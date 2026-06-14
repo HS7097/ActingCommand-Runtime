@@ -1,0 +1,439 @@
+openapi: 3.1.0
+info:
+  title: ActingCommand Runtime API
+  version: 0.1.0-p0a
+  license:
+    name: AGPL-3.0-only
+servers:
+  - url: http://127.0.0.1:8765
+paths:
+  /health:
+    get:
+      summary: Runtime process health.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Runtime is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /profiles:
+    get:
+      summary: List profiles known to the runtime.
+      operationId: listProfiles
+      responses:
+        "200":
+          description: Profiles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profiles]
+                properties:
+                  profiles:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProfileSummary"
+  /profiles/{profileId}/summary:
+    get:
+      summary: Get a normalized profile summary for UI rendering.
+      operationId: getProfileSummary
+      parameters:
+        - $ref: "#/components/parameters/ProfileID"
+      responses:
+        "200":
+          description: Profile summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileSummary"
+        "404":
+          $ref: "#/components/responses/RuntimeError"
+  /runtime/status:
+    get:
+      summary: Get runtime status.
+      operationId: getRuntimeStatus
+      responses:
+        "200":
+          description: Runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeStatus"
+  /runtime/start:
+    post:
+      summary: Start automation backends, not the runtime process itself.
+      operationId: startRuntimeBackends
+      requestBody:
+        $ref: "#/components/requestBodies/RuntimeCommand"
+      responses:
+        "200":
+          $ref: "#/components/responses/CommandResult"
+  /runtime/stop:
+    post:
+      summary: Stop automation backends, not the runtime process itself.
+      operationId: stopRuntimeBackends
+      requestBody:
+        $ref: "#/components/requestBodies/RuntimeCommand"
+      responses:
+        "200":
+          $ref: "#/components/responses/CommandResult"
+  /runtime/restart:
+    post:
+      summary: Restart automation backends.
+      operationId: restartRuntimeBackends
+      requestBody:
+        $ref: "#/components/requestBodies/RuntimeCommand"
+      responses:
+        "200":
+          $ref: "#/components/responses/CommandResult"
+  /runtime/refresh:
+    post:
+      summary: Refresh runtime state from configured backends.
+      operationId: refreshRuntime
+      requestBody:
+        $ref: "#/components/requestBodies/RuntimeCommand"
+      responses:
+        "200":
+          $ref: "#/components/responses/CommandResult"
+  /logs/recent:
+    get:
+      summary: Recent runtime logs.
+      operationId: getRecentLogs
+      parameters:
+        - $ref: "#/components/parameters/ProfileIDQuery"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Logs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [logs]
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LogEvent"
+  /resources/history:
+    get:
+      summary: Resource history points for charts and decision support.
+      operationId: getResourceHistory
+      parameters:
+        - $ref: "#/components/parameters/ProfileIDQuery"
+        - name: key
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Resource history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [points]
+                properties:
+                  points:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResourceHistoryPoint"
+  /acquisitions/recent:
+    get:
+      summary: Recent acquisition screenshot metadata.
+      operationId: getRecentAcquisitions
+      parameters:
+        - $ref: "#/components/parameters/ProfileIDQuery"
+        - name: taskRunId
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Acquisition capture metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [captures]
+                properties:
+                  captures:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AcquisitionCapture"
+  /images/{imageId}:
+    get:
+      summary: Runtime-owned image reference for UI display.
+      operationId: getRuntimeImage
+      parameters:
+        - name: imageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image content.
+          content:
+            image/png:
+              schema:
+                type: string
+                contentEncoding: binary
+        "404":
+          $ref: "#/components/responses/RuntimeError"
+components:
+  parameters:
+    ProfileID:
+      name: profileId
+      in: path
+      required: true
+      schema:
+        type: string
+    ProfileIDQuery:
+      name: profileId
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+  requestBodies:
+    RuntimeCommand:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeCommand"
+  responses:
+    CommandResult:
+      description: Runtime command result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CommandResult"
+    RuntimeError:
+      description: Visible runtime error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeError"
+  schemas:
+    Health:
+      type: object
+      required: [ok, state, version]
+      properties:
+        ok:
+          type: boolean
+        state:
+          $ref: "#/components/schemas/RuntimeState"
+        version:
+          type: string
+        stateDir:
+          type: string
+    RuntimeState:
+      type: string
+      enum: [unknown, stopped, starting, running, stopping, degraded, fatal]
+    Severity:
+      type: string
+      enum: [info, warning, error, fatal, degraded]
+    Resolution:
+      type: object
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+        height:
+          type: integer
+        scale:
+          type: number
+        dpi:
+          type: integer
+    RuntimeStatus:
+      type: object
+      required: [state, stateDir, version, scheduler]
+      properties:
+        state:
+          $ref: "#/components/schemas/RuntimeState"
+        startedAt:
+          type: string
+          format: date-time
+        stateDir:
+          type: string
+        version:
+          type: string
+        scheduler:
+          $ref: "#/components/schemas/SchedulerSummary"
+        lastError:
+          $ref: "#/components/schemas/RuntimeError"
+    SchedulerSummary:
+      type: object
+      required: [alive, pendingCount, waitingCount, lastSeverity, state]
+      properties:
+        alive:
+          type: boolean
+        currentTask:
+          type: string
+        nextTask:
+          type: string
+        nextRunAt:
+          type: string
+          format: date-time
+        pendingCount:
+          type: integer
+        waitingCount:
+          type: integer
+        lastSeverity:
+          $ref: "#/components/schemas/Severity"
+        state:
+          $ref: "#/components/schemas/RuntimeState"
+    ProfileSummary:
+      type: object
+      required: [id, name, game, server, resolution, runtimeState, scheduler]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        game:
+          type: string
+          enum: [Azur, Ark, BA]
+        server:
+          type: string
+          enum: [.jp, .cn, .gb]
+        locale:
+          type: string
+        resolution:
+          $ref: "#/components/schemas/Resolution"
+        runtimeState:
+          $ref: "#/components/schemas/RuntimeState"
+        scheduler:
+          $ref: "#/components/schemas/SchedulerSummary"
+    RuntimeCommand:
+      type: object
+      required: [profileId, requestId]
+      properties:
+        profileId:
+          type: string
+        requestId:
+          type: string
+        reason:
+          type: string
+        options:
+          type: object
+          additionalProperties:
+            type: string
+    CommandResult:
+      type: object
+      required: [requestId, state, accepted]
+      properties:
+        requestId:
+          type: string
+        state:
+          $ref: "#/components/schemas/RuntimeState"
+        accepted:
+          type: boolean
+        message:
+          type: string
+        error:
+          $ref: "#/components/schemas/RuntimeError"
+    RuntimeError:
+      type: object
+      required: [severity, code, message, module, occurredAt]
+      properties:
+        severity:
+          $ref: "#/components/schemas/Severity"
+        code:
+          type: string
+        message:
+          type: string
+        module:
+          type: string
+        originalError:
+          type: string
+        fallbackPath:
+          type: string
+        userVisibleImpact:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+    LogEvent:
+      type: object
+      required: [timestamp, level, source, message]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          $ref: "#/components/schemas/Severity"
+        source:
+          type: string
+        message:
+          type: string
+    ResourceHistoryPoint:
+      type: object
+      required: [timestamp, profileId, game, server, key, value, source]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        profileId:
+          type: string
+        game:
+          type: string
+        server:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+        source:
+          type: string
+    AcquisitionCapture:
+      type: object
+      required: [id, profileId, game, server, resolution, taskId, taskRunId, capturedAt, imageRef, sourceTrigger, recognitionState]
+      properties:
+        id:
+          type: string
+        profileId:
+          type: string
+        game:
+          type: string
+        server:
+          type: string
+        locale:
+          type: string
+        resolution:
+          $ref: "#/components/schemas/Resolution"
+        taskId:
+          type: string
+        taskRunId:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        imageRef:
+          type: string
+        imageHash:
+          type: string
+        sourceTrigger:
+          type: string
+        recognitionState:
+          type: string
+          enum: [pending, recognized, failed, manual]
+        labels:
+          type: array
+          items:
+            type: string
+

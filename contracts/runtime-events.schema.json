@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actingcommand.local/contracts/runtime-events.schema.json",
+  "title": "ActingCommand Runtime Event",
+  "type": "object",
+  "required": ["type", "timestamp", "sequence", "payload"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "runtime.state_changed",
+        "scheduler.current_task_changed",
+        "scheduler.next_task_changed",
+        "log.appended",
+        "severity.changed",
+        "resource.snapshot_updated",
+        "resource.history_appended",
+        "acquisition.recorded",
+        "profile.updated"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "profileId": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "acquisition.recorded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/acquisitionCapture"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "resolution": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "scale": { "type": "number" },
+        "dpi": { "type": "integer" }
+      }
+    },
+    "acquisitionCapture": {
+      "type": "object",
+      "required": [
+        "id",
+        "profileId",
+        "game",
+        "server",
+        "resolution",
+        "taskId",
+        "taskRunId",
+        "capturedAt",
+        "imageRef",
+        "sourceTrigger",
+        "recognitionState"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "profileId": { "type": "string" },
+        "game": { "type": "string", "enum": ["Azur", "Ark", "BA"] },
+        "server": { "type": "string", "enum": [".jp", ".cn", ".gb"] },
+        "locale": { "type": "string" },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "taskId": { "type": "string" },
+        "taskRunId": { "type": "string" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "imageRef": { "type": "string" },
+        "imageHash": { "type": "string" },
+        "sourceTrigger": { "type": "string" },
+        "recognitionState": {
+          "type": "string",
+          "enum": ["pending", "recognized", "failed", "manual"]
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+

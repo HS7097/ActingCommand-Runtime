@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actingcommand.local/contracts/task-flow.schema.json",
+  "title": "ActingCommand Declarative Task Flow",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "game",
+    "servers",
+    "resolutions",
+    "entrypoint",
+    "tasks"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "0.1.0-p0a"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "game": {
+      "type": "string",
+      "enum": ["Azur", "Ark", "BA"]
+    },
+    "servers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [".jp", ".cn", ".gb"]
+      }
+    },
+    "resolutions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/resolution"
+      }
+    },
+    "entrypoint": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "resolution": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "dpi": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "name", "steps", "onFailure"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "onFailure": {
+          "$ref": "#/$defs/failurePolicy"
+        },
+        "produces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["resource", "item", "character", "drop", "screenshot", "state"]
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "primitive"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "primitive": {
+          "type": "string",
+          "enum": [
+            "capture",
+            "match",
+            "ocr",
+            "get_color",
+            "tap",
+            "swipe",
+            "wait_for",
+            "start_app",
+            "stop_app",
+            "record_acquisition",
+            "update_resource_snapshot",
+            "emit_event"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "when": {
+          "type": "string"
+        },
+        "next": {
+          "type": "string"
+        },
+        "onFailure": {
+          "$ref": "#/$defs/failurePolicy"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "failurePolicy": {
+      "type": "object",
+      "required": ["severity"],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["warning", "error", "fatal", "degraded"]
+        },
+        "retryLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "retryDelayMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "fallbackStep": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+
