@@ -9,11 +9,39 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     description TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS server_variants (
+    id TEXT PRIMARY KEY,
+    game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
+    upstream TEXT NOT NULL,
+    server_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    locale TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+INSERT OR IGNORE INTO server_variants (id, game, upstream, server_key, display_name, locale, notes) VALUES
+    ('alas.cn', 'Azur', 'Alas', 'alas.cn', 'Alas CN', 'zh-CN', 'Azur Lane Alas cn server variant'),
+    ('alas.en', 'Azur', 'Alas', 'alas.en', 'Alas EN', 'en', 'Azur Lane Alas en server variant'),
+    ('alas.jp', 'Azur', 'Alas', 'alas.jp', 'Alas JP', 'ja-JP', 'Azur Lane Alas jp server variant'),
+    ('alas.tw', 'Azur', 'Alas', 'alas.tw', 'Alas TW', 'zh-TW', 'Azur Lane Alas tw server variant'),
+    ('baas.jp', 'BA', 'BAAS', 'baas.jp', 'BAAS JP', 'ja-JP', 'Blue Archive BAAS jp server variant'),
+    ('baas.cn', 'BA', 'BAAS', 'baas.cn', 'BAAS CN', 'zh-CN', 'Blue Archive BAAS cn server variant'),
+    ('baas.global_en', 'BA', 'BAAS', 'baas.global_en', 'BAAS Global EN', 'en', 'Blue Archive BAAS global_en server variant'),
+    ('baas.ko', 'BA', 'BAAS', 'baas.ko', 'BAAS KO', 'ko-KR', 'Blue Archive BAAS ko server variant'),
+    ('baas.zh_tw', 'BA', 'BAAS', 'baas.zh_tw', 'BAAS ZH TW', 'zh-TW', 'Blue Archive BAAS zh_tw server variant'),
+    ('maa.bilibili', 'Ark', 'MAA', 'maa.bilibili', 'MAA Bilibili', 'zh-CN', 'Arknights MAA B server variant'),
+    ('maa.official', 'Ark', 'MAA', 'maa.official', 'MAA Official', 'zh-CN', 'Arknights MAA official CN server variant'),
+    ('maa.txwy', 'Ark', 'MAA', 'maa.txwy', 'MAA txwy', 'zh-CN', 'Arknights MAA txwy server variant'),
+    ('maa.yostar_en', 'Ark', 'MAA', 'maa.yostar_en', 'MAA YoStar EN', 'en', 'Arknights MAA YoStarEN server variant'),
+    ('maa.yostar_jp', 'Ark', 'MAA', 'maa.yostar_jp', 'MAA YoStar JP', 'ja-JP', 'Arknights MAA YoStarJP server variant'),
+    ('maa.yostar_kr', 'Ark', 'MAA', 'maa.yostar_kr', 'MAA YoStar KR', 'ko-KR', 'Arknights MAA YoStarKR server variant');
+
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     locale TEXT,
     resolution_width INTEGER NOT NULL CHECK (resolution_width > 0),
     resolution_height INTEGER NOT NULL CHECK (resolution_height > 0),
@@ -62,7 +90,7 @@ CREATE TABLE IF NOT EXISTS task_definitions (
     id TEXT PRIMARY KEY,
     flow_id TEXT NOT NULL,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     name TEXT NOT NULL,
     schema_version TEXT NOT NULL,
     definition_json TEXT NOT NULL,
@@ -86,7 +114,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
 CREATE TABLE IF NOT EXISTS resource_packs (
     id TEXT PRIMARY KEY,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     locale TEXT,
     resolution_width INTEGER NOT NULL CHECK (resolution_width > 0),
     resolution_height INTEGER NOT NULL CHECK (resolution_height > 0),
@@ -106,7 +134,7 @@ CREATE TABLE IF NOT EXISTS asset_manifest (
     path TEXT NOT NULL,
     hash TEXT,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     locale TEXT,
     resolution_width INTEGER NOT NULL CHECK (resolution_width > 0),
     resolution_height INTEGER NOT NULL CHECK (resolution_height > 0),
@@ -118,7 +146,7 @@ CREATE TABLE IF NOT EXISTS resource_snapshots (
     profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     task_run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -130,7 +158,7 @@ CREATE TABLE IF NOT EXISTS resource_history (
     profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     task_run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -143,7 +171,7 @@ CREATE TABLE IF NOT EXISTS acquisition_captures (
     task_id TEXT NOT NULL,
     task_run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
     game TEXT NOT NULL CHECK (game IN ('Azur', 'Ark', 'BA')),
-    server TEXT NOT NULL CHECK (server IN ('.jp', '.cn', '.gb')),
+    server TEXT NOT NULL,
     locale TEXT,
     resolution_width INTEGER NOT NULL CHECK (resolution_width > 0),
     resolution_height INTEGER NOT NULL CHECK (resolution_height > 0),
@@ -167,9 +195,9 @@ CREATE TABLE IF NOT EXISTS acquisition_labels (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_profile_created ON logs(profile_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_server_variants_game_key ON server_variants(game, server_key);
 CREATE INDEX IF NOT EXISTS idx_runtime_events_profile_created ON runtime_events(profile_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_resource_history_profile_key_time ON resource_history(profile_id, key, observed_at);
 CREATE INDEX IF NOT EXISTS idx_acquisition_profile_time ON acquisition_captures(profile_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_acquisition_task_run ON acquisition_captures(task_run_id);
 CREATE INDEX IF NOT EXISTS idx_asset_manifest_pack ON asset_manifest(resource_pack_id);
-

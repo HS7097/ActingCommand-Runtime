@@ -39,8 +39,10 @@ The current Go direction starts with decision/data contracts before the operatio
 - UI event contract: `contracts/runtime-events.schema.json`
 - task-flow schema: `contracts/task-flow.schema.json`
 - SQLite schema: `contracts/sqlite/schema.sql`
+- server variant policy: `contracts/server-keys.md`
+- execution-layer boundary: `contracts/primitive-service.md`
 
-The operation layer should implement the primitive API later. It must return structured observations and image references, not raw frame buffers. UI code should use the runtime API and should not open the runtime SQLite database directly.
+The operation layer may be implemented in Rust or another language. It should connect through a Go adapter that satisfies `pkg/contract.PrimitiveLayer`. It must return structured observations and image references, not raw frame buffers. UI code should use the runtime API and should not open the runtime SQLite database directly.
 
 ## Local run
 

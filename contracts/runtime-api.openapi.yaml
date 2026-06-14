@@ -259,6 +259,16 @@ components:
           type: number
         dpi:
           type: integer
+    ServerKey:
+      type: string
+      pattern: "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+      description: Backend-specific server variant key. Examples include alas.jp, alas.en, alas.tw, baas.global_en, baas.ko, maa.bilibili, maa.official, maa.yostar_jp.
+      examples:
+        - alas.jp
+        - alas.en
+        - baas.global_en
+        - maa.bilibili
+        - maa.yostar_jp
     RuntimeStatus:
       type: object
       required: [state, stateDir, version, scheduler]
@@ -309,8 +319,7 @@ components:
           type: string
           enum: [Azur, Ark, BA]
         server:
-          type: string
-          enum: [.jp, .cn, .gb]
+          $ref: "#/components/schemas/ServerKey"
         locale:
           type: string
         resolution:
@@ -393,7 +402,7 @@ components:
         game:
           type: string
         server:
-          type: string
+          $ref: "#/components/schemas/ServerKey"
         key:
           type: string
         value:
@@ -411,7 +420,7 @@ components:
         game:
           type: string
         server:
-          type: string
+          $ref: "#/components/schemas/ServerKey"
         locale:
           type: string
         resolution:
@@ -436,4 +445,3 @@ components:
           type: array
           items:
             type: string
-

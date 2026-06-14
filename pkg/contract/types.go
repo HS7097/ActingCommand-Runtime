@@ -17,9 +17,21 @@ const (
 type ServerKey string
 
 const (
-	ServerJP     ServerKey = ".jp"
-	ServerCN     ServerKey = ".cn"
-	ServerGlobal ServerKey = ".gb"
+	ServerAlasCN       ServerKey = "alas.cn"
+	ServerAlasEN       ServerKey = "alas.en"
+	ServerAlasJP       ServerKey = "alas.jp"
+	ServerAlasTW       ServerKey = "alas.tw"
+	ServerBAASJP       ServerKey = "baas.jp"
+	ServerBAASCN       ServerKey = "baas.cn"
+	ServerBAASGlobalEN ServerKey = "baas.global_en"
+	ServerBAASKO       ServerKey = "baas.ko"
+	ServerBAASZHTW     ServerKey = "baas.zh_tw"
+	ServerMAABilibili  ServerKey = "maa.bilibili"
+	ServerMAAOfficial  ServerKey = "maa.official"
+	ServerMAATxwy      ServerKey = "maa.txwy"
+	ServerMAAYostarEN  ServerKey = "maa.yostar_en"
+	ServerMAAYostarJP  ServerKey = "maa.yostar_jp"
+	ServerMAAYostarKR  ServerKey = "maa.yostar_kr"
 )
 
 type EngineKind string

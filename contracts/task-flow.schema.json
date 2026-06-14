@@ -33,8 +33,7 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "string",
-        "enum": [".jp", ".cn", ".gb"]
+        "$ref": "#/$defs/serverKey"
       }
     },
     "resolutions": {
@@ -84,6 +83,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "serverKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "description": "Backend-specific server variant key, for example alas.jp, alas.en, baas.global_en, maa.yostar_jp, or maa.bilibili."
     },
     "task": {
       "type": "object",
@@ -196,4 +200,3 @@
   },
   "additionalProperties": false
 }
-

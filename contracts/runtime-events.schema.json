@@ -64,6 +64,11 @@
         "dpi": { "type": "integer" }
       }
     },
+    "serverKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "description": "Backend-specific server variant key."
+    },
     "acquisitionCapture": {
       "type": "object",
       "required": [
@@ -83,7 +88,7 @@
         "id": { "type": "string" },
         "profileId": { "type": "string" },
         "game": { "type": "string", "enum": ["Azur", "Ark", "BA"] },
-        "server": { "type": "string", "enum": [".jp", ".cn", ".gb"] },
+        "server": { "$ref": "#/$defs/serverKey" },
         "locale": { "type": "string" },
         "resolution": { "$ref": "#/$defs/resolution" },
         "taskId": { "type": "string" },
@@ -104,4 +109,3 @@
     }
   }
 }
-
