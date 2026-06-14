@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "0.1.0-p0a",
+  "id": "azur.daily.claim_rewards",
+  "name": "Azur daily reward claim benchmark flow",
+  "game": "Azur",
+  "servers": ["alas.jp", "alas.en", "alas.tw"],
+  "resolutions": [
+    {
+      "width": 1280,
+      "height": 720,
+      "scale": 1.0
+    }
+  ],
+  "entrypoint": "daily.claim_rewards",
+  "tasks": [
+    {
+      "id": "daily.claim_rewards",
+      "name": "Claim daily rewards",
+      "produces": ["resource", "screenshot"],
+      "onFailure": {
+        "severity": "error",
+        "retryLimit": 2,
+        "retryDelayMs": 500
+      },
+      "steps": [
+        {
+          "id": "capture.home",
+          "primitive": "capture",
+          "timeoutMs": 2000,
+          "params": {
+            "reason": "benchmark_home_state"
+          },
+          "next": "match.reward"
+        },
+        {
+          "id": "match.reward",
+          "primitive": "match",
+          "timeoutMs": 2000,
+          "params": {
+            "template": "daily_reward_button",
+            "threshold": 0.92
+          },
+          "onFailure": {
+            "severity": "degraded",
+            "retryLimit": 1,
+            "retryDelayMs": 250,
+            "fallbackStep": "emit.no_reward"
+          },
+          "next": "tap.reward"
+        },
+        {
+          "id": "tap.reward",
+          "primitive": "tap",
+          "timeoutMs": 1000,
+          "params": {
+            "point": {
+              "x": 1040,
+              "y": 620
+            },
+            "reason": "claim_reward"
+          },
+          "next": "record.reward"
+        },
+        {
+          "id": "record.reward",
+          "primitive": "record_acquisition",
+          "timeoutMs": 1000,
+          "params": {
+            "sourceTrigger": "reward_screen",
+            "recognitionState": "pending"
+          }
+        },
+        {
+          "id": "emit.no_reward",
+          "primitive": "emit_event",
+          "timeoutMs": 100,
+          "params": {
+            "type": "scheduler.current_task_changed",
+            "message": "No reward button found"
+          }
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "benchmark": "true"
+  }
+}

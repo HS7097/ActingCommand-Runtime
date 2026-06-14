@@ -1,0 +1,21 @@
+{
+  "id": "acq-20260614-000001",
+  "profileId": "alas-jp-main",
+  "game": "Azur",
+  "server": "alas.jp",
+  "locale": "ja-JP",
+  "resolution": {
+    "width": 1280,
+    "height": 720,
+    "scale": 1.0
+  },
+  "taskId": "daily.claim_rewards",
+  "taskRunId": "run-20260614-000001",
+  "capturedAt": "2026-06-14T10:00:00.000Z",
+  "imageRef": "runtime://images/acq-20260614-000001",
+  "imageHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "sourceTrigger": "reward_screen",
+  "recognitionState": "pending",
+  "labels": ["coin", "oil", "event_point"],
+  "retentionClass": "recent"
+}
