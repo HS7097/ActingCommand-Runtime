@@ -20,4 +20,10 @@ The compile-time Go interfaces live in:
 - `pkg/contract/taskflow.go`
 - `pkg/contract/types.go`
 
+## Rust backup boundary
+
+Backup Rust contract definitions live in:
+
+- `contracts/rust/actingcommand-contract-rs`
+
 The UI must use the runtime API and must not own the runtime lifecycle. The execution layer should satisfy `PrimitiveLayer` through a Go adapter and may be implemented by a Rust worker or another process. It returns structured observations and image references, not raw frame buffers.
