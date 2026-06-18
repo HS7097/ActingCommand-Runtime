@@ -155,6 +155,14 @@ fn validate_relative_ref(rel: &str, capture_id: &str) -> CaptureStoreResult<()> 
             "capture image_ref is not filesystem-safe: {rel}"
         )));
     }
+    if rel
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(CaptureStoreError::InvalidInput(format!(
+            "capture image_ref contains a path-traversal segment: {rel}"
+        )));
+    }
     if capture_id.contains(':') {
         return Err(CaptureStoreError::InvalidInput(format!(
             "capture id is not filesystem-safe: {capture_id}"
@@ -178,7 +186,7 @@ fn sanitize(value: &str) -> String {
     }
 
     let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         "unknown".to_string()
     } else {
         trimmed.to_string()
@@ -257,12 +265,43 @@ mod tests {
     fn sanitize_empty_or_all_invalid_values_returns_unknown() {
         assert_eq!(sanitize(""), "unknown");
         assert_eq!(sanitize(":::// "), "unknown");
+        assert_eq!(sanitize("."), "unknown");
+        assert_eq!(sanitize(".."), "unknown");
     }
 
     #[test]
     fn sanitize_compresses_underscores_and_keeps_safe_ascii() {
         assert_eq!(sanitize("abc DEF:::ghi"), "abc_DEF_ghi");
+        assert_eq!(sanitize("../profile"), ".._profile");
         assert_eq!(sanitize("Azur.JP_profile-01"), "Azur.JP_profile-01");
+    }
+
+    #[test]
+    fn save_frame_with_path_traversal_profile_id_stays_under_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = CaptureStore::new(temp.path().to_path_buf());
+        let frame = test_frame(b"png bytes".to_vec());
+
+        let capture = store
+            .save_frame("..", "manual", &frame)
+            .expect("capture saved");
+
+        assert!(!capture.image_ref.contains("captures/../"));
+        assert!(!capture.image_ref.split('/').any(|segment| segment == ".."));
+        assert!(capture.image_ref.starts_with("captures/unknown/"));
+
+        let root = temp.path().canonicalize().expect("root canonicalized");
+        let saved = temp.path().join(&capture.image_ref);
+        let saved = saved.canonicalize().expect("saved capture canonicalized");
+        assert!(saved.starts_with(&root));
+    }
+
+    #[test]
+    fn validate_relative_ref_rejects_path_traversal_segments() {
+        let err =
+            validate_relative_ref("captures/../x/y.png", "y").expect_err("path traversal rejected");
+
+        assert!(matches!(err, CaptureStoreError::InvalidInput(_)));
     }
 
     fn test_frame(png: Vec<u8>) -> Frame {
