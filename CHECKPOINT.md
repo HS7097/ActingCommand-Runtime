@@ -22,17 +22,19 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - Added Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
 - Supersedes the previous routine behavior of mirroring Runtime task planning files into the umbrella repository.
 - Runtime future task close-out should commit and push planning/checkpoint updates in this repository.
+- Runtime-local planning initialization was pushed to `HS7097/ActingCommand-Runtime`.
 
 ### Files changed
 
+- `CHECKPOINT.md`
 - `AGENTS.md`
 - `PLANS.md`
-- `CHECKPOINT.md`
 
 ### Commands run
 
 - Checked Runtime repository status.
 - Created Runtime-local planning files.
+- Committed and pushed Runtime-local planning files.
 
 ### Test results
 
@@ -44,4 +46,4 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 
 ### Next step
 
-1. Push Runtime-local planning initialization to `HS7097/ActingCommand-Runtime`.
+1. Use Runtime-local `PLANS.md` and `CHECKPOINT.md` for the next Runtime task.
