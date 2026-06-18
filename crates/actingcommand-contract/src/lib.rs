@@ -6,6 +6,7 @@
 //! contracts for protocol, device, and engine boundaries, not game logic.
 
 #![forbid(unsafe_code)]
+#![allow(clippy::result_large_err)]
 
 pub mod game_engine;
 pub mod primitive;

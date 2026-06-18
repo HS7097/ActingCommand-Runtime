@@ -54,9 +54,12 @@ cargo run -p actingcommand-device-test -- reset
 cargo run -p actingcommand-device-test -- tap 100 100
 cargo run -p actingcommand-device-test -- longtap 500 500 1000
 cargo run -p actingcommand-device-test -- swipe 300 500 900 500 500
+cargo run -p actingcommand-device-test -- --port 16384 capture --out runtime-state/captures/manual/frame.png
 ```
 
 Multiple subcommands can be supplied in one invocation. They reuse one long-lived MaaTouch session.
+
+The `capture --out` command is a single-shot ADB screencap path. It does not start a MaaTouch session.
 
 The default MaaTouch binary path is ignored by Git:
 

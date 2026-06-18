@@ -86,6 +86,16 @@ fn run_capture_command(
 
     let mut backend = ScreencapBackend::new(config.adb, config.target);
     let frame = backend.capture()?;
+    if let Some(parent) = out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            DeviceError::fatal(format!(
+                "failed to create capture output directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
     fs::write(out, &frame.png).map_err(|err| {
         DeviceError::fatal(format!(
             "failed to write capture output {}: {err}",
