@@ -47,3 +47,37 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 ### Next step
 
 1. Use Runtime-local `PLANS.md` and `CHECKPOINT.md` for the next Runtime task.
+
+## 2026-06-18 Runtime-to-main merge policy
+
+### Current status
+
+- Clarified Runtime-to-main repository merge policy by user instruction.
+- Routine Runtime updates stay in `HS7097/ActingCommand-Runtime`.
+- Do not merge, copy, or synchronize Runtime changes into the umbrella/main `HS7097/ActingCommand` repository by default.
+- Merge a Runtime state into the main repository only after the user explicitly confirms that merge point.
+- Runtime-local policy update is recorded in commit `51e5b9aff95e8f8f8e3e5d105ed56fbf17a8d989`.
+
+### Files changed
+
+- `AGENTS.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Updated Runtime-local policy files.
+- `git commit -m "docs: clarify Runtime-to-main merge policy"`
+- Amended the checkpoint with the final Runtime commit hash before pushing.
+
+### Test results
+
+- Documentation/policy-only change; no code tests required.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Use this merge policy for future Runtime work.

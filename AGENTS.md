@@ -38,6 +38,8 @@ For each Runtime task:
 
 Do not mirror planning files into `HS7097/ActingCommand` after routine Runtime tasks. Use the umbrella repository only for umbrella-level planning, cross-repository policy, or meta-documentation.
 
+Do not merge, copy, or synchronize routine Runtime updates into the umbrella/main `HS7097/ActingCommand` repository by default. Keep Runtime changes in this repository until the user explicitly confirms a specific merge point.
+
 ## Current boundaries
 
 - Do not add game logic unless the current plan explicitly requires it.
