@@ -45,11 +45,16 @@ Run Rust checks:
 cargo test --workspace
 ```
 
-Run the MaaTouch device probe:
+Run the MaaTouch input backend tool:
 
 ```powershell
-cargo run -p actingcommand-device-test -- --port 16384
+cargo run -p actingcommand-device-test -- reset
+cargo run -p actingcommand-device-test -- tap 100 100
+cargo run -p actingcommand-device-test -- longtap 500 500 1000
+cargo run -p actingcommand-device-test -- swipe 300 500 900 500 500
 ```
+
+Multiple subcommands can be supplied in one invocation. They reuse one long-lived MaaTouch session.
 
 The default MaaTouch binary path is ignored by Git:
 
@@ -60,7 +65,7 @@ external-tools/maatouch/maatouch
 You can also pass an explicit external path:
 
 ```powershell
-cargo run -p actingcommand-device-test -- --local ..\upstream-sources\AzurPilot\bin\MaaTouch\maatouch --port 16384
+cargo run -p actingcommand-device-test -- --local ..\upstream-sources\AzurPilot\bin\MaaTouch\maatouch --port 16384 reset
 ```
 
 MaaTouch failure is a fatal device-layer error. ADB input fallback is intentionally not implemented.

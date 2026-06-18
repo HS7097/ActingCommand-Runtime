@@ -1,11 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    DeviceError, DeviceResult, MaaTouchValidationConfig, TouchAction, validate_maatouch,
+    DeviceError, DeviceResult, InputBackend, MaaTouchBackend, MaaTouchValidationConfig,
+    combine_operation_and_close,
 };
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeviceCommand {
+    Reset,
+    Tap {
+        x: i32,
+        y: i32,
+    },
+    LongTap {
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    },
+    Swipe {
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    },
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -15,113 +37,211 @@ fn main() {
 }
 
 fn run() -> DeviceResult<()> {
-    let config = parse_args(env::args().skip(1))?;
-    let serial = config.target.resolved_serial();
+    let (config, commands) = parse_args(env::args().skip(1))?;
+    let mut backend = MaaTouchBackend::new(config.adb, config.target, config.maatouch);
 
-    println!("Target device: {serial}");
-    println!("Local MaaTouch: {}", config.maatouch.local_path.display());
-    println!("Remote MaaTouch: {}", config.maatouch.remote_path);
+    println!("Target device: {}", backend.serial());
+    let device = backend.connect()?;
+    println!("Device state: {}", device.state);
+    println!("Device screen: {}", device.screen_size);
+    if let Some(handshake) = backend.handshake_info() {
+        println!(
+            "MaaTouch handshake OK: contacts={} size={}x{} pressure={} pid={}",
+            handshake.max_contacts,
+            handshake.max_x,
+            handshake.max_y,
+            handshake.max_pressure,
+            handshake.pid
+        );
+    }
 
-    let result = validate_maatouch(&config)?;
-    println!("Device state: {}", result.device.state);
-    println!("Device screen: {}", result.device.screen_size);
-    println!(
-        "MaaTouch handshake OK: contacts={} size={}x{} pressure={} pid={}",
-        result.handshake.max_contacts,
-        result.handshake.max_x,
-        result.handshake.max_y,
-        result.handshake.max_pressure,
-        result.handshake.pid
-    );
+    let operation_result = run_commands(&mut backend, &commands);
+    let close_result = backend.close();
+    combine_operation_and_close(operation_result, close_result)?;
+
     println!("PASS");
     Ok(())
 }
 
-fn parse_args<I>(args: I) -> DeviceResult<MaaTouchValidationConfig>
+fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> DeviceResult<()> {
+    for command in commands {
+        match *command {
+            DeviceCommand::Reset => {
+                backend.reset()?;
+                println!("reset sent");
+            }
+            DeviceCommand::Tap { x, y } => {
+                backend.tap(x, y)?;
+                println!("tap sent: x={x} y={y}");
+            }
+            DeviceCommand::LongTap { x, y, duration_ms } => {
+                backend.long_tap(x, y, duration_ms)?;
+                println!("longtap sent: x={x} y={y} duration_ms={duration_ms}");
+            }
+            DeviceCommand::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => {
+                backend.swipe(x1, y1, x2, y2, duration_ms)?;
+                println!("swipe sent: x1={x1} y1={y1} x2={x2} y2={y2} duration_ms={duration_ms}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_args<I>(args: I) -> DeviceResult<(MaaTouchValidationConfig, Vec<DeviceCommand>)>
 where
     I: IntoIterator<Item = String>,
 {
     let mut cfg = MaaTouchValidationConfig::default();
-    let mut tap_enabled = false;
-    let mut wake_first = false;
-    let mut wake = TouchAction::new(1200, 360, 50);
-    let mut tap = TouchAction::new(640, 360, 50);
+    let mut commands = Vec::new();
+    let tokens = args.into_iter().collect::<Vec<_>>();
+    let mut index = 0;
 
-    let mut iter = args.into_iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--adb" => cfg.adb.adb_path = next_value(&mut iter, "--adb")?,
-            "--serial" => cfg.target.serial = Some(next_value(&mut iter, "--serial")?),
-            "--host" => cfg.target.host = next_value(&mut iter, "--host")?,
-            "--port" => cfg.target.port = parse_value(&mut iter, "--port")?,
-            "--local" => cfg.maatouch.local_path = PathBuf::from(next_value(&mut iter, "--local")?),
-            "--remote" => cfg.maatouch.remote_path = next_value(&mut iter, "--remote")?,
-            "--no-connect" => cfg.target.connect = false,
-            "--no-push" => cfg.maatouch.push = false,
-            "--tap" => tap_enabled = true,
-            "--wake-first" => wake_first = true,
-            "--wake-x" => wake.x = parse_value(&mut iter, "--wake-x")?,
-            "--wake-y" => wake.y = parse_value(&mut iter, "--wake-y")?,
-            "--x" => tap.x = parse_value(&mut iter, "--x")?,
-            "--y" => tap.y = parse_value(&mut iter, "--y")?,
-            "--pressure" => {
-                let pressure = parse_value(&mut iter, "--pressure")?;
-                wake.pressure = pressure;
-                tap.pressure = pressure;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--adb" => {
+                cfg.adb.adb_path = next_token(&tokens, &mut index, "--adb")?;
+            }
+            "--serial" => {
+                cfg.target.serial = Some(next_token(&tokens, &mut index, "--serial")?);
+            }
+            "--host" => {
+                cfg.target.host = next_token(&tokens, &mut index, "--host")?;
+            }
+            "--port" => {
+                cfg.target.port = parse_token(&tokens, &mut index, "--port")?;
+            }
+            "--local" => {
+                cfg.maatouch.local_path =
+                    PathBuf::from(next_token(&tokens, &mut index, "--local")?);
+            }
+            "--remote" => {
+                cfg.maatouch.remote_path = next_token(&tokens, &mut index, "--remote")?;
+            }
+            "--no-connect" => {
+                cfg.target.connect = false;
+                index += 1;
+            }
+            "--no-push" => {
+                cfg.maatouch.push = false;
+                index += 1;
             }
             "--command-timeout-ms" => {
-                cfg.adb.command_timeout =
-                    Duration::from_millis(parse_value(&mut iter, "--command-timeout-ms")?)
+                cfg.adb.command_timeout = Duration::from_millis(parse_token(
+                    &tokens,
+                    &mut index,
+                    "--command-timeout-ms",
+                )?);
             }
             "--handshake-timeout-ms" => {
-                cfg.maatouch.handshake_timeout =
-                    Duration::from_millis(parse_value(&mut iter, "--handshake-timeout-ms")?)
+                cfg.maatouch.handshake_timeout = Duration::from_millis(parse_token(
+                    &tokens,
+                    &mut index,
+                    "--handshake-timeout-ms",
+                )?);
             }
             "--shutdown-timeout-ms" => {
-                cfg.maatouch.shutdown_timeout =
-                    Duration::from_millis(parse_value(&mut iter, "--shutdown-timeout-ms")?)
-            }
-            "--post-command-delay-ms" => {
-                cfg.touch_plan.post_command_delay =
-                    Duration::from_millis(parse_value(&mut iter, "--post-command-delay-ms")?)
-            }
-            "--between-tap-delay-ms" => {
-                cfg.touch_plan.between_tap_delay =
-                    Duration::from_millis(parse_value(&mut iter, "--between-tap-delay-ms")?)
+                cfg.maatouch.shutdown_timeout = Duration::from_millis(parse_token(
+                    &tokens,
+                    &mut index,
+                    "--shutdown-timeout-ms",
+                )?);
             }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
             }
-            _ => return Err(DeviceError::fatal(format!("unknown argument: {arg}"))),
+            "reset" => {
+                commands.push(DeviceCommand::Reset);
+                index += 1;
+            }
+            "tap" => {
+                index += 1;
+                let x = parse_positional(&tokens, &mut index, "tap x")?;
+                let y = parse_positional(&tokens, &mut index, "tap y")?;
+                commands.push(DeviceCommand::Tap { x, y });
+            }
+            "longtap" => {
+                index += 1;
+                let x = parse_positional(&tokens, &mut index, "longtap x")?;
+                let y = parse_positional(&tokens, &mut index, "longtap y")?;
+                let duration_ms = parse_positional(&tokens, &mut index, "longtap duration_ms")?;
+                commands.push(DeviceCommand::LongTap { x, y, duration_ms });
+            }
+            "swipe" => {
+                index += 1;
+                let x1 = parse_positional(&tokens, &mut index, "swipe x1")?;
+                let y1 = parse_positional(&tokens, &mut index, "swipe y1")?;
+                let x2 = parse_positional(&tokens, &mut index, "swipe x2")?;
+                let y2 = parse_positional(&tokens, &mut index, "swipe y2")?;
+                let duration_ms = parse_positional(&tokens, &mut index, "swipe duration_ms")?;
+                commands.push(DeviceCommand::Swipe {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    duration_ms,
+                });
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown argument or command: {other}"
+                )));
+            }
         }
     }
 
-    if wake_first {
-        cfg.touch_plan.wake_first = Some(wake);
-    }
-    if tap_enabled {
-        cfg.touch_plan.tap = Some(tap);
+    if commands.is_empty() {
+        return Err(DeviceError::fatal(
+            "missing command: expected reset, tap, longtap, or swipe",
+        ));
     }
 
-    Ok(cfg)
+    Ok((cfg, commands))
 }
 
-fn next_value<I>(iter: &mut I, name: &str) -> DeviceResult<String>
-where
-    I: Iterator<Item = String>,
-{
-    iter.next()
-        .ok_or_else(|| DeviceError::fatal(format!("missing value for {name}")))
+fn next_token(tokens: &[String], index: &mut usize, name: &str) -> DeviceResult<String> {
+    let value_index = *index + 1;
+    let value = tokens
+        .get(value_index)
+        .ok_or_else(|| DeviceError::fatal(format!("missing value for {name}")))?
+        .clone();
+    *index += 2;
+    Ok(value)
 }
 
-fn parse_value<I, T>(iter: &mut I, name: &str) -> DeviceResult<T>
+fn parse_token<T>(tokens: &[String], index: &mut usize, name: &str) -> DeviceResult<T>
 where
-    I: Iterator<Item = String>,
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    let value = next_value(iter, name)?;
+    let value = next_token(tokens, index, name)?;
+    parse_value(&value, name)
+}
+
+fn parse_positional<T>(tokens: &[String], index: &mut usize, name: &str) -> DeviceResult<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let value = tokens
+        .get(*index)
+        .ok_or_else(|| DeviceError::fatal(format!("missing positional value for {name}")))?;
+    let parsed = parse_value(value, name)?;
+    *index += 1;
+    Ok(parsed)
+}
+
+fn parse_value<T>(value: &str, name: &str) -> DeviceResult<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
     value
         .parse()
         .map_err(|err| DeviceError::fatal(format!("invalid value for {name}: {err}")))
@@ -129,8 +249,47 @@ where
 
 fn print_help() {
     println!(
-        "Usage: cargo run -p actingcommand-device-test -- [--port 16384] [--wake-first --tap --x 1160 --y 541]\n\
-         Defaults to reset-only MaaTouch validation on 127.0.0.1:16384.\n\
-         MaaTouch binary default: external-tools/maatouch/maatouch"
+        "Usage:\n\
+         cargo run -p actingcommand-device-test -- [options] reset\n\
+         cargo run -p actingcommand-device-test -- [options] tap <x> <y>\n\
+         cargo run -p actingcommand-device-test -- [options] longtap <x> <y> <duration_ms>\n\
+         cargo run -p actingcommand-device-test -- [options] swipe <x1> <y1> <x2> <y2> <duration_ms>\n\
+         \n\
+         Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
+         Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
+         --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_multiple_commands_for_one_session() {
+        let (_, commands) = parse_args([
+            "reset".to_string(),
+            "tap".to_string(),
+            "100".to_string(),
+            "200".to_string(),
+            "longtap".to_string(),
+            "300".to_string(),
+            "400".to_string(),
+            "500".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![
+                DeviceCommand::Reset,
+                DeviceCommand::Tap { x: 100, y: 200 },
+                DeviceCommand::LongTap {
+                    x: 300,
+                    y: 400,
+                    duration_ms: 500
+                },
+            ]
+        );
+    }
 }

@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, CommandOutput, stop_child};
-use crate::{DeviceError, DeviceResult};
+use crate::{DeviceError, DeviceResult, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+const TOUCH_ID: i32 = 0;
+const DEFAULT_PRESSURE: i32 = 50;
+const TAP_HOLD_MS: u64 = 80;
+const SWIPE_FRAME_MS: u64 = 16;
+const MAX_SWIPE_STEPS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct DeviceTarget {
@@ -44,6 +50,8 @@ pub struct MaaTouchConfig {
     pub push: bool,
     pub handshake_timeout: Duration,
     pub shutdown_timeout: Duration,
+    pub default_pressure: i32,
+    pub tap_hold: Duration,
 }
 
 impl Default for MaaTouchConfig {
@@ -56,6 +64,8 @@ impl Default for MaaTouchConfig {
             push: true,
             handshake_timeout: Duration::from_secs(8),
             shutdown_timeout: Duration::from_secs(1),
+            default_pressure: DEFAULT_PRESSURE,
+            tap_hold: Duration::from_millis(TAP_HOLD_MS),
         }
     }
 }
@@ -122,30 +132,364 @@ pub struct MaaTouchValidationResult {
     pub handshake: HandshakeInfo,
 }
 
+pub struct MaaTouchBackend {
+    adb_config: AdbConfig,
+    target: DeviceTarget,
+    maatouch_config: MaaTouchConfig,
+    serial: String,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    handshake_info: Option<HandshakeInfo>,
+    stderr_text: Arc<Mutex<String>>,
+    stderr_thread: Option<JoinHandle<()>>,
+    closed: bool,
+}
+
+impl MaaTouchBackend {
+    pub fn new(
+        adb_config: AdbConfig,
+        target: DeviceTarget,
+        maatouch_config: MaaTouchConfig,
+    ) -> Self {
+        let serial = target.resolved_serial();
+        Self {
+            adb_config,
+            target,
+            maatouch_config,
+            serial,
+            child: None,
+            stdin: None,
+            handshake_info: None,
+            stderr_text: Arc::new(Mutex::new(String::new())),
+            stderr_thread: None,
+            closed: true,
+        }
+    }
+
+    pub fn serial(&self) -> &str {
+        &self.serial
+    }
+
+    pub fn handshake_info(&self) -> Option<&HandshakeInfo> {
+        self.handshake_info.as_ref()
+    }
+
+    pub fn connect(&mut self) -> DeviceResult<DeviceInfo> {
+        if self.child.is_some() || self.stdin.is_some() {
+            return Err(DeviceError::fatal("MaaTouchBackend is already connected"));
+        }
+
+        let adb = Adb::new(self.adb_config.clone());
+        if self.target.connect {
+            let output = adb.connect(&self.serial)?;
+            print_command_output("adb connect", &output);
+        }
+
+        let device = verify_device(&adb, &self.serial)?;
+        self.install(&adb)?;
+        self.start()?;
+        Ok(device)
+    }
+
+    pub fn install(&self, adb: &Adb) -> DeviceResult<()> {
+        if self.maatouch_config.push {
+            require_file(&self.maatouch_config.local_path)?;
+            let local = self
+                .maatouch_config
+                .local_path
+                .to_string_lossy()
+                .to_string();
+            let output = adb.push(&self.serial, &local, &self.maatouch_config.remote_path)?;
+            print_command_output("adb push", &output);
+        }
+
+        let output = adb.chmod(&self.serial, &self.maatouch_config.remote_path, "755")?;
+        print_command_output("adb chmod", &output);
+        Ok(())
+    }
+
+    pub fn start(&mut self) -> DeviceResult<()> {
+        if self.child.is_some() || self.stdin.is_some() {
+            return Err(DeviceError::fatal("MaaTouch process is already started"));
+        }
+
+        let mut child = Command::new(&self.adb_config.adb_path)
+            .args([
+                "-s",
+                &self.serial,
+                "shell",
+                &format!("CLASSPATH={}", self.maatouch_config.remote_path),
+                "app_process",
+                "/",
+                "com.shxyke.MaaTouch.App",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| {
+                DeviceError::fatal(format!("failed to start MaaTouch app_process: {err}"))
+            })?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stderr"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdin"))?;
+
+        self.stderr_text = Arc::new(Mutex::new(String::new()));
+        self.stderr_thread = Some(spawn_stderr_reader(stderr, Arc::clone(&self.stderr_text)));
+
+        let handshake = match self.read_handshake(stdout, &mut child) {
+            Ok(handshake) => handshake,
+            Err(err) => {
+                stop_child(&mut child, self.maatouch_config.shutdown_timeout);
+                let join_result = self.join_stderr_thread();
+                return combine_operation_and_close(Err(err), join_result);
+            }
+        };
+        self.child = Some(child);
+        self.stdin = Some(stdin);
+        self.handshake_info = Some(handshake);
+        self.closed = false;
+        Ok(())
+    }
+
+    pub fn read_handshake<R: Read + Send + 'static>(
+        &self,
+        stdout: R,
+        child: &mut Child,
+    ) -> DeviceResult<HandshakeInfo> {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let _ = tx.send(parse_handshake(&mut reader));
+        });
+
+        match rx.recv_timeout(self.maatouch_config.handshake_timeout) {
+            Ok(result) => result.map_err(|err| self.with_stderr(err)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                stop_child(child, self.maatouch_config.shutdown_timeout);
+                Err(self.with_stderr(DeviceError::fatal(format!(
+                    "timed out after {:?} waiting for MaaTouch handshake",
+                    self.maatouch_config.handshake_timeout
+                ))))
+            }
+            Err(err) => {
+                stop_child(child, self.maatouch_config.shutdown_timeout);
+                Err(self.with_stderr(DeviceError::fatal(format!(
+                    "failed to receive MaaTouch handshake: {err}"
+                ))))
+            }
+        }
+    }
+
+    fn ensure_active(&mut self) -> DeviceResult<()> {
+        if self.closed || self.child.is_none() || self.stdin.is_none() {
+            return Err(DeviceError::fatal("MaaTouchBackend is not connected"));
+        }
+
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| DeviceError::fatal("MaaTouch child process is missing"))?;
+        if let Some(status) = child.try_wait().map_err(|err| {
+            DeviceError::fatal(format!("failed to poll MaaTouch process status: {err}"))
+        })? {
+            self.closed = true;
+            return Err(self.with_stderr(DeviceError::fatal(format!(
+                "MaaTouch process exited unexpectedly with {status}"
+            ))));
+        }
+
+        Ok(())
+    }
+
+    fn write_and_flush(&mut self, commands: &str) -> DeviceResult<()> {
+        self.ensure_active()?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| DeviceError::fatal("MaaTouch stdin is missing"))?;
+        stdin.write_all(commands.as_bytes()).map_err(|err| {
+            DeviceError::fatal(format!("failed to write MaaTouch command: {err}"))
+        })?;
+        stdin.flush().map_err(|err| {
+            DeviceError::fatal(format!("failed to flush MaaTouch command: {err}"))
+        })?;
+        Ok(())
+    }
+
+    fn with_stderr(&self, err: DeviceError) -> DeviceError {
+        let stderr = self
+            .stderr_text
+            .lock()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        if stderr.is_empty() {
+            err
+        } else {
+            DeviceError::fatal(format!("{err}\nMaaTouch stderr:\n{stderr}"))
+        }
+    }
+
+    fn join_stderr_thread(&mut self) -> DeviceResult<()> {
+        if let Some(thread) = self.stderr_thread.take() {
+            thread.join().map_err(|_| {
+                DeviceError::fatal("MaaTouch stderr reader thread panicked during shutdown")
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl InputBackend for MaaTouchBackend {
+    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+        self.long_tap(x, y, self.maatouch_config.tap_hold.as_millis() as u64)
+    }
+
+    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+        let pressure = self.maatouch_config.default_pressure;
+        self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+        thread::sleep(Duration::from_millis(duration_ms));
+        self.write_and_flush(&format!("u {TOUCH_ID}\nc\n"))?;
+        Ok(())
+    }
+
+    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+        let pressure = self.maatouch_config.default_pressure;
+        self.write_and_flush(&format!("d {TOUCH_ID} {x1} {y1} {pressure}\nc\n"))?;
+
+        let points = swipe_points(x1, y1, x2, y2, duration_ms);
+        let delay = swipe_step_delay(duration_ms, points.len());
+        for (x, y) in points {
+            self.write_and_flush(&format!("m {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
+        }
+
+        self.write_and_flush(&format!(
+            "m {TOUCH_ID} {x2} {y2} {pressure}\nc\nu {TOUCH_ID}\nc\n"
+        ))?;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> DeviceResult<()> {
+        self.write_and_flush("r\nc\n")
+    }
+
+    fn close(&mut self) -> DeviceResult<()> {
+        if self.closed {
+            return Ok(());
+        }
+
+        let mut errors = Vec::new();
+        if let Err(err) = self.reset() {
+            errors.push(err);
+        }
+        self.stdin.take();
+
+        if let Some(mut child) = self.child.take() {
+            if !stop_child(&mut child, self.maatouch_config.shutdown_timeout) {
+                errors.push(DeviceError::fatal(format!(
+                    "MaaTouch process did not exit within {:?}",
+                    self.maatouch_config.shutdown_timeout
+                )));
+            }
+        }
+
+        if let Err(err) = self.join_stderr_thread() {
+            errors.push(err);
+        }
+
+        let stderr = self
+            .stderr_text
+            .lock()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        if !stderr.is_empty() && stderr != "Killed" {
+            errors.push(DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
+        }
+
+        self.closed = true;
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(DeviceError::fatal(
+                errors
+                    .into_iter()
+                    .map(|err| err.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ))
+        }
+    }
+}
+
 pub fn validate_maatouch(
     config: &MaaTouchValidationConfig,
 ) -> DeviceResult<MaaTouchValidationResult> {
-    if config.maatouch.push {
-        require_file(&config.maatouch.local_path)?;
-    }
+    let mut backend = MaaTouchBackend::new(
+        config.adb.clone(),
+        config.target.clone(),
+        config.maatouch.clone(),
+    );
+    let device = backend.connect()?;
+    let handshake = backend
+        .handshake_info()
+        .cloned()
+        .ok_or_else(|| DeviceError::fatal("MaaTouch handshake was not recorded after connect"))?;
 
-    let serial = config.target.resolved_serial();
-    let adb = Adb::new(config.adb.clone());
+    let operation_result = run_touch_plan(&mut backend, &config.touch_plan);
+    let close_result = backend.close();
+    combine_operation_and_close(operation_result, close_result)?;
 
-    if config.target.connect {
-        let output = adb.connect(&serial)?;
-        print_command_output("adb connect", &output);
-    }
-
-    let device = verify_device(&adb, &serial)?;
-
-    if config.maatouch.push {
-        push_maatouch(&adb, &serial, &config.maatouch)?;
-    }
-
-    let handshake =
-        run_maatouch_session(&config.adb, &serial, &config.maatouch, &config.touch_plan)?;
     Ok(MaaTouchValidationResult { device, handshake })
+}
+
+fn run_touch_plan(backend: &mut MaaTouchBackend, touch_plan: &TouchPlan) -> DeviceResult<()> {
+    backend.reset()?;
+    if let Some(wake) = touch_plan.wake_first {
+        backend.long_tap(
+            wake.x,
+            wake.y,
+            backend.maatouch_config.tap_hold.as_millis() as u64,
+        )?;
+        thread::sleep(touch_plan.between_tap_delay);
+    }
+    if let Some(tap) = touch_plan.tap {
+        backend.long_tap(
+            tap.x,
+            tap.y,
+            backend.maatouch_config.tap_hold.as_millis() as u64,
+        )?;
+    }
+    if !touch_plan.post_command_delay.is_zero() {
+        thread::sleep(touch_plan.post_command_delay);
+    }
+    Ok(())
+}
+
+pub fn combine_operation_and_close(
+    operation_result: DeviceResult<()>,
+    close_result: DeviceResult<()>,
+) -> DeviceResult<()> {
+    match (operation_result, close_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(operation), Ok(())) => Err(operation),
+        (Ok(()), Err(close)) => Err(close),
+        (Err(operation), Err(close)) => Err(DeviceError::fatal(format!(
+            "{operation}; additionally failed to close MaaTouch: {close}"
+        ))),
+    }
 }
 
 fn require_file(path: &PathBuf) -> DeviceResult<()> {
@@ -188,155 +532,21 @@ fn verify_device(adb: &Adb, serial: &str) -> DeviceResult<DeviceInfo> {
     })
 }
 
-fn push_maatouch(adb: &Adb, serial: &str, config: &MaaTouchConfig) -> DeviceResult<()> {
-    let local = config.local_path.to_string_lossy().to_string();
-    let output = adb.push(serial, &local, &config.remote_path)?;
-    print_command_output("adb push", &output);
-
-    let output = adb.chmod(serial, &config.remote_path, "755")?;
-    print_command_output("adb chmod", &output);
-    Ok(())
-}
-
-fn run_maatouch_session(
-    adb: &AdbConfig,
-    serial: &str,
-    maatouch: &MaaTouchConfig,
-    touch_plan: &TouchPlan,
-) -> DeviceResult<HandshakeInfo> {
-    let mut child = Command::new(&adb.adb_path)
-        .args([
-            "-s",
-            serial,
-            "shell",
-            &format!("CLASSPATH={}", maatouch.remote_path),
-            "app_process",
-            "/",
-            "com.shxyke.MaaTouch.App",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| {
-            DeviceError::fatal(format!("failed to start MaaTouch app_process: {err}"))
-        })?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stderr"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdin"))?;
-
-    let stderr_text = Arc::new(Mutex::new(String::new()));
-    let stderr_copy = Arc::clone(&stderr_text);
-    let stderr_thread = thread::spawn(move || {
+fn spawn_stderr_reader(
+    stderr: impl Read + Send + 'static,
+    target: Arc<Mutex<String>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut text = String::new();
         let _ = reader.read_to_string(&mut text);
-        if let Ok(mut target) = stderr_copy.lock() {
+        if let Ok(mut target) = target.lock() {
             *target = text;
         }
-    });
-
-    let stdout_reader = Arc::new(Mutex::new(BufReader::new(stdout)));
-    let handshake_reader = Arc::clone(&stdout_reader);
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let result = match handshake_reader.lock() {
-            Ok(mut reader) => read_handshake(&mut reader),
-            Err(err) => Err(DeviceError::fatal(format!(
-                "failed to lock MaaTouch stdout reader: {err}"
-            ))),
-        };
-        let _ = tx.send(result);
-    });
-
-    let info = match receive_handshake(
-        rx,
-        &stderr_text,
-        &mut child,
-        maatouch.shutdown_timeout,
-        maatouch.handshake_timeout,
-    ) {
-        Ok(info) => info,
-        Err(err) => {
-            drop(stdout_reader);
-            let _ = stderr_thread.join();
-            return Err(err);
-        }
-    };
-
-    send_reset(&mut stdin)?;
-    if let Some(wake) = touch_plan.wake_first {
-        send_tap(&mut stdin, wake)?;
-        thread::sleep(touch_plan.between_tap_delay);
-    }
-    if let Some(tap) = touch_plan.tap {
-        send_tap(&mut stdin, tap)?;
-    }
-
-    thread::sleep(touch_plan.post_command_delay);
-    drop(stdin);
-    if !stop_child(&mut child, maatouch.shutdown_timeout) {
-        drop(stdout_reader);
-        let _ = stderr_thread.join();
-        return Err(DeviceError::fatal(format!(
-            "MaaTouch process did not exit within {:?}",
-            maatouch.shutdown_timeout
-        )));
-    }
-    drop(stdout_reader);
-    let _ = stderr_thread.join();
-
-    let stderr = stderr_text
-        .lock()
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default();
-    if !stderr.is_empty() && stderr != "Killed" {
-        return Err(DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
-    }
-
-    Ok(info)
+    })
 }
 
-fn receive_handshake(
-    rx: mpsc::Receiver<DeviceResult<HandshakeInfo>>,
-    stderr: &Arc<Mutex<String>>,
-    child: &mut std::process::Child,
-    shutdown_timeout: Duration,
-    handshake_timeout: Duration,
-) -> DeviceResult<HandshakeInfo> {
-    match rx.recv_timeout(handshake_timeout) {
-        Ok(result) => result.map_err(|err| attach_stderr(err, stderr)),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            stop_child(child, shutdown_timeout);
-            Err(attach_stderr(
-                DeviceError::fatal(format!(
-                    "timed out after {:?} waiting for MaaTouch handshake",
-                    handshake_timeout
-                )),
-                stderr,
-            ))
-        }
-        Err(err) => {
-            stop_child(child, shutdown_timeout);
-            Err(attach_stderr(
-                DeviceError::fatal(format!("failed to receive MaaTouch handshake: {err}")),
-                stderr,
-            ))
-        }
-    }
-}
-
-fn read_handshake<R: Read>(reader: &mut BufReader<R>) -> DeviceResult<HandshakeInfo> {
+fn parse_handshake<R: Read>(reader: &mut BufReader<R>) -> DeviceResult<HandshakeInfo> {
     loop {
         let mut line = String::new();
         let read = reader.read_line(&mut line).map_err(|err| {
@@ -400,33 +610,23 @@ fn parse_version_and_pid<R: Read>(
     })
 }
 
-fn send_reset(stdin: &mut ChildStdin) -> DeviceResult<()> {
-    stdin
-        .write_all(b"r\nc\n")
-        .map_err(|err| DeviceError::fatal(format!("failed to send MaaTouch reset: {err}")))?;
-    stdin
-        .flush()
-        .map_err(|err| DeviceError::fatal(format!("failed to flush MaaTouch reset: {err}")))?;
-    Ok(())
+fn swipe_points(x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> Vec<(i32, i32)> {
+    let steps = ((duration_ms / SWIPE_FRAME_MS).max(1)).min(MAX_SWIPE_STEPS);
+    (1..steps)
+        .map(|step| {
+            let ratio = step as f64 / steps as f64;
+            let x = x1 as f64 + (x2 - x1) as f64 * ratio;
+            let y = y1 as f64 + (y2 - y1) as f64 * ratio;
+            (x.round() as i32, y.round() as i32)
+        })
+        .collect()
 }
 
-fn send_tap(stdin: &mut ChildStdin, tap: TouchAction) -> DeviceResult<()> {
-    writeln!(stdin, "d 0 {} {} {}", tap.x, tap.y, tap.pressure)
-        .map_err(|err| DeviceError::fatal(format!("failed to send MaaTouch down: {err}")))?;
-    writeln!(stdin, "c")
-        .map_err(|err| DeviceError::fatal(format!("failed to commit MaaTouch down: {err}")))?;
-    stdin
-        .flush()
-        .map_err(|err| DeviceError::fatal(format!("failed to flush MaaTouch down: {err}")))?;
-    thread::sleep(Duration::from_millis(80));
-    writeln!(stdin, "u 0")
-        .map_err(|err| DeviceError::fatal(format!("failed to send MaaTouch up: {err}")))?;
-    writeln!(stdin, "c")
-        .map_err(|err| DeviceError::fatal(format!("failed to commit MaaTouch up: {err}")))?;
-    stdin
-        .flush()
-        .map_err(|err| DeviceError::fatal(format!("failed to flush MaaTouch up: {err}")))?;
-    Ok(())
+fn swipe_step_delay(duration_ms: u64, point_count: usize) -> Duration {
+    if point_count == 0 || duration_ms == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis((duration_ms / (point_count as u64 + 1)).max(1))
 }
 
 fn print_command_output(label: &str, output: &CommandOutput) {
@@ -437,18 +637,6 @@ fn print_command_output(label: &str, output: &CommandOutput) {
     let stderr = output.stderr.trim();
     if !stderr.is_empty() {
         eprintln!("{label} stderr: {stderr}");
-    }
-}
-
-fn attach_stderr(err: DeviceError, stderr: &Arc<Mutex<String>>) -> DeviceError {
-    let stderr = stderr
-        .lock()
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default();
-    if stderr.is_empty() {
-        err
-    } else {
-        DeviceError::fatal(format!("{err}\nMaaTouch stderr:\n{stderr}"))
     }
 }
 
@@ -467,11 +655,26 @@ mod tests {
     fn parses_maatouch_handshake() {
         let input = Cursor::new("^ 10 1280 720 255\n$ 12345\n");
         let mut reader = BufReader::new(input);
-        let info = read_handshake(&mut reader).expect("handshake");
+        let info = parse_handshake(&mut reader).expect("handshake");
         assert_eq!(info.max_contacts, 10);
         assert_eq!(info.max_x, 1280);
         assert_eq!(info.max_y, 720);
         assert_eq!(info.max_pressure, 255);
         assert_eq!(info.pid, "12345");
+    }
+
+    #[test]
+    fn swipe_points_include_intermediate_points_only() {
+        let points = swipe_points(0, 0, 100, 0, 64);
+        assert_eq!(points, vec![(25, 0), (50, 0), (75, 0)]);
+    }
+
+    #[test]
+    fn validation_uses_backend_style_close_error_combination() {
+        let operation = Err(DeviceError::fatal("operation failed"));
+        let close = Err(DeviceError::fatal("close failed"));
+        let err = combine_operation_and_close(operation, close).expect_err("combined error");
+        assert!(err.message().contains("operation failed"));
+        assert!(err.message().contains("close failed"));
     }
 }
