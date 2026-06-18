@@ -56,7 +56,7 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - Routine Runtime updates stay in `HS7097/ActingCommand-Runtime`.
 - Do not merge, copy, or synchronize Runtime changes into the umbrella/main `HS7097/ActingCommand` repository by default.
 - Merge a Runtime state into the main repository only after the user explicitly confirms that merge point.
-- Runtime-local policy update is recorded in commit `51e5b9aff95e8f8f8e3e5d105ed56fbf17a8d989`.
+- Runtime-local policy update is recorded in commit `7e587f956067ab21384a11b784df60a8eab788fd`.
 
 ### Files changed
 
