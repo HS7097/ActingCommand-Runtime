@@ -19,6 +19,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P2.1 capture artifact store.
 - P2.1.1 capture artifact path security close-out.
 - P4a threshold-free recognition primitive engine.
+- P4a.1 recognition score semantics close-out.
+
+## Recognition score semantics
+
+P4a.1 clarifies template-match score semantics without starting P4b.
+
+`TemplateMatch` carries both:
+
+- `raw_score`: the method-native score returned by the current template matching algorithm.
+- `score`: a normalized `0.0..=1.0` score for later rule-layer thresholding. This is not a probability.
+
+Current template matching uses `imageproc` `CrossCorrelationNormalized`. For non-negative image pixels this metric is already in `0.0..=1.0`, so P4a.1 normalization is identity plus clamp, with `NaN` normalized to `0.0`.
+
+P4a.1 remains threshold-free. P4b or higher-level callers own threshold selection, rule data loading, and decision policy.
 
 ## Repo-local planning policy
 

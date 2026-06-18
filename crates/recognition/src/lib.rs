@@ -61,6 +61,12 @@ pub struct Rect {
 pub struct TemplateMatch {
     pub x: i32,
     pub y: i32,
+
+    /// Raw score returned by the current template matching method.
+    pub raw_score: f32,
+
+    /// Normalized score in 0.0..=1.0 for rule-layer thresholding.
+    /// This is not a probability.
     pub score: f32,
 }
 
@@ -138,6 +144,8 @@ impl Scene {
             MatchTemplateMethod::CrossCorrelationNormalized,
         );
         let extremes = find_extremes(&response);
+        let raw_score = extremes.max_value;
+        let score = normalize_ncc_score(raw_score);
         let x = i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
             RecognitionError::fatal("template match x coordinate exceeds i32 range")
         })?;
@@ -148,7 +156,8 @@ impl Scene {
         Ok(TemplateMatch {
             x,
             y,
-            score: extremes.max_value,
+            raw_score,
+            score,
         })
     }
 
@@ -236,6 +245,15 @@ fn euclidean_distance(mean: [u8; 3], expected: [u8; 3]) -> f32 {
     (dr * dr + dg * dg + db * db).sqrt()
 }
 
+// CrossCorrelationNormalized on non-negative pixels is already a [0, 1] metric; P4a only normalizes scores and leaves thresholds to callers.
+fn normalize_ncc_score(raw: f32) -> f32 {
+    if raw.is_nan() {
+        0.0
+    } else {
+        raw.clamp(0.0, 1.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,7 +270,13 @@ mod tests {
             .expect("template match");
 
         assert_eq!((matched.x, matched.y), (200, 150));
+        assert!(
+            matched.raw_score >= 0.99,
+            "raw_score was {}",
+            matched.raw_score
+        );
         assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert_score_is_normalized(matched.score);
     }
 
     #[test]
@@ -266,6 +290,7 @@ mod tests {
             .expect("template match");
 
         assert!(matched.score < 0.95, "score was {}", matched.score);
+        assert_score_is_normalized(matched.score);
     }
 
     #[test]
@@ -284,7 +309,13 @@ mod tests {
             .expect("template match");
 
         assert_eq!((matched.x, matched.y), (200, 150));
+        assert!(
+            matched.raw_score >= 0.99,
+            "raw_score was {}",
+            matched.raw_score
+        );
         assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert_score_is_normalized(matched.score);
     }
 
     #[test]
@@ -306,6 +337,17 @@ mod tests {
         assert!(matched.y >= region.y);
         assert!(matched.x < region.x + region.width);
         assert!(matched.y < region.y + region.height);
+        assert_score_is_normalized(matched.score);
+    }
+
+    #[test]
+    fn normalize_ncc_score_uses_identity_clamp_semantics() {
+        assert_eq!(normalize_ncc_score(0.0), 0.0);
+        assert_eq!(normalize_ncc_score(0.5), 0.5);
+        assert_eq!(normalize_ncc_score(1.0), 1.0);
+        assert_eq!(normalize_ncc_score(-0.2), 0.0);
+        assert_eq!(normalize_ncc_score(1.3), 1.0);
+        assert_eq!(normalize_ncc_score(f32::NAN), 0.0);
     }
 
     #[test]
@@ -441,5 +483,9 @@ mod tests {
             .write_to(&mut out, ImageFormat::Png)
             .expect("encode PNG");
         out.into_inner()
+    }
+
+    fn assert_score_is_normalized(score: f32) {
+        assert!((0.0..=1.0).contains(&score), "score was {score}");
     }
 }

@@ -14,6 +14,9 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4a recognition primitive engine:
   - commit `5083b136022abe4907af3dfd653b399952038a65`
   - tag `checkpoint/20260618-p4a-recognition-primitives`
+- P4a.1 recognition score semantics close-out:
+  - adds `raw_score` plus normalized `score` to `TemplateMatch`
+  - keeps P4a threshold-free
 
 ## 2026-06-18 Runtime repo-local planning initialization
 
@@ -81,3 +84,55 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 ### Next step
 
 1. Use this merge policy for future Runtime work.
+
+## 2026-06-18 P4a.1 recognition score semantics close-out
+
+### Current status
+
+- Completed P4a.1 recognition score semantics close-out.
+- `TemplateMatch` now includes both `raw_score` and normalized `score`.
+- `raw_score` is the method-native score from `imageproc` `CrossCorrelationNormalized`.
+- `score` is normalized to `0.0..=1.0` for future rule-layer thresholding and is not a probability.
+- `normalize_ncc_score` uses identity plus clamp for current NCC semantics and maps `NaN` to `0.0`.
+- P4a remains threshold-free; P4b or callers own threshold selection and recognition data loading.
+- No UI, SQLite, OCR, page navigation, game logic, fallback, reconnect, retry, OpenCV, or new dependency was added.
+- No `crates/device` or `crates/runtime-core` source was modified.
+
+### Files changed
+
+- `crates/recognition/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P4a.1-score-semantics.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Checked Runtime repository status and baseline commit.
+- Inspected `crates/recognition/src/lib.rs` and `crates/recognition/Cargo.toml`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-recognition`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-recognition -- -D warnings`
+- `rg -n "OCR|ocr|SQLite|sqlite|\bUI\b|\bui\b|navigation|navigate|state machine|game logic|fallback|reconnect|retry|opencv|threshold\s*=|threshold\(" crates\recognition crates\recognition\Cargo.toml`
+- `rg -n "raw_score|normalize_ncc_score|CrossCorrelationNormalized|TemplateMatch" crates\recognition\src\lib.rs`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-recognition` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-recognition -- -D warnings` passed.
+- `git diff --check` passed.
+- Recognition tests now cover normalized NCC identity/clamp semantics, `NaN -> 0.0`, `raw_score` on perfect matches, and normalized `score` range.
+- Prohibited-feature scan found no OCR, UI, SQLite, page navigation, game logic, fallback, reconnect, retry, OpenCV, or threshold implementation in `crates/recognition`.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Define P4b recognition data loading and threshold policy outside the P4a primitive engine.
