@@ -1,6 +1,6 @@
 # ActingCommand Runtime Contracts
 
-These files are the P0a contracts between the runtime decision/data core, UI, and future execution layer.
+These files are historical and protocol reference contracts between the runtime decision/data core, UI, and future execution layer.
 
 ## Files
 
@@ -11,19 +11,23 @@ These files are the P0a contracts between the runtime decision/data core, UI, an
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 
-## Go boundary
+## Rust mainline boundary
 
-The compile-time Go interfaces live in:
+The Rust mainline contract crate lives in:
+
+- `crates/actingcommand-contract`
+
+The Rust device-layer crate lives in:
+
+- `crates/device`
+
+## Historical Go boundary
+
+The historical Go interfaces live in:
 
 - `pkg/contract/primitive.go`
 - `pkg/contract/game_engine.go`
 - `pkg/contract/taskflow.go`
 - `pkg/contract/types.go`
 
-## Rust backup boundary
-
-Backup Rust contract definitions live in:
-
-- `contracts/rust/actingcommand-contract-rs`
-
-The UI must use the runtime API and must not own the runtime lifecycle. The execution layer should satisfy `PrimitiveLayer` through a Go adapter and may be implemented by a Rust worker or another process. It returns structured observations and image references, not raw frame buffers.
+The UI must use the runtime API and must not own the runtime lifecycle. The execution layer must return structured observations and image references, not raw frame buffers.

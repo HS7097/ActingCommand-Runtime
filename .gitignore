@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ActingCommand local runtime data and external artifacts
+runtime-state/
+screenshots/
+captures/
+acquisitions/
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+upstream-sources/
+external-tools/

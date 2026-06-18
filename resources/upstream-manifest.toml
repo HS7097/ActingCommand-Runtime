@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# This manifest records upstream locations for local reference artifacts.
+# It does not include upstream source code, binaries, screenshots, templates,
+# game assets, OCR data, or generated resource packs in this repository.
+
+[[tools]]
+id = "maatouch"
+name = "MaaTouch"
+source_project = "wess09/AzurPilot"
+source_url = "https://github.com/wess09/AzurPilot"
+source_path = "bin/MaaTouch/maatouch"
+local_hint = "external-tools/maatouch/maatouch"
+included_in_repository = false
+license_review = "Upstream repository license and file-level attribution must be reviewed before redistribution."
+notes = "Used by apps/device-test through an explicit --local path or ignored external-tools copy. Do not commit the binary."

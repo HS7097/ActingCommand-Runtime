@@ -13,24 +13,47 @@ use std::time::Instant;
 fn main() {
     let iterations = parse_iterations();
     let root = repo_root();
-    let acquisition = fs::read(root.join("benchmarks/workloads/acquisition_capture.json")).expect("read acquisition workload");
-    let event = fs::read(root.join("benchmarks/workloads/runtime_event.json")).expect("read event workload");
-    let task_flow = fs::read(root.join("benchmarks/workloads/task_flow.json")).expect("read task flow workload");
+    let acquisition = fs::read(root.join("benchmarks/workloads/acquisition_capture.json"))
+        .expect("read acquisition workload");
+    let event = fs::read(root.join("benchmarks/workloads/runtime_event.json"))
+        .expect("read event workload");
+    let task_flow = fs::read(root.join("benchmarks/workloads/task_flow.json"))
+        .expect("read task flow workload");
 
     let acquisition_value: Value = serde_json::from_slice(&acquisition).expect("parse acquisition");
 
-    bench("serde_json parse acquisition", iterations, acquisition.len(), || {
-        let _: Value = serde_json::from_slice(&acquisition).expect("parse acquisition");
-    });
-    bench("serde_json stringify acquisition", iterations, acquisition.len(), || {
-        let _ = serde_json::to_vec(&acquisition_value).expect("stringify acquisition");
-    });
-    bench("serde_json parse runtime event", iterations, event.len(), || {
-        let _: Value = serde_json::from_slice(&event).expect("parse event");
-    });
-    bench("serde_json parse task flow", (iterations / 10).max(1), task_flow.len(), || {
-        let _: Value = serde_json::from_slice(&task_flow).expect("parse task flow");
-    });
+    bench(
+        "serde_json parse acquisition",
+        iterations,
+        acquisition.len(),
+        || {
+            let _: Value = serde_json::from_slice(&acquisition).expect("parse acquisition");
+        },
+    );
+    bench(
+        "serde_json stringify acquisition",
+        iterations,
+        acquisition.len(),
+        || {
+            let _ = serde_json::to_vec(&acquisition_value).expect("stringify acquisition");
+        },
+    );
+    bench(
+        "serde_json parse runtime event",
+        iterations,
+        event.len(),
+        || {
+            let _: Value = serde_json::from_slice(&event).expect("parse event");
+        },
+    );
+    bench(
+        "serde_json parse task flow",
+        (iterations / 10).max(1),
+        task_flow.len(),
+        || {
+            let _: Value = serde_json::from_slice(&task_flow).expect("parse task flow");
+        },
+    );
     bench_tcp(iterations, &event);
 }
 

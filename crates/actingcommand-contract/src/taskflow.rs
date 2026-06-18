@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Rust backup data structures for declarative task-flow contracts.
+//! Rust mainline data structures for declarative task-flow contracts.
 
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskFlow {
     pub schema_version: String,
     pub id: String,
@@ -18,7 +19,7 @@ pub struct TaskFlow {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskDefinition {
     pub id: TaskId,
     pub name: String,
@@ -28,7 +29,7 @@ pub struct TaskDefinition {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskStep {
     pub id: String,
     pub description: Option<String>,
@@ -40,7 +41,7 @@ pub struct TaskStep {
     pub timeout_ms: Option<DurationMillis>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FailurePolicy {
     pub severity: Severity,
     pub retry_limit: Option<i32>,
@@ -48,7 +49,8 @@ pub struct FailurePolicy {
     pub fallback_step: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum TaskParamValue {
     Null,
     Bool(bool),

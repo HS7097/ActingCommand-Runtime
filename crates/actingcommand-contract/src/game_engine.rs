@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Rust backup boundary for native engines and delegated upstream backends.
+//! Rust mainline boundary for native engines and delegated upstream backends.
 
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 
-/// Game automation boundary mirrored from Go `GameEngine`.
 pub trait GameEngine {
     fn describe(&self, ctx: &RuntimeContext) -> ContractResult<GameEngineDescriptor>;
 
@@ -71,7 +71,7 @@ pub trait GameEngine {
     ) -> ContractResult<Vec<AcquisitionCapture>>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameEngineDescriptor {
     pub id: String,
     pub kind: EngineKind,
@@ -82,7 +82,7 @@ pub struct GameEngineDescriptor {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCommand {
     pub profile_id: ProfileId,
     pub request_id: String,
@@ -90,7 +90,7 @@ pub struct RuntimeCommand {
     pub options: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandResult {
     pub request_id: String,
     pub state: RuntimeState,
@@ -99,7 +99,7 @@ pub struct CommandResult {
     pub error: Option<RuntimeError>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskRequest {
     pub profile_id: ProfileId,
     pub request_id: String,
@@ -108,7 +108,7 @@ pub struct TaskRequest {
     pub options: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskRunSummary {
     pub task_run_id: TaskRunId,
     pub task_id: TaskId,
@@ -119,20 +119,20 @@ pub struct TaskRunSummary {
     pub last_error: Option<RuntimeError>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecentQuery {
     pub profile_id: Option<ProfileId>,
     pub limit: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceHistoryQuery {
     pub profile_id: Option<ProfileId>,
     pub key: Option<ResourceKey>,
     pub limit: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AcquisitionQuery {
     pub profile_id: Option<ProfileId>,
     pub task_run_id: Option<TaskRunId>,

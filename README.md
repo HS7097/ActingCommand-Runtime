@@ -2,7 +2,7 @@
 
 Independent runtime service for ActingCommand.
 
-This repository contains `AliceRuntimeOrchestrator`, the long-lived local runtime process. The UI is a disposable client and must not own this process lifetime.
+This repository is converging to a Rust mainline runtime. The older Python `AliceRuntimeOrchestrator` remains as legacy/mock material only, and the older Go contracts remain as historical reference and benchmark material only.
 
 ## Responsibility
 
@@ -30,11 +30,48 @@ WS:   ws://127.0.0.1:8766/events
 
 The runtime must survive UI reload, crash, or close.
 
-## P0a contracts
+## Rust workspace
 
-The current Go direction starts with decision/data contracts before the operation layer is implemented.
+The Rust mainline skeleton starts with contracts and device-layer validation before broad runtime implementation.
 
-- Go interfaces: `pkg/contract`
+- workspace root: `Cargo.toml`
+- Rust contracts: `crates/actingcommand-contract`
+- device layer: `crates/device`
+- MaaTouch device probe: `apps/device-test`
+
+Run Rust checks:
+
+```powershell
+cargo test --workspace
+```
+
+Run the MaaTouch device probe:
+
+```powershell
+cargo run -p actingcommand-device-test -- --port 16384
+```
+
+The default MaaTouch binary path is ignored by Git:
+
+```text
+external-tools/maatouch/maatouch
+```
+
+You can also pass an explicit external path:
+
+```powershell
+cargo run -p actingcommand-device-test -- --local ..\upstream-sources\AzurPilot\bin\MaaTouch\maatouch --port 16384
+```
+
+MaaTouch failure is a fatal device-layer error. ADB input fallback is intentionally not implemented.
+
+## Historical contracts and benchmarks
+
+The Go and Python materials are not current implementation targets.
+
+- Python mock runtime: `runtime`
+- Go historical interfaces: `pkg/contract`
+- Go/Python/Rust microbenchmarks: `benchmarks`
 - UI HTTP contract: `contracts/runtime-api.openapi.yaml`
 - UI event contract: `contracts/runtime-events.schema.json`
 - task-flow schema: `contracts/task-flow.schema.json`
@@ -42,23 +79,23 @@ The current Go direction starts with decision/data contracts before the operatio
 - server variant policy: `contracts/server-keys.md`
 - execution-layer boundary: `contracts/primitive-service.md`
 
-The operation layer may be implemented in Rust or another language. It should connect through a Go adapter that satisfies `pkg/contract.PrimitiveLayer`. It must return structured observations and image references, not raw frame buffers. UI code should use the runtime API and should not open the runtime SQLite database directly.
+Do not continue expanding the Python mock runtime or Go runtime/core line. UI code should use the runtime API and should not open the runtime SQLite database directly.
 
 ## Local run
 
-Install dependencies:
+Install legacy Python mock dependencies:
 
 ```powershell
 python -m pip install -r .\runtime\requirements.txt
 ```
 
-Start the runtime:
+Start the legacy Python mock runtime:
 
 ```powershell
 .\scripts\start-runtime.ps1
 ```
 
-Stop the runtime:
+Stop the legacy Python mock runtime:
 
 ```powershell
 .\scripts\stop-runtime.ps1

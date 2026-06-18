@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[workspace]
+members = [
+    "apps/device-test",
+    "benchmarks/rust",
+    "crates/actingcommand-contract",
+    "crates/device",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/HS7097/ActingCommand-Runtime"
+
+[workspace.dependencies]
+actingcommand-contract = { path = "crates/actingcommand-contract" }
+actingcommand-device = { path = "crates/device" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Rust backup boundary for low-level device, capture, recognition, and input primitives.
+//! Rust mainline boundary for low-level device, capture, recognition, and input primitives.
 
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 
-/// Execution-layer boundary mirrored from Go `PrimitiveLayer`.
 pub trait PrimitiveLayer {
     fn connect_device(
         &mut self,
@@ -59,7 +59,7 @@ pub trait PrimitiveLayer {
     ) -> ContractResult<WaitForResult>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceConnectRequest {
     pub profile_id: ProfileId,
     pub device_id: String,
@@ -68,7 +68,7 @@ pub struct DeviceConnectRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceSession {
     pub id: String,
     pub device_id: String,
@@ -78,7 +78,7 @@ pub struct DeviceSession {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppRequest {
     pub session_id: String,
     pub package: String,
@@ -86,7 +86,7 @@ pub struct AppRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureRequest {
     pub session_id: String,
     pub region: Option<Rect>,
@@ -94,7 +94,7 @@ pub struct CaptureRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureRef {
     pub id: String,
     pub image_ref: String,
@@ -103,7 +103,7 @@ pub struct CaptureRef {
     pub captured_at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchRequest {
     pub session_id: String,
     pub capture_id: Option<String>,
@@ -114,7 +114,7 @@ pub struct MatchRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemplateRef {
     pub id: String,
     pub path: String,
@@ -125,20 +125,20 @@ pub struct TemplateRef {
     pub resolution: Resolution,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchResult {
     pub hits: Vec<MatchHit>,
     pub observed_at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatchHit {
     pub template_id: String,
     pub score: f64,
     pub rect: Rect,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OcrRequest {
     pub session_id: String,
     pub capture_id: Option<String>,
@@ -147,7 +147,7 @@ pub struct OcrRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OcrResult {
     pub text: String,
     pub blocks: Vec<OcrBlock>,
@@ -156,14 +156,14 @@ pub struct OcrResult {
     pub warnings: Vec<RuntimeError>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OcrBlock {
     pub text: String,
     pub rect: Rect,
     pub confidence: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColorRequest {
     pub session_id: String,
     pub capture_id: Option<String>,
@@ -171,13 +171,13 @@ pub struct ColorRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColorResult {
     pub rgba: String,
     pub observed_at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TapRequest {
     pub session_id: String,
     pub point: Point,
@@ -185,7 +185,7 @@ pub struct TapRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwipeRequest {
     pub session_id: String,
     pub from: Point,
@@ -195,7 +195,7 @@ pub struct SwipeRequest {
     pub timeout_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaitForRequest {
     pub session_id: String,
     pub condition: String,
@@ -203,14 +203,14 @@ pub struct WaitForRequest {
     pub poll_every_ms: DurationMillis,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaitForResult {
     pub satisfied: bool,
     pub observed_at: Timestamp,
     pub details: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionResult {
     pub ok: bool,
     pub observed_at: Timestamp,
@@ -218,13 +218,13 @@ pub struct ActionResult {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,

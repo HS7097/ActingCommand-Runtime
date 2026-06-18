@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Rust backup contract definitions for ActingCommand runtime boundaries.
+//! Rust mainline contract definitions for ActingCommand runtime boundaries.
 //!
-//! The Go contracts in `pkg/contract` remain the P0a owner. This crate mirrors
-//! those interfaces for future Rust workers or adapters without adding runtime
-//! dependencies to the main Go core.
+//! These models define the Rust-side API vocabulary. They are skeleton
+//! contracts for protocol, device, and engine boundaries, not game logic.
 
 #![forbid(unsafe_code)]
 
@@ -40,7 +39,7 @@ mod tests {
             fallback_path: None,
             user_visible_impact: Some("request failed".to_string()),
             context: Metadata::new(),
-            occurred_at: "2026-06-16T00:00:00Z".to_string(),
+            occurred_at: "2026-06-18T00:00:00Z".to_string(),
         };
 
         let result: ContractResult<()> = Err(err);

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Shared runtime model types mirrored from the Go contract package.
+//! Shared runtime model types for Rust mainline contracts.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub type Metadata = BTreeMap<String, String>;
@@ -56,14 +57,14 @@ pub const SEVERITY_FATAL: &str = "fatal";
 pub const SEVERITY_DEGRADED: &str = "degraded";
 
 /// Request-scoped metadata used by Rust adapters in place of Go's `context.Context`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct RuntimeContext {
     pub request_id: String,
     pub deadline_at: Option<Timestamp>,
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Resolution {
     pub width: i32,
     pub height: i32,
@@ -71,7 +72,7 @@ pub struct Resolution {
     pub dpi: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeError {
     pub severity: Severity,
     pub code: String,
@@ -84,7 +85,7 @@ pub struct RuntimeError {
     pub occurred_at: Timestamp,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEvent {
     pub timestamp: Timestamp,
     pub level: Severity,
@@ -93,7 +94,7 @@ pub struct LogEvent {
     pub context: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SchedulerSummary {
     pub alive: bool,
     pub current_task: Option<String>,
@@ -105,7 +106,7 @@ pub struct SchedulerSummary {
     pub state: RuntimeState,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileSummary {
     pub id: ProfileId,
     pub name: String,
@@ -121,7 +122,7 @@ pub struct ProfileSummary {
     pub recent_logs: Vec<LogEvent>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Resource {
     pub key: ResourceKey,
     pub value: String,
@@ -129,7 +130,7 @@ pub struct Resource {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceHistoryPoint {
     pub timestamp: Timestamp,
     pub profile_id: ProfileId,
@@ -140,7 +141,7 @@ pub struct ResourceHistoryPoint {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AcquisitionCapture {
     pub id: String,
     pub profile_id: ProfileId,
@@ -159,7 +160,7 @@ pub struct AcquisitionCapture {
     pub retention_class: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeStatus {
     pub state: RuntimeState,
     pub started_at: Option<Timestamp>,
@@ -171,7 +172,7 @@ pub struct RuntimeStatus {
     pub capabilities: Vec<RuntimeCapability>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCapability {
     pub name: String,
     pub version: Option<String>,
