@@ -6,6 +6,7 @@ members = [
     "benchmarks/rust",
     "crates/actingcommand-contract",
     "crates/device",
+    "crates/recognition",
     "crates/runtime-core",
 ]
 resolver = "3"
