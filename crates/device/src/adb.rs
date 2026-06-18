@@ -58,6 +58,14 @@ impl Adb {
         Ok(output.stdout.trim().to_string())
     }
 
+    pub fn screencap(&self, serial: &str, timeout: Duration) -> DeviceResult<BinaryOutput> {
+        run_binary_with_timeout(
+            &self.config.adb_path,
+            &["-s", serial, "exec-out", "screencap", "-p"],
+            timeout,
+        )
+    }
+
     pub fn push(&self, serial: &str, local: &str, remote: &str) -> DeviceResult<CommandOutput> {
         self.run(&["-s", serial, "push", local, remote])
     }

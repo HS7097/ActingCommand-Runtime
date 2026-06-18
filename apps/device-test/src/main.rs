@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    DeviceError, DeviceResult, InputBackend, MaaTouchBackend, MaaTouchValidationConfig,
-    combine_operation_and_close,
+    CaptureBackend, DeviceError, DeviceResult, InputBackend, MaaTouchBackend,
+    MaaTouchValidationConfig, ScreencapBackend, combine_operation_and_close,
 };
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -27,6 +28,9 @@ enum DeviceCommand {
         y2: i32,
         duration_ms: u64,
     },
+    Capture {
+        out: PathBuf,
+    },
 }
 
 fn main() {
@@ -38,6 +42,13 @@ fn main() {
 
 fn run() -> DeviceResult<()> {
     let (config, commands) = parse_args(env::args().skip(1))?;
+    if commands
+        .iter()
+        .any(|command| matches!(command, DeviceCommand::Capture { .. }))
+    {
+        return run_capture_command(config, &commands);
+    }
+
     let mut backend = MaaTouchBackend::new(config.adb, config.target, config.maatouch);
 
     println!("Target device: {}", backend.serial());
@@ -60,6 +71,33 @@ fn run() -> DeviceResult<()> {
     combine_operation_and_close(operation_result, close_result)?;
 
     println!("PASS");
+    Ok(())
+}
+
+fn run_capture_command(
+    config: MaaTouchValidationConfig,
+    commands: &[DeviceCommand],
+) -> DeviceResult<()> {
+    let [DeviceCommand::Capture { out }] = commands else {
+        return Err(DeviceError::fatal(
+            "capture cannot be combined with MaaTouch input commands",
+        ));
+    };
+
+    let mut backend = ScreencapBackend::new(config.adb, config.target);
+    let frame = backend.capture()?;
+    fs::write(out, &frame.png).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to write capture output {}: {err}",
+            out.display()
+        ))
+    })?;
+    println!(
+        "captured {}x{} -> {}",
+        frame.width,
+        frame.height,
+        out.display()
+    );
     Ok(())
 }
 
@@ -87,6 +125,11 @@ fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> De
             } => {
                 backend.swipe(x1, y1, x2, y2, duration_ms)?;
                 println!("swipe sent: x1={x1} y1={y1} x2={x2} y2={y2} duration_ms={duration_ms}");
+            }
+            DeviceCommand::Capture { .. } => {
+                return Err(DeviceError::fatal(
+                    "capture cannot run through MaaTouchBackend",
+                ));
             }
         }
     }
@@ -188,6 +231,12 @@ where
                     duration_ms,
                 });
             }
+            "capture" => {
+                index += 1;
+                commands.push(DeviceCommand::Capture {
+                    out: parse_capture_out(&tokens, &mut index)?,
+                });
+            }
             other => {
                 return Err(DeviceError::fatal(format!(
                     "unknown argument or command: {other}"
@@ -198,11 +247,29 @@ where
 
     if commands.is_empty() {
         return Err(DeviceError::fatal(
-            "missing command: expected reset, tap, longtap, or swipe",
+            "missing command: expected reset, tap, longtap, swipe, or capture",
         ));
     }
 
     Ok((cfg, commands))
+}
+
+fn parse_capture_out(tokens: &[String], index: &mut usize) -> DeviceResult<PathBuf> {
+    let mut out = None;
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--out" => {
+                out = Some(PathBuf::from(next_token(tokens, index, "--out")?));
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown capture argument: {other}"
+                )));
+            }
+        }
+    }
+
+    out.ok_or_else(|| DeviceError::fatal("capture requires --out <path>"))
 }
 
 fn next_token(tokens: &[String], index: &mut usize, name: &str) -> DeviceResult<String> {
@@ -254,8 +321,10 @@ fn print_help() {
          cargo run -p actingcommand-device-test -- [options] tap <x> <y>\n\
          cargo run -p actingcommand-device-test -- [options] longtap <x> <y> <duration_ms>\n\
          cargo run -p actingcommand-device-test -- [options] swipe <x1> <y1> <x2> <y2> <duration_ms>\n\
+         cargo run -p actingcommand-device-test -- [options] capture --out <path>\n\
          \n\
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
+         Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
          Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
@@ -291,5 +360,30 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn parses_capture_out() {
+        let (_, commands) = parse_args([
+            "--port".to_string(),
+            "16384".to_string(),
+            "capture".to_string(),
+            "--out".to_string(),
+            "frame.png".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![DeviceCommand::Capture {
+                out: PathBuf::from("frame.png")
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_capture_without_out() {
+        let err = parse_args(["capture".to_string()]).expect_err("missing out");
+        assert!(err.message().contains("--out"));
     }
 }
