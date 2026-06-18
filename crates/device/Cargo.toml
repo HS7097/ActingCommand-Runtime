@@ -9,4 +9,3 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-actingcommand-contract = { workspace = true }

@@ -12,9 +12,6 @@ dependencies = [
 [[package]]
 name = "actingcommand-device"
 version = "0.1.0"
-dependencies = [
- "actingcommand-contract",
-]
 
 [[package]]
 name = "actingcommand-device-test"

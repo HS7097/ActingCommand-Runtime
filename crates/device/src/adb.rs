@@ -2,8 +2,9 @@
 
 use crate::{DeviceError, DeviceResult};
 use std::io::{self, Read};
+use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,12 @@ impl Default for AdbConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryOutput {
+    pub stdout: Vec<u8>,
     pub stderr: String,
 }
 
@@ -60,15 +67,60 @@ impl Adb {
     }
 
     pub fn run(&self, args: &[&str]) -> DeviceResult<CommandOutput> {
-        run_with_timeout(&self.config.adb_path, args, self.config.command_timeout)
+        run_text_with_timeout(&self.config.adb_path, args, self.config.command_timeout)
     }
 }
 
-pub fn run_with_timeout(
+struct RawCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+pub fn run_text_with_timeout(
     adb_path: &str,
     args: &[&str],
     timeout: Duration,
 ) -> DeviceResult<CommandOutput> {
+    let output = run_raw_with_timeout(adb_path, args, timeout)?;
+    let stdout = decode_adb_text(output.stdout, "stdout", args)?;
+    let stderr = decode_adb_text(output.stderr, "stderr", args)?;
+    if output.status.success() {
+        return Ok(CommandOutput { stdout, stderr });
+    }
+    Err(DeviceError::fatal(format!(
+        "adb {} failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        args.join(" "),
+        output.status
+    )))
+}
+
+pub fn run_binary_with_timeout(
+    adb_path: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> DeviceResult<BinaryOutput> {
+    let output = run_raw_with_timeout(adb_path, args, timeout)?;
+    let stderr = decode_adb_text(output.stderr, "stderr", args)?;
+    if output.status.success() {
+        return Ok(BinaryOutput {
+            stdout: output.stdout,
+            stderr,
+        });
+    }
+    Err(DeviceError::fatal(format!(
+        "adb {} failed with {}\nstdout bytes: {}\nstderr:\n{stderr}",
+        args.join(" "),
+        output.status,
+        output.stdout.len()
+    )))
+}
+
+fn run_raw_with_timeout(
+    adb_path: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> DeviceResult<RawCommandOutput> {
     let mut child = Command::new(adb_path)
         .args(args)
         .stdout(Stdio::piped())
@@ -78,6 +130,15 @@ pub fn run_with_timeout(
             DeviceError::fatal(format!("failed to spawn adb {}: {err}", args.join(" ")))
         })?;
 
+    let stdout = child.stdout.take().ok_or_else(|| {
+        DeviceError::fatal(format!("failed to open adb {} stdout", args.join(" ")))
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        DeviceError::fatal(format!("failed to open adb {} stderr", args.join(" ")))
+    })?;
+    let stdout_thread = spawn_pipe_reader(stdout);
+    let stderr_thread = spawn_pipe_reader(stderr);
+
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait().map_err(|err| {
@@ -86,20 +147,14 @@ pub fn run_with_timeout(
                 args.join(" ")
             ))
         })? {
-            let stdout = read_pipe_to_string(child.stdout.take())?;
-            let stderr = read_pipe_to_string(child.stderr.take())?;
-            if status.success() {
-                return Ok(CommandOutput { stdout, stderr });
-            }
-            return Err(DeviceError::fatal(format!(
-                "adb {} failed with {status}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-                args.join(" ")
-            )));
+            return collect_raw_output(status, stdout_thread, stderr_thread);
         }
         if started.elapsed() >= timeout {
             stop_child(&mut child, Duration::from_millis(500));
-            let stdout = read_pipe_to_string(child.stdout.take())?;
-            let stderr = read_pipe_to_string(child.stderr.take())?;
+            let stdout = join_pipe_reader(stdout_thread, "stdout")?;
+            let stderr = join_pipe_reader(stderr_thread, "stderr")?;
+            let stdout = String::from_utf8_lossy(&stdout);
+            let stderr = String::from_utf8_lossy(&stderr);
             return Err(DeviceError::fatal(format!(
                 "adb {} timed out after {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
                 args.join(" "),
@@ -108,6 +163,45 @@ pub fn run_with_timeout(
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn collect_raw_output(
+    status: ExitStatus,
+    stdout_thread: JoinHandle<io::Result<Vec<u8>>>,
+    stderr_thread: JoinHandle<io::Result<Vec<u8>>>,
+) -> DeviceResult<RawCommandOutput> {
+    Ok(RawCommandOutput {
+        status,
+        stdout: join_pipe_reader(stdout_thread, "stdout")?,
+        stderr: join_pipe_reader(stderr_thread, "stderr")?,
+    })
+}
+
+fn spawn_pipe_reader(mut reader: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_pipe_reader(
+    thread: JoinHandle<io::Result<Vec<u8>>>,
+    stream_name: &str,
+) -> DeviceResult<Vec<u8>> {
+    thread
+        .join()
+        .map_err(|_| DeviceError::fatal(format!("adb {stream_name} reader thread panicked")))?
+        .map_err(|err| DeviceError::fatal(format!("failed to read adb {stream_name}: {err}")))
+}
+
+fn decode_adb_text(bytes: Vec<u8>, stream_name: &str, args: &[&str]) -> DeviceResult<String> {
+    String::from_utf8(bytes).map_err(|err| {
+        DeviceError::fatal(format!(
+            "adb {} produced non-UTF-8 {stream_name}: {err}",
+            args.join(" ")
+        ))
+    })
 }
 
 pub fn stop_child(child: &mut Child, timeout: Duration) -> bool {
@@ -122,16 +216,5 @@ pub fn stop_child(child: &mut Child, timeout: Duration) -> bool {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    eprintln!("warning: child process did not exit within {:?}", timeout);
     false
-}
-
-fn read_pipe_to_string<R: Read>(pipe: Option<R>) -> DeviceResult<String> {
-    let mut text = String::new();
-    if let Some(mut reader) = pipe {
-        reader.read_to_string(&mut text).map_err(|err: io::Error| {
-            DeviceError::fatal(format!("failed to read adb pipe: {err}"))
-        })?;
-    }
-    Ok(text)
 }

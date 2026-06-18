@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{Adb, AdbConfig, CommandOutput, stop_child};
+use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::{DeviceError, DeviceResult, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -181,8 +181,7 @@ impl MaaTouchBackend {
 
         let adb = Adb::new(self.adb_config.clone());
         if self.target.connect {
-            let output = adb.connect(&self.serial)?;
-            print_command_output("adb connect", &output);
+            adb.connect(&self.serial)?;
         }
 
         let device = verify_device(&adb, &self.serial)?;
@@ -199,12 +198,10 @@ impl MaaTouchBackend {
                 .local_path
                 .to_string_lossy()
                 .to_string();
-            let output = adb.push(&self.serial, &local, &self.maatouch_config.remote_path)?;
-            print_command_output("adb push", &output);
+            adb.push(&self.serial, &local, &self.maatouch_config.remote_path)?;
         }
 
-        let output = adb.chmod(&self.serial, &self.maatouch_config.remote_path, "755")?;
-        print_command_output("adb chmod", &output);
+        adb.chmod(&self.serial, &self.maatouch_config.remote_path, "755")?;
         Ok(())
     }
 
@@ -255,6 +252,14 @@ impl MaaTouchBackend {
                 return combine_operation_and_close(Err(err), join_result);
             }
         };
+        if let Err(err) = validate_default_pressure(
+            self.maatouch_config.default_pressure,
+            handshake.max_pressure,
+        ) {
+            stop_child(&mut child, self.maatouch_config.shutdown_timeout);
+            let join_result = self.join_stderr_thread();
+            return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
+        }
         self.child = Some(child);
         self.stdin = Some(stdin);
         self.handshake_info = Some(handshake);
@@ -267,6 +272,9 @@ impl MaaTouchBackend {
         stdout: R,
         child: &mut Child,
     ) -> DeviceResult<HandshakeInfo> {
+        // MaaTouch/minitouch emits its startup handshake on stdout. After that
+        // this backend only writes commands and does not expect stdout replies,
+        // so letting the handshake reader consume and close stdout is safe.
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -303,12 +311,48 @@ impl MaaTouchBackend {
         if let Some(status) = child.try_wait().map_err(|err| {
             DeviceError::fatal(format!("failed to poll MaaTouch process status: {err}"))
         })? {
-            self.closed = true;
             return Err(self.with_stderr(DeviceError::fatal(format!(
                 "MaaTouch process exited unexpectedly with {status}"
             ))));
         }
 
+        Ok(())
+    }
+
+    fn validate_input(&self, x: i32, y: i32, pressure: i32) -> DeviceResult<()> {
+        let handshake = self
+            .handshake_info
+            .as_ref()
+            .ok_or_else(|| DeviceError::fatal("MaaTouch handshake info is missing"))?;
+
+        if x < 0 || y < 0 {
+            return Err(DeviceError::fatal(format!(
+                "MaaTouch coordinate must be non-negative: x={x}, y={y}"
+            )));
+        }
+        if x > handshake.max_x {
+            return Err(DeviceError::fatal(format!(
+                "MaaTouch x coordinate {x} exceeds max_x {}",
+                handshake.max_x
+            )));
+        }
+        if y > handshake.max_y {
+            return Err(DeviceError::fatal(format!(
+                "MaaTouch y coordinate {y} exceeds max_y {}",
+                handshake.max_y
+            )));
+        }
+        if pressure <= 0 {
+            return Err(DeviceError::fatal(format!(
+                "MaaTouch pressure must be positive: {pressure}"
+            )));
+        }
+        if pressure > handshake.max_pressure {
+            return Err(DeviceError::fatal(format!(
+                "MaaTouch pressure {pressure} exceeds max_pressure {}",
+                handshake.max_pressure
+            )));
+        }
         Ok(())
     }
 
@@ -348,6 +392,27 @@ impl MaaTouchBackend {
         }
         Ok(())
     }
+
+    fn shutdown(&mut self) -> Vec<DeviceError> {
+        let mut errors = Vec::new();
+        self.stdin.take();
+
+        if let Some(mut child) = self.child.take()
+            && !stop_child(&mut child, self.maatouch_config.shutdown_timeout)
+        {
+            errors.push(DeviceError::fatal(format!(
+                "MaaTouch process did not exit within {:?}",
+                self.maatouch_config.shutdown_timeout
+            )));
+        }
+
+        if let Err(err) = self.join_stderr_thread() {
+            errors.push(err);
+        }
+
+        self.closed = true;
+        errors
+    }
 }
 
 impl InputBackend for MaaTouchBackend {
@@ -357,6 +422,7 @@ impl InputBackend for MaaTouchBackend {
 
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
         let pressure = self.maatouch_config.default_pressure;
+        self.validate_input(x, y, pressure)?;
         self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
         thread::sleep(Duration::from_millis(duration_ms));
         self.write_and_flush(&format!("u {TOUCH_ID}\nc\n"))?;
@@ -365,6 +431,8 @@ impl InputBackend for MaaTouchBackend {
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
         let pressure = self.maatouch_config.default_pressure;
+        self.validate_input(x1, y1, pressure)?;
+        self.validate_input(x2, y2, pressure)?;
         self.write_and_flush(&format!("d {TOUCH_ID} {x1} {y1} {pressure}\nc\n"))?;
 
         let points = swipe_points(x1, y1, x2, y2, duration_ms);
@@ -395,20 +463,7 @@ impl InputBackend for MaaTouchBackend {
         if let Err(err) = self.reset() {
             errors.push(err);
         }
-        self.stdin.take();
-
-        if let Some(mut child) = self.child.take() {
-            if !stop_child(&mut child, self.maatouch_config.shutdown_timeout) {
-                errors.push(DeviceError::fatal(format!(
-                    "MaaTouch process did not exit within {:?}",
-                    self.maatouch_config.shutdown_timeout
-                )));
-            }
-        }
-
-        if let Err(err) = self.join_stderr_thread() {
-            errors.push(err);
-        }
+        errors.extend(self.shutdown());
 
         let stderr = self
             .stderr_text
@@ -434,6 +489,15 @@ impl InputBackend for MaaTouchBackend {
     }
 }
 
+impl Drop for MaaTouchBackend {
+    fn drop(&mut self) {
+        if !self.closed {
+            let _ = self.shutdown();
+        }
+    }
+}
+
+/// Smoke-test helper for CLI probes; production callers should use `MaaTouchBackend` directly.
 pub fn validate_maatouch(
     config: &MaaTouchValidationConfig,
 ) -> DeviceResult<MaaTouchValidationResult> {
@@ -453,6 +517,15 @@ pub fn validate_maatouch(
     combine_operation_and_close(operation_result, close_result)?;
 
     Ok(MaaTouchValidationResult { device, handshake })
+}
+
+fn validate_default_pressure(default_pressure: i32, max_pressure: i32) -> DeviceResult<()> {
+    if default_pressure <= 0 || default_pressure > max_pressure {
+        return Err(DeviceError::fatal(format!(
+            "MaaTouch default pressure {default_pressure} is outside device pressure range 1..={max_pressure}; adjust MaaTouchConfig.default_pressure"
+        )));
+    }
+    Ok(())
 }
 
 fn run_touch_plan(backend: &mut MaaTouchBackend, touch_plan: &TouchPlan) -> DeviceResult<()> {
@@ -611,7 +684,7 @@ fn parse_version_and_pid<R: Read>(
 }
 
 fn swipe_points(x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> Vec<(i32, i32)> {
-    let steps = ((duration_ms / SWIPE_FRAME_MS).max(1)).min(MAX_SWIPE_STEPS);
+    let steps = (duration_ms / SWIPE_FRAME_MS).clamp(1, MAX_SWIPE_STEPS);
     (1..steps)
         .map(|step| {
             let ratio = step as f64 / steps as f64;
@@ -627,17 +700,6 @@ fn swipe_step_delay(duration_ms: u64, point_count: usize) -> Duration {
         return Duration::ZERO;
     }
     Duration::from_millis((duration_ms / (point_count as u64 + 1)).max(1))
-}
-
-fn print_command_output(label: &str, output: &CommandOutput) {
-    let stdout = output.stdout.trim();
-    if !stdout.is_empty() {
-        println!("{label} stdout: {stdout}");
-    }
-    let stderr = output.stderr.trim();
-    if !stderr.is_empty() {
-        eprintln!("{label} stderr: {stderr}");
-    }
 }
 
 #[cfg(test)]
@@ -670,11 +732,83 @@ mod tests {
     }
 
     #[test]
+    fn validate_input_accepts_legal_values() {
+        let backend = backend_with_handshake();
+        backend.validate_input(1280, 720, 255).expect("valid input");
+    }
+
+    #[test]
+    fn validate_input_rejects_missing_handshake() {
+        let backend = MaaTouchBackend::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+            MaaTouchConfig::default(),
+        );
+        assert_fatal(backend.validate_input(100, 100, 50));
+    }
+
+    #[test]
+    fn validate_input_rejects_negative_coordinate() {
+        let backend = backend_with_handshake();
+        assert_fatal(backend.validate_input(-1, 100, 50));
+    }
+
+    #[test]
+    fn validate_input_rejects_x_over_max() {
+        let backend = backend_with_handshake();
+        assert_fatal(backend.validate_input(1281, 100, 50));
+    }
+
+    #[test]
+    fn validate_input_rejects_y_over_max() {
+        let backend = backend_with_handshake();
+        assert_fatal(backend.validate_input(100, 721, 50));
+    }
+
+    #[test]
+    fn validate_input_rejects_non_positive_pressure() {
+        let backend = backend_with_handshake();
+        assert_fatal(backend.validate_input(100, 100, 0));
+    }
+
+    #[test]
+    fn validate_input_rejects_pressure_over_max() {
+        let backend = backend_with_handshake();
+        assert_fatal(backend.validate_input(100, 100, 256));
+    }
+
+    #[test]
+    fn validate_default_pressure_rejects_device_range_mismatch() {
+        assert_fatal(validate_default_pressure(50, 49));
+    }
+
+    #[test]
     fn validation_uses_backend_style_close_error_combination() {
         let operation = Err(DeviceError::fatal("operation failed"));
         let close = Err(DeviceError::fatal("close failed"));
         let err = combine_operation_and_close(operation, close).expect_err("combined error");
         assert!(err.message().contains("operation failed"));
         assert!(err.message().contains("close failed"));
+    }
+
+    fn backend_with_handshake() -> MaaTouchBackend {
+        let mut backend = MaaTouchBackend::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+            MaaTouchConfig::default(),
+        );
+        backend.handshake_info = Some(HandshakeInfo {
+            max_contacts: 10,
+            max_x: 1280,
+            max_y: 720,
+            max_pressure: 255,
+            pid: "12345".to_string(),
+        });
+        backend
+    }
+
+    fn assert_fatal(result: DeviceResult<()>) {
+        let err = result.expect_err("expected fatal device error");
+        assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
     }
 }
