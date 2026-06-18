@@ -1,15 +1,18 @@
 # ActingCommand Runtime Performance Benchmarks
 
-These benchmarks measure the P0a runtime contracts before the full runtime is implemented.
+These benchmarks measure the Rust mainline runtime contracts before the full runtime is implemented.
 
-The goal is to compare interface overhead across Python, Go, and Rust, and to keep future runtime transport/database changes measurable.
+The goal is to keep future runtime transport/database changes measurable in the Rust mainline.
+
+Historical Go and Python benchmark harnesses were moved to:
+
+- https://github.com/HS7097/ActingCommand-Legacy-Runtime
 
 ## What is measured
 
 - JSON encode/decode cost for runtime contract payloads.
 - Local transport round-trip cost using length-prefixed JSON over TCP.
 - SQLite write cost for resource history and acquisition capture metadata.
-- Go contract model overhead for primitive, task-flow, and GameEngine-facing payloads.
 
 ## What is not measured yet
 
@@ -21,18 +24,6 @@ The goal is to compare interface overhead across Python, Go, and Rust, and to ke
 Those belong in later operation-layer and end-to-end benchmarks.
 
 ## Commands
-
-Run Go benchmarks:
-
-```powershell
-go test ./benchmarks/go -bench . -benchmem
-```
-
-Run Python benchmarks:
-
-```powershell
-python .\benchmarks\python\bench_runtime_contracts.py --iterations 10000
-```
 
 Run Rust benchmarks:
 
@@ -46,7 +37,7 @@ cargo run --release --manifest-path .\benchmarks\rust\Cargo.toml -- --iterations
 - `workloads/runtime_event.json`
 - `workloads/task_flow.json`
 
-Every language harness should use these files so results stay comparable.
+Rust benchmark harnesses should use these files so results stay comparable with historical benchmark data.
 
 ## Result interpretation
 
@@ -59,4 +50,4 @@ For now, the useful questions are:
 - Is JSON overhead small enough for control-plane events?
 - Is length-prefixed local IPC fast enough for primitive calls that do not transfer raw frames?
 - Is SQLite metadata insertion fast enough for resource history and acquisition screenshot indexes?
-- Does a Rust execution worker create acceptable adapter/transport overhead when called from the Go runtime?
+- Does the Rust runtime create acceptable adapter/transport overhead for future execution workers?

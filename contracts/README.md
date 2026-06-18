@@ -23,11 +23,8 @@ The Rust device-layer crate lives in:
 
 ## Historical Go boundary
 
-The historical Go interfaces live in:
+The historical Go interfaces were moved to:
 
-- `pkg/contract/primitive.go`
-- `pkg/contract/game_engine.go`
-- `pkg/contract/taskflow.go`
-- `pkg/contract/types.go`
+- https://github.com/HS7097/ActingCommand-Legacy-Runtime
 
 The UI must use the runtime API and must not own the runtime lifecycle. The execution layer must return structured observations and image references, not raw frame buffers.

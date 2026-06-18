@@ -2,7 +2,9 @@
 
 Independent runtime service for ActingCommand.
 
-This repository is converging to a Rust mainline runtime. The older Python `AliceRuntimeOrchestrator` remains as legacy/mock material only, and the older Go contracts remain as historical reference and benchmark material only.
+This repository is the Rust mainline runtime. The older Python `AliceRuntimeOrchestrator` mock, Go historical contracts, Go probe, and Go/Python benchmark harnesses were moved to:
+
+- https://github.com/HS7097/ActingCommand-Legacy-Runtime
 
 ## Responsibility
 
@@ -70,13 +72,10 @@ cargo run -p actingcommand-device-test -- --local ..\upstream-sources\AzurPilot\
 
 MaaTouch failure is a fatal device-layer error. ADB input fallback is intentionally not implemented.
 
-## Historical contracts and benchmarks
+## Historical Python and Go materials
 
-The Go and Python materials are not current implementation targets.
+The Go and Python materials are no longer stored in this Rust mainline repository.
 
-- Python mock runtime: `runtime`
-- Go historical interfaces: `pkg/contract`
-- Go/Python/Rust microbenchmarks: `benchmarks`
 - UI HTTP contract: `contracts/runtime-api.openapi.yaml`
 - UI event contract: `contracts/runtime-events.schema.json`
 - task-flow schema: `contracts/task-flow.schema.json`
@@ -84,27 +83,9 @@ The Go and Python materials are not current implementation targets.
 - server variant policy: `contracts/server-keys.md`
 - execution-layer boundary: `contracts/primitive-service.md`
 
-Do not continue expanding the Python mock runtime or Go runtime/core line. UI code should use the runtime API and should not open the runtime SQLite database directly.
+Do not continue expanding the Python mock runtime or Go runtime/core line in this repository. Use the legacy repository for historical reference:
 
-## Local run
-
-Install legacy Python mock dependencies:
-
-```powershell
-python -m pip install -r .\runtime\requirements.txt
-```
-
-Start the legacy Python mock runtime:
-
-```powershell
-.\scripts\start-runtime.ps1
-```
-
-Stop the legacy Python mock runtime:
-
-```powershell
-.\scripts\stop-runtime.ps1
-```
+- https://github.com/HS7097/ActingCommand-Legacy-Runtime
 
 ## State path
 
