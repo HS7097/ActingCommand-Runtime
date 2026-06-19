@@ -397,3 +397,116 @@ Resource repository:
 1. Commit and push Runtime repository changes.
 2. Decide whether to continue with P5b real AzurLane page samples or P6 minimal task-loop draft.
 3. Before real AzurLane page definitions become authoritative, review the Campaign button color check using the recorded `color_mean` and `color_expected`.
+
+## 2026-06-19 P5c detect-page and P6a dry-run task loop
+
+### Current status
+
+- Completed P5c `device-test detect-page`.
+- Completed read-only PageSet validation for AzurLane, Arknights, and BlueArchive resource repositories.
+- Completed P6a `actingcommand-task-loop` dry-run task loop.
+- Completed `device-test task-dry-run`.
+- No UI, SQLite, OCR, real click execution, scheduler, background loop, page navigation, game task logic, ADB input fallback, or OpenCV was added.
+- MaaTouch was not started by detect-page, task-dry-run, tests, or resource PageSet validation.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/device-test/Cargo.toml`
+- `apps/device-test/src/main.rs`
+- `crates/page-detector/src/lib.rs`
+- `crates/task-loop/Cargo.toml`
+- `crates/task-loop/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P5c-and-P6a-dry-run.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Checked Runtime repository status.
+- Checked or cloned read-only resource repositories:
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+- `git fetch origin`
+- `git pull --ff-only`
+- `cargo test -p actingcommand-page-detector`
+- `cargo test -p actingcommand-task-loop`
+- `cargo test -p actingcommand-device-test`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-page-detector -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings`
+- `cargo tree -p actingcommand-task-loop --depth 1`
+- `rg -n "SQLite|sqlite|OCR|ocr|state machine|game logic|opencv|rusqlite|fallback|reconnect|retry|MaaTouch|Screencap|CaptureBackend|Device|tap\(|swipe\(|long_tap\(|reset\(" crates\page-detector crates\task-loop`
+- `rg -n "image\s*=|imageproc\s*=|opencv|rusqlite|sqlite|actingcommand-device|actingcommand-runtime-core" crates\page-detector\Cargo.toml crates\task-loop\Cargo.toml`
+- `git diff --check`
+
+### Resource repository validation
+
+- AzurLane resource repository:
+  - path: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+  - commit: `8503ca1`
+  - command: `cargo run -p actingcommand-device-test -- detect-page --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pages.json --check-pages`
+  - result: `check_pages=passed`
+- Arknights resource repository:
+  - path: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+  - commit: `00199ee`
+  - command: `cargo run -p actingcommand-device-test -- detect-page --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\recognition\arknights.cn.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\recognition\arknights.cn.pages.json --check-pages`
+  - result: `check_pages=passed`
+- BlueArchive resource repository:
+  - path: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+  - commit: `a5a9749`
+  - command: `cargo run -p actingcommand-device-test -- detect-page --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pages.json --check-pages`
+  - result: `check_pages=passed`
+
+### Test results
+
+- `cargo test -p actingcommand-page-detector` passed with 23 tests.
+- `cargo test -p actingcommand-task-loop` passed with 13 tests.
+- `cargo test -p actingcommand-device-test` passed with 40 tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-page-detector -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings` passed.
+- `git diff --check` passed.
+- `cargo tree -p actingcommand-task-loop --depth 1` showed direct dependencies only on `actingcommand-page-detector`, `actingcommand-recognition`, `actingcommand-recognition-pack`, `serde`, and `serde_json`.
+- Prohibited-feature scans over `crates/page-detector` and `crates/task-loop` had no matches.
+- Direct-dependency scan found no direct `image`, `imageproc`, OpenCV, SQLite, `actingcommand-device`, or `actingcommand-runtime-core` dependency in `crates/page-detector` or `crates/task-loop`.
+
+### P5c detect-page details
+
+- Added `detect-page --check-pages`.
+- Added `detect-page --page <page_id> --scene <png>`.
+- Added `detect-page --page <page_id> --capture`.
+- Added `detect-page --all --scene/--capture`.
+- Output remains one `key=value` entry per line.
+- Per-target page evidence is printed as `target=<id>,role=<role>,passed=<bool>,message=<message>`.
+- `--check-pages` is mutually exclusive with `--page`, `--all`, `--scene`, and `--capture`.
+- `detect-page` is a read-only command and is guarded from mixing with MaaTouch input commands.
+
+### P6a task-loop and task-dry-run details
+
+- Added `actingcommand-task-loop`.
+- Added TaskPlan schema v0.1 with `complete` and `click` dry-run actions.
+- `DryRunTaskLoop::new` validates structure only.
+- `DryRunTaskLoop::validate` validates all page and click-target references before dry-run.
+- `DryRunTaskLoop::dry_run` evaluates steps in order and stops at the first matching page.
+- Added `task-dry-run --scene`.
+- Added `task-dry-run --capture`.
+- `task-dry-run` validates the task plan before loading scene/capture.
+- `task-dry-run` output remains one `key=value` entry per line and always prints `executed=false`.
+- `task-dry-run` is a read-only command and is guarded from mixing with MaaTouch input commands.
+
+### Current blocker
+
+- None for P5c or P6a.
+- Live `detect-page` and `task-dry-run` verification against real devices remains an Alice/operator step.
+- Real TaskPlan ownership is still undecided and should not be placed in resource repositories by default.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Alice can manually run live `detect-page` and `task-dry-run` checks for Azur, Ark, and BA.
+3. Choose a next milestone: P6b controlled click execution, Runtime API contract for UI, or capture metadata / SQLite schema design.
+4. Add a regression frame-set lane before real page definitions become broad or authoritative.

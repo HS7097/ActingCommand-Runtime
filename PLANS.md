@@ -24,6 +24,8 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P4c recognition pack disk fixtures, read-only recognize entry, and AzurLane JP resource-pack bridge.
 - P4c-fixup recognize color diagnostics and ClickOnly CLI input handling.
 - P5 PageDetector page recognition layer.
+- P5c `device-test detect-page` CLI and multi-resource PageSet validation.
+- P6a dry-run task loop.
 
 ## Recognition score semantics
 
@@ -119,6 +121,50 @@ The PageDetector layer deliberately does not own:
 
 P5 evaluates an existing `Scene` with an existing `RecognitionEvaluator`. It only answers whether the current scene matches a page definition. ClickOnly targets are fatal when used as page evidence.
 
+P5c exposes PageDetector through read-only `device-test detect-page`.
+
+The detect-page CLI owns:
+
+- PageSet validation with `--check-pages`.
+- single-page scene/capture evaluation with `--page`.
+- all-page scene/capture evaluation with `--all`.
+- key-value output compatible with existing `recognize` output style.
+
+The detect-page CLI remains read-only. It does not start MaaTouch, does not execute clicks, does not write capture artifacts, does not write SQLite, and does not run game task logic.
+
+P5c also validates the current resource repositories as read-only inputs:
+
+- `ActingCommand-Resources-AzurLane`
+- `ActingCommand-Resources-Arknights`
+- `ActingCommand-Resources-BlueArchive`
+
+Resource repositories remain the owner of recognition packs, page sets, templates, and resource data. Runtime only consumes them through explicit pack/page schema boundaries.
+
+## Dry-run task loop
+
+P6a adds `actingcommand-task-loop` as a minimal dry-run decision layer above PageDetector.
+
+The task-loop layer owns:
+
+- TaskPlan JSON parsing.
+- structural task-plan validation.
+- reference validation against `PageDetector` and `RecognitionEvaluator`.
+- ordered page evaluation by task step.
+- dry-run action summaries for `complete` and `click` actions.
+
+The task-loop layer deliberately does not own:
+
+- device access.
+- click execution.
+- scheduler behavior.
+- retries.
+- background loops.
+- SQLite or state persistence.
+- UI.
+- game-specific task logic.
+
+P6a click actions return click metadata only. They are not executed.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -135,7 +181,9 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - Recognition primitive errors are fatal.
 - Recognition pack validation and evaluation errors are fatal.
 - PageDetector parse, validation, and evaluation errors are fatal.
+- Task-loop parse, validation, and dry-run errors are fatal.
 - Runtime `recognize` errors are fatal and visible.
+- Runtime `detect-page` and `task-dry-run` errors are fatal and visible.
 - No OpenCV in P4a recognition primitives.
 - No OCR until a separate scoped milestone.
 - No SQLite until a separate scoped milestone.
@@ -143,13 +191,15 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - No game logic until a specific runtime/game milestone.
 - No click execution in P4c recognition validation.
 - No click execution or device access in P5 PageDetector.
+- No click execution, scheduler, SQLite, background loop, or game logic in P6a task-loop.
 - No upstream source or asset copying without license, attribution, and boundary review.
 
 ## Next steps
 
-1. Decide whether the next milestone is P5b real AzurLane page-definition samples or P6 minimal task-loop draft.
-2. Revisit `ui_white/MAIN_GOTO_CAMPAIGN_WHITE` color calibration before treating the real AzurLane main page as green.
-3. Define runtime-owned capture metadata and image reference lifecycle.
-4. Define SQLite schema in a separate scoped milestone.
-5. Define how Runtime exposes capture, recognition, and page-detection results to UI/API layers.
-6. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Alice can run live `detect-page` and `task-dry-run` checks against the three games as an operator step.
+2. P6b controlled click execution requires separate confirmation, safety locks, and a dry-run-to-click upgrade path.
+3. Define Runtime API contracts for UI integration in a separate milestone.
+4. Define capture metadata and SQLite schema in a separate scoped milestone.
+5. Create a regression frame-set lane so each page has positive and negative sample frames guarding recognition drift.
+6. Decide where real TaskPlan files live; they should not be stored in resource repositories, and P6a remains synthetic-only.
+7. Keep `CHECKPOINT.md` updated with every completed Runtime task.

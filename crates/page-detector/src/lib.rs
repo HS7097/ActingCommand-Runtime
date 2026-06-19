@@ -137,6 +137,10 @@ impl PageDetector {
         Ok(())
     }
 
+    pub fn contains_page(&self, page_id: &str) -> bool {
+        self.page_indexes.contains_key(page_id)
+    }
+
     pub fn evaluate_page(
         &self,
         evaluator: &RecognitionEvaluator,
@@ -385,6 +389,14 @@ mod tests {
     #[test]
     fn new_accepts_valid_page_set() {
         PageDetector::new(home_page_set()).expect("detector");
+    }
+
+    #[test]
+    fn contains_page_reports_known_pages() {
+        let detector = PageDetector::new(home_page_set()).expect("detector");
+
+        assert!(detector.contains_page("fixture/home_page"));
+        assert!(!detector.contains_page("fixture/missing"));
     }
 
     #[test]

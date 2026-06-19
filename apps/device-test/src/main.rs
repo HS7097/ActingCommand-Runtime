@@ -4,14 +4,20 @@ use actingcommand_device::{
     CaptureBackend, DeviceError, DeviceResult, InputBackend, MaaTouchBackend,
     MaaTouchValidationConfig, ScreencapBackend, combine_operation_and_close,
 };
+use actingcommand_page_detector::{
+    PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
+};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, RecognitionPack, RecognitionTarget, TargetEvaluation,
     TargetKind, load_pack_from_json_str,
 };
+use actingcommand_task_loop::{
+    DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
+};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +45,12 @@ enum DeviceCommand {
     Recognize {
         options: RecognizeOptions,
     },
+    DetectPage {
+        options: DetectPageOptions,
+    },
+    TaskDryRun {
+        options: TaskDryRunOptions,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +61,28 @@ struct RecognizeOptions {
     scene: Option<PathBuf>,
     capture: bool,
     check_pack: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DetectPageOptions {
+    pack: PathBuf,
+    pack_root: PathBuf,
+    pages: PathBuf,
+    page: Option<String>,
+    all: bool,
+    scene: Option<PathBuf>,
+    capture: bool,
+    check_pages: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskDryRunOptions {
+    pack: PathBuf,
+    pack_root: PathBuf,
+    pages: PathBuf,
+    task: PathBuf,
+    scene: Option<PathBuf>,
+    capture: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,15 +109,17 @@ fn run() -> DeviceResult<()> {
             print!("{}", run_recognize_command(config, options)?);
             return Ok(());
         }
-        _ if commands.iter().any(|command| {
-            matches!(
-                command,
-                DeviceCommand::Capture { .. } | DeviceCommand::Recognize { .. }
-            )
-        }) =>
-        {
+        [DeviceCommand::DetectPage { options }] => {
+            print!("{}", run_detect_page_command(config, options)?);
+            return Ok(());
+        }
+        [DeviceCommand::TaskDryRun { options }] => {
+            print!("{}", run_task_dry_run_command(config, options)?);
+            return Ok(());
+        }
+        _ if has_read_only_command(&commands) => {
             return Err(DeviceError::fatal(
-                "capture and recognize cannot be combined with MaaTouch input commands",
+                "read-only commands cannot be combined with MaaTouch input commands",
             ));
         }
         _ => {}
@@ -112,6 +148,18 @@ fn run() -> DeviceResult<()> {
 
     println!("PASS");
     Ok(())
+}
+
+fn has_read_only_command(commands: &[DeviceCommand]) -> bool {
+    commands.iter().any(|command| {
+        matches!(
+            command,
+            DeviceCommand::Capture { .. }
+                | DeviceCommand::Recognize { .. }
+                | DeviceCommand::DetectPage { .. }
+                | DeviceCommand::TaskDryRun { .. }
+        )
+    })
 }
 
 fn run_capture_command(
@@ -199,27 +247,131 @@ fn run_recognize_command(
     format_evaluation(&evaluator, target, target_kind, evaluation)
 }
 
+fn run_detect_page_command(
+    config: MaaTouchValidationConfig,
+    options: &DetectPageOptions,
+) -> DeviceResult<String> {
+    let (evaluator, detector) =
+        load_evaluator_and_detector(&options.pack, &options.pack_root, &options.pages)?;
+    detector.validate(&evaluator).map_err(page_error)?;
+
+    if options.check_pages {
+        return Ok("check_pages=passed\n".to_string());
+    }
+
+    let scene = load_scene(
+        config,
+        options.scene.as_ref(),
+        options.capture,
+        "detect-page",
+    )?;
+
+    if options.all {
+        let evaluations = detector
+            .evaluate_all(&evaluator, &scene)
+            .map_err(page_error)?;
+        return Ok(evaluations
+            .iter()
+            .map(format_page_evaluation)
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
+    let page = options
+        .page
+        .as_deref()
+        .ok_or_else(|| DeviceError::fatal("detect-page requires --page <id> or --all"))?;
+    let evaluation = detector
+        .evaluate_page(&evaluator, &scene, page)
+        .map_err(page_error)?;
+    Ok(format_page_evaluation(&evaluation))
+}
+
+fn run_task_dry_run_command(
+    config: MaaTouchValidationConfig,
+    options: &TaskDryRunOptions,
+) -> DeviceResult<String> {
+    let (evaluator, detector) =
+        load_evaluator_and_detector(&options.pack, &options.pack_root, &options.pages)?;
+    let task_json = fs::read_to_string(&options.task).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to read task plan {}: {err}",
+            options.task.display()
+        ))
+    })?;
+    let task_plan = load_task_plan_from_json_str(&task_json).map_err(task_error)?;
+    let task_loop = DryRunTaskLoop::new(task_plan).map_err(task_error)?;
+    task_loop
+        .validate(&detector, &evaluator)
+        .map_err(task_error)?;
+
+    let scene = load_scene(
+        config,
+        options.scene.as_ref(),
+        options.capture,
+        "task-dry-run",
+    )?;
+    let result = task_loop
+        .dry_run(&detector, &evaluator, &scene)
+        .map_err(task_error)?;
+    Ok(format_dry_run_result(&result))
+}
+
 fn load_recognition_scene(
     config: MaaTouchValidationConfig,
     options: &RecognizeOptions,
 ) -> DeviceResult<Scene> {
-    let scene_png = if let Some(scene) = &options.scene {
+    load_scene(config, options.scene.as_ref(), options.capture, "recognize")
+}
+
+fn load_scene(
+    config: MaaTouchValidationConfig,
+    scene: Option<&PathBuf>,
+    capture: bool,
+    command: &str,
+) -> DeviceResult<Scene> {
+    let scene_png = if let Some(scene) = scene {
         fs::read(scene).map_err(|err| {
             DeviceError::fatal(format!(
                 "failed to read scene PNG {}: {err}",
                 scene.display()
             ))
         })?
-    } else if options.capture {
+    } else if capture {
         let mut backend = ScreencapBackend::new(config.adb, config.target);
         backend.capture()?.png
     } else {
-        return Err(DeviceError::fatal(
-            "recognize requires exactly one of --scene <png> or --capture",
-        ));
+        return Err(DeviceError::fatal(format!(
+            "{command} requires exactly one of --scene <png> or --capture"
+        )));
     };
 
     Scene::from_png(&scene_png).map_err(|err| DeviceError::fatal(err.to_string()))
+}
+
+fn load_evaluator_and_detector(
+    pack_path: &Path,
+    pack_root: &Path,
+    pages_path: &Path,
+) -> DeviceResult<(RecognitionEvaluator, PageDetector)> {
+    let pack_json = fs::read_to_string(pack_path).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to read recognition pack {}: {err}",
+            pack_path.display()
+        ))
+    })?;
+    let pack = load_pack_from_json_str(&pack_json).map_err(pack_error)?;
+    let evaluator = RecognitionEvaluator::new(pack_root.to_path_buf(), pack).map_err(pack_error)?;
+
+    let pages_json = fs::read_to_string(pages_path).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to read page set {}: {err}",
+            pages_path.display()
+        ))
+    })?;
+    let page_set = load_page_set_from_json_str(&pages_json).map_err(page_error)?;
+    let detector = PageDetector::new(page_set).map_err(page_error)?;
+    Ok((evaluator, detector))
 }
 
 fn resolve_cli_target_kind(pack: &RecognitionPack, target_id: &str) -> DeviceResult<CliTargetKind> {
@@ -316,7 +468,84 @@ fn format_rgb(value: [u8; 3]) -> String {
     format!("{},{},{}", value[0], value[1], value[2])
 }
 
+fn format_page_evaluation(evaluation: &PageEvaluation) -> String {
+    let mut output = format!(
+        "page_id={}\nmatched={}\nrequired_passed={}\nrequired_total={}\noptional_passed={}\noptional_total={}\nforbidden_passed={}\nforbidden_total={}\nmessage={}\n",
+        evaluation.page_id,
+        evaluation.matched,
+        evaluation.required_passed,
+        evaluation.required_total,
+        evaluation.optional_passed,
+        evaluation.optional_total,
+        evaluation.forbidden_passed,
+        evaluation.forbidden_total,
+        evaluation.message
+    );
+
+    for target in &evaluation.target_results {
+        output.push_str(&format!(
+            "target={},role={},passed={},message={}\n",
+            target.target_id,
+            format_page_role(target.role),
+            target.passed,
+            target.message
+        ));
+    }
+
+    output
+}
+
+fn format_page_role(role: PageTargetRole) -> &'static str {
+    match role {
+        PageTargetRole::Required => "required",
+        PageTargetRole::Optional => "optional",
+        PageTargetRole::Forbidden => "forbidden",
+    }
+}
+
+fn format_dry_run_result(result: &DryRunResult) -> String {
+    let mut output = format!(
+        "task_id={}\nstatus={}\nmatched_step={}\nmatched_page={}\n",
+        result.task_id,
+        format_dry_run_status(result.status),
+        result.matched_step_id.as_deref().unwrap_or("missing"),
+        result.matched_page_id.as_deref().unwrap_or("missing")
+    );
+
+    match &result.action {
+        Some(DryRunAction::Complete) => {
+            output.push_str("action=complete\n");
+        }
+        Some(DryRunAction::Click { target_id, click }) => {
+            output.push_str(&format!(
+                "action=click\ntarget={target_id}\nclick={}\n",
+                format_rect(*click)
+            ));
+        }
+        None => {}
+    }
+
+    output.push_str(&format!("executed=false\nmessage={}\n", result.message));
+    output
+}
+
+fn format_dry_run_status(status: DryRunStatus) -> &'static str {
+    match status {
+        DryRunStatus::NoPageMatched => "no_page_matched",
+        DryRunStatus::WouldComplete => "would_complete",
+        DryRunStatus::WouldClick => "would_click",
+    }
+}
+
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> DeviceError {
+    DeviceError::fatal(err.to_string())
+}
+
+fn page_error(err: actingcommand_page_detector::PageDetectorError) -> DeviceError {
+    DeviceError::fatal(err.to_string())
+}
+
+fn task_error(err: actingcommand_task_loop::TaskLoopError) -> DeviceError {
     DeviceError::fatal(err.to_string())
 }
 
@@ -353,6 +582,16 @@ fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> De
             DeviceCommand::Recognize { .. } => {
                 return Err(DeviceError::fatal(
                     "recognize cannot run through MaaTouchBackend",
+                ));
+            }
+            DeviceCommand::DetectPage { .. } => {
+                return Err(DeviceError::fatal(
+                    "detect-page cannot run through MaaTouchBackend",
+                ));
+            }
+            DeviceCommand::TaskDryRun { .. } => {
+                return Err(DeviceError::fatal(
+                    "task-dry-run cannot run through MaaTouchBackend",
                 ));
             }
         }
@@ -467,6 +706,18 @@ where
                     options: parse_recognize_options(&tokens, &mut index)?,
                 });
             }
+            "detect-page" => {
+                index += 1;
+                commands.push(DeviceCommand::DetectPage {
+                    options: parse_detect_page_options(&tokens, &mut index)?,
+                });
+            }
+            "task-dry-run" => {
+                index += 1;
+                commands.push(DeviceCommand::TaskDryRun {
+                    options: parse_task_dry_run_options(&tokens, &mut index)?,
+                });
+            }
             other => {
                 return Err(DeviceError::fatal(format!(
                     "unknown argument or command: {other}"
@@ -477,7 +728,7 @@ where
 
     if commands.is_empty() {
         return Err(DeviceError::fatal(
-            "missing command: expected reset, tap, longtap, swipe, capture, or recognize",
+            "missing command: expected reset, tap, longtap, swipe, capture, recognize, detect-page, or task-dry-run",
         ));
     }
 
@@ -540,6 +791,159 @@ fn parse_recognize_options(tokens: &[String], index: &mut usize) -> DeviceResult
         scene,
         capture,
         check_pack,
+    })
+}
+
+fn parse_detect_page_options(
+    tokens: &[String],
+    index: &mut usize,
+) -> DeviceResult<DetectPageOptions> {
+    let mut pack = None;
+    let mut pack_root = None;
+    let mut pages = None;
+    let mut page = None;
+    let mut all = false;
+    let mut scene = None;
+    let mut capture = false;
+    let mut check_pages = false;
+
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--pack" => {
+                pack = Some(PathBuf::from(next_token(tokens, index, "--pack")?));
+            }
+            "--pack-root" => {
+                pack_root = Some(PathBuf::from(next_token(tokens, index, "--pack-root")?));
+            }
+            "--pages" => {
+                pages = Some(PathBuf::from(next_token(tokens, index, "--pages")?));
+            }
+            "--page" => {
+                page = Some(next_token(tokens, index, "--page")?);
+            }
+            "--all" => {
+                all = true;
+                *index += 1;
+            }
+            "--scene" => {
+                scene = Some(PathBuf::from(next_token(tokens, index, "--scene")?));
+            }
+            "--capture" => {
+                capture = true;
+                *index += 1;
+            }
+            "--check-pages" => {
+                check_pages = true;
+                *index += 1;
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown detect-page argument: {other}"
+                )));
+            }
+        }
+    }
+
+    if scene.is_some() && capture {
+        return Err(DeviceError::fatal(
+            "detect-page accepts --scene <png> or --capture, not both",
+        ));
+    }
+    if page.is_some() && all {
+        return Err(DeviceError::fatal(
+            "detect-page accepts --page <id> or --all, not both",
+        ));
+    }
+    if check_pages && (page.is_some() || all || scene.is_some() || capture) {
+        return Err(DeviceError::fatal(
+            "detect-page --check-pages cannot be combined with --page, --all, --scene, or --capture",
+        ));
+    }
+    if !check_pages && page.is_none() && !all {
+        return Err(DeviceError::fatal(
+            "detect-page requires --page <id> or --all unless --check-pages is used",
+        ));
+    }
+    if !check_pages && scene.is_none() && !capture {
+        return Err(DeviceError::fatal(
+            "detect-page requires --scene <png> or --capture unless --check-pages is used",
+        ));
+    }
+
+    Ok(DetectPageOptions {
+        pack: pack.ok_or_else(|| DeviceError::fatal("detect-page requires --pack <pack.json>"))?,
+        pack_root: pack_root
+            .ok_or_else(|| DeviceError::fatal("detect-page requires --pack-root <dir>"))?,
+        pages: pages
+            .ok_or_else(|| DeviceError::fatal("detect-page requires --pages <pages.json>"))?,
+        page,
+        all,
+        scene,
+        capture,
+        check_pages,
+    })
+}
+
+fn parse_task_dry_run_options(
+    tokens: &[String],
+    index: &mut usize,
+) -> DeviceResult<TaskDryRunOptions> {
+    let mut pack = None;
+    let mut pack_root = None;
+    let mut pages = None;
+    let mut task = None;
+    let mut scene = None;
+    let mut capture = false;
+
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--pack" => {
+                pack = Some(PathBuf::from(next_token(tokens, index, "--pack")?));
+            }
+            "--pack-root" => {
+                pack_root = Some(PathBuf::from(next_token(tokens, index, "--pack-root")?));
+            }
+            "--pages" => {
+                pages = Some(PathBuf::from(next_token(tokens, index, "--pages")?));
+            }
+            "--task" => {
+                task = Some(PathBuf::from(next_token(tokens, index, "--task")?));
+            }
+            "--scene" => {
+                scene = Some(PathBuf::from(next_token(tokens, index, "--scene")?));
+            }
+            "--capture" => {
+                capture = true;
+                *index += 1;
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown task-dry-run argument: {other}"
+                )));
+            }
+        }
+    }
+
+    if scene.is_some() && capture {
+        return Err(DeviceError::fatal(
+            "task-dry-run accepts --scene <png> or --capture, not both",
+        ));
+    }
+    if scene.is_none() && !capture {
+        return Err(DeviceError::fatal(
+            "task-dry-run requires --scene <png> or --capture",
+        ));
+    }
+
+    Ok(TaskDryRunOptions {
+        pack: pack.ok_or_else(|| DeviceError::fatal("task-dry-run requires --pack <pack.json>"))?,
+        pack_root: pack_root
+            .ok_or_else(|| DeviceError::fatal("task-dry-run requires --pack-root <dir>"))?,
+        pages: pages
+            .ok_or_else(|| DeviceError::fatal("task-dry-run requires --pages <pages.json>"))?,
+        task: task.ok_or_else(|| DeviceError::fatal("task-dry-run requires --task <task.json>"))?,
+        scene,
+        capture,
     })
 }
 
@@ -614,10 +1018,14 @@ fn print_help() {
          cargo run -p actingcommand-device-test -- [options] recognize --pack <pack.json> --pack-root <dir> --target <id> --scene <png>\n\
          cargo run -p actingcommand-device-test -- [options] recognize --pack <pack.json> --pack-root <dir> --target <id> --capture\n\
          cargo run -p actingcommand-device-test -- [options] recognize --pack <pack.json> --pack-root <dir> --check-pack\n\
+         cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --check-pages\n\
+         cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --page <page_id> --scene <png>\n\
+         cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --all --capture\n\
+         cargo run -p actingcommand-device-test -- [options] task-dry-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --task <task.json> --scene <png>\n\
          \n\
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
          Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
-         Recognize is read-only: offline scene mode does not connect to a device; capture mode only uses ScreencapBackend.\n\
+         Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode only uses ScreencapBackend.\n\
          Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
@@ -1033,10 +1441,535 @@ mod tests {
         let _ = fs::remove_dir_all(fixture.root);
     }
 
+    #[test]
+    fn parses_detect_page_check_pages() {
+        let (_, commands) = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--check-pages".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::DetectPage {
+                options: DetectPageOptions {
+                    check_pages: true,
+                    page: None,
+                    scene: None,
+                    capture: false,
+                    ..
+                }
+            }]
+        ));
+    }
+
+    #[test]
+    fn parses_detect_page_scene_form() {
+        let (_, commands) = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--page".to_string(),
+            "fixture/home_page".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::DetectPage {
+                options: DetectPageOptions {
+                    page: Some(_),
+                    scene: Some(_),
+                    capture: false,
+                    check_pages: false,
+                    ..
+                }
+            }]
+        ));
+    }
+
+    #[test]
+    fn parses_detect_page_capture_form() {
+        let (config, commands) = parse_args([
+            "--port".to_string(),
+            "16384".to_string(),
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--page".to_string(),
+            "fixture/home_page".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(config.target.port, 16_384);
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::DetectPage {
+                options: DetectPageOptions { capture: true, .. }
+            }]
+        ));
+    }
+
+    #[test]
+    fn rejects_detect_page_scene_and_capture_together() {
+        let err = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--page".to_string(),
+            "fixture/home_page".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect_err("scene/capture conflict");
+
+        assert!(err.message().contains("--scene"));
+        assert!(err.message().contains("--capture"));
+    }
+
+    #[test]
+    fn rejects_detect_page_without_page_or_all() {
+        let err = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+        ])
+        .expect_err("page required");
+
+        assert!(err.message().contains("--page"));
+        assert!(err.message().contains("--all"));
+    }
+
+    #[test]
+    fn rejects_detect_page_without_scene_or_capture() {
+        let err = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--page".to_string(),
+            "fixture/home_page".to_string(),
+        ])
+        .expect_err("scene required");
+
+        assert!(err.message().contains("--scene"));
+        assert!(err.message().contains("--capture"));
+    }
+
+    #[test]
+    fn rejects_detect_page_check_pages_mixed_with_page_or_scene() {
+        let err = parse_args([
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--check-pages".to_string(),
+            "--page".to_string(),
+            "fixture/home_page".to_string(),
+        ])
+        .expect_err("mixed check-pages");
+
+        assert!(err.message().contains("--check-pages"));
+        assert!(err.message().contains("--page"));
+    }
+
+    #[test]
+    fn check_pages_accepts_synthetic_pages() {
+        let fixture = write_page_fixture("check-pages-valid", [24, 28, 36]);
+        let output = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                page: None,
+                all: false,
+                scene: None,
+                capture: false,
+                check_pages: true,
+            },
+        )
+        .expect("check pages");
+
+        assert_eq!(output, "check_pages=passed\n");
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_scene_matches_synthetic_page() {
+        let fixture = write_page_fixture("detect-page-match", [24, 28, 36]);
+        let output = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                page: Some("fixture/home_page".to_string()),
+                all: false,
+                scene: Some(fixture.scene.clone()),
+                capture: false,
+                check_pages: false,
+            },
+        )
+        .expect("detect page");
+
+        assert!(output.contains("page_id=fixture/home_page"));
+        assert!(output.contains("matched=true"));
+        assert!(
+            output.contains("target=fixture/color,role=required,passed=true,message=color passed")
+        );
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_required_failure_reports_target_line() {
+        let fixture = write_page_fixture("detect-page-fail", [255, 0, 0]);
+        let output = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                page: Some("fixture/home_page".to_string()),
+                all: false,
+                scene: Some(fixture.scene.clone()),
+                capture: false,
+                check_pages: false,
+            },
+        )
+        .expect("detect page");
+
+        assert!(output.contains("matched=false"));
+        assert!(output.contains("message=required target failed: fixture/color"));
+        assert!(
+            output.contains("target=fixture/color,role=required,passed=false,message=color failed")
+        );
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_click_only_page_is_fatal() {
+        let fixture = write_click_only_fixture("detect-page-click-only");
+        let pages = write_pages_file(&fixture.root, "fixture/home_page", "fixture/click");
+        let err = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages,
+                page: None,
+                all: false,
+                scene: None,
+                capture: false,
+                check_pages: true,
+            },
+        )
+        .expect_err("click-only page");
+
+        assert!(err.message().contains("click-only target"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_missing_page_id_is_fatal() {
+        let fixture = write_page_fixture("detect-page-missing-page", [24, 28, 36]);
+        let err = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                page: Some("fixture/missing".to_string()),
+                all: false,
+                scene: Some(fixture.scene.clone()),
+                capture: false,
+                check_pages: false,
+            },
+        )
+        .expect_err("missing page");
+
+        assert!(err.message().contains("page id not found"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_coordinate_mismatch_is_fatal() {
+        let fixture = write_page_fixture("detect-page-coordinate", [24, 28, 36]);
+        let wrong_scene = fixture.root.join("scenes/wrong.png");
+        fs::write(&wrong_scene, encode_png(32, 24, |_x, _y| [24, 28, 36])).expect("wrong scene");
+        let err = run_detect_page_command(
+            MaaTouchValidationConfig::default(),
+            &DetectPageOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                page: Some("fixture/home_page".to_string()),
+                all: false,
+                scene: Some(wrong_scene),
+                capture: false,
+                check_pages: false,
+            },
+        )
+        .expect_err("coordinate mismatch");
+
+        assert!(err.message().contains("coordinate_space"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn detect_page_is_treated_as_read_only_command() {
+        let (_, commands) = parse_args([
+            "tap".to_string(),
+            "1".to_string(),
+            "2".to_string(),
+            "detect-page".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--check-pages".to_string(),
+        ])
+        .expect("parse mixed commands");
+
+        assert!(has_read_only_command(&commands));
+    }
+
+    #[test]
+    fn parses_task_dry_run_scene_form() {
+        let (_, commands) = parse_args([
+            "task-dry-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--task".to_string(),
+            "task.json".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::TaskDryRun {
+                options: TaskDryRunOptions {
+                    scene: Some(_),
+                    capture: false,
+                    ..
+                }
+            }]
+        ));
+    }
+
+    #[test]
+    fn parses_task_dry_run_capture_form() {
+        let (_, commands) = parse_args([
+            "task-dry-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--task".to_string(),
+            "task.json".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::TaskDryRun {
+                options: TaskDryRunOptions { capture: true, .. }
+            }]
+        ));
+    }
+
+    #[test]
+    fn rejects_task_dry_run_scene_and_capture_together() {
+        let err = parse_args([
+            "task-dry-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--task".to_string(),
+            "task.json".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect_err("scene/capture conflict");
+
+        assert!(err.message().contains("--scene"));
+        assert!(err.message().contains("--capture"));
+    }
+
+    #[test]
+    fn rejects_task_dry_run_without_task() {
+        let err = parse_args([
+            "task-dry-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+        ])
+        .expect_err("missing task");
+
+        assert!(err.message().contains("--task"));
+    }
+
+    #[test]
+    fn task_dry_run_complete_outputs_would_complete() {
+        let fixture = write_page_fixture("task-complete", [24, 28, 36]);
+        let output = run_task_dry_run_command(
+            MaaTouchValidationConfig::default(),
+            &TaskDryRunOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                task: fixture.task_complete.clone(),
+                scene: Some(fixture.scene.clone()),
+                capture: false,
+            },
+        )
+        .expect("task dry run");
+
+        assert!(output.contains("task_id=fixture.task"));
+        assert!(output.contains("status=would_complete"));
+        assert!(output.contains("matched_step=home_step"));
+        assert!(output.contains("matched_page=fixture/home_page"));
+        assert!(output.contains("action=complete"));
+        assert!(output.contains("executed=false"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn task_dry_run_click_outputs_click_rect() {
+        let fixture = write_page_fixture("task-click", [24, 28, 36]);
+        let output = run_task_dry_run_command(
+            MaaTouchValidationConfig::default(),
+            &TaskDryRunOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                task: fixture.task_click.clone(),
+                scene: Some(fixture.scene.clone()),
+                capture: false,
+            },
+        )
+        .expect("task dry run");
+
+        assert!(output.contains("status=would_click"));
+        assert!(output.contains("action=click"));
+        assert!(output.contains("target=fixture/color"));
+        assert!(output.contains("click=30,20,18,14"));
+        assert!(output.contains("executed=false"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn task_dry_run_coordinate_mismatch_is_fatal() {
+        let fixture = write_page_fixture("task-coordinate", [24, 28, 36]);
+        let wrong_scene = fixture.root.join("scenes/wrong.png");
+        fs::write(&wrong_scene, encode_png(32, 24, |_x, _y| [24, 28, 36])).expect("wrong scene");
+        let err = run_task_dry_run_command(
+            MaaTouchValidationConfig::default(),
+            &TaskDryRunOptions {
+                pack: fixture.pack.clone(),
+                pack_root: fixture.root.clone(),
+                pages: fixture.pages.clone(),
+                task: fixture.task_complete.clone(),
+                scene: Some(wrong_scene),
+                capture: false,
+            },
+        )
+        .expect_err("coordinate mismatch");
+
+        assert!(err.message().contains("coordinate_space"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn task_dry_run_is_treated_as_read_only_command() {
+        let (_, commands) = parse_args([
+            "tap".to_string(),
+            "1".to_string(),
+            "2".to_string(),
+            "task-dry-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--task".to_string(),
+            "task.json".to_string(),
+            "--scene".to_string(),
+            "scene.png".to_string(),
+        ])
+        .expect("parse mixed commands");
+
+        assert!(has_read_only_command(&commands));
+    }
+
     struct Fixture {
         root: PathBuf,
         pack: PathBuf,
         scene: PathBuf,
+    }
+
+    struct PageFixture {
+        root: PathBuf,
+        pack: PathBuf,
+        pages: PathBuf,
+        scene: PathBuf,
+        task_complete: PathBuf,
+        task_click: PathBuf,
     }
 
     fn write_template_fixture(label: &str) -> Fixture {
@@ -1087,6 +2020,30 @@ mod tests {
         }
     }
 
+    fn write_page_fixture(label: &str, expected: [u8; 3]) -> PageFixture {
+        let root = temp_fixture_dir(label);
+        fs::create_dir_all(root.join("scenes")).expect("scenes dir");
+        fs::write(root.join("scenes/home_scene.png"), scene_png(64, 48)).expect("scene");
+        fs::write(
+            root.join("recognition-pack.json"),
+            color_pack_json(expected),
+        )
+        .expect("pack");
+        let pages = write_pages_file(&root, "fixture/home_page", "fixture/color");
+        let task_complete = write_task_file(&root, "task-complete.json", task_complete_json());
+        let task_click =
+            write_task_file(&root, "task-click.json", task_click_json("fixture/color"));
+
+        PageFixture {
+            pack: root.join("recognition-pack.json"),
+            pages,
+            scene: root.join("scenes/home_scene.png"),
+            task_complete,
+            task_click,
+            root,
+        }
+    }
+
     fn write_click_only_fixture(label: &str) -> Fixture {
         let root = temp_fixture_dir(label);
         fs::write(root.join("recognition-pack.json"), click_only_pack_json()).expect("pack");
@@ -1095,6 +2052,18 @@ mod tests {
             scene: root.join("unused.png"),
             root,
         }
+    }
+
+    fn write_pages_file(root: &std::path::Path, page_id: &str, target_id: &str) -> PathBuf {
+        let pages = root.join("pages.json");
+        fs::write(&pages, pages_json(page_id, target_id)).expect("pages");
+        pages
+    }
+
+    fn write_task_file(root: &std::path::Path, name: &str, content: String) -> PathBuf {
+        let task = root.join(name);
+        fs::write(&task, content).expect("task");
+        task
     }
 
     fn write_missing_template_fixture(label: &str) -> Fixture {
@@ -1189,6 +2158,53 @@ mod tests {
                 ]
             }}"#,
             expected[0], expected[1], expected[2]
+        )
+    }
+
+    fn pages_json(page_id: &str, target_id: &str) -> String {
+        format!(
+            r#"{{
+                "schema_version": "0.1",
+                "pages": [
+                  {{
+                    "id": "{page_id}",
+                    "required": ["{target_id}"],
+                    "optional": [],
+                    "forbidden": []
+                  }}
+                ]
+            }}"#
+        )
+    }
+
+    fn task_complete_json() -> String {
+        r#"{
+            "schema_version": "0.1",
+            "id": "fixture.task",
+            "steps": [
+              {
+                "id": "home_step",
+                "page_id": "fixture/home_page",
+                "on_match": { "type": "complete" }
+              }
+            ]
+        }"#
+        .to_string()
+    }
+
+    fn task_click_json(target_id: &str) -> String {
+        format!(
+            r#"{{
+                "schema_version": "0.1",
+                "id": "fixture.task",
+                "steps": [
+                  {{
+                    "id": "home_step",
+                    "page_id": "fixture/home_page",
+                    "on_match": {{ "type": "click", "target_id": "{target_id}" }}
+                  }}
+                ]
+            }}"#
         )
     }
 

@@ -34,8 +34,10 @@ name = "actingcommand-device-test"
 version = "0.1.0"
 dependencies = [
  "actingcommand-device",
+ "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-task-loop",
 ]
 
 [[package]]
@@ -81,6 +83,17 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
+]
+
+[[package]]
+name = "actingcommand-task-loop"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-page-detector",
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
