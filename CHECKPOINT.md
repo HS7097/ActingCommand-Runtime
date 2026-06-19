@@ -20,6 +20,118 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-19 multirun request and upstream-script safety gate
+
+### Current status
+
+- Manually returned AzurLane JP on `127.0.0.1:16384` from sortie/chapter map to the main page.
+- Confirmed `azurlane/main_white` matched after the home tap.
+- Rechecked Arknights home on `127.0.0.1:16416`; `arknights/home` matched.
+- BlueArchive JP on `127.0.0.1:16448` was in hidden/idle UI; captured first, visually confirmed hidden UI, sent one neutral wake tap, then confirmed `bluearchive/home`.
+- Did not run upstream/original scripts for "all functions" because the current ActingCommand Runtime has no audited upstream adapter capable of enforcing the requested premium-resource and exercise/PvP safety rules across all original-script tasks.
+- Ran a three-port parallel Runtime smoke instead. This used the existing safe BA navigation-only runner profile and page guards.
+
+### Safety gate result
+
+Direct upstream/original full-function execution was blocked by safety review.
+
+Reasons:
+
+- Current Runtime has no adapter-level policy gate for upstream scripts.
+- Upstream script scans found real state-changing tasks:
+  - Alas/AzurLaneAutoScript: `Exercise`, `GemsFarming`, `Retirement`, shop tasks, tactical/training, commission, research, and other scheduler tasks.
+  - BAAS/BAAH: AP purchase, tactical challenge/arena, shop purchase, quest/sweep/fight tasks, and reward/claim tasks.
+  - MAA: `Fight`, `Recruit`, `Mall`, `Award`, `Roguelike`, and other task chains.
+- Some task families can consume limited daily attempts, oil/AP/sanity, shop currency, tickets, or account resources; some can approach premium-resource confirmation flows.
+- "All functions except exercise" is not yet representable in ActingCommand as a reviewed allowlist with per-task resource-policy caps.
+- Running those upstream scripts directly would bypass the current `ProbeClickEffect`, `ResourcePolicy`, page guard, forbidden geometry, and checkpoint controls.
+
+### Device state and recognition
+
+- AzurLane:
+  - port: `127.0.0.1:16384`
+  - home tap: `target\release\actingcommand-device-test.exe --port 16384 tap 1230 37`
+  - frame: `target\resource-refresh-20260619\azur-16384-after-home-tap.png`
+  - `azurlane/main_white`: matched
+- Arknights:
+  - port: `127.0.0.1:16416`
+  - `arknights/home`: matched
+- BlueArchive:
+  - port: `127.0.0.1:16448`
+  - pre-run frame: `target\resource-refresh-20260619\ba-16448-before-multirun.png`
+  - observed state: hidden/idle UI
+  - wake tap: `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+  - `bluearchive/home`: matched after wake
+
+### Parallel smoke result
+
+- Runner profile: `target\resource-refresh-20260619\runner-profiles\bluearchive.jp.runner.json`
+- `127.0.0.1:16384`:
+  - run dir: `target\multirun-20260619\16384\runner-bluearchive-jp-refresh-smoke-1781880833304`
+  - result: `blocked`
+  - message: `page_guard_not_matched`
+  - executed: false
+  - click count: 0
+- `127.0.0.1:16416`:
+  - run dir: `target\multirun-20260619\16416\runner-bluearchive-jp-refresh-smoke-1781880833303`
+  - result: `blocked`
+  - message: `page_guard_not_matched`
+  - executed: false
+  - click count: 0
+- `127.0.0.1:16448`:
+  - run dir: `target\multirun-20260619\16448\runner-bluearchive-jp-refresh-smoke-1781880833956`
+  - result: `completed`
+  - executed: true
+  - click count: 2
+  - final page: `bluearchive/home`
+  - effects executed: `NavigationOnly` only
+  - `claims_executed`: 0
+  - `regenerating_resource_actions_executed`: 0
+  - `premium_currency_allowed`: false
+  - `auto_refill_allowed`: false
+
+### Commands run
+
+- `target\release\actingcommand-device-test.exe --port 16384 tap 1230 37`
+- `target\release\actingcommand-device-test.exe --port 16384 capture --out target\resource-refresh-20260619\azur-16384-after-home-tap.png`
+- `target\release\actingcommand-device-test.exe --port 16384 detect-page ... --page azurlane/main_white --capture`
+- `target\release\actingcommand-device-test.exe --port 16416 detect-page ... --page arknights/home --capture`
+- `target\release\actingcommand-device-test.exe --port 16448 capture --out target\resource-refresh-20260619\ba-16448-before-multirun.png`
+- `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+- `target\release\actingcommand-device-test.exe --port 16448 detect-page ... --page bluearchive/home --capture`
+- Three parallel `target\release\actingcommand-device-test.exe --port <port> runner ... --capture` runs for ports `16384`, `16416`, and `16448`.
+- Read-only scans over upstream source directories for task names and premium/resource risk terms.
+
+### Test results
+
+- AzurLane home detection passed after manual home tap.
+- Arknights home detection passed.
+- BlueArchive hidden UI handling passed: capture first, one neutral wake tap, then home detection.
+- Parallel Runtime smoke passed:
+  - AzurLane and Arknights were safely blocked by page guard with zero clicks.
+  - BlueArchive completed the verified navigation-only route with two clicks.
+- No premium currency, paid refill, purchase confirmation, exercise/PvP, claim, or regenerating-resource consumption was executed.
+
+### Current blocker
+
+- Full upstream/original all-function testing needs a policy-enforced adapter layer before it can be safely run.
+- The adapter must translate upstream tasks into an ActingCommand allowlist with:
+  - exercise/PvP disabled;
+  - premium-resource use disabled;
+  - paid refill disabled;
+  - purchase confirmation disabled;
+  - task-specific resource caps for oil/AP/sanity/tickets;
+  - explicit stop-on-confirmation behavior;
+  - journaling for every state-changing action.
+- ActingCommand currently has only a BA navigation-only probe fixture; AzurLane and Arknights need reviewed safe probe fixtures before real click validation beyond home detection.
+
+### Next step
+
+1. Define an upstream-task safety matrix before launching original scripts.
+2. Add per-game safe probe fixtures for AzurLane and Arknights.
+3. Add adapter-level resource policy checks before allowing original script task execution.
+4. Re-run multi-open with a reviewed allowlist instead of raw upstream "all functions".
+
 ## 2026-06-19 resource refresh and live smoke revalidation
 
 ### Current status
