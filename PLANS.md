@@ -20,6 +20,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P2.1.1 capture artifact path security close-out.
 - P4a threshold-free recognition primitive engine.
 - P4a.1 recognition score semantics close-out.
+- P4b recognition pack rule and threshold layer.
 
 ## Recognition score semantics
 
@@ -33,6 +34,32 @@ P4a.1 clarifies template-match score semantics without starting P4b.
 Current template matching uses `imageproc` `CrossCorrelationNormalized`. For non-negative image pixels this metric is already in `0.0..=1.0`, so P4a.1 normalization is identity plus clamp, with `NaN` normalized to `0.0`.
 
 P4a.1 remains threshold-free. P4b or higher-level callers own threshold selection, rule data loading, and decision policy.
+
+## Recognition pack rule layer
+
+P4b adds `actingcommand-recognition-pack` as the data-driven rule layer above the P4a primitive engine.
+
+The pack layer owns:
+
+- JSON pack parsing.
+- recognition target validation.
+- template threshold policy.
+- color distance threshold policy.
+- coordinate-space checks.
+- click-target metadata lookup.
+
+The pack layer deliberately does not own:
+
+- OCR.
+- UI.
+- SQLite.
+- navigation.
+- state machines.
+- game logic.
+- click execution.
+- capture persistence.
+
+P4b keeps `crates/recognition` threshold-free and does not add serde to primitive `Rect`. Pack-facing geometry uses `PackRect` and converts into primitive geometry at evaluation time.
 
 ## Repo-local planning policy
 
@@ -48,6 +75,7 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - MaaTouch failure is fatal.
 - Capture failure is fatal.
 - Recognition primitive errors are fatal.
+- Recognition pack validation and evaluation errors are fatal.
 - No OpenCV in P4a recognition primitives.
 - No OCR until a separate scoped milestone.
 - No SQLite until a separate scoped milestone.
@@ -57,7 +85,7 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 
 ## Next steps
 
-1. Define P4b recognition data loading and threshold policy outside the P4a primitive engine.
+1. Define the next recognition/runtime integration milestone that consumes P4b packs without adding game logic.
 2. Define runtime-owned capture metadata and image reference lifecycle.
 3. Define SQLite schema in a separate scoped milestone.
 4. Define how Runtime exposes capture and recognition results to UI/API layers.

@@ -17,6 +17,8 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4a.1 recognition score semantics close-out:
   - adds `raw_score` plus normalized `score` to `TemplateMatch`
   - keeps P4a threshold-free
+- P4b recognition pack rule layer:
+  - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
 ## 2026-06-18 Runtime repo-local planning initialization
 
@@ -136,3 +138,57 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 ### Next step
 
 1. Define P4b recognition data loading and threshold policy outside the P4a primitive engine.
+
+## 2026-06-19 P4b recognition pack rule layer
+
+### Current status
+
+- Completed P4b recognition pack rule and threshold layer.
+- Added `actingcommand-recognition-pack` as the P4b rule and threshold layer above the threshold-free P4a recognition primitive crate.
+- P4b keeps OCR, UI, SQLite, navigation, state machines, game logic, click execution, and capture persistence out of scope.
+- `crates/recognition` remains threshold-free.
+- `recognition::Rect` remains serde-free; P4b uses `PackRect` and converts at the pack boundary.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/recognition-pack/Cargo.toml`
+- `crates/recognition-pack/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P4b-recognition-pack.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Checked Runtime repository status and baseline commit.
+- Inspected `crates/recognition/src/lib.rs` and `crates/recognition/Cargo.toml`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-recognition-pack -- -D warnings`
+- `cargo tree -p actingcommand-recognition-pack --depth 1`
+- `rg -n "opencv|rusqlite|sqlite|SQLite|OCR|ocr|\bUI\b|\bui\b|navigation|navigate|state machine|game logic|fallback|reconnect|retry|adb|input tap|tap\(" crates\recognition-pack`
+- `rg -n "image\s*=|imageproc\s*=|opencv|rusqlite|sqlite" crates\recognition-pack\Cargo.toml`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-recognition-pack` passed with 24 tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-recognition-pack -- -D warnings` passed.
+- `cargo tree -p actingcommand-recognition-pack --depth 1` showed direct dependencies only on `actingcommand-recognition`, `serde`, and `serde_json`.
+- Prohibited-feature scans found no OCR, UI, SQLite, navigation, state machine, game logic, fallback, reconnect, retry, ADB, or top-level `image`/`imageproc`/OpenCV dependency in `crates/recognition-pack`.
+- `git diff --check` passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Define the next recognition/runtime integration milestone separately.
