@@ -10,3 +10,5 @@ publish = false
 
 [dependencies]
 actingcommand-device = { workspace = true }
+actingcommand-recognition = { workspace = true }
+actingcommand-recognition-pack = { workspace = true }

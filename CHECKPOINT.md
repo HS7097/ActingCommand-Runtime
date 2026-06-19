@@ -192,3 +192,104 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 
 1. Commit and push Runtime repository changes.
 2. Define the next recognition/runtime integration milestone separately.
+
+## 2026-06-19 P4c recognition pack real-data bridge
+
+### Current status
+
+- Completed Runtime P4c-1 from-disk recognition-pack integration test.
+- Completed Runtime P4c-3 read-only `device-test recognize` entry.
+- Cloned and used `HS7097/ActingCommand-Resources-AzurLane` locally for P4c resource-pack validation.
+- Completed resource-side P4c-2b jp pack generation from neutral data with cropped patches.
+- Performed P4c-4 observational calibration against emulator port `16384`.
+
+### Files changed
+
+Runtime repository:
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/device-test/Cargo.toml`
+- `apps/device-test/src/main.rs`
+- `crates/recognition-pack/tests/from_disk.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+Resource repository:
+
+- `README.md`
+- `manifest.yaml`
+- `tools/generate_azurlane_pack.py`
+- `recognition/azurlane.jp.pack.json`
+- `recognition/patches/azurlane/jp/**`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P4c-recognition-pack-realdata.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Checked Runtime repository status.
+- Cloned `HS7097/ActingCommand-Resources-AzurLane` to `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`.
+- `python tools\generate_azurlane_pack.py --server jp --clean`
+- `cargo run -p actingcommand-device-test -- recognize --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --check-pack`
+- Resource repository path validation: 2005 targets, 0 missing template paths, 0 unsafe template paths.
+- `cargo run -p actingcommand-device-test -- --port 16384 capture --out C:\Users\Alice\Documents\Azur\p4c-main.png`
+- `cargo run -p actingcommand-device-test -- recognize --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --target ui_white/MAIN_GOTO_CAMPAIGN_WHITE --scene C:\Users\Alice\Documents\Azur\p4c-main.png`
+- `cargo run -p actingcommand-device-test -- --port 16384 recognize --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --target ui_white/MAIN_GOTO_CAMPAIGN_WHITE --capture`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo test -p actingcommand-device-test`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-recognition-pack -p actingcommand-device-test -- -D warnings`
+- `cargo tree -p actingcommand-device-test --depth 1`
+- Prohibited-feature scans over `apps/device-test` and `crates/recognition-pack`.
+- `git diff --check`
+- Resource repository `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-recognition-pack` passed, including the new from-disk integration test.
+- `cargo test -p actingcommand-device-test` passed with 12 tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-recognition-pack -p actingcommand-device-test -- -D warnings` passed.
+- `device-test recognize --check-pack` accepted the resource repo jp pack.
+- Resource jp pack has 2005 targets and 2005 generated patch PNG files under `recognition/patches/azurlane/jp`.
+- Resource pack path validation found 0 missing template paths and 0 unsafe paths.
+- Resource repository `git diff --check` passed after forcing generated pack JSON to LF line endings.
+- `cargo tree -p actingcommand-device-test --depth 1` showed direct dependencies only on `actingcommand-device`, `actingcommand-recognition`, and `actingcommand-recognition-pack`.
+- No direct `image`, `imageproc`, OpenCV, SQLite, OCR, UI, PageDetector, game logic, fallback, reconnect, or retry dependency was added to `device-test` or `recognition-pack`.
+- Existing MaaTouch input commands remain in the existing input branch; `recognize` returns before that branch and does not start MaaTouch.
+
+### P4c-4 calibration notes
+
+- Port: `16384`.
+- Capture command produced `C:\Users\Alice\Documents\Azur\p4c-main.png`.
+- Scene size: `1280x720`.
+- Target: `ui_white/MAIN_GOTO_CAMPAIGN_WHITE`.
+- Pack: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json`.
+- Offline scene result:
+  - `passed=false`
+  - `raw_score=0.853815`
+  - `score=0.853815`
+  - `threshold=0.900000`
+  - `click=1123,438,137,142`
+- Live capture result after full jp pack generation:
+  - `passed=false`
+  - `raw_score=0.861700`
+  - `score=0.861700`
+  - `threshold=0.900000`
+  - `click=1123,438,137,142`
+- Visual inspection of `p4c-main.png` showed the game on a secretary/home screen where the target white campaign button was not visible.
+- Threshold conclusion for this observation: keep `0.90`; this is a non-hit observation below threshold, not evidence to lower the threshold.
+- P5 prerequisite note: re-run calibration on `page_main_white` where `MAIN_GOTO_CAMPAIGN_WHITE` is visible before changing region/template/threshold.
+
+### Current blocker
+
+- No blocker for Runtime P4c-1/P4c-3 automation.
+- Green hit calibration still needs the game placed on `page_main_white` with `MAIN_GOTO_CAMPAIGN_WHITE` visible.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Commit and push resource repository pack/converter changes.
+3. Start P5 PageDetector only after a separate task is confirmed.

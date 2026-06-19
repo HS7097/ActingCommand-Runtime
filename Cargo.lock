@@ -34,6 +34,8 @@ name = "actingcommand-device-test"
 version = "0.1.0"
 dependencies = [
  "actingcommand-device",
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
 ]
 
 [[package]]

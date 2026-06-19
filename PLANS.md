@@ -21,6 +21,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P4a threshold-free recognition primitive engine.
 - P4a.1 recognition score semantics close-out.
 - P4b recognition pack rule and threshold layer.
+- P4c recognition pack disk fixtures, read-only recognize entry, and AzurLane JP resource-pack bridge.
 
 ## Recognition score semantics
 
@@ -61,6 +62,28 @@ The pack layer deliberately does not own:
 
 P4b keeps `crates/recognition` threshold-free and does not add serde to primitive `Rect`. Pack-facing geometry uses `PackRect` and converts into primitive geometry at evaluation time.
 
+## Recognition pack real-data bridge
+
+P4c connects the P4b pack layer to disk fixtures, the resource repository pack format, and a read-only CLI validation entry.
+
+The Runtime side owns:
+
+- synthetic from-disk pack/template/scene integration tests for `actingcommand-recognition-pack`;
+- `device-test recognize --check-pack`;
+- `device-test recognize --scene`;
+- `device-test --port <port> recognize --capture`;
+- fixed key-value output for template, color, and click-only targets.
+
+The resource repository side owns:
+
+- `recognition/azurlane.jp.pack.json`;
+- cropped patch templates under `recognition/patches/azurlane/jp/`;
+- neutral-to-pack conversion tooling.
+
+P4c `recognize` is read-only. It does not start MaaTouch, does not execute clicks, does not write capture artifacts, does not write SQLite, does not run OCR, does not detect pages, and does not run game task logic.
+
+P4c manual calibration is observational. A failed target match on a non-target page is recorded as threshold evidence, not treated as a green functional failure.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -76,16 +99,18 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - Capture failure is fatal.
 - Recognition primitive errors are fatal.
 - Recognition pack validation and evaluation errors are fatal.
+- Runtime `recognize` errors are fatal and visible.
 - No OpenCV in P4a recognition primitives.
 - No OCR until a separate scoped milestone.
 - No SQLite until a separate scoped milestone.
 - No UI in this repository.
 - No game logic until a specific runtime/game milestone.
+- No click execution in P4c recognition validation.
 - No upstream source or asset copying without license, attribution, and boundary review.
 
 ## Next steps
 
-1. Define the next recognition/runtime integration milestone that consumes P4b packs without adding game logic.
+1. Define P5 PageDetector using P4c recognition packs without click execution or task flow.
 2. Define runtime-owned capture metadata and image reference lifecycle.
 3. Define SQLite schema in a separate scoped milestone.
 4. Define how Runtime exposes capture and recognition results to UI/API layers.
