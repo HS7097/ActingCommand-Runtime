@@ -39,6 +39,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-page-detector"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "actingcommand-recognition"
 version = "0.1.0"
 dependencies = [

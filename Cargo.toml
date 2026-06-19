@@ -6,6 +6,7 @@ members = [
     "benchmarks/rust",
     "crates/actingcommand-contract",
     "crates/device",
+    "crates/page-detector",
     "crates/recognition",
     "crates/recognition-pack",
     "crates/runtime-core",
@@ -20,6 +21,7 @@ repository = "https://github.com/HS7097/ActingCommand-Runtime"
 [workspace.dependencies]
 actingcommand-contract = { path = "crates/actingcommand-contract" }
 actingcommand-device = { path = "crates/device" }
+actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }

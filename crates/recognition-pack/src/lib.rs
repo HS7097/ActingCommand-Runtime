@@ -159,6 +159,7 @@ pub struct RecognitionEvaluator {
 pub enum TargetKind {
     Template,
     Color,
+    ClickOnly,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -251,6 +252,15 @@ impl RecognitionEvaluator {
             }),
             RecognitionTarget::ClickOnly(target) => Ok(target.click),
         }
+    }
+
+    pub fn target_kind(&self, target_id: &str) -> RecognitionPackResult<TargetKind> {
+        let target = self.target(target_id)?;
+        Ok(match target {
+            RecognitionTarget::Template(_) => TargetKind::Template,
+            RecognitionTarget::Color(_) => TargetKind::Color,
+            RecognitionTarget::ClickOnly(_) => TargetKind::ClickOnly,
+        })
     }
 
     fn evaluate_template(

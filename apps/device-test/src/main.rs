@@ -268,25 +268,52 @@ fn format_evaluation(
                     "template target '{target}' returned no template result"
                 ))
             })?;
-            Ok(format!(
-                "id={target}\nkind=template\npassed={}\nraw_score={:.6}\nscore={:.6}\nthreshold={:.6}\nclick={click}\n",
-                evaluation.passed, template.raw_score, template.score, template.threshold
-            ))
+            let mut output = format!(
+                "id={target}\nkind=template\npassed={}\nraw_score={:.6}\nscore={:.6}\nthreshold={:.6}\nmessage={}\n",
+                evaluation.passed,
+                template.raw_score,
+                template.score,
+                template.threshold,
+                evaluation.message
+            );
+            if let Some(color) = evaluation.color {
+                output.push_str(&format!(
+                    "color_distance={:.6}\ncolor_max_distance={:.6}\ncolor_mean={}\ncolor_expected={}\n",
+                    color.distance,
+                    color.max_distance,
+                    format_rgb(color.mean),
+                    format_rgb(color.expected)
+                ));
+            }
+            output.push_str(&format!("click={click}\n"));
+            Ok(output)
         }
         TargetKind::Color => {
             let color = evaluation.color.ok_or_else(|| {
                 DeviceError::fatal(format!("color target '{target}' returned no color result"))
             })?;
             Ok(format!(
-                "id={target}\nkind=color\npassed={}\ndistance={:.6}\nmax_distance={:.6}\nclick={click}\n",
-                evaluation.passed, color.distance, color.max_distance
+                "id={target}\nkind=color\npassed={}\ndistance={:.6}\nmax_distance={:.6}\nmessage={}\ncolor_mean={}\ncolor_expected={}\nclick={click}\n",
+                evaluation.passed,
+                color.distance,
+                color.max_distance,
+                evaluation.message,
+                format_rgb(color.mean),
+                format_rgb(color.expected)
             ))
         }
+        TargetKind::ClickOnly => Err(DeviceError::fatal(
+            "click-only target cannot return evaluation output",
+        )),
     }
 }
 
 fn format_rect(rect: PackRect) -> String {
     format!("{},{},{},{}", rect.x, rect.y, rect.width, rect.height)
+}
+
+fn format_rgb(value: [u8; 3]) -> String {
+    format!("{},{},{}", value[0], value[1], value[2])
 }
 
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> DeviceError {
@@ -505,12 +532,6 @@ fn parse_recognize_options(tokens: &[String], index: &mut usize) -> DeviceResult
             "recognize requires --target <id> unless --check-pack is used",
         ));
     }
-    if !check_pack && scene.is_none() && !capture {
-        return Err(DeviceError::fatal(
-            "recognize requires --scene <png> or --capture unless --check-pack is used",
-        ));
-    }
-
     Ok(RecognizeOptions {
         pack: pack.ok_or_else(|| DeviceError::fatal("recognize requires --pack <pack.json>"))?,
         pack_root: pack_root
@@ -803,8 +824,108 @@ mod tests {
         assert!(output.contains("kind=template"));
         assert!(output.contains("passed=true"));
         assert!(output.contains("threshold=0.900000"));
+        assert!(output.contains("message=template passed"));
         assert!(output.contains("click=30,20,18,14"));
         let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn template_with_color_check_outputs_color_diagnostics() {
+        let fixture = write_template_with_color_fixture("template-color-pass", [24, 28, 36]);
+        let output = run_recognize_command(
+            MaaTouchValidationConfig::default(),
+            &RecognizeOptions {
+                pack: fixture.pack,
+                pack_root: fixture.root.clone(),
+                target: Some("fixture/button".to_string()),
+                scene: Some(fixture.scene),
+                capture: false,
+                check_pack: false,
+            },
+        )
+        .expect("recognize");
+
+        assert!(output.contains("passed=true"));
+        assert!(output.contains("message=template passed"));
+        assert!(output.contains("color_distance=0.000000"));
+        assert!(output.contains("color_max_distance=20.000000"));
+        assert!(output.contains("color_mean=24,28,36"));
+        assert!(output.contains("color_expected=24,28,36"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn template_with_failing_color_check_explains_failure() {
+        let fixture = write_template_with_color_fixture("template-color-fail", [255, 0, 0]);
+        let output = run_recognize_command(
+            MaaTouchValidationConfig::default(),
+            &RecognizeOptions {
+                pack: fixture.pack,
+                pack_root: fixture.root.clone(),
+                target: Some("fixture/button".to_string()),
+                scene: Some(fixture.scene),
+                capture: false,
+                check_pack: false,
+            },
+        )
+        .expect("recognize");
+
+        assert!(output.contains("passed=false"));
+        assert!(output.contains("message=color check failed"));
+        assert!(output.contains("color_distance="));
+        assert!(output.contains("color_expected=255,0,0"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn color_target_outputs_message() {
+        let fixture = write_color_fixture("color-target", [24, 28, 36]);
+        let output = run_recognize_command(
+            MaaTouchValidationConfig::default(),
+            &RecognizeOptions {
+                pack: fixture.pack,
+                pack_root: fixture.root.clone(),
+                target: Some("fixture/color".to_string()),
+                scene: Some(fixture.scene),
+                capture: false,
+                check_pack: false,
+            },
+        )
+        .expect("recognize");
+
+        assert!(output.contains("kind=color"));
+        assert!(output.contains("passed=true"));
+        assert!(output.contains("message=color passed"));
+        assert!(output.contains("color_mean=24,28,36"));
+        assert!(output.contains("color_expected=24,28,36"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn parses_click_only_recognize_without_scene_or_capture() {
+        let (_, commands) = parse_args([
+            "recognize".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--target".to_string(),
+            "fixture/click".to_string(),
+        ])
+        .expect("parse click-only candidate");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::Recognize {
+                options: RecognizeOptions {
+                    target: Some(_),
+                    scene: None,
+                    capture: false,
+                    check_pack: false,
+                    ..
+                }
+            }]
+        ));
     }
 
     #[test]
@@ -827,6 +948,48 @@ mod tests {
             output,
             "id=fixture/click\nkind=click_only\nclick=3,4,5,6\nevaluated=false\n"
         );
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn template_recognize_without_scene_or_capture_is_fatal() {
+        let fixture = write_template_fixture("template-missing-input");
+        let err = run_recognize_command(
+            MaaTouchValidationConfig::default(),
+            &RecognizeOptions {
+                pack: fixture.pack,
+                pack_root: fixture.root.clone(),
+                target: Some("fixture/button".to_string()),
+                scene: None,
+                capture: false,
+                check_pack: false,
+            },
+        )
+        .expect_err("template input required");
+
+        assert!(err.message().contains("--scene"));
+        assert!(err.message().contains("--capture"));
+        let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn color_recognize_without_scene_or_capture_is_fatal() {
+        let fixture = write_color_fixture("color-missing-input", [24, 28, 36]);
+        let err = run_recognize_command(
+            MaaTouchValidationConfig::default(),
+            &RecognizeOptions {
+                pack: fixture.pack,
+                pack_root: fixture.root.clone(),
+                target: Some("fixture/color".to_string()),
+                scene: None,
+                capture: false,
+                check_pack: false,
+            },
+        )
+        .expect_err("color input required");
+
+        assert!(err.message().contains("--scene"));
+        assert!(err.message().contains("--capture"));
         let _ = fs::remove_dir_all(fixture.root);
     }
 
@@ -890,6 +1053,40 @@ mod tests {
         }
     }
 
+    fn write_template_with_color_fixture(label: &str, expected: [u8; 3]) -> Fixture {
+        let root = temp_fixture_dir(label);
+        fs::create_dir_all(root.join("templates")).expect("templates dir");
+        fs::create_dir_all(root.join("scenes")).expect("scenes dir");
+        fs::write(root.join("templates/button.png"), button_png(12, 10)).expect("template");
+        fs::write(root.join("scenes/home_scene.png"), scene_png(64, 48)).expect("scene");
+        fs::write(
+            root.join("recognition-pack.json"),
+            template_with_color_pack_json(expected),
+        )
+        .expect("pack");
+        Fixture {
+            pack: root.join("recognition-pack.json"),
+            scene: root.join("scenes/home_scene.png"),
+            root,
+        }
+    }
+
+    fn write_color_fixture(label: &str, expected: [u8; 3]) -> Fixture {
+        let root = temp_fixture_dir(label);
+        fs::create_dir_all(root.join("scenes")).expect("scenes dir");
+        fs::write(root.join("scenes/home_scene.png"), scene_png(64, 48)).expect("scene");
+        fs::write(
+            root.join("recognition-pack.json"),
+            color_pack_json(expected),
+        )
+        .expect("pack");
+        Fixture {
+            pack: root.join("recognition-pack.json"),
+            scene: root.join("scenes/home_scene.png"),
+            root,
+        }
+    }
+
     fn write_click_only_fixture(label: &str) -> Fixture {
         let root = temp_fixture_dir(label);
         fs::write(root.join("recognition-pack.json"), click_only_pack_json()).expect("pack");
@@ -943,6 +1140,56 @@ mod tests {
               }
             ]
         }"#
+    }
+
+    fn template_with_color_pack_json(expected: [u8; 3]) -> String {
+        format!(
+            r#"{{
+                "schema_version": "0.1",
+                "game": "fixture",
+                "server": "test",
+                "locale": "test",
+                "coordinate_space": {{ "width": 64, "height": 48 }},
+                "defaults": {{ "template_threshold": 0.90, "color_max_distance": 20.0 }},
+                "targets": [
+                  {{
+                    "type": "template",
+                    "id": "fixture/button",
+                    "template_path": "templates/button.png",
+                    "region": {{ "x": 20, "y": 14, "width": 12, "height": 10 }},
+                    "color_check": {{
+                      "region": {{ "x": 0, "y": 0, "width": 4, "height": 4 }},
+                      "expected": [{}, {}, {}]
+                    }},
+                    "click": {{ "x": 30, "y": 20, "width": 18, "height": 14 }}
+                  }}
+                ]
+            }}"#,
+            expected[0], expected[1], expected[2]
+        )
+    }
+
+    fn color_pack_json(expected: [u8; 3]) -> String {
+        format!(
+            r#"{{
+                "schema_version": "0.1",
+                "game": "fixture",
+                "server": "test",
+                "locale": "test",
+                "coordinate_space": {{ "width": 64, "height": 48 }},
+                "defaults": {{ "template_threshold": 0.90, "color_max_distance": 20.0 }},
+                "targets": [
+                  {{
+                    "type": "color",
+                    "id": "fixture/color",
+                    "region": {{ "x": 0, "y": 0, "width": 4, "height": 4 }},
+                    "expected": [{}, {}, {}],
+                    "click": {{ "x": 30, "y": 20, "width": 18, "height": 14 }}
+                  }}
+                ]
+            }}"#,
+            expected[0], expected[1], expected[2]
+        )
     }
 
     fn click_only_pack_json() -> &'static str {

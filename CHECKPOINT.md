@@ -293,3 +293,107 @@ Resource repository:
 1. Commit and push Runtime repository changes.
 2. Commit and push resource repository pack/converter changes.
 3. Start P5 PageDetector only after a separate task is confirmed.
+
+## 2026-06-19 P4c-fixup and P5 PageDetector
+
+### Current status
+
+- Completed P4c-fixup in Runtime.
+- Added color diagnostics to read-only `device-test recognize` output while preserving one `key=value` line per output row.
+- Added `RecognitionEvaluator::target_kind` and `TargetKind` support for eager PageDetector validation.
+- Completed P5 `actingcommand-page-detector` as a new Rust workspace crate.
+- P5 only evaluates existing `Scene` values through `RecognitionEvaluator`; it does not start ADB, MaaTouch, Screencap, SQLite, UI, OCR, click execution, navigation, or game task logic.
+- Runtime documentation was updated in this repository only.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/device-test/src/main.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `crates/page-detector/Cargo.toml`
+- `crates/page-detector/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P4c-fixup-calibration-and-P5.md`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Checked Runtime repository status.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-page-detector`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-page-detector -p actingcommand-device-test -p actingcommand-recognition-pack -- -D warnings`
+- `cargo tree -p actingcommand-page-detector --depth 1`
+- `rg -n "SQLite|sqlite|OCR|ocr|state machine|game logic|opencv|rusqlite|fallback|reconnect|retry|MaaTouch|Screencap|CaptureBackend|Device|tap\(|swipe\(|long_tap\(|reset\(" crates\page-detector`
+- `rg -n "image\s*=|imageproc\s*=|opencv|rusqlite|sqlite|actingcommand-device|actingcommand-runtime-core" crates\page-detector\Cargo.toml`
+- `git diff --check`
+- `cargo run -p actingcommand-device-test -- --port 16384 recognize --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --target ui_white/MAIN_GOTO_CAMPAIGN_WHITE --capture`
+- `cargo run -p actingcommand-device-test -- --port 16384 capture --out C:\Users\Alice\AppData\Local\Temp\actingcommand-calibration-16384.png`
+
+### Test results
+
+- `cargo test -p actingcommand-page-detector` passed with 22 tests.
+- `cargo test -p actingcommand-device-test` passed with 18 tests.
+- `cargo test -p actingcommand-recognition-pack` passed with 24 unit tests, 1 integration test, and doc tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-page-detector -p actingcommand-device-test -p actingcommand-recognition-pack -- -D warnings` passed.
+- `git diff --check` passed.
+- `cargo tree -p actingcommand-page-detector --depth 1` showed direct dependencies only on `actingcommand-recognition`, `actingcommand-recognition-pack`, `serde`, and `serde_json`.
+- Prohibited-feature scans found no OCR, UI, SQLite, game logic, fallback, reconnect, retry, MaaTouch, Screencap, CaptureBackend, device dependency, click execution, `image`, `imageproc`, OpenCV, or runtime-core dependency in `crates/page-detector`.
+
+### P4c-fixup details
+
+- Template recognize output now includes `message`.
+- Template recognize output with `color_check` now includes `color_distance`, `color_max_distance`, `color_mean`, and `color_expected`.
+- Color recognize output now includes `message`, `color_mean`, and `color_expected`.
+- ClickOnly recognize no longer requires `--scene` or `--capture` and still returns only click metadata plus `evaluated=false`.
+- Template and Color recognize still fatal when neither `--scene` nor `--capture` is provided.
+- `--scene` and `--capture` remain mutually exclusive.
+- `recognize` remains read-only and returns before MaaTouch input command handling.
+
+### P5 PageDetector details
+
+- Added `actingcommand-page-detector` workspace crate.
+- Added `PageSet`, `PageDefinition`, `PageDetector`, `PageEvaluation`, `PageTargetEvaluation`, and `PageTargetRole`.
+- Added `load_page_set_from_json_str`.
+- Added structural validation for schema version, empty/duplicate page ids, empty required lists, duplicate target ids, and cross-role target conflicts.
+- Added eager evaluator validation with `RecognitionEvaluator::target_kind`.
+- ClickOnly targets are fatal when used as required, optional, or forbidden page evidence.
+- Matching rule is `all required passed && no forbidden passed`; optional evidence is diagnostic only.
+
+### Calibration notes
+
+- Port: `16384`.
+- Temporary capture path: `C:\Users\Alice\AppData\Local\Temp\actingcommand-calibration-16384.png`.
+- Scene size: `1280x720`.
+- Visual inspection confirmed the game was on the main page with the white/right-side Campaign button visible.
+- Target: `ui_white/MAIN_GOTO_CAMPAIGN_WHITE`.
+- Pack: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\recognition\azurlane.jp.pack.json`.
+- Repeated live capture results:
+  - `passed=false`
+  - `raw_score=0.997019`, then `0.996998`, then `0.996995`
+  - `score=0.997019`, then `0.996998`, then `0.996995`
+  - `threshold=0.900000`
+  - `message=color check failed`
+  - `color_distance=22.158520`
+  - `color_max_distance=20.000000`
+  - `color_mean=155,172,186`
+  - `color_expected=156,165,165`
+- Calibration conclusion: template evidence is strong, but the current color gate fails by about `2.16`. Do not lower the template threshold. Revisit the target color region, expected color, or color distance policy before treating this real AzurLane target as green.
+
+### Current blocker
+
+- No blocker for Runtime P4c-fixup or synthetic P5 PageDetector.
+- Real AzurLane P5b page samples should wait for a follow-up calibration decision on `ui_white/MAIN_GOTO_CAMPAIGN_WHITE` color diagnostics.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Decide whether to continue with P5b real AzurLane page samples or P6 minimal task-loop draft.
+3. Before real AzurLane page definitions become authoritative, review the Campaign button color check using the recorded `color_mean` and `color_expected`.

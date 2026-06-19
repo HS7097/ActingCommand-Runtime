@@ -22,6 +22,8 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P4a.1 recognition score semantics close-out.
 - P4b recognition pack rule and threshold layer.
 - P4c recognition pack disk fixtures, read-only recognize entry, and AzurLane JP resource-pack bridge.
+- P4c-fixup recognize color diagnostics and ClickOnly CLI input handling.
+- P5 PageDetector page recognition layer.
 
 ## Recognition score semantics
 
@@ -84,6 +86,39 @@ P4c `recognize` is read-only. It does not start MaaTouch, does not execute click
 
 P4c manual calibration is observational. A failed target match on a non-target page is recorded as threshold evidence, not treated as a green functional failure.
 
+P4c-fixup keeps the key-value output format and adds diagnostics without changing read-only behavior:
+
+- Template targets always print `message`.
+- Template targets with `color_check` also print `color_distance`, `color_max_distance`, `color_mean`, and `color_expected`.
+- Color targets print `message`, `color_mean`, and `color_expected`.
+- ClickOnly targets can be queried without `--scene` or `--capture`, and still only print click metadata plus `evaluated=false`.
+
+## PageDetector layer
+
+P5 adds `actingcommand-page-detector` as a page recognition layer above `actingcommand-recognition-pack`.
+
+The PageDetector layer owns:
+
+- PageSet JSON parsing.
+- structural page-definition validation.
+- eager target-reference validation against `RecognitionEvaluator::target_kind`.
+- required/optional/forbidden page evidence evaluation.
+- page match summaries and per-target diagnostics.
+
+The PageDetector layer deliberately does not own:
+
+- device access.
+- screenshots or capture backends.
+- MaaTouch or any click execution.
+- SQLite or capture persistence.
+- OCR.
+- UI.
+- navigation.
+- state machines.
+- game task logic.
+
+P5 evaluates an existing `Scene` with an existing `RecognitionEvaluator`. It only answers whether the current scene matches a page definition. ClickOnly targets are fatal when used as page evidence.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -99,6 +134,7 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - Capture failure is fatal.
 - Recognition primitive errors are fatal.
 - Recognition pack validation and evaluation errors are fatal.
+- PageDetector parse, validation, and evaluation errors are fatal.
 - Runtime `recognize` errors are fatal and visible.
 - No OpenCV in P4a recognition primitives.
 - No OCR until a separate scoped milestone.
@@ -106,12 +142,14 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - No UI in this repository.
 - No game logic until a specific runtime/game milestone.
 - No click execution in P4c recognition validation.
+- No click execution or device access in P5 PageDetector.
 - No upstream source or asset copying without license, attribution, and boundary review.
 
 ## Next steps
 
-1. Define P5 PageDetector using P4c recognition packs without click execution or task flow.
-2. Define runtime-owned capture metadata and image reference lifecycle.
-3. Define SQLite schema in a separate scoped milestone.
-4. Define how Runtime exposes capture and recognition results to UI/API layers.
-5. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Decide whether the next milestone is P5b real AzurLane page-definition samples or P6 minimal task-loop draft.
+2. Revisit `ui_white/MAIN_GOTO_CAMPAIGN_WHITE` color calibration before treating the real AzurLane main page as green.
+3. Define runtime-owned capture metadata and image reference lifecycle.
+4. Define SQLite schema in a separate scoped milestone.
+5. Define how Runtime exposes capture, recognition, and page-detection results to UI/API layers.
+6. Keep `CHECKPOINT.md` updated with every completed Runtime task.
