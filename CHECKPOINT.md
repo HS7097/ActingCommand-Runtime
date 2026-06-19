@@ -20,6 +20,118 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-19 resource refresh and live smoke revalidation
+
+### Current status
+
+- Refreshed the three resource repositories from their remotes with `git pull --ff-only`.
+- Resource repositories were already up to date and remained clean.
+- Rebuilt the release `actingcommand-device-test` binary.
+- Captured fresh frames for AzurLane, Arknights, and BlueArchive.
+- BlueArchive was in hidden/idle UI state on the first fresh capture, so only a neutral wake tap was sent before any BA recognition/probe action.
+- Revalidated pack/page recognition and the current safe control path.
+- No resource repository files were modified.
+- No Runtime source code was modified in this task.
+
+### Resource repository revisions
+
+- AzurLane: `a72a13f`
+- Arknights: `e9c2b7c`
+- BlueArchive: `2fec019`
+
+### Current live frames
+
+- AzurLane:
+  - port: `127.0.0.1:16384`
+  - frame: `target\resource-refresh-20260619\azur-16384-now.png`
+  - observed state: AzurLane JP sortie/chapter map, not main page
+  - `azurlane/main_white`: not matched
+  - action decision: no probe click; read-only detection only
+- Arknights:
+  - port: `127.0.0.1:16416`
+  - frame: `target\resource-refresh-20260619\ark-16416-now.png`
+  - observed state: Arknights home
+  - `arknights/home`: matched
+  - action decision: no probe click; read-only detection only
+- BlueArchive:
+  - port: `127.0.0.1:16448`
+  - first fresh frame: `target\resource-refresh-20260619\ba-16448-now.png`
+  - observed state: BlueArchive JP hidden/idle UI
+  - wake action: `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+  - after-wake frame: `target\resource-refresh-20260619\ba-16448-after-wake.png`
+  - `bluearchive/home`: matched after wake
+
+### Recognition validation
+
+- `detect-page --check-pages` passed for:
+  - AzurLane JP resources
+  - Arknights CN resources
+  - BlueArchive JP resources
+- Scene-based detection on fresh frames:
+  - `azurlane/main_white`: not matched, expected for current sortie/map screen
+  - `arknights/home`: matched
+  - `bluearchive/home`: matched after wake
+
+### Safe control validation
+
+- BA probe-run:
+  - command used release binary and current BlueArchive resources
+  - run id: `probe-1781879689436`
+  - artifact dir: `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\resource-refresh-20260619\probe-runs\probe-1781879689436`
+  - result: `completed`
+  - executed: true
+  - click count: 2
+  - final page: `bluearchive/home`
+  - effects executed: `NavigationOnly` only
+  - `claims_executed`: 0
+  - `regenerating_resource_actions_executed`: 0
+  - `premium_currency_allowed`: false
+  - `auto_refill_allowed`: false
+- Runner multi-open smoke:
+  - profile: `target\resource-refresh-20260619\runner-profiles\bluearchive.jp.runner.json`
+  - `127.0.0.1:16384`: `blocked`, `page_guard_not_matched`, executed false, click count 0
+  - `127.0.0.1:16416`: `blocked`, `page_guard_not_matched`, executed false, click count 0
+  - `127.0.0.1:16448`: `completed`, executed true, click count 2, final page `bluearchive/home`
+
+### Commands run
+
+- `git status --short --branch` in Runtime and all three resource repositories.
+- `git fetch origin; git pull --ff-only; git rev-parse --short HEAD` in each resource repository.
+- `cargo build --release -p actingcommand-device-test`
+- `adb devices -l`
+- `target\release\actingcommand-device-test.exe --port 16384 capture --out target\resource-refresh-20260619\azur-16384-now.png`
+- `target\release\actingcommand-device-test.exe --port 16416 capture --out target\resource-refresh-20260619\ark-16416-now.png`
+- `target\release\actingcommand-device-test.exe --port 16448 capture --out target\resource-refresh-20260619\ba-16448-now.png`
+- `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+- `target\release\actingcommand-device-test.exe --port 16448 capture --out target\resource-refresh-20260619\ba-16448-after-wake.png`
+- `target\release\actingcommand-device-test.exe detect-page ... --check-pages` for all three resource repositories.
+- `target\release\actingcommand-device-test.exe detect-page ... --scene ...` for current AzurLane, Arknights, and BlueArchive frames.
+- `target\release\actingcommand-device-test.exe --port 16448 detect-page ... --page bluearchive/home --capture`
+- `target\release\actingcommand-device-test.exe --port 16448 probe-run ... --capture --checkpoint-frames 8`
+- Three parallel runner runs for ports `16384`, `16416`, and `16448`.
+- `cargo test -p actingcommand-device-test -p actingcommand-task-loop`
+
+### Test results
+
+- `cargo build --release -p actingcommand-device-test` passed.
+- `cargo test -p actingcommand-device-test -p actingcommand-task-loop` passed:
+  - `actingcommand-device-test`: 53 tests passed.
+  - `actingcommand-task-loop`: 35 tests passed.
+- Three resource `detect-page --check-pages` validations passed.
+- BA hidden UI was handled by immediate screenshot, visible decision, one neutral wake tap, and re-detection before probe execution.
+
+### Current blocker
+
+- AzurLane live probe remains blocked until the device is returned to `azurlane/main_white` or a reviewed map-screen probe is defined.
+- Arknights live probe remains blocked because no reviewed Arknights probe fixture/resource route exists yet.
+- BlueArchive tested route remains limited to verified `NavigationOnly`; FreeClaim/AP-consuming paths are still blocked pending reviewed resources and an explicit reviewed/resume flow.
+
+### Next step
+
+1. Add regression frames for BA hidden UI, BA visible home, BA task center, Arknights home, and AzurLane map-vs-main negative evidence.
+2. Define safe Arknights observe-only probe fixtures before any Ark click validation.
+3. Return AzurLane to main page or add an explicitly reviewed map-screen read-only probe before Azur live clicks.
+
 ## 2026-06-19 P6d live validation and resource gap close-out
 
 ### Current status
