@@ -8,6 +8,10 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
+pub mod probe;
+
+pub use probe::*;
+
 pub type TaskLoopResult<T> = Result<T, TaskLoopError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

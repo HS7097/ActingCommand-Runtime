@@ -165,6 +165,65 @@ The task-loop layer deliberately does not own:
 
 P6a click actions return click metadata only. They are not executed.
 
+## Non-destructive probe loop
+
+P6b/P6c/P6d adds a controlled non-destructive probe lane.
+
+The `actingcommand-task-loop` probe layer owns:
+
+- `ProbePlan` schema v0.1 parsing.
+- structural probe validation.
+- reference validation against `PageDetector`, `RecognitionEvaluator`, and explicit external reference overrides.
+- pure probe-step decisions for `detect_page`, `observe_page`, `observe_targets`, and `navigation_only` click targets.
+- conservative click-name safety checks for destructive words.
+
+The task-loop probe layer deliberately does not own:
+
+- device access.
+- MaaTouch sessions.
+- actual click-point generation.
+- file journals.
+- capture polling.
+- scheduler behavior.
+- retry loops.
+- SQLite.
+- UI.
+- OCR.
+- OpenCV.
+- game task flow.
+
+`device-test probe-run` owns the executable probe bridge:
+
+- required `--capture` mode.
+- no `--scene` click execution.
+- no mixing with `reset`, `tap`, `longtap`, or `swipe`.
+- ScreencapBackend capture before and after actions.
+- MaaTouchBackend only after safety checks pass.
+- actual click-point generation inside the chosen click rect.
+- operation journal files under the provided run root.
+- post-click arrival polling.
+- failure-visible summaries.
+
+`actual_click_point` records:
+
+- seed.
+- algorithm.
+- source rect.
+- final point.
+
+For BlueArchive JP, `device-test` can load `navigation/bluearchive.jp.navigation.json` as data:
+
+- `navigation/<id>` becomes an external click target.
+- `control/<id>` becomes an external click target.
+- `navigation/<id>/arrive_anchor` becomes an external page reference.
+- `arrive_anchor` full-frame matching is a temporary `device-test` bridge only.
+- The task-loop core does not know about BA-specific direct matching.
+- Later work should migrate BA arrival anchors into recognition-pack full-frame targets after the schema supports them.
+
+BA forbidden destructive points are checked by rect or radius. Exact-point-only checks are not sufficient.
+
+P6b/P6c/P6d remains non-destructive. It may navigate and observe, but it must not claim rewards, buy, consume, decompose, enhance, retire, construct, start battles, receive mail, or perform similar state-changing actions.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -184,6 +243,7 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - Task-loop parse, validation, and dry-run errors are fatal.
 - Runtime `recognize` errors are fatal and visible.
 - Runtime `detect-page` and `task-dry-run` errors are fatal and visible.
+- Runtime `probe-run` errors are fatal and visible.
 - No OpenCV in P4a recognition primitives.
 - No OCR until a separate scoped milestone.
 - No SQLite until a separate scoped milestone.
@@ -192,14 +252,19 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - No click execution in P4c recognition validation.
 - No click execution or device access in P5 PageDetector.
 - No click execution, scheduler, SQLite, background loop, or game logic in P6a task-loop.
+- No device access or click execution in the P6b/P6c/P6d task-loop probe core.
+- P6b/P6c/P6d device-test click execution is navigation-only and MaaTouch-only.
+- Do not commit MaaTouch binaries; use local-only external tools or `--local <path>`.
 - No upstream source or asset copying without license, attribution, and boundary review.
 
 ## Next steps
 
-1. Alice can run live `detect-page` and `task-dry-run` checks against the three games as an operator step.
-2. P6b controlled click execution requires separate confirmation, safety locks, and a dry-run-to-click upgrade path.
-3. Define Runtime API contracts for UI integration in a separate milestone.
-4. Define capture metadata and SQLite schema in a separate scoped milestone.
-5. Create a regression frame-set lane so each page has positive and negative sample frames guarding recognition drift.
-6. Decide where real TaskPlan files live; they should not be stored in resource repositories, and P6a remains synthetic-only.
-7. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Deploy MaaTouch locally outside the repository or pass it with `--local <path>`.
+2. Run BA JP `probe-run` on a live BA home screen and confirm `home_to_task` reaches the arrival anchor before enabling further probe steps.
+3. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+4. Add Arknights operator/menu navigation targets before Arknights probes.
+5. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack full-frame targets.
+6. Define Runtime API contracts for UI integration in a separate milestone.
+7. Define capture metadata and SQLite schema in a separate scoped milestone.
+8. Create a regression frame-set lane so each page has positive and negative sample frames guarding recognition drift.
+9. Keep `CHECKPOINT.md` updated with every completed Runtime task.

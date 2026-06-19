@@ -14,3 +14,5 @@ actingcommand-page-detector = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-task-loop = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

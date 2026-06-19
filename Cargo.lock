@@ -38,6 +38,8 @@ dependencies = [
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "actingcommand-task-loop",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

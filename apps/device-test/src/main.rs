@@ -20,6 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod probe_run;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeviceCommand {
     Reset,
@@ -50,6 +52,9 @@ enum DeviceCommand {
     },
     TaskDryRun {
         options: TaskDryRunOptions,
+    },
+    ProbeRun {
+        options: probe_run::ProbeRunOptions,
     },
 }
 
@@ -117,9 +122,18 @@ fn run() -> DeviceResult<()> {
             print!("{}", run_task_dry_run_command(config, options)?);
             return Ok(());
         }
+        [DeviceCommand::ProbeRun { options }] => {
+            print!("{}", probe_run::run_probe_command(config, options)?);
+            return Ok(());
+        }
         _ if has_read_only_command(&commands) => {
             return Err(DeviceError::fatal(
                 "read-only commands cannot be combined with MaaTouch input commands",
+            ));
+        }
+        _ if has_probe_run_command(&commands) => {
+            return Err(DeviceError::fatal(
+                "probe-run cannot be combined with other commands",
             ));
         }
         _ => {}
@@ -160,6 +174,12 @@ fn has_read_only_command(commands: &[DeviceCommand]) -> bool {
                 | DeviceCommand::TaskDryRun { .. }
         )
     })
+}
+
+fn has_probe_run_command(commands: &[DeviceCommand]) -> bool {
+    commands
+        .iter()
+        .any(|command| matches!(command, DeviceCommand::ProbeRun { .. }))
 }
 
 fn run_capture_command(
@@ -594,6 +614,11 @@ fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> De
                     "task-dry-run cannot run through MaaTouchBackend",
                 ));
             }
+            DeviceCommand::ProbeRun { .. } => {
+                return Err(DeviceError::fatal(
+                    "probe-run cannot run through MaaTouchBackend command list",
+                ));
+            }
         }
     }
     Ok(())
@@ -718,6 +743,12 @@ where
                     options: parse_task_dry_run_options(&tokens, &mut index)?,
                 });
             }
+            "probe-run" => {
+                index += 1;
+                commands.push(DeviceCommand::ProbeRun {
+                    options: parse_probe_run_options(&tokens, &mut index)?,
+                });
+            }
             other => {
                 return Err(DeviceError::fatal(format!(
                     "unknown argument or command: {other}"
@@ -728,7 +759,7 @@ where
 
     if commands.is_empty() {
         return Err(DeviceError::fatal(
-            "missing command: expected reset, tap, longtap, swipe, capture, recognize, detect-page, or task-dry-run",
+            "missing command: expected reset, tap, longtap, swipe, capture, recognize, detect-page, task-dry-run, or probe-run",
         ));
     }
 
@@ -947,6 +978,79 @@ fn parse_task_dry_run_options(
     })
 }
 
+fn parse_probe_run_options(
+    tokens: &[String],
+    index: &mut usize,
+) -> DeviceResult<probe_run::ProbeRunOptions> {
+    let mut pack = None;
+    let mut pack_root = None;
+    let mut pages = None;
+    let mut probe = None;
+    let mut run_root = None;
+    let mut navigation = None;
+    let mut capture = false;
+    let mut scene = None;
+
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--pack" => {
+                pack = Some(PathBuf::from(next_token(tokens, index, "--pack")?));
+            }
+            "--pack-root" => {
+                pack_root = Some(PathBuf::from(next_token(tokens, index, "--pack-root")?));
+            }
+            "--pages" => {
+                pages = Some(PathBuf::from(next_token(tokens, index, "--pages")?));
+            }
+            "--probe" => {
+                probe = Some(PathBuf::from(next_token(tokens, index, "--probe")?));
+            }
+            "--run-root" => {
+                run_root = Some(PathBuf::from(next_token(tokens, index, "--run-root")?));
+            }
+            "--navigation" => {
+                navigation = Some(PathBuf::from(next_token(tokens, index, "--navigation")?));
+            }
+            "--capture" => {
+                capture = true;
+                *index += 1;
+            }
+            "--scene" => {
+                scene = Some(PathBuf::from(next_token(tokens, index, "--scene")?));
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown probe-run argument: {other}"
+                )));
+            }
+        }
+    }
+
+    if scene.is_some() {
+        return Err(DeviceError::fatal(
+            "probe-run does not support --scene for click execution",
+        ));
+    }
+    if !capture {
+        return Err(DeviceError::fatal("probe-run requires --capture"));
+    }
+
+    Ok(probe_run::ProbeRunOptions {
+        pack: pack.ok_or_else(|| DeviceError::fatal("probe-run requires --pack <pack.json>"))?,
+        pack_root: pack_root
+            .ok_or_else(|| DeviceError::fatal("probe-run requires --pack-root <dir>"))?,
+        pages: pages
+            .ok_or_else(|| DeviceError::fatal("probe-run requires --pages <pages.json>"))?,
+        probe: probe
+            .ok_or_else(|| DeviceError::fatal("probe-run requires --probe <probe.json>"))?,
+        run_root: run_root
+            .ok_or_else(|| DeviceError::fatal("probe-run requires --run-root <dir>"))?,
+        navigation,
+        capture,
+        scene,
+    })
+}
+
 fn parse_capture_out(tokens: &[String], index: &mut usize) -> DeviceResult<PathBuf> {
     let mut out = None;
     while *index < tokens.len() {
@@ -1022,10 +1126,12 @@ fn print_help() {
          cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --page <page_id> --scene <png>\n\
          cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --all --capture\n\
          cargo run -p actingcommand-device-test -- [options] task-dry-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --task <task.json> --scene <png>\n\
+         cargo run -p actingcommand-device-test -- [options] probe-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --probe <probe.json> --run-root <dir> --capture [--navigation <navigation.json>]\n\
          \n\
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
          Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
          Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode only uses ScreencapBackend.\n\
+         Probe-run is a controlled navigation-only probe: it captures, safety-checks, then taps only through MaaTouch.\n\
          Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
@@ -1955,6 +2061,61 @@ mod tests {
         .expect("parse mixed commands");
 
         assert!(has_read_only_command(&commands));
+    }
+
+    #[test]
+    fn parses_probe_run_capture_form() {
+        let (_, commands) = parse_args([
+            "--port".to_string(),
+            "16384".to_string(),
+            "probe-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--probe".to_string(),
+            "probe.json".to_string(),
+            "--run-root".to_string(),
+            "runs".to_string(),
+            "--navigation".to_string(),
+            "navigation.json".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::ProbeRun {
+                options: probe_run::ProbeRunOptions {
+                    capture: true,
+                    navigation: Some(_),
+                    ..
+                }
+            }]
+        ));
+        assert!(has_probe_run_command(&commands));
+    }
+
+    #[test]
+    fn rejects_probe_run_without_capture() {
+        let err = parse_args([
+            "probe-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--probe".to_string(),
+            "probe.json".to_string(),
+            "--run-root".to_string(),
+            "runs".to_string(),
+        ])
+        .expect_err("capture required");
+
+        assert!(err.message().contains("--capture"));
     }
 
     struct Fixture {

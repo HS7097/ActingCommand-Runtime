@@ -510,3 +510,163 @@ Resource repository:
 2. Alice can manually run live `detect-page` and `task-dry-run` checks for Azur, Ark, and BA.
 3. Choose a next milestone: P6b controlled click execution, Runtime API contract for UI, or capture metadata / SQLite schema design.
 4. Add a regression frame-set lane before real page definitions become broad or authoritative.
+
+## 2026-06-19 P6b/P6c/P6d non-destructive probe loop
+
+### Current status
+
+- Implemented a P6b/P6c/P6d non-destructive probe lane.
+- `actingcommand-task-loop` now has a pure probe module for `ProbePlan` schema v0.1.
+- The task-loop probe core only parses, validates, and decides probe steps; it does not access devices, generate actual click points, write journals, start MaaTouch, or perform captures.
+- `device-test probe-run` owns executable probe behavior, including ScreencapBackend capture, MaaTouchBackend taps after safety checks, actual click-point generation, operation journal files, and arrival polling.
+- No MaaTouch binary was committed.
+- `external-tools/maatouch/maatouch` is still absent locally, so any probe that reaches a click step will require `--local <path>` or a local-only external tool before it can tap.
+- A safe BA JP probe smoke run on port `16384` completed with `executed=false` and `click_count=0` because the captured frame did not match `bluearchive/home`; no MaaTouch session was started and no click was sent.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/device-test/Cargo.toml`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `apps/device-test/tests/fixtures/bluearchive.jp.probe.json`
+- `crates/task-loop/src/lib.rs`
+- `crates/task-loop/src/probe.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Probe implementation notes
+
+- Probe actions:
+  - `detect_page`
+  - `observe_page`
+  - `observe_targets`
+  - `click` with `effect = navigation_only`
+- Click steps require `expect_after.page_id`.
+- Probe plans are capped at 10 steps.
+- Runtime probe invocations are capped at 3 navigation clicks.
+- Dangerous click names are rejected for click targets and click steps.
+- Observe targets may contain words such as reward or collect because observe actions do not click.
+- External references let `device-test` provide navigation-data click rects and temporary arrival-anchor pages without adding BA-specific direct matching to the task-loop core.
+
+### Journal behavior
+
+- Each `probe-run` writes:
+  - `command.txt`
+  - `probe-plan.json`
+  - `input-paths.json`
+  - `events.jsonl`
+  - `summary.json`
+  - `frames/`
+  - `observations/`
+- `actual_click_point` records:
+  - seed
+  - algorithm
+  - rect
+  - point
+- Failure paths write `run_failed`; completed paths write `run_finished`.
+- Post-click arrival validation uses polling rather than a single delayed frame.
+
+### BlueArchive navigation bridge
+
+- Read-only navigation file:
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\navigation\bluearchive.jp.navigation.json`
+- Resource repository commit:
+  - `aaac863`
+- `navigation/home_to_task` is mapped to a small randomizable click rect around `[66, 237]`.
+- `control/home` is mapped to a small randomizable click rect around `[1236, 25]`.
+- `navigation/home_to_task/arrive_anchor` is mapped to the full-frame `PAGE_TASK_CENTER.png` template.
+- This arrival-anchor direct match is temporary in `device-test` only and should later become a recognition-pack full-frame target.
+- `forbidden_destructive_points` are checked by rect or radius, not exact equality.
+
+### Resource gap scan
+
+- AzurLane:
+  - repository: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+  - commit: `8503ca1`
+  - pages: 1
+  - page: `azurlane/main_white`
+  - targets: 2005
+  - GOTO/MISSION/COMMISSION-like targets: 166
+  - blocker: mission/commission and other destination page definitions are missing from pages JSON; navigation probe needs resource work first.
+- Arknights:
+  - repository: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+  - commit: `00199ee`
+  - pages: 1
+  - page: `arknights/home`
+  - targets: 2
+  - operator/menu-like targets: 0
+  - blocker: operator/menu navigation targets are missing from pack/page data; probe needs resource work first.
+- BlueArchive:
+  - repository: `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+  - commit: `aaac863`
+  - pages: 1
+  - page: `bluearchive/home`
+  - targets: 1
+  - navigation file: `bluearchive.jp.navigation.json`
+  - executable now: structurally yes, but a real click requires the live game to be on BA home and MaaTouch binary to be supplied locally.
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-P6b-P6c-P6d-probe-loop.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Checked Runtime repository status.
+- Read current task-loop, device-test, page-detector, recognition-pack, device capture, and MaaTouch code.
+- Read BlueArchive navigation, pack, and pages JSON.
+- Scanned AzurLane, Arknights, and BlueArchive resource repositories read-only.
+- `adb devices -l`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-task-loop`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-task-loop -p actingcommand-device-test`
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo tree -p actingcommand-task-loop --depth 1`
+- `git diff --check`
+- `rg -n "rusqlite|sqlite|SQLite|OCR|ocr|OpenCV|opencv|scheduler|background loop|retry loop|adb shell input|input tap|long_tap\(|swipe\(" apps/device-test crates/task-loop`
+- `rg -n "rusqlite|sqlite|opencv|image\s*=|imageproc\s*=|actingcommand-device|actingcommand-runtime-core" crates/task-loop/Cargo.toml`
+- `rg -n "adb shell input|input tap|fallback|reconnect|retry loop|background loop|rusqlite|SQLite|sqlite|OCR|ocr|OpenCV|opencv" apps/device-test/src/probe_run.rs crates/task-loop/src/probe.rs apps/device-test/tests/fixtures/bluearchive.jp.probe.json`
+- `rg -n "long_tap\(|swipe\(" apps/device-test/src/probe_run.rs crates/task-loop/src/probe.rs`
+- `cargo run -p actingcommand-device-test -- --port 16384 probe-run --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pages.json --probe apps\device-test\tests\fixtures\bluearchive.jp.probe.json --run-root C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\probe-runs --navigation C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\navigation\bluearchive.jp.navigation.json --capture`
+
+### Probe smoke result
+
+- Run id: `probe-1781872119434`
+- Run directory: `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\probe-runs\probe-1781872119434`
+- Result: `completed`
+- `executed=false`
+- `click_count=0`
+- Captured frame size: `1280x720`
+- First capture elapsed time: `695 ms`
+- Reason no click occurred:
+  - `bluearchive/home` page guard failed with `required target failed: page/home`
+  - the follow-up `return_home` step was also skipped because the external arrival page guard was not known
+- MaaTouch was not started in this smoke run.
+
+### Test results
+
+- `cargo test -p actingcommand-task-loop` passed with 31 tests.
+- `cargo test -p actingcommand-device-test` passed with 47 tests.
+- `cargo test -p actingcommand-task-loop -p actingcommand-device-test` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings` passed.
+- `cargo tree -p actingcommand-task-loop --depth 1` showed direct dependencies only on `actingcommand-page-detector`, `actingcommand-recognition`, `actingcommand-recognition-pack`, `serde`, and `serde_json`.
+- `git diff --check` passed.
+- The task-loop Cargo.toml direct-dependency scan found no direct `image`, `imageproc`, OpenCV, SQLite, `actingcommand-device`, or `actingcommand-runtime-core` dependency.
+- The new probe-code prohibited-feature scan found no ADB input fallback, reconnect, retry loop, background loop, SQLite, OCR, OpenCV, `long_tap`, or `swipe`.
+- The broader task-specified scan over `apps/device-test` and `crates/task-loop` only matched pre-existing `device-test` `long_tap` and `swipe` input commands in `apps/device-test/src/main.rs`; the new probe lane does not call them.
+
+### Current blocker
+
+- `external-tools/maatouch/maatouch` is not present and must not be committed; pass `--local <path>` or place it in an ignored local-only external-tools path before real click execution.
+- BA live click verification requires the target emulator to be on the BA JP home page.
+- AzurLane and Arknights probes are blocked by missing resource page/target definitions.
+
+### Next step
+
+1. Run final workspace tests, formatting check, clippy, cargo tree, prohibited-feature scans, and `git diff --check`.
+2. Commit and push Runtime repository changes.
+3. After MaaTouch is supplied locally and BA is on the home screen, rerun BA JP `probe-run` for the real navigation click path.
+4. Do not start P6e destructive operations without separate user confirmation.
