@@ -15,12 +15,14 @@ use actingcommand_recognition_pack::{
 use actingcommand_task_loop::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
 };
+use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod probe_run;
+use probe_run::DEFAULT_CHECKPOINT_FRAMES;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeviceCommand {
@@ -56,6 +58,12 @@ enum DeviceCommand {
     ProbeRun {
         options: probe_run::ProbeRunOptions,
     },
+    Benchmark {
+        options: BenchmarkOptions,
+    },
+    Runner {
+        options: RunnerOptions,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +96,44 @@ struct TaskDryRunOptions {
     task: PathBuf,
     scene: Option<PathBuf>,
     capture: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BenchmarkOptions {
+    rounds: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunnerOptions {
+    profile: PathBuf,
+    run_root: PathBuf,
+    capture: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunnerProfile {
+    id: String,
+    pack: PathBuf,
+    pack_root: PathBuf,
+    pages: PathBuf,
+    #[serde(default)]
+    navigation: Option<PathBuf>,
+    #[serde(default)]
+    checkpoint_frames: Option<usize>,
+    probes: Vec<RunnerProbe>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunnerProbe {
+    id: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LatencyStats {
+    best: u128,
+    median: u128,
+    p90: u128,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +170,14 @@ fn run() -> DeviceResult<()> {
         }
         [DeviceCommand::ProbeRun { options }] => {
             print!("{}", probe_run::run_probe_command(config, options)?);
+            return Ok(());
+        }
+        [DeviceCommand::Benchmark { options }] => {
+            print!("{}", run_benchmark_command(config, options)?);
+            return Ok(());
+        }
+        [DeviceCommand::Runner { options }] => {
+            print!("{}", run_runner_command(config, options)?);
             return Ok(());
         }
         _ if has_read_only_command(&commands) => {
@@ -335,6 +389,160 @@ fn run_task_dry_run_command(
         .dry_run(&detector, &evaluator, &scene)
         .map_err(task_error)?;
     Ok(format_dry_run_result(&result))
+}
+
+fn run_benchmark_command(
+    config: MaaTouchValidationConfig,
+    options: &BenchmarkOptions,
+) -> DeviceResult<String> {
+    if options.rounds == 0 {
+        return Err(DeviceError::fatal(
+            "benchmark --rounds must be greater than 0",
+        ));
+    }
+
+    let mut capture_backend = ScreencapBackend::new(config.adb.clone(), config.target.clone());
+    let mut capture_ms = Vec::with_capacity(options.rounds);
+    for _ in 0..options.rounds {
+        let started = Instant::now();
+        let _frame = capture_backend.capture()?;
+        capture_ms.push(started.elapsed().as_millis());
+    }
+
+    let mut control_backend = MaaTouchBackend::new(
+        config.adb.clone(),
+        config.target.clone(),
+        config.maatouch.clone(),
+    );
+    let _device = control_backend.connect()?;
+    let mut control_ms = Vec::with_capacity(options.rounds);
+    for _ in 0..options.rounds {
+        let started = Instant::now();
+        control_backend.reset()?;
+        control_ms.push(started.elapsed().as_millis());
+    }
+    let close = control_backend.close();
+    combine_operation_and_close(Ok(()), close)?;
+
+    let capture_stats = LatencyStats::from_samples(&capture_ms)?;
+    let control_stats = LatencyStats::from_samples(&control_ms)?;
+    let recommend_poll_interval_ms = (capture_stats.p90 + 50).max(capture_stats.median * 2);
+    let recommend_min_capture_interval_ms = capture_stats.p90.max(1);
+    let recommend_min_op_interval_ms = (control_stats.median + 20).max(1);
+
+    Ok(format!(
+        "rounds={}\n\
+         screenshot_best_ms={}\n\
+         screenshot_median_ms={}\n\
+         screenshot_p90_ms={}\n\
+         screenshot_rating={}\n\
+         control_best_ms={}\n\
+         control_median_ms={}\n\
+         recommend_poll_interval_ms={}\n\
+         recommend_min_capture_interval_ms={}\n\
+         recommend_min_op_interval_ms={}\n\
+         table=kind,best_ms,median_ms,p90_ms,rating\n\
+         table=screenshot,{},{},{},{}\n\
+         table=control,{},{},{},reset_only\n",
+        options.rounds,
+        capture_stats.best,
+        capture_stats.median,
+        capture_stats.p90,
+        capture_rating(capture_stats.median),
+        control_stats.best,
+        control_stats.median,
+        recommend_poll_interval_ms,
+        recommend_min_capture_interval_ms,
+        recommend_min_op_interval_ms,
+        capture_stats.best,
+        capture_stats.median,
+        capture_stats.p90,
+        capture_rating(capture_stats.median),
+        control_stats.best,
+        control_stats.median,
+        control_stats.p90,
+    ))
+}
+
+fn run_runner_command(
+    config: MaaTouchValidationConfig,
+    options: &RunnerOptions,
+) -> DeviceResult<String> {
+    if !options.capture {
+        return Err(DeviceError::fatal("runner requires --capture"));
+    }
+    let profile_json = fs::read_to_string(&options.profile).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to read runner profile {}: {err}",
+            options.profile.display()
+        ))
+    })?;
+    let profile: RunnerProfile = serde_json::from_str(&profile_json).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to parse runner profile {}: {err}",
+            options.profile.display()
+        ))
+    })?;
+    if profile.probes.is_empty() {
+        return Err(DeviceError::fatal(
+            "runner profile probes must not be empty",
+        ));
+    }
+    let base = options.profile.parent().unwrap_or_else(|| Path::new("."));
+    let runner_dir = options
+        .run_root
+        .join(format!("runner-{}-{}", profile.id, run_timestamp()));
+    fs::create_dir_all(&runner_dir).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to create runner directory {}: {err}",
+            runner_dir.display()
+        ))
+    })?;
+
+    let mut output = format!(
+        "runner_id={}\nrun_dir={}\nprofile={}\n",
+        profile.id,
+        runner_dir.display(),
+        options.profile.display()
+    );
+    let mut failures = 0usize;
+    for probe in &profile.probes {
+        let probe_run_root = runner_dir.join(safe_file_part(&probe.id));
+        let probe_options = probe_run::ProbeRunOptions {
+            pack: resolve_profile_path(base, &profile.pack),
+            pack_root: resolve_profile_path(base, &profile.pack_root),
+            pages: resolve_profile_path(base, &profile.pages),
+            probe: resolve_profile_path(base, &probe.path),
+            run_root: probe_run_root,
+            navigation: profile
+                .navigation
+                .as_ref()
+                .map(|path| resolve_profile_path(base, path)),
+            capture: true,
+            scene: None,
+            checkpoint_frames: profile
+                .checkpoint_frames
+                .unwrap_or(DEFAULT_CHECKPOINT_FRAMES),
+        };
+        match probe_run::run_probe_command(config.clone(), &probe_options) {
+            Ok(result) => {
+                output.push_str(&format!(
+                    "probe={},status=ok\n{}\n",
+                    probe.id,
+                    indent_multiline(&result)
+                ));
+            }
+            Err(err) => {
+                failures += 1;
+                output.push_str(&format!("probe={},status=failed,error={}\n", probe.id, err));
+            }
+        }
+    }
+    output.push_str(&format!(
+        "probes_total={}\nprobes_failed={failures}\n",
+        profile.probes.len()
+    ));
+    Ok(output)
 }
 
 fn load_recognition_scene(
@@ -557,6 +765,70 @@ fn format_dry_run_status(status: DryRunStatus) -> &'static str {
     }
 }
 
+impl LatencyStats {
+    fn from_samples(samples: &[u128]) -> DeviceResult<Self> {
+        if samples.is_empty() {
+            return Err(DeviceError::fatal("latency sample set is empty"));
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let best = sorted[0];
+        let median = sorted[sorted.len() / 2];
+        let p90_index = ((sorted.len() - 1) * 90).div_ceil(100);
+        Ok(Self {
+            best,
+            median,
+            p90: sorted[p90_index],
+        })
+    }
+}
+
+fn capture_rating(median_ms: u128) -> &'static str {
+    match median_ms {
+        0..=99 => "VeryFast",
+        100..=199 => "Fast",
+        200..=349 => "Medium",
+        _ => "Slow",
+    }
+}
+
+fn resolve_profile_path(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+fn indent_multiline(value: &str) -> String {
+    value
+        .lines()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn safe_file_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn run_timestamp() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
+}
+
 fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> DeviceError {
     DeviceError::fatal(err.to_string())
 }
@@ -617,6 +889,16 @@ fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> De
             DeviceCommand::ProbeRun { .. } => {
                 return Err(DeviceError::fatal(
                     "probe-run cannot run through MaaTouchBackend command list",
+                ));
+            }
+            DeviceCommand::Benchmark { .. } => {
+                return Err(DeviceError::fatal(
+                    "benchmark cannot run through MaaTouchBackend command list",
+                ));
+            }
+            DeviceCommand::Runner { .. } => {
+                return Err(DeviceError::fatal(
+                    "runner cannot run through MaaTouchBackend command list",
                 ));
             }
         }
@@ -749,6 +1031,18 @@ where
                     options: parse_probe_run_options(&tokens, &mut index)?,
                 });
             }
+            "benchmark" => {
+                index += 1;
+                commands.push(DeviceCommand::Benchmark {
+                    options: parse_benchmark_options(&tokens, &mut index)?,
+                });
+            }
+            "runner" => {
+                index += 1;
+                commands.push(DeviceCommand::Runner {
+                    options: parse_runner_options(&tokens, &mut index)?,
+                });
+            }
             other => {
                 return Err(DeviceError::fatal(format!(
                     "unknown argument or command: {other}"
@@ -759,7 +1053,7 @@ where
 
     if commands.is_empty() {
         return Err(DeviceError::fatal(
-            "missing command: expected reset, tap, longtap, swipe, capture, recognize, detect-page, task-dry-run, or probe-run",
+            "missing command: expected reset, tap, longtap, swipe, capture, recognize, detect-page, task-dry-run, probe-run, benchmark, or runner",
         ));
     }
 
@@ -990,6 +1284,7 @@ fn parse_probe_run_options(
     let mut navigation = None;
     let mut capture = false;
     let mut scene = None;
+    let mut checkpoint_frames = DEFAULT_CHECKPOINT_FRAMES;
 
     while *index < tokens.len() {
         match tokens[*index].as_str() {
@@ -1014,6 +1309,9 @@ fn parse_probe_run_options(
             "--capture" => {
                 capture = true;
                 *index += 1;
+            }
+            "--checkpoint-frames" => {
+                checkpoint_frames = parse_token(tokens, index, "--checkpoint-frames")?;
             }
             "--scene" => {
                 scene = Some(PathBuf::from(next_token(tokens, index, "--scene")?));
@@ -1048,6 +1346,62 @@ fn parse_probe_run_options(
         navigation,
         capture,
         scene,
+        checkpoint_frames,
+    })
+}
+
+fn parse_benchmark_options(tokens: &[String], index: &mut usize) -> DeviceResult<BenchmarkOptions> {
+    let mut rounds = 15usize;
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--rounds" => {
+                rounds = parse_token(tokens, index, "--rounds")?;
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown benchmark argument: {other}"
+                )));
+            }
+        }
+    }
+    if rounds == 0 {
+        return Err(DeviceError::fatal(
+            "benchmark --rounds must be greater than 0",
+        ));
+    }
+    Ok(BenchmarkOptions { rounds })
+}
+
+fn parse_runner_options(tokens: &[String], index: &mut usize) -> DeviceResult<RunnerOptions> {
+    let mut profile = None;
+    let mut run_root = None;
+    let mut capture = false;
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "--profile" => {
+                profile = Some(PathBuf::from(next_token(tokens, index, "--profile")?));
+            }
+            "--run-root" => {
+                run_root = Some(PathBuf::from(next_token(tokens, index, "--run-root")?));
+            }
+            "--capture" => {
+                capture = true;
+                *index += 1;
+            }
+            other => {
+                return Err(DeviceError::fatal(format!(
+                    "unknown runner argument: {other}"
+                )));
+            }
+        }
+    }
+    if !capture {
+        return Err(DeviceError::fatal("runner requires --capture"));
+    }
+    Ok(RunnerOptions {
+        profile: profile.ok_or_else(|| DeviceError::fatal("runner requires --profile <json>"))?,
+        run_root: run_root.ok_or_else(|| DeviceError::fatal("runner requires --run-root <dir>"))?,
+        capture,
     })
 }
 
@@ -1126,12 +1480,15 @@ fn print_help() {
          cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --page <page_id> --scene <png>\n\
          cargo run -p actingcommand-device-test -- [options] detect-page --pack <pack.json> --pack-root <dir> --pages <pages.json> --all --capture\n\
          cargo run -p actingcommand-device-test -- [options] task-dry-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --task <task.json> --scene <png>\n\
-         cargo run -p actingcommand-device-test -- [options] probe-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --probe <probe.json> --run-root <dir> --capture [--navigation <navigation.json>]\n\
+         cargo run -p actingcommand-device-test -- [options] probe-run --pack <pack.json> --pack-root <dir> --pages <pages.json> --probe <probe.json> --run-root <dir> --capture [--navigation <navigation.json>] [--checkpoint-frames N]\n\
+         cargo run -p actingcommand-device-test -- [options] benchmark [--rounds N]\n\
+         cargo run -p actingcommand-device-test -- [options] runner --profile <game.json> --run-root <dir> --capture\n\
          \n\
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
          Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
          Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode only uses ScreencapBackend.\n\
-         Probe-run is a controlled navigation-only probe: it captures, safety-checks, then taps only through MaaTouch.\n\
+         Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps only through MaaTouch.\n\
+         Benchmark uses ScreencapBackend and MaaTouch reset only. Runner executes profile probes once and exits.\n\
          Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
@@ -2116,6 +2473,101 @@ mod tests {
         .expect_err("capture required");
 
         assert!(err.message().contains("--capture"));
+    }
+
+    #[test]
+    fn parses_probe_run_checkpoint_frames() {
+        let (_, commands) = parse_args([
+            "probe-run".to_string(),
+            "--pack".to_string(),
+            "pack.json".to_string(),
+            "--pack-root".to_string(),
+            "resources".to_string(),
+            "--pages".to_string(),
+            "pages.json".to_string(),
+            "--probe".to_string(),
+            "probe.json".to_string(),
+            "--run-root".to_string(),
+            "runs".to_string(),
+            "--capture".to_string(),
+            "--checkpoint-frames".to_string(),
+            "3".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(matches!(
+            commands.as_slice(),
+            [DeviceCommand::ProbeRun {
+                options: probe_run::ProbeRunOptions {
+                    checkpoint_frames: 3,
+                    ..
+                }
+            }]
+        ));
+    }
+
+    #[test]
+    fn parses_benchmark_rounds() {
+        let (_, commands) = parse_args([
+            "benchmark".to_string(),
+            "--rounds".to_string(),
+            "5".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![DeviceCommand::Benchmark {
+                options: BenchmarkOptions { rounds: 5 }
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_benchmark_zero_rounds() {
+        let err = parse_args([
+            "benchmark".to_string(),
+            "--rounds".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("rounds");
+
+        assert!(err.message().contains("greater than 0"));
+    }
+
+    #[test]
+    fn parses_runner_capture_form() {
+        let (_, commands) = parse_args([
+            "runner".to_string(),
+            "--profile".to_string(),
+            "ba.json".to_string(),
+            "--run-root".to_string(),
+            "runs".to_string(),
+            "--capture".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            commands,
+            vec![DeviceCommand::Runner {
+                options: RunnerOptions {
+                    profile: PathBuf::from("ba.json"),
+                    run_root: PathBuf::from("runs"),
+                    capture: true,
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn latency_stats_reports_best_median_and_p90() {
+        let stats = LatencyStats::from_samples(&[10, 50, 30, 20, 40]).expect("stats");
+
+        assert_eq!(stats.best, 10);
+        assert_eq!(stats.median, 30);
+        assert_eq!(stats.p90, 50);
+        assert_eq!(capture_rating(99), "VeryFast");
+        assert_eq!(capture_rating(200), "Medium");
     }
 
     struct Fixture {

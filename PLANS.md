@@ -26,6 +26,8 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P5 PageDetector page recognition layer.
 - P5c `device-test detect-page` CLI and multi-resource PageSet validation.
 - P6a dry-run task loop.
+- P6b/P6c/P6d probe-loop framework.
+- P6d live validation and limited resource close-out.
 
 ## Recognition score semantics
 
@@ -165,17 +167,18 @@ The task-loop layer deliberately does not own:
 
 P6a click actions return click metadata only. They are not executed.
 
-## Non-destructive probe loop
+## Limited-resource probe loop
 
-P6b/P6c/P6d adds a controlled non-destructive probe lane.
+P6b/P6c/P6d adds a controlled probe lane. P6d changes the execution standard from fully non-destructive to limited-resource operation, but the default live path remains conservative.
 
 The `actingcommand-task-loop` probe layer owns:
 
 - `ProbePlan` schema v0.1 parsing.
 - structural probe validation.
 - reference validation against `PageDetector`, `RecognitionEvaluator`, and explicit external reference overrides.
-- pure probe-step decisions for `detect_page`, `observe_page`, `observe_targets`, and `navigation_only` click targets.
-- conservative click-name safety checks for destructive words.
+- pure probe-step decisions for `detect_page`, `observe_page`, `observe_targets`, and whitelisted click effects.
+- effect-aware safety checks for destructive words.
+- resource-policy validation for state-changing effects.
 
 The task-loop probe layer deliberately does not own:
 
@@ -192,6 +195,22 @@ The task-loop probe layer deliberately does not own:
 - OpenCV.
 - game task flow.
 
+Allowed click effects are:
+
+- `NavigationOnly`: page navigation only.
+- `FreeClaim`: free reward collection only when a `free_reward` policy explicitly forbids premium currency, refill, and cost.
+- `ConsumeRegeneratingResource`: only AzurLane oil, BlueArchive AP, or Arknights sanity with a declared `max_cost`, and still blocked from PvP/exercise routes.
+
+Forbidden actions remain blocked:
+
+- premium or paid currency use.
+- paid oil/AP/sanity refill.
+- shop purchases.
+- gacha, construction, or recruitment.
+- retire, delete, decompose, enhance, awaken, or similar destructive account changes.
+- exercise/PvP battles.
+- blind confirmation prompts.
+
 `device-test probe-run` owns the executable probe bridge:
 
 - required `--capture` mode.
@@ -203,6 +222,8 @@ The task-loop probe layer deliberately does not own:
 - operation journal files under the provided run root.
 - post-click arrival polling.
 - failure-visible summaries.
+- page-guard failure stops later clicks and records `result=blocked`.
+- checkpoint artifacts under `checkpoints/` when frame batches or risky effects require review.
 
 `actual_click_point` records:
 
@@ -222,7 +243,25 @@ For BlueArchive JP, `device-test` can load `navigation/bluearchive.jp.navigation
 
 BA forbidden destructive points are checked by rect or radius. Exact-point-only checks are not sufficient.
 
-P6b/P6c/P6d remains non-destructive. It may navigate and observe, but it must not claim rewards, buy, consume, decompose, enhance, retire, construct, start battles, receive mail, or perform similar state-changing actions.
+P6d live validation used only `NavigationOnly` routes. No FreeClaim, regenerating-resource consumption, paid refill, purchase, exercise/PvP, or destructive action was executed.
+
+## P6d benchmark and runner lane
+
+`device-test benchmark` measures the current ActingCommand stack before live execution:
+
+- screenshot latency through `ScreencapBackend`.
+- control latency through `MaaTouchBackend` reset operations.
+- recommended polling and minimum operation intervals.
+
+`device-test runner` packages recognition, capture, probe-run, and MaaTouch control into a one-shot profile-driven unit:
+
+- no scheduler.
+- no background resident process.
+- no SQLite.
+- independent run directories per port/process.
+- one failed probe is recorded without hiding the failure.
+
+Runner multi-open validation currently uses the BA JP smoke profile. Non-BA devices are expected to stop at page guard with `click_count=0`; the BA device may execute only the verified `NavigationOnly` home-to-task-and-back route.
 
 ## Repo-local planning policy
 

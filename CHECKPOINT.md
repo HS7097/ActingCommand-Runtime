@@ -20,6 +20,200 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-19 P6d live validation and resource gap close-out
+
+### Current status
+
+- Completed P6d implementation and validation from baseline `f7a05cefaa0299a6414ac61687c7f3f6070a7f5c`.
+- Probe-loop standard is now limited-resource operation with explicit `ProbeClickEffect` and `ResourcePolicy` validation.
+- `device-test probe-run` now consumes the unified navigation schema used by the resource repositories.
+- Page guard failure stops later clicks and records `result=blocked`.
+- Forbidden geometry checks cover candidate rects, forbidden rects, forbidden point radius, and actual click points.
+- Checkpoint support records frame-batch/risky-effect review artifacts and can pause with `result=paused_for_review`.
+- `device-test benchmark` measures screenshot/control latency before live runs.
+- `device-test runner` packages recognition, capture, probe-run, and MaaTouch control as a one-shot profile-driven unit.
+- Included MaaTouch binary at `external-tools/maatouch/maatouch` after owner license review and explicit approval.
+- No UI, SQLite, OCR, OpenCV, scheduler, background loop, ADB input fallback, reconnect, or retry loop was added.
+
+### Files changed
+
+- `.gitignore`
+- `NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `crates/task-loop/src/probe.rs`
+- `external-tools/maatouch/maatouch`
+
+### MaaTouch deployment status
+
+- Local destination: `external-tools/maatouch/maatouch`
+- Source reviewed locally: `C:\Users\Alice\Documents\Azur\upstream-sources\AzurLaneAutoScript\bin\MaaTouch\maatouch`
+- Size: 13,775 bytes
+- SHA256: `4EA8590CD0349CE900F39AB16EF3751DAD2356286B465B4293F80F9858C995D0`
+- Input path remains `MaaTouchBackend`; no ADB input fallback is present.
+
+### Resource repository read-only scan
+
+- AzurLane resources:
+  - commit `a72a13f`
+  - pack targets: 2005
+  - `pages.json` pages: 1
+  - navigation pages: 42
+  - navigation edges: 106
+  - destructive markers: 18
+  - `detect-page --check-pages`: passed
+  - live executable now: blocked, current 16384 screen was AzurLane JP sortie/map state, not `azurlane/main_white`
+  - FreeClaim executable now: blocked pending reviewed probe/resource targets
+  - oil-consuming executable now: blocked pending resource policy and safe probe coverage
+- Arknights resources:
+  - commit `e9c2b7c`
+  - pack targets: 2
+  - `pages.json` pages: 1
+  - navigation pages: 10
+  - navigation edges: 18
+  - destructive markers: 8
+  - `detect-page --check-pages`: passed
+  - live executable now: read-only home detection passed on 16416
+  - operator observe: blocked pending richer targets/routes
+  - sanity-consuming executable now: blocked pending resource policy and safe probe coverage
+- BlueArchive resources:
+  - commit `2fec019`
+  - pack targets: 1
+  - `pages.json` pages: 1
+  - navigation pages: 20
+  - navigation edges: 22
+  - destructive markers: 23
+  - `detect-page --check-pages`: passed
+  - live executable now: yes for verified `NavigationOnly` home-to-task-and-back smoke route
+  - FreeClaim executable now: not executed; claim/destructive points remain blocked
+  - AP-consuming executable now: blocked pending resource policy and reviewed probe coverage
+
+### Live device checks
+
+- Device ports observed:
+  - `127.0.0.1:16384`: AzurLane JP, current screen was sortie/map state; `azurlane/main_white` did not match.
+  - `127.0.0.1:16416`: Arknights CN home; `arknights/home` matched.
+  - `127.0.0.1:16448`: BlueArchive JP home after one neutral wake tap; `bluearchive/home` matched.
+- Wake tap:
+  - command: `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+  - purpose: reveal BA home UI from idle/hidden-UI state
+  - result: MaaTouch handshake OK and subsequent BA home detection matched
+- BA live probe-run:
+  - command: `target\release\actingcommand-device-test.exe --port 16448 probe-run --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pages.json --probe apps\device-test\tests\fixtures\bluearchive.jp.probe.json --run-root C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\probe-runs --navigation C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\navigation\bluearchive.jp.navigation.json --capture --checkpoint-frames 8`
+  - run id: `probe-1781878705771`
+  - artifact dir: `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\probe-runs\probe-1781878705771`
+  - result: `completed`
+  - executed: `true`
+  - click count: 2
+  - effects executed: `NavigationOnly` only
+  - `claims_executed`: 0
+  - `regenerating_resource_actions_executed`: 0
+  - `premium_currency_allowed`: false
+  - `auto_refill_allowed`: false
+  - purchase/refill/confirmation prompts encountered: no
+  - exercise/PvP battle touched: no
+  - final page: `bluearchive/home`
+
+### Benchmark results
+
+Release binary used: `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\release\actingcommand-device-test.exe`
+
+| Port | Screenshot best | Screenshot median | Screenshot p90 | Rating | Control best | Control median | Recommended poll | Min capture interval | Min op interval |
+| ---- | --------------- | ----------------- | -------------- | ------ | ------------ | -------------- | ---------------- | -------------------- | --------------- |
+| 16384 | 416 ms | 564 ms | 769 ms | Slow | 0 ms | 0 ms | 1128 ms | 769 ms | 20 ms |
+| 16416 | 514 ms | 620 ms | 895 ms | Slow | 0 ms | 0 ms | 1240 ms | 895 ms | 20 ms |
+| 16448 | 458 ms | 641 ms | 897 ms | Slow | 0 ms | 0 ms | 1282 ms | 897 ms | 20 ms |
+
+Control timing uses MaaTouch reset writes, so it reflects command-submission latency rather than a full UI arrival latency.
+
+### Runner multi-open result
+
+- Temporary runner profile: `target\p6d-runner-profiles\bluearchive.jp.runner.json`
+- 16384:
+  - run dir: `target\runner-runs\16384\runner-bluearchive-jp-smoke-1781878855427`
+  - result: `blocked`
+  - message: `page_guard_not_matched`
+  - executed: false
+  - click count: 0
+- 16416:
+  - run dir: `target\runner-runs\16416\runner-bluearchive-jp-smoke-1781878855427`
+  - result: `blocked`
+  - message: `page_guard_not_matched`
+  - executed: false
+  - click count: 0
+- 16448:
+  - run dir: `target\runner-runs\16448\runner-bluearchive-jp-smoke-1781878855544`
+  - result: `completed`
+  - executed: true
+  - click count: 2
+  - final page: `bluearchive/home`
+
+The three runner processes used independent run roots and did not share mutable state.
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-P6d-live-validation-and-resource-closeout.md`.
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- Copied MaaTouch from local upstream source into `external-tools/maatouch/maatouch`.
+- `cargo test -p actingcommand-task-loop`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-task-loop -p actingcommand-device-test`
+- `cargo build --release -p actingcommand-device-test`
+- Resource repository `git fetch origin` and `git pull --ff-only` for AzurLane, Arknights, and BlueArchive resource repos.
+- Resource JSON scan for pack counts, page counts, navigation counts, and destructive marker counts.
+- `target\release\actingcommand-device-test.exe --port 16384 benchmark --rounds 15`
+- `target\release\actingcommand-device-test.exe --port 16416 benchmark --rounds 15`
+- `target\release\actingcommand-device-test.exe --port 16448 benchmark --rounds 15`
+- `target\release\actingcommand-device-test.exe --port 16384 detect-page ... --page azurlane/main_white --capture`
+- `target\release\actingcommand-device-test.exe --port 16416 detect-page ... --page arknights/home --capture`
+- `target\release\actingcommand-device-test.exe --port 16448 detect-page ... --page bluearchive/home --capture`
+- `target\release\actingcommand-device-test.exe --port 16448 tap 640 360`
+- `target\release\actingcommand-device-test.exe --port 16448 probe-run ... --capture --checkpoint-frames 8`
+- Three parallel `target\release\actingcommand-device-test.exe --port <port> runner --profile target\p6d-runner-profiles\bluearchive.jp.runner.json --run-root target\runner-runs\<port> --capture` runs for ports 16384, 16416, and 16448.
+- `cargo fmt --all`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings`
+- `cargo tree -p actingcommand-task-loop --depth 1`
+- `git diff --check`
+- Prohibited-feature scans over `apps/device-test`, `apps/device-test/src/probe_run.rs`, `crates/task-loop`, and `crates/task-loop/Cargo.toml`.
+
+### Test results
+
+- `cargo test -p actingcommand-task-loop` passed with 35 tests.
+- `cargo test -p actingcommand-device-test` passed with 53 tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings` passed.
+- `git diff --check` passed.
+- `cargo tree -p actingcommand-task-loop --depth 1` direct dependencies:
+  - `actingcommand-page-detector`
+  - `actingcommand-recognition`
+  - `actingcommand-recognition-pack`
+  - `serde`
+  - `serde_json`
+- Broad prohibited-feature scan only matched pre-existing `device-test` input subcommands `long_tap` and `swipe`.
+- Probe lane and task-loop prohibited-feature scan had no matches for fallback, reconnect, retry loop, SQLite, OCR, OpenCV, ADB input, `long_tap`, or `swipe`.
+- `crates/task-loop/Cargo.toml` scan had no direct dependency on SQLite/OpenCV/image/imageproc/device/runtime-core.
+- `crates/device` has no `println!` or `eprintln!`.
+
+### Current blocker
+
+- AzurLane live route blocked because the current 16384 screen is not `azurlane/main_white`.
+- Arknights has home detection but lacks enough reviewed operator/sanity probe resources for live mutation.
+- BlueArchive only has verified live `NavigationOnly` coverage for home-to-task-and-back; FreeClaim/AP-consuming paths remain blocked until reviewed resources and checkpoints are added.
+- Full-frame template arrival matching is functional but slow on BA task arrival; future work should move BA arrival anchors into recognition-pack targets and optimize recognition regions.
+
+### Next step
+
+1. Commit and push P6d Runtime changes.
+2. Add regression frames for BA home/task positive and negative cases.
+3. Expand AzurLane and Arknights resource packs with reviewed observe targets before live mutation.
+4. Add explicit reviewed/resume flow before enabling FreeClaim or regenerating-resource consumption.
+
 ## 2026-06-18 Runtime repo-local planning initialization
 
 ### Current status

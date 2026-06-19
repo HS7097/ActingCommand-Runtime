@@ -6,10 +6,11 @@ use actingcommand_device::{
     MaaTouchValidationConfig, ScreencapBackend, combine_operation_and_close,
 };
 use actingcommand_page_detector::PageDetector;
-use actingcommand_recognition::Scene;
+use actingcommand_recognition::{Rect as RecognitionRect, Scene};
 use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator};
 use actingcommand_task_loop::{
-    ProbeDecisionLoop, ProbeReferenceOverrides, ProbeStepDecision, load_probe_plan_from_json_str,
+    ProbeClickEffect, ProbeDecisionLoop, ProbeReferenceOverrides, ProbeStepDecision,
+    ResourcePolicy, ResourcePolicyKind, load_probe_plan_from_json_str,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -26,6 +27,7 @@ const DEFAULT_CLICK_RECT_RADIUS: i32 = 20;
 const DEFAULT_FORBIDDEN_RADIUS: i32 = 20;
 const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_EXPECT_INTERVAL_MS: u64 = 100;
+pub const DEFAULT_CHECKPOINT_FRAMES: usize = 8;
 const MAX_POLL_FRAMES: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +40,7 @@ pub struct ProbeRunOptions {
     pub navigation: Option<PathBuf>,
     pub capture: bool,
     pub scene: Option<PathBuf>,
+    pub checkpoint_frames: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,11 +56,13 @@ struct ActualClickPoint {
 struct NavigationFile {
     coordinate_space: Option<NavigationCoordinateSpace>,
     #[serde(default)]
-    control_points: HashMap<String, NavigationControlPoint>,
+    control_points: Vec<NavigationControlPoint>,
+    #[serde(default)]
+    pages: Vec<NavigationPage>,
     #[serde(default)]
     navigation: Vec<NavigationRoute>,
     #[serde(default)]
-    forbidden_destructive_points: Vec<ForbiddenDestructivePoint>,
+    destructive_actions: Vec<NavigationDestructiveAction>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -68,14 +73,18 @@ struct NavigationCoordinateSpace {
 
 #[derive(Debug, Clone, Deserialize)]
 struct NavigationControlPoint {
+    name: String,
     point: [i32; 2],
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct NavigationRoute {
     id: String,
-    click_point: [i32; 2],
-    arrive_anchor: Option<ArrivalAnchor>,
+    #[serde(default)]
+    from_page: String,
+    #[serde(default)]
+    to_page: String,
+    click: NavigationClick,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,16 +92,56 @@ struct ArrivalAnchor {
     template: String,
     #[serde(default)]
     threshold: Option<f32>,
+    #[serde(default)]
+    region: Option<PackRect>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ForbiddenDestructivePoint {
+struct NavigationPage {
     id: String,
     #[serde(default)]
+    anchors: Vec<NavigationAnchor>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NavigationAnchor {
+    kind: String,
+    template_path: String,
+    #[serde(default)]
+    region: String,
+    #[serde(default)]
+    threshold: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NavigationClick {
+    kind: String,
+    #[serde(default)]
+    point: String,
+    #[serde(default)]
+    rect: String,
+    #[serde(default)]
+    template_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NavigationDestructiveAction {
+    id: String,
+    #[serde(default)]
+    page: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    point: String,
+    #[serde(default)]
+    rect: String,
+}
+
+#[derive(Debug, Clone)]
+struct ForbiddenDestructivePoint {
+    id: String,
     point: Option<[i32; 2]>,
-    #[serde(default)]
     rect: Option<PackRect>,
-    #[serde(default)]
     radius: Option<i32>,
 }
 
@@ -109,6 +158,7 @@ struct OperationJournal {
     events: PathBuf,
     frames: PathBuf,
     observations: PathBuf,
+    checkpoints: PathBuf,
     pack_root: PathBuf,
 }
 
@@ -116,9 +166,41 @@ struct OperationJournal {
 struct ProbeRunState {
     executed: bool,
     click_count: usize,
+    claims_executed: usize,
+    regenerating_resource_actions_executed: usize,
+    last_resource_kind: Option<String>,
+    last_max_cost: Option<u32>,
     final_page: Option<String>,
     frames: usize,
     observations: usize,
+    checkpoint_count: usize,
+    guard_failed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProbeRunFinish {
+    Completed,
+    Blocked { message: String },
+    PausedForReview { message: String },
+}
+
+impl ProbeRunFinish {
+    fn result(&self) -> &str {
+        match self {
+            ProbeRunFinish::Completed => "completed",
+            ProbeRunFinish::Blocked { .. } => "blocked",
+            ProbeRunFinish::PausedForReview { .. } => "paused_for_review",
+        }
+    }
+
+    fn message(&self) -> Option<&str> {
+        match self {
+            ProbeRunFinish::Completed => None,
+            ProbeRunFinish::Blocked { message } | ProbeRunFinish::PausedForReview { message } => {
+                Some(message)
+            }
+        }
+    }
 }
 
 pub fn run_probe_command(
@@ -144,14 +226,24 @@ pub fn run_probe_command(
     let mut state = ProbeRunState::default();
     let result = execute_probe_run(config, options, &probe_json, &journal, &mut state);
     match result {
-        Ok(()) => {
-            journal.event("run_finished", json!({"result": "completed"}))?;
-            journal.summary(options, "completed", &state, None)?;
+        Ok(finish) => {
+            journal.event(
+                "run_finished",
+                json!({"result": finish.result(), "message": finish.message()}),
+            )?;
+            journal.summary(
+                options,
+                finish.result(),
+                &state,
+                finish.message().map(str::to_string),
+            )?;
             Ok(format!(
-                "run_id={}\nrun_dir={}\nprobe={}\nresult=completed\nexecuted={}\nclick_count={}\nsummary={}\nevents={}\n",
+                "run_id={}\nrun_dir={}\nprobe={}\nresult={}\nmessage={}\nexecuted={}\nclick_count={}\nsummary={}\nevents={}\n",
                 journal.run_id,
                 journal.run_dir.display(),
                 options.probe.display(),
+                finish.result(),
+                finish.message().unwrap_or(""),
                 state.executed,
                 state.click_count,
                 journal.run_dir.join("summary.json").display(),
@@ -175,7 +267,7 @@ fn execute_probe_run(
     probe_json: &str,
     journal: &OperationJournal,
     state: &mut ProbeRunState,
-) -> DeviceResult<()> {
+) -> DeviceResult<ProbeRunFinish> {
     journal.event(
         "run_started",
         json!({
@@ -215,6 +307,9 @@ fn execute_probe_run(
     let mut capture = ScreencapBackend::new(config.adb.clone(), config.target.clone());
     let before = capture_frame(&mut capture, journal, "000_before.png", "before")?;
     state.frames += 1;
+    if let Some(finish) = maybe_checkpoint(options, journal, state, "initial_frame")? {
+        return Ok(finish);
+    }
     let mut scene = Scene::from_png(&before).map_err(|err| DeviceError::fatal(err.to_string()))?;
     let seed_base = run_seed();
     let mut backend = None::<MaaTouchBackend>;
@@ -241,8 +336,9 @@ fn execute_probe_run(
                 evaluation,
                 ..
             } => {
+                state.guard_failed = true;
                 journal.event(
-                    "click_skipped",
+                    "step_skipped",
                     json!({
                         "step_id": step.id,
                         "reason": "page_guard_not_matched",
@@ -250,14 +346,18 @@ fn execute_probe_run(
                         "message": evaluation.message
                     }),
                 )?;
+                return Ok(ProbeRunFinish::Blocked {
+                    message: "page_guard_not_matched".to_string(),
+                });
             }
             ProbeStepDecision::SkippedExternalPageGuard {
                 page_id,
                 current_page_id,
                 ..
             } => {
+                state.guard_failed = true;
                 journal.event(
-                    "click_skipped",
+                    "step_skipped",
                     json!({
                         "step_id": step.id,
                         "reason": "external_page_guard_not_matched",
@@ -265,6 +365,9 @@ fn execute_probe_run(
                         "current_page_id": current_page_id
                     }),
                 )?;
+                return Ok(ProbeRunFinish::Blocked {
+                    message: "page_guard_not_matched".to_string(),
+                });
             }
             ProbeStepDecision::DetectPage {
                 page_id,
@@ -306,9 +409,20 @@ fn execute_probe_run(
             ProbeStepDecision::Click {
                 target_id,
                 click,
+                effect,
+                resource_policy,
                 expect_after,
                 ..
             } => {
+                if let Some(finish) = maybe_pause_for_risky_effect(
+                    effect,
+                    &resource_policy,
+                    journal,
+                    state,
+                    &step.id,
+                )? {
+                    return Ok(finish);
+                }
                 if state.click_count >= probe_loop.max_navigation_clicks() {
                     return Err(DeviceError::fatal(
                         "probe-run navigation click limit exceeded",
@@ -322,13 +436,16 @@ fn execute_probe_run(
                 let actual = actual_click_point(click, seed_base ^ hash_text(&step.id));
                 validate_point_in_click_space(actual.x, actual.y)?;
                 if let Some(bridge) = &navigation {
-                    bridge.validate_not_forbidden(actual.x, actual.y)?;
+                    bridge.validate_rect_not_forbidden(click)?;
+                    bridge.validate_point_not_forbidden(actual.x, actual.y)?;
                 }
                 journal.event(
                     "safety_check_done",
                     json!({
                         "step_id": step.id,
                         "target_id": target_id,
+                        "effect": format_effect(effect),
+                        "forbidden_radius": DEFAULT_FORBIDDEN_RADIUS,
                         "actual_click_point": actual_click_json(actual)
                     }),
                 )?;
@@ -343,11 +460,14 @@ fn execute_probe_run(
                 }
                 state.executed = true;
                 state.click_count += 1;
+                record_effect_execution(effect, resource_policy.as_ref(), state);
                 journal.event(
                     "click_done",
                     json!({
                         "step_id": step.id,
                         "target_id": target_id,
+                        "effect": format_effect(effect),
+                        "resource_policy": resource_policy_json(resource_policy.as_ref()),
                         "actual_click_point": actual_click_json(actual)
                     }),
                 )?;
@@ -373,6 +493,12 @@ fn execute_probe_run(
                 scene = arrived.scene;
                 state.frames += arrived.frames;
                 state.final_page = Some(expect_after.page_id);
+                if let Some(finish) = maybe_checkpoint(options, journal, state, "frame_batch")? {
+                    if let Some(mut backend) = backend.take() {
+                        combine_operation_and_close(Ok(()), backend.close())?;
+                    }
+                    return Ok(finish);
+                }
             }
         }
         journal.event("step_finished", json!({"step_id": step.id}))?;
@@ -384,7 +510,7 @@ fn execute_probe_run(
         combine_operation_and_close(operation, close)?;
     }
 
-    Ok(())
+    Ok(ProbeRunFinish::Completed)
 }
 
 fn close_backend_after_error<T>(
@@ -396,6 +522,90 @@ fn close_backend_after_error<T>(
         unreachable!("combine_operation_and_close returned Ok for an operation error");
     }
     Err(err)
+}
+
+fn maybe_pause_for_risky_effect(
+    effect: ProbeClickEffect,
+    policy: &Option<ResourcePolicy>,
+    journal: &OperationJournal,
+    state: &mut ProbeRunState,
+    step_id: &str,
+) -> DeviceResult<Option<ProbeRunFinish>> {
+    if effect == ProbeClickEffect::NavigationOnly {
+        return Ok(None);
+    }
+    write_checkpoint_artifact(journal, state, "state_change_review_required")?;
+    journal.event(
+        "checkpoint",
+        json!({
+            "reason": "state_change_review_required",
+            "step_id": step_id,
+            "effect": format_effect(effect),
+            "resource_policy": resource_policy_json(policy.as_ref())
+        }),
+    )?;
+    Ok(Some(ProbeRunFinish::PausedForReview {
+        message: "state_change_review_required".to_string(),
+    }))
+}
+
+fn maybe_checkpoint(
+    options: &ProbeRunOptions,
+    journal: &OperationJournal,
+    state: &mut ProbeRunState,
+    reason: &str,
+) -> DeviceResult<Option<ProbeRunFinish>> {
+    if options.checkpoint_frames == 0 || state.frames < options.checkpoint_frames {
+        return Ok(None);
+    }
+    write_checkpoint_artifact(journal, state, reason)?;
+    journal.event(
+        "checkpoint",
+        json!({
+            "reason": reason,
+            "frames": state.frames,
+            "click_count": state.click_count,
+            "checkpoint_index": state.checkpoint_count
+        }),
+    )?;
+    Ok(Some(ProbeRunFinish::PausedForReview {
+        message: reason.to_string(),
+    }))
+}
+
+fn write_checkpoint_artifact(
+    journal: &OperationJournal,
+    state: &mut ProbeRunState,
+    reason: &str,
+) -> DeviceResult<()> {
+    state.checkpoint_count += 1;
+    let dir = journal.checkpoints.join(format!(
+        "{:03}_{}",
+        state.checkpoint_count,
+        safe_file_part(reason)
+    ));
+    fs::create_dir_all(&dir).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to create checkpoint directory {}: {err}",
+            dir.display()
+        ))
+    })?;
+    let checkpoint = json!({
+        "reason": reason,
+        "frames": state.frames,
+        "click_count": state.click_count,
+        "executed": state.executed,
+        "guard_failed": state.guard_failed,
+        "final_page": state.final_page,
+    });
+    fs::write(
+        dir.join("checkpoint.json"),
+        serde_json::to_vec_pretty(&checkpoint).map_err(|err| {
+            DeviceError::fatal(format!("failed to serialize checkpoint.json: {err}"))
+        })?,
+    )
+    .map_err(|err| DeviceError::fatal(format!("failed to write checkpoint.json: {err}")))?;
+    Ok(())
 }
 
 fn ensure_maatouch_backend<'a>(
@@ -526,7 +736,7 @@ fn match_arrival_anchor(
         ))
     })?;
     let matched = scene
-        .match_template(&template, None)
+        .match_template(&template, anchor.region.map(pack_rect_to_recognition_rect))
         .map_err(|err| DeviceError::fatal(err.to_string()))?;
     Ok(matched.score >= anchor.threshold.unwrap_or(0.9))
 }
@@ -579,28 +789,203 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
 
     let mut overrides = ProbeReferenceOverrides::new();
     let mut arrival_anchors = HashMap::new();
+    let page_anchors = navigation
+        .pages
+        .iter()
+        .filter_map(|page| page_arrival_anchor(page).map(|anchor| (page.id.clone(), anchor)))
+        .collect::<HashMap<_, _>>();
+    for (page_id, anchor) in &page_anchors {
+        overrides.insert_page(page_id.clone());
+        arrival_anchors.insert(page_id.clone(), anchor.clone());
+    }
     for route in &navigation.navigation {
-        let target_id = navigation_target_id(&route.id);
-        overrides.insert_click_target(&target_id, point_rect(route.click_point));
-        if let Some(anchor) = &route.arrive_anchor {
-            let page_id = navigation_arrival_page_id(&route.id);
-            overrides.insert_page(&page_id);
-            arrival_anchors.insert(page_id, anchor.clone());
+        if !route.from_page.is_empty() {
+            overrides.insert_page(route.from_page.clone());
+        }
+        let Some(click_rect) = route_click_rect(route)? else {
+            continue;
+        };
+        overrides.insert_click_target(navigation_target_id(&route.id), click_rect);
+        if !route.to_page.is_empty() {
+            overrides.insert_page(route.to_page.clone());
+            if let Some(anchor) = page_anchors.get(&route.to_page) {
+                arrival_anchors.insert(route.to_page.clone(), anchor.clone());
+                arrival_anchors.insert(navigation_arrival_page_id(&route.id), anchor.clone());
+                overrides.insert_page(navigation_arrival_page_id(&route.id));
+            }
         }
     }
-    for (name, point) in &navigation.control_points {
-        overrides.insert_click_target(control_target_id(name), point_rect(point.point));
+    for point in &navigation.control_points {
+        overrides.insert_click_target(control_target_id(&point.name), point_rect(point.point));
     }
+    let forbidden = navigation
+        .destructive_actions
+        .iter()
+        .filter_map(forbidden_from_destructive_action)
+        .collect::<Vec<_>>();
 
     Ok(NavigationBridge {
         overrides,
         arrival_anchors,
-        forbidden: navigation.forbidden_destructive_points,
+        forbidden,
     })
 }
 
+fn page_arrival_anchor(page: &NavigationPage) -> Option<ArrivalAnchor> {
+    page.anchors
+        .iter()
+        .find(|anchor| anchor.kind == "template" && !anchor.template_path.is_empty())
+        .map(|anchor| ArrivalAnchor {
+            template: anchor.template_path.clone(),
+            threshold: anchor.threshold,
+            region: parse_optional_region(&anchor.region),
+        })
+}
+
+fn route_click_rect(route: &NavigationRoute) -> DeviceResult<Option<PackRect>> {
+    match route.click.kind.as_str() {
+        "point" => {
+            let point = parse_point_string(&route.click.point).map_err(|message| {
+                DeviceError::fatal(format!(
+                    "navigation route '{}' invalid point: {message}",
+                    route.id
+                ))
+            })?;
+            Ok(Some(point_rect(point)))
+        }
+        "rect" => {
+            let rect = parse_rect_string(&route.click.rect).map_err(|message| {
+                DeviceError::fatal(format!(
+                    "navigation route '{}' invalid rect: {message}",
+                    route.id
+                ))
+            })?;
+            Ok(Some(rect))
+        }
+        "template_center" => {
+            let _template_path = &route.click.template_path;
+            Ok(None)
+        }
+        other => Err(DeviceError::fatal(format!(
+            "navigation route '{}' has unsupported click kind '{other}'",
+            route.id
+        ))),
+    }
+}
+
+fn forbidden_from_destructive_action(
+    action: &NavigationDestructiveAction,
+) -> Option<ForbiddenDestructivePoint> {
+    let id = if action.page.is_empty() && action.kind.is_empty() {
+        action.id.clone()
+    } else {
+        format!("{}:{}:{}", action.page, action.kind, action.id)
+    };
+    if !action.rect.is_empty() {
+        return parse_rect_string(&action.rect)
+            .ok()
+            .map(|rect| ForbiddenDestructivePoint {
+                id,
+                point: None,
+                rect: Some(rect),
+                radius: Some(DEFAULT_FORBIDDEN_RADIUS),
+            });
+    }
+    if action.point.is_empty() {
+        return None;
+    }
+    match parse_i32_list(&action.point).ok()?.as_slice() {
+        [x, y] => Some(ForbiddenDestructivePoint {
+            id,
+            point: Some([*x, *y]),
+            rect: None,
+            radius: Some(DEFAULT_FORBIDDEN_RADIUS),
+        }),
+        [x, y, width, height] => Some(ForbiddenDestructivePoint {
+            id,
+            point: None,
+            rect: Some(PackRect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            }),
+            radius: Some(DEFAULT_FORBIDDEN_RADIUS),
+        }),
+        _ => None,
+    }
+}
+
+fn parse_optional_region(value: &str) -> Option<PackRect> {
+    if value.is_empty() || value == "full_frame" {
+        None
+    } else {
+        parse_rect_string(value).ok()
+    }
+}
+
+fn parse_point_string(value: &str) -> Result<[i32; 2], String> {
+    match parse_i32_list(value)?.as_slice() {
+        [x, y] => Ok([*x, *y]),
+        values => Err(format!("expected x,y but got {} values", values.len())),
+    }
+}
+
+fn parse_rect_string(value: &str) -> Result<PackRect, String> {
+    match parse_i32_list(value)?.as_slice() {
+        [x, y, width, height] => Ok(PackRect {
+            x: *x,
+            y: *y,
+            width: *width,
+            height: *height,
+        }),
+        values => Err(format!("expected x,y,w,h but got {} values", values.len())),
+    }
+}
+
+fn parse_i32_list(value: &str) -> Result<Vec<i32>, String> {
+    if value.trim().is_empty() {
+        return Err("value is empty".to_string());
+    }
+    value
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<i32>()
+                .map_err(|err| format!("invalid integer '{}': {err}", part.trim()))
+        })
+        .collect()
+}
+
 impl NavigationBridge {
-    fn validate_not_forbidden(&self, x: i32, y: i32) -> DeviceResult<()> {
+    fn validate_rect_not_forbidden(&self, rect: PackRect) -> DeviceResult<()> {
+        for forbidden in &self.forbidden {
+            let intersects_rect = forbidden
+                .rect
+                .is_some_and(|forbidden_rect| rects_intersect(rect, forbidden_rect));
+            let contains_point = forbidden
+                .point
+                .is_some_and(|point| rect_contains(rect, point[0], point[1]));
+            let intersects_radius = forbidden.point.is_some_and(|point| {
+                rect_intersects_radius(
+                    rect,
+                    point[0],
+                    point[1],
+                    forbidden.radius.unwrap_or(DEFAULT_FORBIDDEN_RADIUS),
+                )
+            });
+            if intersects_rect || contains_point || intersects_radius {
+                return Err(DeviceError::fatal(format!(
+                    "click rect {} intersects forbidden destructive action '{}'",
+                    format_rect_for_error(rect),
+                    forbidden.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_point_not_forbidden(&self, x: i32, y: i32) -> DeviceResult<()> {
         for forbidden in &self.forbidden {
             let in_rect = forbidden.rect.is_some_and(|rect| rect_contains(rect, x, y));
             let in_radius = forbidden.point.is_some_and(|point| {
@@ -614,7 +999,7 @@ impl NavigationBridge {
             });
             if in_rect || in_radius {
                 return Err(DeviceError::fatal(format!(
-                    "actual click point {x},{y} falls inside forbidden destructive point '{}'",
+                    "actual click point {x},{y} falls inside forbidden destructive action '{}'",
                     forbidden.id
                 )));
             }
@@ -629,6 +1014,7 @@ impl OperationJournal {
         let run_dir = options.run_root.join(&run_id);
         let frames = run_dir.join("frames");
         let observations = run_dir.join("observations");
+        let checkpoints = run_dir.join("checkpoints");
         fs::create_dir_all(&frames).map_err(|err| {
             DeviceError::fatal(format!(
                 "failed to create probe run directory {}: {err}",
@@ -639,6 +1025,12 @@ impl OperationJournal {
             DeviceError::fatal(format!(
                 "failed to create observations directory {}: {err}",
                 observations.display()
+            ))
+        })?;
+        fs::create_dir_all(&checkpoints).map_err(|err| {
+            DeviceError::fatal(format!(
+                "failed to create checkpoints directory {}: {err}",
+                checkpoints.display()
             ))
         })?;
         fs::write(
@@ -654,6 +1046,7 @@ impl OperationJournal {
             run_dir,
             frames,
             observations,
+            checkpoints,
             pack_root: options.pack_root.clone(),
         })
     }
@@ -715,10 +1108,18 @@ impl OperationJournal {
             "result": result,
             "executed": state.executed,
             "click_count": state.click_count,
+            "claims_executed": state.claims_executed,
+            "regenerating_resource_actions_executed": state.regenerating_resource_actions_executed,
+            "resource_kind": state.last_resource_kind,
+            "max_cost": state.last_max_cost,
             "destructive_allowed": false,
+            "premium_currency_allowed": false,
+            "auto_refill_allowed": false,
+            "guard_failed": state.guard_failed,
             "final_page": state.final_page,
             "frames": state.frames,
             "observations": state.observations,
+            "checkpoints": state.checkpoint_count,
             "paths": {
                 "pack": options.pack,
                 "pack_root": options.pack_root,
@@ -727,7 +1128,8 @@ impl OperationJournal {
                 "navigation": options.navigation,
                 "run_dir": self.run_dir,
                 "frames": self.frames,
-                "observations": self.observations
+                "observations": self.observations,
+                "checkpoints": self.checkpoints
             },
             "error": error,
         });
@@ -780,6 +1182,56 @@ fn actual_click_json(actual: ActualClickPoint) -> serde_json::Value {
     })
 }
 
+fn record_effect_execution(
+    effect: ProbeClickEffect,
+    policy: Option<&ResourcePolicy>,
+    state: &mut ProbeRunState,
+) {
+    match effect {
+        ProbeClickEffect::NavigationOnly => {}
+        ProbeClickEffect::FreeClaim => {
+            state.claims_executed += 1;
+        }
+        ProbeClickEffect::ConsumeRegeneratingResource => {
+            state.regenerating_resource_actions_executed += 1;
+        }
+    }
+    if let Some(policy) = policy {
+        state.last_resource_kind = Some(format_resource_kind(policy.kind).to_string());
+        state.last_max_cost = policy.max_cost;
+    }
+}
+
+fn resource_policy_json(policy: Option<&ResourcePolicy>) -> serde_json::Value {
+    match policy {
+        Some(policy) => json!({
+            "kind": format_resource_kind(policy.kind),
+            "max_cost": policy.max_cost,
+            "premium_currency_allowed": policy.premium_currency_allowed,
+            "auto_refill_allowed": policy.auto_refill_allowed,
+            "cost_allowed": policy.cost_allowed,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn format_effect(effect: ProbeClickEffect) -> &'static str {
+    match effect {
+        ProbeClickEffect::NavigationOnly => "navigation_only",
+        ProbeClickEffect::FreeClaim => "free_claim",
+        ProbeClickEffect::ConsumeRegeneratingResource => "consume_regenerating_resource",
+    }
+}
+
+fn format_resource_kind(kind: ResourcePolicyKind) -> &'static str {
+    match kind {
+        ResourcePolicyKind::FreeReward => "free_reward",
+        ResourcePolicyKind::AzurlaneOil => "azurlane.oil",
+        ResourcePolicyKind::BluearchiveAp => "bluearchive.ap",
+        ResourcePolicyKind::ArknightsSanity => "arknights.sanity",
+    }
+}
+
 fn rect_json(rect: PackRect) -> serde_json::Value {
     json!({"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height})
 }
@@ -822,11 +1274,34 @@ fn rect_contains(rect: PackRect, x: i32, y: i32) -> bool {
     x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
 }
 
+fn rects_intersect(a: PackRect, b: PackRect) -> bool {
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}
+
+fn rect_intersects_radius(rect: PackRect, cx: i32, cy: i32, radius: i32) -> bool {
+    let closest_x = cx.clamp(rect.x, rect.x + rect.width - 1);
+    let closest_y = cy.clamp(rect.y, rect.y + rect.height - 1);
+    point_in_radius(closest_x, closest_y, cx, cy, radius)
+}
+
 fn point_in_radius(x: i32, y: i32, cx: i32, cy: i32, radius: i32) -> bool {
     let dx = i64::from(x - cx);
     let dy = i64::from(y - cy);
     let radius = i64::from(radius.max(0));
     dx * dx + dy * dy <= radius * radius
+}
+
+fn pack_rect_to_recognition_rect(rect: PackRect) -> RecognitionRect {
+    RecognitionRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn format_rect_for_error(rect: PackRect) -> String {
+    format!("{},{},{},{}", rect.x, rect.y, rect.width, rect.height)
 }
 
 fn navigation_target_id(id: &str) -> String {
@@ -946,8 +1421,8 @@ mod tests {
             }],
         };
 
-        assert!(bridge.validate_not_forbidden(106, 100).is_err());
-        assert!(bridge.validate_not_forbidden(111, 100).is_ok());
+        assert!(bridge.validate_point_not_forbidden(106, 100).is_err());
+        assert!(bridge.validate_point_not_forbidden(111, 100).is_ok());
     }
 
     #[test]
@@ -968,8 +1443,38 @@ mod tests {
             }],
         };
 
-        assert!(bridge.validate_not_forbidden(49, 69).is_err());
-        assert!(bridge.validate_not_forbidden(50, 69).is_ok());
+        assert!(bridge.validate_point_not_forbidden(49, 69).is_err());
+        assert!(bridge.validate_point_not_forbidden(50, 69).is_ok());
+    }
+
+    #[test]
+    fn forbidden_candidate_rect_rejects_point_and_radius_overlap() {
+        let bridge = NavigationBridge {
+            overrides: ProbeReferenceOverrides::new(),
+            arrival_anchors: HashMap::new(),
+            forbidden: vec![ForbiddenDestructivePoint {
+                id: "radius".to_string(),
+                point: Some([100, 100]),
+                rect: None,
+                radius: Some(10),
+            }],
+        };
+
+        assert!(
+            bridge
+                .validate_rect_not_forbidden(rect(90, 90, 5, 5))
+                .is_err()
+        );
+        assert!(
+            bridge
+                .validate_rect_not_forbidden(rect(110, 96, 5, 5))
+                .is_err()
+        );
+        assert!(
+            bridge
+                .validate_rect_not_forbidden(rect(120, 120, 5, 5))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -984,16 +1489,33 @@ mod tests {
             r#"{
                 "schema_version": "0.1",
                 "coordinate_space": {"width": 1280, "height": 720},
-                "control_points": {"home": {"point": [1236, 25]}},
+                "control_points": [
+                  {"name": "home", "point": [1236, 25], "note": "safe home"}
+                ],
+                "pages": [
+                  {
+                    "id": "bluearchive/task",
+                    "anchors": [
+                      {
+                        "kind": "template",
+                        "template_path": "page.png",
+                        "region": "full_frame",
+                        "threshold": 0.9,
+                        "pack_target_id": "task_center"
+                      }
+                    ]
+                  }
+                ],
                 "navigation": [
                   {
                     "id": "home_to_task",
-                    "click_point": [66, 237],
-                    "arrive_anchor": {"template": "page.png", "threshold": 0.9}
+                    "from_page": "bluearchive/home",
+                    "to_page": "bluearchive/task",
+                    "click": {"kind": "point", "point": "66,237"}
                   }
                 ],
-                "forbidden_destructive_points": [
-                  {"id": "collect", "point": [1150, 671], "radius": 30}
+                "destructive_actions": [
+                  {"id": "collect", "page": "bluearchive/task", "kind": "claim", "point": "1150,671"}
                 ]
             }"#,
         )
@@ -1012,6 +1534,16 @@ mod tests {
                 .overrides
                 .contains_page("navigation/home_to_task/arrive_anchor")
         );
+        assert!(bridge.overrides.contains_page("bluearchive/task"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> PackRect {
+        PackRect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

@@ -36,6 +36,8 @@ pub enum ProbeAction {
     Click {
         target_id: String,
         effect: ProbeClickEffect,
+        #[serde(default)]
+        resource_policy: Option<ResourcePolicy>,
     },
     ObserveTargets {
         target_ids: Vec<String>,
@@ -49,6 +51,33 @@ pub enum ProbeAction {
 #[serde(rename_all = "snake_case")]
 pub enum ProbeClickEffect {
     NavigationOnly,
+    FreeClaim,
+    ConsumeRegeneratingResource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ResourcePolicy {
+    pub kind: ResourcePolicyKind,
+    #[serde(default)]
+    pub max_cost: Option<u32>,
+    #[serde(default)]
+    pub premium_currency_allowed: bool,
+    #[serde(default)]
+    pub auto_refill_allowed: bool,
+    #[serde(default)]
+    pub cost_allowed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourcePolicyKind {
+    FreeReward,
+    #[serde(rename = "azurlane.oil")]
+    AzurlaneOil,
+    #[serde(rename = "bluearchive.ap")]
+    BluearchiveAp,
+    #[serde(rename = "arknights.sanity")]
+    ArknightsSanity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -101,6 +130,8 @@ pub enum ProbeStepDecision {
         step_id: String,
         target_id: String,
         click: PackRect,
+        effect: ProbeClickEffect,
+        resource_policy: Option<ResourcePolicy>,
         expect_after: ProbeExpectation,
     },
 }
@@ -174,8 +205,13 @@ impl ProbeDecisionLoop {
                         evaluator.target_kind(target_id).map_err(pack_error)?;
                     }
                 }
-                ProbeAction::Click { target_id, .. } => {
-                    validate_click_name_safety(&self.plan.id, &step.id, target_id)?;
+                ProbeAction::Click {
+                    target_id,
+                    effect,
+                    resource_policy,
+                } => {
+                    validate_click_name_safety(*effect, target_id)?;
+                    validate_resource_policy(&step.id, *effect, resource_policy.as_ref())?;
                     click_target_rect(evaluator, overrides, target_id)?;
                     let expectation = step.expect_after.as_ref().ok_or_else(|| {
                         TaskLoopError::fatal(format!(
@@ -281,8 +317,13 @@ impl ProbeDecisionLoop {
                     evaluations,
                 })
             }
-            ProbeAction::Click { target_id, .. } => {
-                validate_click_name_safety(&self.plan.id, &step.id, target_id)?;
+            ProbeAction::Click {
+                target_id,
+                effect,
+                resource_policy,
+            } => {
+                validate_click_name_safety(*effect, target_id)?;
+                validate_resource_policy(&step.id, *effect, resource_policy.as_ref())?;
                 let expect_after = step.expect_after.clone().ok_or_else(|| {
                     TaskLoopError::fatal(format!("step '{}' click requires expect_after", step.id))
                 })?;
@@ -290,6 +331,8 @@ impl ProbeDecisionLoop {
                     step_id: step.id.clone(),
                     target_id: target_id.clone(),
                     click: click_target_rect(evaluator, overrides, target_id)?,
+                    effect: *effect,
+                    resource_policy: resource_policy.clone(),
                     expect_after,
                 })
             }
@@ -340,7 +383,7 @@ fn validate_probe_plan_structure(plan: &ProbePlan) -> TaskLoopResult<()> {
     Ok(())
 }
 
-fn validate_probe_action_structure(plan: &ProbePlan, step: &ProbeStep) -> TaskLoopResult<()> {
+fn validate_probe_action_structure(_plan: &ProbePlan, step: &ProbeStep) -> TaskLoopResult<()> {
     match &step.action {
         ProbeAction::DetectPage { page_id } | ProbeAction::ObservePage { page_id } => {
             if page_id.is_empty() {
@@ -376,16 +419,14 @@ fn validate_probe_action_structure(plan: &ProbePlan, step: &ProbeStep) -> TaskLo
                 )));
             }
         }
-        ProbeAction::Click { target_id, effect } => {
+        ProbeAction::Click {
+            target_id,
+            effect,
+            resource_policy,
+        } => {
             if target_id.is_empty() {
                 return Err(TaskLoopError::fatal(format!(
                     "probe step '{}' click target_id is empty",
-                    step.id
-                )));
-            }
-            if *effect != ProbeClickEffect::NavigationOnly {
-                return Err(TaskLoopError::fatal(format!(
-                    "probe step '{}' click effect must be navigation_only",
                     step.id
                 )));
             }
@@ -401,7 +442,8 @@ fn validate_probe_action_structure(plan: &ProbePlan, step: &ProbeStep) -> TaskLo
                     step.id
                 )));
             }
-            validate_click_name_safety(&plan.id, &step.id, target_id)?;
+            validate_click_name_safety(*effect, target_id)?;
+            validate_resource_policy(&step.id, *effect, resource_policy.as_ref())?;
         }
     }
     Ok(())
@@ -438,31 +480,96 @@ fn click_target_rect(
     }
 }
 
-fn validate_click_name_safety(
-    probe_id: &str,
-    step_id: &str,
-    target_id: &str,
-) -> TaskLoopResult<()> {
-    for (label, value) in [
-        ("probe id", probe_id),
-        ("probe step id", step_id),
-        ("click target id", target_id),
-    ] {
-        if let Some(word) = dangerous_word(value) {
-            return Err(TaskLoopError::fatal(format!(
-                "{label} '{value}' contains destructive word '{word}'"
-            )));
-        }
+fn validate_click_name_safety(effect: ProbeClickEffect, target_id: &str) -> TaskLoopResult<()> {
+    if let Some(word) = dangerous_word(effect, target_id) {
+        return Err(TaskLoopError::fatal(format!(
+            "click target id '{target_id}' is not allowed for effect {:?}: dangerous word '{word}'",
+            effect
+        )));
     }
     Ok(())
 }
 
-fn dangerous_word(value: &str) -> Option<&'static str> {
+fn validate_resource_policy(
+    step_id: &str,
+    effect: ProbeClickEffect,
+    policy: Option<&ResourcePolicy>,
+) -> TaskLoopResult<()> {
+    match effect {
+        ProbeClickEffect::NavigationOnly => {
+            if let Some(policy) = policy {
+                reject_premium_or_refill(step_id, policy)?;
+            }
+            Ok(())
+        }
+        ProbeClickEffect::FreeClaim => {
+            let policy = policy.ok_or_else(|| {
+                TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' free_claim requires resource_policy"
+                ))
+            })?;
+            reject_premium_or_refill(step_id, policy)?;
+            if policy.kind != ResourcePolicyKind::FreeReward {
+                return Err(TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' free_claim requires resource_policy.kind=free_reward"
+                )));
+            }
+            if policy.cost_allowed {
+                return Err(TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' free_claim must not allow cost"
+                )));
+            }
+            Ok(())
+        }
+        ProbeClickEffect::ConsumeRegeneratingResource => {
+            let policy = policy.ok_or_else(|| {
+                TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' consume_regenerating_resource requires resource_policy"
+                ))
+            })?;
+            reject_premium_or_refill(step_id, policy)?;
+            match policy.kind {
+                ResourcePolicyKind::AzurlaneOil
+                | ResourcePolicyKind::BluearchiveAp
+                | ResourcePolicyKind::ArknightsSanity => {}
+                ResourcePolicyKind::FreeReward => {
+                    return Err(TaskLoopError::fatal(format!(
+                        "probe step '{step_id}' consume_regenerating_resource requires oil/AP/sanity policy kind"
+                    )));
+                }
+            }
+            if policy.max_cost.is_none() {
+                return Err(TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' consume_regenerating_resource requires max_cost"
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn reject_premium_or_refill(step_id: &str, policy: &ResourcePolicy) -> TaskLoopResult<()> {
+    if policy.premium_currency_allowed {
+        return Err(TaskLoopError::fatal(format!(
+            "probe step '{step_id}' must not allow premium currency"
+        )));
+    }
+    if policy.auto_refill_allowed {
+        return Err(TaskLoopError::fatal(format!(
+            "probe step '{step_id}' must not allow auto refill"
+        )));
+    }
+    Ok(())
+}
+
+fn dangerous_word(effect: ProbeClickEffect, value: &str) -> Option<&'static str> {
     let lower = value.to_lowercase();
-    DANGEROUS_WORDS
-        .iter()
-        .copied()
-        .find(|word| lower.contains(word))
+    let words = match effect {
+        ProbeClickEffect::NavigationOnly => NAVIGATION_DANGEROUS_WORDS,
+        ProbeClickEffect::FreeClaim => FREE_CLAIM_DANGEROUS_WORDS,
+        ProbeClickEffect::ConsumeRegeneratingResource => CONSUME_DANGEROUS_WORDS,
+    };
+    words.iter().copied().find(|word| lower.contains(word))
 }
 
 fn page_error(err: actingcommand_page_detector::PageDetectorError) -> TaskLoopError {
@@ -473,6 +580,106 @@ fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> Task
     TaskLoopError::fatal(err.to_string())
 }
 
+const NAVIGATION_DANGEROUS_WORDS: &[&str] = &[
+    "claim",
+    "collect",
+    "receive",
+    "reward",
+    "battle",
+    "sortie",
+    "start",
+    "buy",
+    "purchase",
+    "confirm",
+    "delete",
+    "retire",
+    "scrap",
+    "consume",
+    "enhance",
+    "awaken",
+    "build",
+    "construct",
+    "exchange",
+    "decompose",
+    "mail",
+    "\u{9886}\u{53d6}",
+    "\u{53d7}\u{53d6}",
+    "\u{8cfc}\u{5165}",
+    "\u{78ba}\u{8a8d}",
+    "\u{51fa}\u{6483}",
+    "\u{6226}\u{95d8}",
+    "\u{5efa}\u{9020}",
+    "\u{9000}\u{5f79}",
+    "\u{5f37}\u{5316}",
+];
+
+const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
+    "buy",
+    "purchase",
+    "paid",
+    "premium",
+    "gem",
+    "diamond",
+    "stone",
+    "pyroxene",
+    "originite",
+    "confirm_purchase",
+    "refill",
+    "recover",
+    "delete",
+    "retire",
+    "scrap",
+    "decompose",
+    "enhance",
+    "awaken",
+    "build",
+    "construct",
+    "gacha",
+    "recruit",
+    "sortie",
+    "battle",
+    "shop",
+    "\u{8d2d}\u{4e70}",
+    "\u{8cfc}\u{5165}",
+    "\u{88dc}\u{5145}",
+    "\u{6f14}\u{4e60}",
+    "\u{6f14}\u{7fd2}",
+];
+
+const CONSUME_DANGEROUS_WORDS: &[&str] = &[
+    "exercise",
+    "pvp",
+    "buy",
+    "purchase",
+    "refill",
+    "recover",
+    "premium",
+    "gem",
+    "diamond",
+    "stone",
+    "pyroxene",
+    "originite",
+    "confirm_purchase",
+    "gacha",
+    "recruit",
+    "build",
+    "construct",
+    "retire",
+    "scrap",
+    "delete",
+    "decompose",
+    "enhance",
+    "awaken",
+    "shop",
+    "\u{6f14}\u{4e60}",
+    "\u{6f14}\u{7fd2}",
+    "\u{7ade}\u{6280}",
+    "\u{8d2d}\u{4e70}",
+    "\u{8cfc}\u{5165}",
+    "\u{88dc}\u{5145}",
+];
+
+#[allow(dead_code)]
 const DANGEROUS_WORDS: &[&str] = &[
     "claim",
     "collect",
@@ -689,6 +896,7 @@ mod tests {
                 action: ProbeAction::Click {
                     target_id: "fixture/click".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
+                    resource_policy: None,
                 },
                 expect_after: Some(ProbeExpectation {
                     page_id: "fixture/home_page".to_string(),
@@ -726,6 +934,7 @@ mod tests {
                 action: ProbeAction::Click {
                     target_id: "fixture/click".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
+                    resource_policy: None,
                 },
                 expect_after: Some(ProbeExpectation {
                     page_id: "fixture/home_page".to_string(),
@@ -765,6 +974,7 @@ mod tests {
                 action: ProbeAction::Click {
                     target_id: "fixture/collect_all".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
+                    resource_policy: None,
                 },
                 expect_after: Some(ProbeExpectation {
                     page_id: "fixture/home_page".to_string(),
@@ -776,7 +986,7 @@ mod tests {
         })
         .expect_err("danger");
 
-        assert_fatal_contains(err, "destructive word");
+        assert_fatal_contains(err, "not allowed");
     }
 
     #[test]
@@ -794,6 +1004,163 @@ mod tests {
         });
 
         assert!(probe.is_ok());
+    }
+
+    #[test]
+    fn free_claim_allows_claim_target_with_free_policy() {
+        let probe = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "claim".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/claim_reward".to_string(),
+                    effect: ProbeClickEffect::FreeClaim,
+                    resource_policy: Some(free_reward_policy()),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        });
+
+        assert!(probe.is_ok());
+    }
+
+    #[test]
+    fn free_claim_requires_policy_without_premium_or_refill() {
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "claim".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/claim_reward".to_string(),
+                    effect: ProbeClickEffect::FreeClaim,
+                    resource_policy: None,
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("missing free claim policy");
+
+        assert_fatal_contains(err, "requires resource_policy");
+
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "claim".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/claim_reward".to_string(),
+                    effect: ProbeClickEffect::FreeClaim,
+                    resource_policy: Some(ResourcePolicy {
+                        premium_currency_allowed: true,
+                        ..free_reward_policy()
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("premium free claim policy");
+
+        assert_fatal_contains(err, "premium currency");
+    }
+
+    #[test]
+    fn consume_allows_battle_target_with_regenerating_policy() {
+        let probe = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "start_battle".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/start_battle".to_string(),
+                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
+                    resource_policy: Some(ResourcePolicy {
+                        kind: ResourcePolicyKind::BluearchiveAp,
+                        max_cost: Some(10),
+                        premium_currency_allowed: false,
+                        auto_refill_allowed: false,
+                        cost_allowed: true,
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        });
+
+        assert!(probe.is_ok());
+    }
+
+    #[test]
+    fn consume_rejects_exercise_and_missing_max_cost() {
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "exercise".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/exercise_start".to_string(),
+                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
+                    resource_policy: Some(ResourcePolicy {
+                        kind: ResourcePolicyKind::AzurlaneOil,
+                        max_cost: Some(10),
+                        premium_currency_allowed: false,
+                        auto_refill_allowed: false,
+                        cost_allowed: true,
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("exercise must be rejected");
+
+        assert_fatal_contains(err, "exercise");
+
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "start_battle".to_string(),
+                page_id: None,
+                action: ProbeAction::Click {
+                    target_id: "fixture/start_battle".to_string(),
+                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
+                    resource_policy: Some(ResourcePolicy {
+                        kind: ResourcePolicyKind::ArknightsSanity,
+                        max_cost: None,
+                        premium_currency_allowed: false,
+                        auto_refill_allowed: false,
+                        cost_allowed: true,
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("missing max cost");
+
+        assert_fatal_contains(err, "max_cost");
     }
 
     #[test]
@@ -820,6 +1187,8 @@ mod tests {
                 step_id: "click_home".to_string(),
                 target_id: "fixture/click".to_string(),
                 click: rect(11, 12, 13, 14),
+                effect: ProbeClickEffect::NavigationOnly,
+                resource_policy: None,
                 expect_after: ProbeExpectation {
                     page_id: "fixture/other_page".to_string(),
                     timeout_ms: Some(3000),
@@ -929,6 +1298,7 @@ mod tests {
                 action: ProbeAction::Click {
                     target_id: "navigation/home_to_task".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
+                    resource_policy: None,
                 },
                 expect_after: Some(ProbeExpectation {
                     page_id: "bluearchive/task_center".to_string(),
@@ -939,6 +1309,16 @@ mod tests {
         }
     }
 
+    fn free_reward_policy() -> ResourcePolicy {
+        ResourcePolicy {
+            kind: ResourcePolicyKind::FreeReward,
+            max_cost: None,
+            premium_currency_allowed: false,
+            auto_refill_allowed: false,
+            cost_allowed: false,
+        }
+    }
+
     fn click_step(id: &str) -> ProbeStep {
         ProbeStep {
             id: id.to_string(),
@@ -946,6 +1326,7 @@ mod tests {
             action: ProbeAction::Click {
                 target_id: "fixture/click".to_string(),
                 effect: ProbeClickEffect::NavigationOnly,
+                resource_policy: None,
             },
             expect_after: Some(ProbeExpectation {
                 page_id: "fixture/other_page".to_string(),
