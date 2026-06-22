@@ -426,34 +426,42 @@ fn run_benchmark_command(
 
     let capture_stats = LatencyStats::from_samples(&capture_ms)?;
     let control_stats = LatencyStats::from_samples(&control_ms)?;
+
+    Ok(format_benchmark_report(
+        options.rounds,
+        capture_stats,
+        control_stats,
+    ))
+}
+
+fn format_benchmark_report(
+    rounds: usize,
+    capture_stats: LatencyStats,
+    control_stats: LatencyStats,
+) -> String {
     let recommend_poll_interval_ms = (capture_stats.p90 + 50).max(capture_stats.median * 2);
     let recommend_min_capture_interval_ms = capture_stats.p90.max(1);
-    let recommend_min_op_interval_ms = (control_stats.median + 20).max(1);
 
-    Ok(format!(
+    format!(
         "rounds={}\n\
          screenshot_best_ms={}\n\
          screenshot_median_ms={}\n\
          screenshot_p90_ms={}\n\
          screenshot_rating={}\n\
-         control_best_ms={}\n\
-         control_median_ms={}\n\
+         control_measurement=command_submission_only\n\
+         control_roundtrip_available=false\n\
+         control_note=maatouch_reset_writes_only_no_device_ack\n\
+         control_submit_best_ms={}\n\
+         control_submit_median_ms={}\n\
+         control_submit_p90_ms={}\n\
          recommend_poll_interval_ms={}\n\
          recommend_min_capture_interval_ms={}\n\
-         recommend_min_op_interval_ms={}\n\
+         recommend_min_op_interval_ms=not_available\n\
+         recommend_min_op_interval_reason=control_has_no_device_ack\n\
          table=kind,best_ms,median_ms,p90_ms,rating\n\
          table=screenshot,{},{},{},{}\n\
-         table=control,{},{},{},reset_only\n",
-        options.rounds,
-        capture_stats.best,
-        capture_stats.median,
-        capture_stats.p90,
-        capture_rating(capture_stats.median),
-        control_stats.best,
-        control_stats.median,
-        recommend_poll_interval_ms,
-        recommend_min_capture_interval_ms,
-        recommend_min_op_interval_ms,
+         table=control_submission,{},{},{},write_flush_only\n",
+        rounds,
         capture_stats.best,
         capture_stats.median,
         capture_stats.p90,
@@ -461,7 +469,16 @@ fn run_benchmark_command(
         control_stats.best,
         control_stats.median,
         control_stats.p90,
-    ))
+        recommend_poll_interval_ms,
+        recommend_min_capture_interval_ms,
+        capture_stats.best,
+        capture_stats.median,
+        capture_stats.p90,
+        capture_rating(capture_stats.median),
+        control_stats.best,
+        control_stats.median,
+        control_stats.p90,
+    )
 }
 
 fn run_runner_command(
@@ -2568,6 +2585,30 @@ mod tests {
         assert_eq!(stats.p90, 50);
         assert_eq!(capture_rating(99), "VeryFast");
         assert_eq!(capture_rating(200), "Medium");
+    }
+
+    #[test]
+    fn benchmark_report_marks_control_as_submission_only() {
+        let report = format_benchmark_report(
+            3,
+            LatencyStats {
+                best: 100,
+                median: 200,
+                p90: 300,
+            },
+            LatencyStats {
+                best: 0,
+                median: 0,
+                p90: 1,
+            },
+        );
+
+        assert!(report.contains("control_measurement=command_submission_only"));
+        assert!(report.contains("control_roundtrip_available=false"));
+        assert!(report.contains("control_submit_best_ms=0"));
+        assert!(report.contains("recommend_min_op_interval_ms=not_available"));
+        assert!(report.contains("table=control_submission,0,0,1,write_flush_only"));
+        assert!(!report.contains("control_best_ms="));
     }
 
     struct Fixture {

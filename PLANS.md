@@ -28,6 +28,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P6a dry-run task loop.
 - P6b/P6c/P6d probe-loop framework.
 - P6d live validation and limited resource close-out.
+- P6d/P6e-half resource-independent close-out: click page guard, MaaTouch license/path fix, benchmark labeling, and BA regression blocker report.
 
 ## Recognition score semantics
 
@@ -264,8 +265,11 @@ P6d live validation used only `NavigationOnly` routes. No FreeClaim, regeneratin
 `device-test benchmark` measures the current ActingCommand stack before live execution:
 
 - screenshot latency through `ScreencapBackend`.
-- control latency through `MaaTouchBackend` reset operations.
+- control command-submission latency through `MaaTouchBackend` reset operations.
 - recommended polling and minimum operation intervals.
+
+Control benchmark output is explicitly labeled as `command_submission_only`.
+MaaTouch reset currently writes and flushes commands without a device acknowledgement, so the benchmark must not present that number as a device round trip or derive a minimum operation interval from it.
 
 `device-test runner` packages recognition, capture, probe-run, and MaaTouch control into a one-shot profile-driven unit:
 
@@ -276,6 +280,27 @@ P6d live validation used only `NavigationOnly` routes. No FreeClaim, regeneratin
 - one failed probe is recorded without hiding the failure.
 
 Runner multi-open validation currently uses the BA JP smoke profile. Non-BA devices are expected to stop at page guard with `click_count=0`; the BA device may execute only the verified `NavigationOnly` home-to-task-and-back route.
+
+## P6d/P6e-half resource-independent close-out
+
+This phase completed the resource-independent half only:
+
+- `ProbeAction::Click` steps must declare a non-empty `page_id` at `ProbeDecisionLoop::new` time.
+- MaaTouch is recorded as Apache-2.0 and the Apache-2.0 license text is kept beside the included binary.
+- `MaaTouchConfig::default` resolves the default local tool path from the executable location, so `device-test` can run from a non-repository current working directory.
+- Benchmark output no longer reports MaaTouch reset writes as a true control round trip.
+- No FreeClaim preflight, ConsumeRegeneratingResource preflight, real reward claim, AP/oil/sanity consumption, broad NavigationOnly巡检, SQLite, UI, scheduler, OCR, OpenCV, or resource repository mutation was added.
+
+The BA regression frame set was collected under `target/regression-frames/bluearchive/jp`, but it is blocked:
+
+- `bluearchive/home` positive samples are available.
+- Idle captures after the wait still matched `bluearchive/home`, so they were not suitable hidden/idle negatives in this run.
+- The temporary `PAGE_TASK_CENTER` full-frame bridge matched returned-home/home frames and is not discriminative enough.
+- A manual MaaTouch tap at `navigation/home_to_task` stayed on the home screen during this run.
+
+Treat BA task-center regression as blocked until the BlueArchive resource repository supplies corrected navigation and arrival-anchor data.
+
+Resource-dependent P6e work remains deferred until the resource Operation Bundle provides reviewed reward references, cost references, resource policies, and destructive-zone data.
 
 ## Repo-local planning policy
 
@@ -313,11 +338,11 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 ## Next steps
 
 1. Deploy MaaTouch locally outside the repository or pass it with `--local <path>`.
-2. Run BA JP `probe-run` on a live BA home screen and confirm `home_to_task` reaches the arrival anchor before enabling further probe steps.
-3. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-4. Add Arknights operator/menu navigation targets before Arknights probes.
-5. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack full-frame targets.
-6. Define Runtime API contracts for UI integration in a separate milestone.
-7. Define capture metadata and SQLite schema in a separate scoped milestone.
-8. Create a regression frame-set lane so each page has positive and negative sample frames guarding recognition drift.
+2. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+3. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+4. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+5. Add Arknights operator/menu navigation targets before Arknights probes.
+6. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+7. Define Runtime API contracts for UI integration in a separate milestone.
+8. Define capture metadata and SQLite schema in a separate scoped milestone.
 9. Keep `CHECKPOINT.md` updated with every completed Runtime task.

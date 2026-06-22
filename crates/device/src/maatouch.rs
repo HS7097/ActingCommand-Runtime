@@ -4,7 +4,7 @@ use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::{DeviceError, DeviceResult, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -57,9 +57,7 @@ pub struct MaaTouchConfig {
 impl Default for MaaTouchConfig {
     fn default() -> Self {
         Self {
-            local_path: PathBuf::from("external-tools")
-                .join("maatouch")
-                .join("maatouch"),
+            local_path: default_maatouch_local_path(),
             remote_path: "/data/local/tmp/maatouch".to_string(),
             push: true,
             handshake_timeout: Duration::from_secs(8),
@@ -67,6 +65,61 @@ impl Default for MaaTouchConfig {
             default_pressure: DEFAULT_PRESSURE,
             tap_hold: Duration::from_millis(TAP_HOLD_MS),
         }
+    }
+}
+
+fn default_maatouch_local_path() -> PathBuf {
+    let Ok(exe) = std::env::current_exe() else {
+        return PathBuf::from("external-tools")
+            .join("maatouch")
+            .join("maatouch");
+    };
+    let candidates = maatouch_path_candidates_from_exe(&exe);
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned()
+        .or_else(|| likely_repo_maatouch_path_from_exe(&exe))
+        .unwrap_or_else(|| {
+            candidates.first().cloned().unwrap_or_else(|| {
+                PathBuf::from("external-tools")
+                    .join("maatouch")
+                    .join("maatouch")
+            })
+        })
+}
+
+fn maatouch_path_candidates_from_exe(exe: &Path) -> Vec<PathBuf> {
+    let Some(mut dir) = exe.parent() else {
+        return vec![
+            PathBuf::from("external-tools")
+                .join("maatouch")
+                .join("maatouch"),
+        ];
+    };
+
+    let mut candidates = Vec::new();
+    loop {
+        candidates.push(dir.join("external-tools").join("maatouch").join("maatouch"));
+        let Some(parent) = dir.parent() else {
+            break;
+        };
+        dir = parent;
+    }
+    candidates
+}
+
+fn likely_repo_maatouch_path_from_exe(exe: &Path) -> Option<PathBuf> {
+    let mut dir = exe.parent()?;
+    loop {
+        if dir.file_name().and_then(|name| name.to_str()) == Some("target") {
+            return dir.parent().map(|repo| {
+                repo.join("external-tools")
+                    .join("maatouch")
+                    .join("maatouch")
+            });
+        }
+        dir = dir.parent()?;
     }
 }
 
@@ -711,6 +764,40 @@ mod tests {
     fn target_defaults_to_host_port_serial() {
         let target = DeviceTarget::default();
         assert_eq!(target.resolved_serial(), "127.0.0.1:16384");
+    }
+
+    #[test]
+    fn maatouch_path_candidates_include_repo_external_tool_path() {
+        let exe = PathBuf::from("repo")
+            .join("target")
+            .join("debug")
+            .join("actingcommand-device-test");
+        let candidates = maatouch_path_candidates_from_exe(&exe);
+
+        assert!(candidates.iter().any(|path| {
+            path == &PathBuf::from("repo")
+                .join("external-tools")
+                .join("maatouch")
+                .join("maatouch")
+        }));
+    }
+
+    #[test]
+    fn maatouch_fallback_prefers_repo_external_tool_path_under_target() {
+        let exe = PathBuf::from("repo")
+            .join("target")
+            .join("debug")
+            .join("actingcommand-device-test");
+
+        assert_eq!(
+            likely_repo_maatouch_path_from_exe(&exe),
+            Some(
+                PathBuf::from("repo")
+                    .join("external-tools")
+                    .join("maatouch")
+                    .join("maatouch")
+            )
+        );
     }
 
     #[test]

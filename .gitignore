@@ -230,3 +230,4 @@ upstream-sources/
 external-tools/*
 !external-tools/maatouch/
 !external-tools/maatouch/maatouch
+!external-tools/maatouch/LICENSE

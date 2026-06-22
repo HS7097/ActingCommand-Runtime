@@ -424,6 +424,15 @@ fn validate_probe_action_structure(_plan: &ProbePlan, step: &ProbeStep) -> TaskL
             effect,
             resource_policy,
         } => {
+            let page_id = step.page_id.as_ref().ok_or_else(|| {
+                TaskLoopError::fatal(format!("probe step '{}' click requires page_id", step.id))
+            })?;
+            if page_id.is_empty() {
+                return Err(TaskLoopError::fatal(format!(
+                    "probe step '{}' click page_id is empty",
+                    step.id
+                )));
+            }
             if target_id.is_empty() {
                 return Err(TaskLoopError::fatal(format!(
                     "probe step '{}' click target_id is empty",
@@ -812,6 +821,34 @@ mod tests {
     }
 
     #[test]
+    fn click_without_page_id_is_fatal() {
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                page_id: None,
+                ..click_step("click_home")
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("page id");
+
+        assert_fatal_contains(err, "click requires page_id");
+    }
+
+    #[test]
+    fn click_with_empty_page_id_is_fatal() {
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                page_id: Some(String::new()),
+                ..click_step("click_home")
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("empty page id");
+
+        assert_fatal_contains(err, "page_id is empty");
+    }
+
+    #[test]
     fn observe_targets_empty_is_fatal() {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
@@ -970,7 +1007,7 @@ mod tests {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "click_home".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/collect_all".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
@@ -1011,7 +1048,7 @@ mod tests {
         let probe = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "claim".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/claim_reward".to_string(),
                     effect: ProbeClickEffect::FreeClaim,
@@ -1034,7 +1071,7 @@ mod tests {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "claim".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/claim_reward".to_string(),
                     effect: ProbeClickEffect::FreeClaim,
@@ -1055,7 +1092,7 @@ mod tests {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "claim".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/claim_reward".to_string(),
                     effect: ProbeClickEffect::FreeClaim,
@@ -1082,7 +1119,7 @@ mod tests {
         let probe = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "start_battle".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/start_battle".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,
@@ -1111,7 +1148,7 @@ mod tests {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "exercise".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/exercise_start".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,
@@ -1138,7 +1175,7 @@ mod tests {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "start_battle".to_string(),
-                page_id: None,
+                page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/start_battle".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,

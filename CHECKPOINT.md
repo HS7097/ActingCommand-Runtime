@@ -20,6 +20,117 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-22 P6d/P6e-half resource-independent close-out
+
+### Current status
+
+- Completed the resource-independent Runtime half of P6d/P6e.
+- `task-loop` now rejects click actions that do not declare a non-empty `page_id`; this makes click provenance fatal at plan construction instead of allowing ambiguous clicks.
+- MaaTouch remains the only input backend. The repository MaaTouch external-tool path is now preferred by default when running built binaries from `target/`.
+- MaaTouch license provenance is recorded in `NOTICE.md`, and the Apache-2.0 license text is tracked at `external-tools/maatouch/LICENSE`.
+- Control benchmark output now labels MaaTouch reset timing as command-submission-only and no longer derives a minimum operation interval from reset writes.
+- BA live regression is blocked by resource/navigation data, not by Runtime source failure: the temporary `PAGE_TASK_CENTER` bridge matched home/returned-home frames and the manual task-center tap stayed on home.
+- No OCR, SQLite, UI, scheduler, ADB input fallback, reconnect logic, long tap, swipe, purchase, refill, gacha, construction, recruitment, sortie, exercise/PvP, FreeClaim, or consuming-resource action was added or executed.
+
+### Resource freshness
+
+- Runtime base before this task: `2718e2a25c5b56e7a0d6fde28049c082bdddf470`
+- `ActingCommand-Resources-AzurLane`: `e494e614fed2a36a8949bd909ca7e7769ded6509`
+- `ActingCommand-Resources-Arknights`: `c57ff2ba8673f7878134c45a6786f11dc1810468`
+- `ActingCommand-Resources-BlueArchive`: `aca24601405354e3af2fd4007c3630310e4814cf`
+
+### Files changed
+
+- `.gitignore`
+- `NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+- `apps/device-test/src/main.rs`
+- `crates/device/src/maatouch.rs`
+- `crates/task-loop/src/probe.rs`
+- `external-tools/maatouch/LICENSE`
+
+### MaaTouch license review
+
+- Verified upstream MaaTouch repository license through GitHub API: `MaaAssistantArknights/MaaTouch` reports Apache-2.0.
+- Downloaded BAAH update package and inspected `DATA/touch.zip/LICENSE.txt`; the bundled license text is Apache-2.0.
+- No separate filled copyright line was found in the bundled license appendix.
+- Local tracked license destination: `external-tools/maatouch/LICENSE`.
+
+### Benchmark results
+
+Output directory: `target\p6d-p6e-half-benchmark-20260622`
+
+| Port | Screenshot best / median / p90 | Screenshot grade | Control result |
+| ---- | ------------------------------ | ---------------- | -------------- |
+| `16384` | `508 / 533 / 660 ms` | Slow | `command_submission_only`, min interval not available |
+| `16416` | `361 / 385 / 566 ms` | Slow | `command_submission_only`, min interval not available |
+| `16448` | `409 / 431 / 564 ms` | Slow | `command_submission_only`, min interval not available |
+
+### BA regression result
+
+- Regression root: `target\regression-frames\bluearchive\jp`
+- Final report: `target\regression-frames\bluearchive\jp\report.json`
+- Markdown report: `target\regression-frames\bluearchive\jp\report.md`
+- Final conclusion: `blocked`
+- Blocker: BA task arrival anchor is not discriminative enough. The temporary `PAGE_TASK_CENTER` bridge matched returned-home/home frames, and manual tap at `navigation/home_to_task` stayed on home. Resource navigation and anchor data must be corrected before this regression can be treated as green.
+- Successful safety-limited probe attempts during investigation:
+  - `probe-1782138370875`
+  - `probe-1782138383088`
+  - `probe-1782138395030`
+- Each successful probe attempt executed only the allowed navigation bridge clicks and reported:
+  - `premium_currency_allowed=false`
+  - `auto_refill_allowed=false`
+  - `claims_executed=0`
+  - `regenerating_resource_actions_executed=0`
+- Safety note: one initial script invocation failed before running because the local PowerShell helper used the wrong parameter variable. No device action happened in that failed invocation.
+
+### Commands run
+
+- `git fetch origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `gh api repos/MaaAssistantArknights/MaaTouch/license`
+- BAAH release/package inspection for `DATA/touch.zip/LICENSE.txt`
+- `cargo test -p actingcommand-task-loop`
+- `cargo test -p actingcommand-device`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-task-loop -p actingcommand-device-test`
+- `cargo test --workspace`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings`
+- `cargo tree -p actingcommand-task-loop --depth 1`
+- `cargo build --release -p actingcommand-device-test`
+- `target\release\actingcommand-device-test.exe --port <port> benchmark --out <path>`
+- BA `probe-run` safety-limited live validation on `127.0.0.1:16448`
+- BA report generation into `target\regression-frames\bluearchive\jp`
+- Prohibited-pattern scans for SQLite, OCR, OpenCV, scheduler/background loop, ADB input fallback, long-tap/swipe use in probe logic, and task-loop device dependencies
+- `git diff --check`
+
+### Test results
+
+- `cargo test --workspace`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy -p actingcommand-task-loop -p actingcommand-device-test -- -D warnings`: passed.
+- `cargo tree -p actingcommand-task-loop --depth 1`: confirmed no `actingcommand-device`, SQLite, OCR, or image-processing backend dependency.
+- Prohibited-pattern scans: no forbidden matches.
+- `git diff --check`: passed.
+- BA live regression: blocked by resource/navigation data as described above; no unsafe resource-consuming action was executed.
+
+### Current blocker
+
+- BA `home_to_task` navigation point and `PAGE_TASK_CENTER` arrival anchor need corrected resource data. The current temporary direct-match bridge is too weak and can match home/returned-home frames.
+- FreeClaim and Consume-resource preflight remain deferred until the resource Operation Bundle is corrected.
+
+### Next step
+
+1. Correct BA resource navigation and task-center arrival anchor data in the resource repository.
+2. Upgrade the BA task arrival anchor into a proper recognition-pack full-frame target instead of a temporary device-test bridge.
+3. Re-run the BA regression from fresh captures after the corrected resources are pulled.
+4. Add AzurLane and Arknights resource-independent regression coverage after their resource packs expose equivalent safe navigation anchors.
+
 ## 2026-06-22 resource repository freshness rule
 
 ### Current status
