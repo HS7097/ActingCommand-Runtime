@@ -20,6 +20,45 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-22 resource repository freshness rule
+
+### Current status
+
+- Added a Runtime project rule: any task that reads or uses resource repository content must refresh the relevant resource repositories from remote before executing the resource-dependent step.
+- The rule applies to current and future resource repositories, including AzurLane, Arknights, and BlueArchive resources.
+- Dirty, missing, unavailable, or non-fast-forward resource repositories are blockers unless Alice gives an explicit one-off override.
+- No Runtime source code was changed.
+
+### Files changed
+
+- `AGENTS.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "Azur|GachaPilot|ActingCommand|PLANS\.md|CHECKPOINT\.md|planning" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `Get-ChildItem -Name`
+- `git status --short --branch`
+- `Get-Content -Raw AGENTS.md`
+- `Get-Content -Raw PLANS.md`
+- `Get-Content -Raw CHECKPOINT.md`
+- `Get-Content -Raw LICENSE_POLICY.md` (not present in this split Runtime repository)
+- `Get-Content -Raw NOTICE.md`
+
+### Test results
+
+- Documentation/rule-only change; no Rust build or runtime test is required.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Before the next Runtime task that uses resource repository content, run `git fetch origin` and `git pull --ff-only` in each relevant resource repository.
+2. Record the resource repository paths and commit hashes in this checkpoint.
+
 ## 2026-06-19 multirun request and upstream-script safety gate
 
 ### Current status

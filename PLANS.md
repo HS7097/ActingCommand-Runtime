@@ -142,6 +142,20 @@ P5c also validates the current resource repositories as read-only inputs:
 
 Resource repositories remain the owner of recognition packs, page sets, templates, and resource data. Runtime only consumes them through explicit pack/page schema boundaries.
 
+## Resource repository freshness gate
+
+Any Runtime task that reads or uses resource repository content must refresh the relevant resource repositories from their remotes before the resource-dependent step runs.
+
+Current resource repositories:
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+
+The expected refresh flow is `git fetch origin` followed by `git pull --ff-only`. Record the path and commit hash used in `CHECKPOINT.md`.
+
+If a resource repository is dirty, missing, unavailable, or cannot fast-forward, treat that as a blocker and do not continue with the resource-dependent task unless Alice gives an explicit one-off override.
+
 ## Dry-run task loop
 
 P6a adds `actingcommand-task-loop` as a minimal dry-run decision layer above PageDetector.

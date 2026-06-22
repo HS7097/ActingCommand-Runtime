@@ -40,6 +40,15 @@ Do not mirror planning files into `HS7097/ActingCommand` after routine Runtime t
 
 Do not merge, copy, or synchronize routine Runtime updates into the umbrella/main `HS7097/ActingCommand` repository by default. Keep Runtime changes in this repository until the user explicitly confirms a specific merge point.
 
+## Resource repository freshness
+
+For any ActingCommand Runtime task that reads or uses resource repository content, first update the relevant resource repositories from their remotes before executing the resource-dependent step.
+
+- Use `git fetch origin` and `git pull --ff-only` for each relevant resource repository.
+- Record the resource repository paths and commit hashes used in `CHECKPOINT.md`.
+- If a resource repository is dirty, missing, unavailable, or cannot fast-forward, stop before the resource-dependent action and report the blocker unless the user explicitly gives a one-off override.
+- This applies to current and future resource repositories, including AzurLane, Arknights, and BlueArchive resources.
+
 ## Current boundaries
 
 - Do not add game logic unless the current plan explicitly requires it.
