@@ -20,6 +20,82 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-24 ActingLab-P1a/P1b Rust scheduler-gate skeleton
+
+### Current status
+
+- Added the first Runtime-embedded ActingLab Rust module under `actingcommand-runtime-core`.
+- Implemented pure state and scheduler-gate decision contracts for:
+  - `LabMode`
+  - `InstanceScope`
+  - `DeferPolicy`
+  - `LabClickPolicy`
+  - `LabLeaseState`
+  - `LabLeaseRequest`
+  - `SchedulerTaskState`
+  - `SchedulerInstanceSnapshot`
+  - `SchedulerGateSnapshot`
+  - `SchedulerGate::evaluate`
+- `exclusive_drain` now has a pure decision model:
+  - idle scoped instances produce `LeaseAcquired`;
+  - running scoped instances produce `DrainingCurrentTask`;
+  - manual-review-blocked scoped instances produce `Failed`;
+  - click permission is true only after lease acquisition and only for `NavigationOnlyOnly`.
+- `passive_mirror` is modeled as no-click and no-defer. It does not drain running tasks.
+- `scheduler_noop` is modeled as no-click but scheduler-deferring for scoped instances.
+- This is contract/state work only. It does not start devices, capture frames, run recognition, execute clicks, write journals, mutate scheduler queues, add UI, add SQLite, add OCR, or touch resource repositories.
+
+### Files changed
+
+- `crates/runtime-core/src/actinglab.rs`
+- `crates/runtime-core/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -5 --oneline --decorate`
+- `git diff --stat`
+- `Get-Content -Raw AGENTS.md`
+- `Get-Content -Raw PLANS.md`
+- `Get-Content -First 220 CHECKPOINT.md`
+- `Get-Content -Raw Cargo.toml`
+- `Get-ChildItem -Directory crates`
+- `Get-Content -Raw crates\runtime-core\Cargo.toml`
+- `Get-Content -Raw crates\runtime-core\src\lib.rs`
+- `Get-Content -Raw crates\runtime-core\src\capture_store.rs`
+- `git show --stat --oneline 72edc17`
+- `git show --stat --oneline e24539f`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-runtime-core`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-runtime-core -- -D warnings`
+- `rg -n "adb|MaaTouch|screencap|CaptureBackend|OCR|ocr|SQLite|sqlite|rusqlite|OpenCV|opencv|tap\(|swipe\(|long_tap\(|background loop|retry loop|reconnect" crates\runtime-core\src\actinglab.rs`
+- `git diff --check`
+
+### Test results
+
+- Initial `cargo test -p actingcommand-runtime-core` caught a `HashMap` lookup type issue; fixed.
+- Second `cargo test -p actingcommand-runtime-core` caught an incorrect passive-mirror draining decision; fixed so passive mirror remains no-click/no-defer/no-drain.
+- Final `cargo test -p actingcommand-runtime-core` passed with 16 tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy -p actingcommand-runtime-core -- -D warnings` passed.
+- Prohibited-feature scan over `crates\runtime-core\src\actinglab.rs` found no ADB, MaaTouch, screencap, capture backend, OCR, SQLite, OpenCV, click execution, retry loop, background loop, or reconnect usage.
+- `git diff --check` passed.
+
+### Current blocker
+
+- None for the Rust ActingLab scheduler-gate skeleton.
+- No real scheduler integration exists yet; this milestone only defines the state and gate-decision contract.
+
+### Next step
+
+1. Commit and push the Runtime skeleton.
+2. In a later milestone, connect `SchedulerGate` to real Runtime scheduler state and journal/frame-stream contracts.
+
 ## 2026-06-24 ActingLab-P1 runtime-embedded cleanup audit
 
 ### Current status

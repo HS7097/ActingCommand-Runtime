@@ -30,6 +30,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P6d live validation and limited resource close-out.
 - P6d/P6e-half resource-independent close-out: click page guard, MaaTouch license/path fix, benchmark labeling, and BA regression blocker report.
 - ActingLab-P1 runtime-embedded direction: Python Runtime-side Lab cleanup audit and Rust embedded Lab planning.
+- ActingLab-P1a/P1b Rust embedded lab skeleton: `LabMode`, `LabLeaseRequest`, `SchedulerGate`, scoped instance decisions, and no-click/passive-mode boundaries.
 
 ## Recognition score semantics
 
@@ -368,6 +369,33 @@ Minimum outputs:
 
 Frame capture must use the Runtime capture backend. Recognition results must use Runtime recognition modules.
 
+### P1a/P1b Rust skeleton
+
+The first Runtime-embedded ActingLab code lives in `actingcommand-runtime-core`.
+
+Implemented pure state and decision contracts:
+
+- `LabMode`
+- `InstanceScope`
+- `DeferPolicy`
+- `LabClickPolicy`
+- `LabLeaseState`
+- `LabLeaseRequest`
+- `SchedulerTaskState`
+- `SchedulerInstanceSnapshot`
+- `SchedulerGateSnapshot`
+- `SchedulerGate::evaluate`
+
+This skeleton deliberately does not start devices, capture frames, run recognition, execute clicks, write journals, or mutate scheduler state. It only evaluates a scheduler snapshot and lease request into a visible decision:
+
+- `exclusive_drain` acquires an idle scoped instance and allows only navigation-only clicks.
+- `exclusive_drain` enters `DrainingCurrentTask` when a scoped instance is running, and cannot click while draining.
+- `passive_mirror` can observe scoped instances without deferring tasks and without click permission.
+- `scheduler_noop` can acquire scoped idle instances, defer scoped tasks, and still cannot click.
+- manual-review-blocked instances fail lease acquisition visibly.
+
+The next Runtime milestone should connect this contract to real scheduler state without changing the no-duplicate-runtime-module rule.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -424,14 +452,15 @@ Remaining BA data work is still resource/live-verification work, not Runtime arc
 ## Next steps
 
 1. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
-2. Start ActingLab-P1a/P1b in Runtime: define Rust `LabMode`, `LabLease`, scoped instance selection, and scheduler gate contracts.
-3. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
-4. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
-5. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
-6. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
-7. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-8. Add Arknights operator/menu navigation targets before Arknights probes.
-9. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-10. Define Runtime API contracts for UI integration in a separate milestone.
-11. Define capture metadata and SQLite schema in a separate scoped milestone.
-12. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+2. Connect ActingLab `SchedulerGate` to real Runtime scheduler state in a separate scoped milestone.
+3. Add Runtime-owned journal/frame-stream contracts for ActingLab passive-mirror evidence output.
+4. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
+5. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
+6. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+7. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+8. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+9. Add Arknights operator/menu navigation targets before Arknights probes.
+10. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+11. Define Runtime API contracts for UI integration in a separate milestone.
+12. Define capture metadata and SQLite schema in a separate scoped milestone.
+13. Keep `CHECKPOINT.md` updated with every completed Runtime task.

@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actinglab;
 pub mod capture_store;
 
+pub use actinglab::*;
 pub use capture_store::*;
