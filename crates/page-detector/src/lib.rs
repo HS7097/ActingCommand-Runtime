@@ -212,9 +212,9 @@ impl PageDetector {
 }
 
 fn validate_page_set(page_set: &PageSet) -> PageDetectorResult<()> {
-    if page_set.schema_version != "0.1" {
+    if page_set.schema_version != "0.1" && page_set.schema_version != "0.3" {
         return Err(PageDetectorError::fatal(format!(
-            "unsupported schema_version '{}', expected '0.1'",
+            "unsupported schema_version '{}', expected '0.1' or '0.3'",
             page_set.schema_version
         )));
     }
@@ -389,6 +389,15 @@ mod tests {
     #[test]
     fn new_accepts_valid_page_set() {
         PageDetector::new(home_page_set()).expect("detector");
+    }
+
+    #[test]
+    fn schema_0_3_page_set_is_supported() {
+        PageDetector::new(PageSet {
+            schema_version: "0.3".to_string(),
+            pages: vec![home_page()],
+        })
+        .expect("schema 0.3 detector");
     }
 
     #[test]

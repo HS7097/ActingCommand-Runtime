@@ -403,16 +403,35 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - No Runtime-side Python ActingLab/Lab implementation that directly controls devices, captures frames, runs recognition, polls pages, or writes device-control journals.
 - ActingLab Runtime work must be Rust and must reuse Runtime modules instead of duplicating capture, recognition, page detection, click execution, poll, scheduler-state, or journal logic.
 
+## Current BA Resource Control Refinement Round
+
+Runtime/resource compatibility completed for the BA control-data refinement task:
+
+- BA generated packs can opt into `match_metric: "ccoeff_normed"` while CCORR remains the default for existing packs.
+- Runtime accepts generated `0.3` recognition packs/pages and `"full_frame"` template regions.
+- Probe-run supports navigation drag actions through MaaTouch swipe and journals actual from/to/duration.
+- Probe-run records initial/final and last before/after pages in checkpoint/summary output.
+- BA resource bundles now generate `recognition/bluearchive.jp.pack.json` with CCOEFF defaults.
+
+Remaining BA data work is still resource/live-verification work, not Runtime architecture work:
+
+- replace full-frame BA anchors with tight live CCOEFF ROIs,
+- resolve sentinel coordinates,
+- add cafe collect,
+- add growth/progression bundles,
+- regenerate artifacts and run live ADB validation.
+
 ## Next steps
 
-1. Start ActingLab-P1a/P1b in Runtime: define Rust `LabMode`, `LabLease`, scoped instance selection, and scheduler gate contracts.
-2. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
-3. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
-4. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
-5. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
-6. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-7. Add Arknights operator/menu navigation targets before Arknights probes.
-8. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-9. Define Runtime API contracts for UI integration in a separate milestone.
-10. Define capture metadata and SQLite schema in a separate scoped milestone.
-11. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
+2. Start ActingLab-P1a/P1b in Runtime: define Rust `LabMode`, `LabLease`, scoped instance selection, and scheduler gate contracts.
+3. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
+4. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
+5. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+6. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+7. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+8. Add Arknights operator/menu navigation targets before Arknights probes.
+9. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+10. Define Runtime API contracts for UI integration in a separate milestone.
+11. Define capture metadata and SQLite schema in a separate scoped milestone.
+12. Keep `CHECKPOINT.md` updated with every completed Runtime task.

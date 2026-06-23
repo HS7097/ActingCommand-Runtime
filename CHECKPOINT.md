@@ -1298,3 +1298,61 @@ Resource repository:
 2. Commit and push Runtime repository changes.
 3. After MaaTouch is supplied locally and BA is on the home screen, rerun BA JP `probe-run` for the real navigation click path.
 4. Do not start P6e destructive operations without separate user confirmation.
+
+## 2026-06-24 BA Resource Control Refinement Base
+
+### Current status
+
+- Read `C:\合作工作区\ActingCommand\TASK-resource-BA-control-refinement-and-progression.md`.
+- Implemented the Runtime/resource compatibility needed before BA live control-data refinement:
+  - recognition `match_metric` support with CCORR default and CCOEFF_NORMED opt-in.
+  - recognition-pack support for generated `0.3` packs, target-level thresholds, and `"full_frame"` template regions.
+  - page-detector support for generated `0.3` pages.
+  - probe-run navigation drag execution via MaaTouch swipe, including actual from/to/duration journal data.
+  - probe-run initial/final and last before/after page summary fields.
+  - conservative standby wake tap when no page is detected and navigation provides a `wake` control point.
+- Updated the BA resource converter and bundle defaults so generated BA packs set `match_metric: "ccoeff_normed"`.
+- Regenerated `recognition/bluearchive.jp.pack.json` in `ActingCommand-Resources-BlueArchive`.
+
+### Files changed
+
+- Runtime:
+  - `crates/recognition/src/lib.rs`
+  - `crates/recognition-pack/src/lib.rs`
+  - `crates/page-detector/src/lib.rs`
+  - `apps/device-test/src/probe_run.rs`
+- BlueArchive resource repo:
+  - `tools/convert_operations.py`
+  - `operations/SCHEMA.md`
+  - all 20 `operations/*/task.json` bundle defaults
+  - `recognition/bluearchive.jp.pack.json`
+
+### Commands run
+
+- `cargo fmt`
+- `cargo test -p actingcommand-recognition -p actingcommand-recognition-pack -p actingcommand-page-detector -p actingcommand-task-loop -p actingcommand-device-test`
+- `cargo run -q -p actingcommand-device-test -- recognize --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --check-pack`
+- `cargo run -q -p actingcommand-device-test -- detect-page --pack C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pack.json --pack-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --pages C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\recognition\bluearchive.jp.pages.json --check-pages`
+- `python tools\convert_operations.py --root . --game bluearchive --server jp --locale ja-JP`
+- `python -m py_compile tools\convert_operations.py`
+
+### Test results
+
+- Runtime focused tests passed.
+- BA generated recognition pack check passed.
+- BA generated pages check passed.
+- BA operation converter completed with 20 bundles, 22 targets, 20 pages, 19 edges, 23 page operations, and 53 primitives.
+
+### Current blocker
+
+- The task file's BA data acceptance items are not complete yet:
+  - full-frame anchors still need live CCOEFF ROI replacement.
+  - 8 sentinel coordinates still need live resolution.
+  - cafe reward collect and growth/progression bundles still need live data authoring and verification.
+- Live BA ADB/device validation was not run in this checkpoint.
+
+### Next step
+
+1. Use the BA emulator and task-specified Python/OpenCV/ADB environment to capture live pages and replace full-frame anchors with tight CCOEFF ROIs.
+2. Resolve the 8 sentinel coordinates and regenerate artifacts.
+3. Add cafe collect and growth/progression operation bundles only after live evidence supports the data.

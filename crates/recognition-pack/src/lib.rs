@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_recognition as recognition;
-use recognition::Scene;
+use recognition::{MatchMetric, Scene};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -76,6 +76,13 @@ pub struct PackPoint {
     pub y: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum PackRegion {
+    Rect(PackRect),
+    Keyword(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct PackCoordinateSpace {
     pub width: u32,
@@ -100,6 +107,8 @@ pub struct RecognitionDefaults {
     pub template_threshold: f32,
     #[serde(default = "default_color_max_distance")]
     pub color_max_distance: f32,
+    #[serde(default = "default_match_metric")]
+    pub match_metric: RecognitionMatchMetric,
 }
 
 impl Default for RecognitionDefaults {
@@ -107,6 +116,23 @@ impl Default for RecognitionDefaults {
         Self {
             template_threshold: default_template_threshold(),
             color_max_distance: default_color_max_distance(),
+            match_metric: default_match_metric(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecognitionMatchMetric {
+    CcorrNormed,
+    CcoeffNormed,
+}
+
+impl RecognitionMatchMetric {
+    fn as_match_metric(self) -> MatchMetric {
+        match self {
+            Self::CcorrNormed => MatchMetric::CrossCorrelationNormalized,
+            Self::CcoeffNormed => MatchMetric::CorrelationCoefficientNormalized,
         }
     }
 }
@@ -123,7 +149,9 @@ pub enum RecognitionTarget {
 pub struct TemplateTarget {
     pub id: String,
     pub template_path: String,
-    pub region: PackRect,
+    pub region: PackRegion,
+    #[serde(default)]
+    pub threshold: Option<f32>,
     pub color_check: Option<ColorCheck>,
     pub click: Option<PackRect>,
 }
@@ -263,6 +291,10 @@ impl RecognitionEvaluator {
         })
     }
 
+    pub fn default_match_metric(&self) -> MatchMetric {
+        self.pack.defaults.match_metric.as_match_metric()
+    }
+
     fn evaluate_template(
         &self,
         scene: &Scene,
@@ -274,15 +306,19 @@ impl RecognitionEvaluator {
                 target.template_path, target.id
             ))
         })?;
+        let region = target_region(&target.id, &target.region)?;
         let matched = scene
-            .match_template(&template_png, Some(target.region.into()))
+            .match_template_with_metric(&template_png, region, self.default_match_metric())
             .map_err(|err| primitive_error(&target.id, err))?;
+        let threshold = target
+            .threshold
+            .unwrap_or(self.pack.defaults.template_threshold);
         let template = TemplateEvaluation {
             x: matched.x,
             y: matched.y,
             raw_score: matched.raw_score,
             score: matched.score,
-            threshold: self.pack.defaults.template_threshold,
+            threshold,
         };
         let template_ok = template.score >= template.threshold;
 
@@ -388,9 +424,9 @@ impl RecognitionTarget {
 }
 
 fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<String>) {
-    if pack.schema_version != "0.1" {
+    if pack.schema_version != "0.1" && pack.schema_version != "0.3" {
         errors.push(format!(
-            "unsupported schema_version '{}', expected '0.1'",
+            "unsupported schema_version '{}', expected '0.1' or '0.3'",
             pack.schema_version
         ));
     }
@@ -407,7 +443,14 @@ fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<Stri
 
         match target {
             RecognitionTarget::Template(target) => {
-                validate_rect_shape(target.region, &format!("target[{index}].region"), errors);
+                validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
+                if let Some(threshold) = target.threshold {
+                    validate_template_threshold(
+                        threshold,
+                        &format!("target[{index}].threshold"),
+                        errors,
+                    );
+                }
                 if let Some(click) = target.click {
                     validate_rect_shape(click, &format!("target[{index}].click"), errors);
                 }
@@ -443,18 +486,23 @@ fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<Stri
 }
 
 fn validate_defaults(defaults: RecognitionDefaults, errors: &mut Vec<String>) {
-    if !defaults.template_threshold.is_finite()
-        || !(0.0..=1.0).contains(&defaults.template_threshold)
-    {
-        errors.push(format!(
-            "defaults.template_threshold must be finite and in 0.0..=1.0: {}",
-            defaults.template_threshold
-        ));
-    }
+    validate_template_threshold(
+        defaults.template_threshold,
+        "defaults.template_threshold",
+        errors,
+    );
     if !defaults.color_max_distance.is_finite() || defaults.color_max_distance < 0.0 {
         errors.push(format!(
             "defaults.color_max_distance must be finite and >= 0.0: {}",
             defaults.color_max_distance
+        ));
+    }
+}
+
+fn validate_template_threshold(threshold: f32, label: &str, errors: &mut Vec<String>) {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        errors.push(format!(
+            "{label} must be finite and in 0.0..=1.0: {threshold}"
         ));
     }
 }
@@ -515,6 +563,29 @@ fn validate_rect_shape(rect: PackRect, label: &str, errors: &mut Vec<String>) {
     }
 }
 
+fn validate_region_shape(region: &PackRegion, label: &str, errors: &mut Vec<String>) {
+    match region {
+        PackRegion::Rect(rect) => validate_rect_shape(*rect, label, errors),
+        PackRegion::Keyword(value) if value == "full_frame" => {}
+        PackRegion::Keyword(value) => errors.push(format!(
+            "{label} string region must be 'full_frame', got '{value}'"
+        )),
+    }
+}
+
+fn target_region(
+    target_id: &str,
+    region: &PackRegion,
+) -> RecognitionPackResult<Option<recognition::Rect>> {
+    match region {
+        PackRegion::Rect(rect) => Ok(Some((*rect).into())),
+        PackRegion::Keyword(value) if value == "full_frame" => Ok(None),
+        PackRegion::Keyword(value) => Err(RecognitionPackError::fatal(format!(
+            "template target '{target_id}' has unsupported region '{value}'"
+        ))),
+    }
+}
+
 fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> RecognitionPackError {
     RecognitionPackError::fatal(format!(
         "recognition primitive failed for target '{target_id}': {err}"
@@ -536,6 +607,10 @@ fn default_template_threshold() -> f32 {
 
 fn default_color_max_distance() -> f32 {
     20.0
+}
+
+fn default_match_metric() -> RecognitionMatchMetric {
+    RecognitionMatchMetric::CcorrNormed
 }
 
 #[cfg(test)]
@@ -567,7 +642,32 @@ mod tests {
 
         assert_eq!(pack.defaults.template_threshold, 0.90);
         assert_eq!(pack.defaults.color_max_distance, 20.0);
+        assert_eq!(
+            pack.defaults.match_metric,
+            RecognitionMatchMetric::CcorrNormed
+        );
         RecognitionEvaluator::new(TestDir::new().path.clone(), pack).expect("defaults valid");
+    }
+
+    #[test]
+    fn schema_0_3_pack_is_supported() {
+        let pack = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.3",
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {"type": "click_only", "id": "tap", "click": {"x": 1, "y": 2, "width": 3, "height": 4}}
+                ]
+            }"#,
+        )
+        .expect("pack parsed");
+
+        let evaluator = RecognitionEvaluator::new(TestDir::new().path.clone(), pack)
+            .expect("schema 0.3 accepted");
+        assert_eq!(
+            evaluator.default_match_metric(),
+            MatchMetric::CorrelationCoefficientNormalized
+        );
     }
 
     #[test]
@@ -599,6 +699,70 @@ mod tests {
         assert!(!evaluation.passed);
         let template = evaluation.template.expect("template result");
         assert!(template.score < template.threshold);
+    }
+
+    #[test]
+    fn ccoeff_match_metric_evaluates_template_targets() {
+        let fixture = TemplateFixture::new();
+        let evaluator = fixture.template_evaluator_with_defaults(
+            RecognitionDefaults {
+                match_metric: RecognitionMatchMetric::CcoeffNormed,
+                ..RecognitionDefaults::default()
+            },
+            None,
+        );
+        let scene = fixture.scene_with_template();
+
+        let evaluation = evaluator
+            .evaluate_target(&scene, "template")
+            .expect("evaluation");
+
+        assert!(evaluation.passed);
+        assert_eq!(
+            evaluator.default_match_metric(),
+            MatchMetric::CorrelationCoefficientNormalized
+        );
+        let template = evaluation.template.expect("template result");
+        assert!(
+            template.raw_score >= 0.99,
+            "score was {}",
+            template.raw_score
+        );
+    }
+
+    #[test]
+    fn full_frame_region_evaluates_template_targets() {
+        let fixture = TemplateFixture::new();
+        let evaluator =
+            fixture.template_evaluator_with_region(PackRegion::Keyword("full_frame".to_string()));
+        let scene = fixture.scene_with_template();
+
+        let evaluation = evaluator
+            .evaluate_target(&scene, "template")
+            .expect("evaluation");
+
+        assert!(evaluation.passed);
+    }
+
+    #[test]
+    fn target_threshold_overrides_default_threshold() {
+        let fixture = TemplateFixture::new();
+        let evaluator = fixture.template_evaluator_with_defaults(
+            RecognitionDefaults {
+                template_threshold: 1.0,
+                ..RecognitionDefaults::default()
+            },
+            Some(0.90),
+        );
+        let scene = fixture.scene_with_template();
+
+        let evaluation = evaluator
+            .evaluate_target(&scene, "template")
+            .expect("evaluation");
+
+        let template = evaluation.template.expect("template result");
+        assert_eq!(template.threshold, 0.90);
+        assert!(evaluation.passed);
     }
 
     #[test]
@@ -876,7 +1040,8 @@ mod tests {
                 RecognitionTarget::Template(TemplateTarget {
                     id: "template".to_string(),
                     template_path: "templates/button.png".to_string(),
-                    region: rect(12, 10, 28, 24),
+                    region: PackRegion::Rect(rect(12, 10, 28, 24)),
+                    threshold: None,
                     color_check: None,
                     click: Some(rect(5, 6, 7, 8)),
                 }),
@@ -930,12 +1095,14 @@ mod tests {
             defaults: RecognitionDefaults {
                 template_threshold: 1.5,
                 color_max_distance: -1.0,
+                ..RecognitionDefaults::default()
             },
             targets: vec![
                 RecognitionTarget::Template(TemplateTarget {
                     id: "".to_string(),
                     template_path: "".to_string(),
-                    region: rect(-1, 0, 0, 4),
+                    region: PackRegion::Rect(rect(-1, 0, 0, 4)),
+                    threshold: None,
                     color_check: None,
                     click: None,
                 }),
@@ -1045,15 +1212,44 @@ mod tests {
         }
 
         fn template_evaluator(&self, threshold: f32) -> RecognitionEvaluator {
-            let pack = RecognitionPack {
-                defaults: RecognitionDefaults {
+            self.template_evaluator_with_defaults(
+                RecognitionDefaults {
                     template_threshold: threshold,
                     ..RecognitionDefaults::default()
                 },
+                None,
+            )
+        }
+
+        fn template_evaluator_with_defaults(
+            &self,
+            defaults: RecognitionDefaults,
+            target_threshold: Option<f32>,
+        ) -> RecognitionEvaluator {
+            self.template_evaluator_with_options(
+                defaults,
+                PackRegion::Rect(rect(12, 10, 28, 24)),
+                target_threshold,
+            )
+        }
+
+        fn template_evaluator_with_region(&self, region: PackRegion) -> RecognitionEvaluator {
+            self.template_evaluator_with_options(RecognitionDefaults::default(), region, None)
+        }
+
+        fn template_evaluator_with_options(
+            &self,
+            defaults: RecognitionDefaults,
+            region: PackRegion,
+            target_threshold: Option<f32>,
+        ) -> RecognitionEvaluator {
+            let pack = RecognitionPack {
+                defaults,
                 targets: vec![RecognitionTarget::Template(TemplateTarget {
                     id: "template".to_string(),
                     template_path: "templates/button.png".to_string(),
-                    region: rect(12, 10, 28, 24),
+                    region,
+                    threshold: target_threshold,
                     color_check: None,
                     click: None,
                 })],
@@ -1067,7 +1263,8 @@ mod tests {
                 targets: vec![RecognitionTarget::Template(TemplateTarget {
                     id: "template".to_string(),
                     template_path: "templates/button.png".to_string(),
-                    region: rect(12, 10, 28, 24),
+                    region: PackRegion::Rect(rect(12, 10, 28, 24)),
+                    threshold: None,
                     color_check: Some(ColorCheck {
                         region: rect(0, 0, 8, 8),
                         expected,

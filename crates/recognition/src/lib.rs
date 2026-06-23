@@ -70,6 +70,12 @@ pub struct TemplateMatch {
     pub score: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMetric {
+    CrossCorrelationNormalized,
+    CorrelationCoefficientNormalized,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorMatch {
     pub distance: f32,
@@ -105,6 +111,19 @@ impl Scene {
         template_png: &[u8],
         region: Option<Rect>,
     ) -> RecognitionResult<TemplateMatch> {
+        self.match_template_with_metric(
+            template_png,
+            region,
+            MatchMetric::CrossCorrelationNormalized,
+        )
+    }
+
+    pub fn match_template_with_metric(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+    ) -> RecognitionResult<TemplateMatch> {
         let template = image::load_from_memory_with_format(template_png, ImageFormat::Png)
             .map_err(|err| decode_error("template PNG", err))?
             .to_luma8();
@@ -137,28 +156,35 @@ impl Scene {
             )));
         }
 
-        // Grayscale template matching plus independent color comparison mirrors an area+color primitive; thresholds stay with callers.
-        let response = match_template_map(
-            &search,
-            &template,
-            MatchTemplateMethod::CrossCorrelationNormalized,
-        );
-        let extremes = find_extremes(&response);
-        let raw_score = extremes.max_value;
-        let score = normalize_ncc_score(raw_score);
-        let x = i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
-            RecognitionError::fatal("template match x coordinate exceeds i32 range")
-        })?;
-        let y = i32::try_from(offset_y + extremes.max_value_location.1).map_err(|_| {
-            RecognitionError::fatal("template match y coordinate exceeds i32 range")
-        })?;
+        match metric {
+            MatchMetric::CrossCorrelationNormalized => {
+                // Grayscale template matching plus independent color comparison mirrors an area+color primitive; thresholds stay with callers.
+                let response = match_template_map(
+                    &search,
+                    &template,
+                    MatchTemplateMethod::CrossCorrelationNormalized,
+                );
+                let extremes = find_extremes(&response);
+                let raw_score = extremes.max_value;
+                let score = normalize_ncc_score(raw_score);
+                let x = i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
+                    RecognitionError::fatal("template match x coordinate exceeds i32 range")
+                })?;
+                let y = i32::try_from(offset_y + extremes.max_value_location.1).map_err(|_| {
+                    RecognitionError::fatal("template match y coordinate exceeds i32 range")
+                })?;
 
-        Ok(TemplateMatch {
-            x,
-            y,
-            raw_score,
-            score,
-        })
+                Ok(TemplateMatch {
+                    x,
+                    y,
+                    raw_score,
+                    score,
+                })
+            }
+            MatchMetric::CorrelationCoefficientNormalized => {
+                ccoeff_normed_match(&search, &template, offset_x, offset_y)
+            }
+        }
     }
 
     pub fn compare_color(&self, region: Rect, expected: [u8; 3]) -> RecognitionResult<ColorMatch> {
@@ -184,6 +210,83 @@ impl Scene {
 
         Ok(ColorMatch { distance, mean })
     }
+}
+
+fn ccoeff_normed_match(
+    search: &GrayImage,
+    template: &GrayImage,
+    offset_x: u32,
+    offset_y: u32,
+) -> RecognitionResult<TemplateMatch> {
+    let template_width = template.width();
+    let template_height = template.height();
+    let count = (template_width * template_height) as f32;
+    let template_sum: f32 = template.pixels().map(|pixel| f32::from(pixel[0])).sum();
+    let template_mean = template_sum / count;
+    let template_centered = template
+        .pixels()
+        .map(|pixel| f32::from(pixel[0]) - template_mean)
+        .collect::<Vec<_>>();
+    let template_norm_sq: f32 = template_centered.iter().map(|value| value * value).sum();
+    if template_norm_sq <= f32::EPSILON {
+        return Err(RecognitionError::fatal(
+            "ccoeff_normed template must have non-zero variance",
+        ));
+    }
+    let template_norm = template_norm_sq.sqrt();
+
+    let max_x = search.width() - template_width;
+    let max_y = search.height() - template_height;
+    let mut best_raw = f32::NEG_INFINITY;
+    let mut best_x = 0_u32;
+    let mut best_y = 0_u32;
+
+    for y in 0..=max_y {
+        for x in 0..=max_x {
+            let mut window_sum = 0_f32;
+            for ty in 0..template_height {
+                for tx in 0..template_width {
+                    window_sum += f32::from(search.get_pixel(x + tx, y + ty)[0]);
+                }
+            }
+            let window_mean = window_sum / count;
+            let mut numerator = 0_f32;
+            let mut window_norm_sq = 0_f32;
+            let mut index = 0_usize;
+            for ty in 0..template_height {
+                for tx in 0..template_width {
+                    let window_value = f32::from(search.get_pixel(x + tx, y + ty)[0]) - window_mean;
+                    numerator += window_value * template_centered[index];
+                    window_norm_sq += window_value * window_value;
+                    index += 1;
+                }
+            }
+            if window_norm_sq <= f32::EPSILON {
+                continue;
+            }
+            let raw = numerator / (window_norm_sq.sqrt() * template_norm);
+            if raw > best_raw {
+                best_raw = raw;
+                best_x = x;
+                best_y = y;
+            }
+        }
+    }
+
+    if !best_raw.is_finite() {
+        best_raw = 0.0;
+    }
+    let x = i32::try_from(offset_x + best_x)
+        .map_err(|_| RecognitionError::fatal("template match x coordinate exceeds i32 range"))?;
+    let y = i32::try_from(offset_y + best_y)
+        .map_err(|_| RecognitionError::fatal("template match y coordinate exceeds i32 range"))?;
+
+    Ok(TemplateMatch {
+        x,
+        y,
+        raw_score: best_raw,
+        score: normalize_ncc_score(best_raw),
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -316,6 +419,47 @@ mod tests {
         );
         assert!(matched.score >= 0.99, "score was {}", matched.score);
         assert_score_is_normalized(matched.score);
+    }
+
+    #[test]
+    fn ccoeff_template_match_finds_non_uniform_template() {
+        let template = template_image();
+        let scene = scene_with_template(200, 150, &template);
+
+        let matched = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                None,
+                MatchMetric::CorrelationCoefficientNormalized,
+            )
+            .expect("template match");
+
+        assert_eq!((matched.x, matched.y), (200, 150));
+        assert!(
+            matched.raw_score >= 0.99,
+            "raw_score was {}",
+            matched.raw_score
+        );
+        assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert_score_is_normalized(matched.score);
+    }
+
+    #[test]
+    fn ccoeff_rejects_zero_variance_template() {
+        let scene =
+            Scene::from_png(&encode_png(&blank_image(40, 40, [30, 31, 32]))).expect("scene");
+        let template = blank_image(8, 8, [255, 255, 255]);
+
+        let err = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                None,
+                MatchMetric::CorrelationCoefficientNormalized,
+            )
+            .expect_err("zero variance template rejected");
+
+        assert_eq!(err.severity(), RecognitionErrorSeverity::Fatal);
+        assert!(err.message().contains("non-zero variance"));
     }
 
     #[test]

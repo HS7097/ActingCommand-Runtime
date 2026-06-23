@@ -52,6 +52,16 @@ struct ActualClickPoint {
     y: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActualInputAction {
+    Tap(ActualClickPoint),
+    Drag {
+        from: ActualClickPoint,
+        to: ActualClickPoint,
+        duration_ms: u64,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct NavigationFile {
     coordinate_space: Option<NavigationCoordinateSpace>,
@@ -122,6 +132,20 @@ struct NavigationClick {
     rect: String,
     #[serde(default)]
     template_path: String,
+    #[serde(default)]
+    x: Option<i32>,
+    #[serde(default)]
+    y: Option<i32>,
+    #[serde(default)]
+    width: Option<i32>,
+    #[serde(default)]
+    height: Option<i32>,
+    #[serde(default, rename = "from")]
+    from_rect: Option<PackRect>,
+    #[serde(default, rename = "to")]
+    to_rect: Option<PackRect>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,7 +173,16 @@ struct ForbiddenDestructivePoint {
 struct NavigationBridge {
     overrides: ProbeReferenceOverrides,
     arrival_anchors: HashMap<String, ArrivalAnchor>,
+    drag_targets: HashMap<String, NavigationDrag>,
+    control_points: HashMap<String, [i32; 2]>,
     forbidden: Vec<ForbiddenDestructivePoint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NavigationDrag {
+    from: PackRect,
+    to: PackRect,
+    duration_ms: u64,
 }
 
 struct OperationJournal {
@@ -170,6 +203,9 @@ struct ProbeRunState {
     regenerating_resource_actions_executed: usize,
     last_resource_kind: Option<String>,
     last_max_cost: Option<u32>,
+    initial_page: Option<String>,
+    last_before_page: Option<String>,
+    last_after_page: Option<String>,
     final_page: Option<String>,
     frames: usize,
     observations: usize,
@@ -313,6 +349,41 @@ fn execute_probe_run(
     let mut scene = Scene::from_png(&before).map_err(|err| DeviceError::fatal(err.to_string()))?;
     let seed_base = run_seed();
     let mut backend = None::<MaaTouchBackend>;
+    let initial_page = detect_current_page(&detector, &evaluator, &scene)?;
+    state.initial_page = initial_page.clone();
+    state.final_page = initial_page.clone();
+    journal.event(
+        "page_detected",
+        json!({"phase": "before_run", "page_id": initial_page}),
+    )?;
+    if state.initial_page.is_none()
+        && let Some(wake_point) = navigation
+            .as_ref()
+            .and_then(|bridge| bridge.control_point("wake"))
+    {
+        journal.event(
+            "standby_wake_started",
+            json!({"point": {"x": wake_point[0], "y": wake_point[1]}}),
+        )?;
+        let backend_ref = ensure_maatouch_backend(&mut backend, &config, journal)?;
+        if let Err(err) = backend_ref.tap(wake_point[0], wake_point[1]) {
+            return close_backend_after_error(&mut backend, err);
+        }
+        journal.event(
+            "standby_wake_done",
+            json!({"point": {"x": wake_point[0], "y": wake_point[1]}}),
+        )?;
+        let after_wake = capture_frame(&mut capture, journal, "001_after_wake.png", "after_wake")?;
+        state.frames += 1;
+        scene = Scene::from_png(&after_wake).map_err(|err| DeviceError::fatal(err.to_string()))?;
+        let after_wake_page = detect_current_page(&detector, &evaluator, &scene)?;
+        state.initial_page = after_wake_page.clone();
+        state.final_page = after_wake_page.clone();
+        journal.event(
+            "page_detected",
+            json!({"phase": "after_wake", "page_id": after_wake_page}),
+        )?;
+    }
 
     for (step_index, step) in probe_loop.plan().steps.iter().enumerate() {
         journal.event(
@@ -428,34 +499,44 @@ fn execute_probe_run(
                         "probe-run navigation click limit exceeded",
                     ));
                 }
+                let before_page = state.final_page.clone();
+                state.last_before_page = before_page.clone();
                 journal.event(
                     "safety_check_started",
-                    json!({"step_id": step.id, "target_id": target_id}),
+                    json!({"step_id": step.id, "target_id": target_id, "before_page": before_page}),
                 )?;
-                validate_rect_in_click_space(click)?;
-                let actual = actual_click_point(click, seed_base ^ hash_text(&step.id));
-                validate_point_in_click_space(actual.x, actual.y)?;
-                if let Some(bridge) = &navigation {
-                    bridge.validate_rect_not_forbidden(click)?;
-                    bridge.validate_point_not_forbidden(actual.x, actual.y)?;
-                }
+                let input_action = actual_input_action(
+                    click,
+                    navigation
+                        .as_ref()
+                        .and_then(|bridge| bridge.drag_target(&target_id)),
+                    seed_base ^ hash_text(&step.id),
+                )?;
+                validate_input_action(&input_action, navigation.as_ref())?;
                 journal.event(
                     "safety_check_done",
                     json!({
                         "step_id": step.id,
                         "target_id": target_id,
+                        "before_page": before_page,
                         "effect": format_effect(effect),
                         "forbidden_radius": DEFAULT_FORBIDDEN_RADIUS,
-                        "actual_click_point": actual_click_json(actual)
+                        "actual_click_point": legacy_actual_click_json(input_action),
+                        "actual_input": actual_input_json(input_action)
                     }),
                 )?;
 
                 let backend_ref = ensure_maatouch_backend(&mut backend, &config, journal)?;
                 journal.event(
                     "click_started",
-                    json!({"step_id": step.id, "target_id": target_id}),
+                    json!({
+                        "step_id": step.id,
+                        "target_id": target_id,
+                        "before_page": before_page,
+                        "actual_input": actual_input_json(input_action)
+                    }),
                 )?;
-                if let Err(err) = backend_ref.tap(actual.x, actual.y) {
+                if let Err(err) = execute_input_action(backend_ref, input_action) {
                     return close_backend_after_error(&mut backend, err);
                 }
                 state.executed = true;
@@ -468,7 +549,8 @@ fn execute_probe_run(
                         "target_id": target_id,
                         "effect": format_effect(effect),
                         "resource_policy": resource_policy_json(resource_policy.as_ref()),
-                        "actual_click_point": actual_click_json(actual)
+                        "actual_click_point": legacy_actual_click_json(input_action),
+                        "actual_input": actual_input_json(input_action)
                     }),
                 )?;
 
@@ -492,7 +574,18 @@ fn execute_probe_run(
                 };
                 scene = arrived.scene;
                 state.frames += arrived.frames;
-                state.final_page = Some(expect_after.page_id);
+                let after_page = Some(expect_after.page_id);
+                state.last_after_page = after_page.clone();
+                state.final_page = after_page.clone();
+                journal.event(
+                    "page_transition_recorded",
+                    json!({
+                        "step_id": step.id,
+                        "target_id": target_id,
+                        "before_page": before_page,
+                        "after_page": after_page
+                    }),
+                )?;
                 if let Some(finish) = maybe_checkpoint(options, journal, state, "frame_batch")? {
                     if let Some(mut backend) = backend.take() {
                         combine_operation_and_close(Ok(()), backend.close())?;
@@ -596,6 +689,9 @@ fn write_checkpoint_artifact(
         "click_count": state.click_count,
         "executed": state.executed,
         "guard_failed": state.guard_failed,
+        "initial_page": state.initial_page,
+        "last_before_page": state.last_before_page,
+        "last_after_page": state.last_after_page,
         "final_page": state.final_page,
     });
     fs::write(
@@ -629,6 +725,20 @@ fn ensure_maatouch_backend<'a>(
     backend
         .as_mut()
         .ok_or_else(|| DeviceError::fatal("failed to initialize MaaTouch backend"))
+}
+
+fn detect_current_page(
+    detector: &PageDetector,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+) -> DeviceResult<Option<String>> {
+    let evaluations = detector
+        .evaluate_all(evaluator, scene)
+        .map_err(page_error)?;
+    Ok(evaluations
+        .into_iter()
+        .find(|evaluation| evaluation.matched)
+        .map(|evaluation| evaluation.page_id))
 }
 
 struct ArrivalResult {
@@ -675,7 +785,9 @@ fn poll_arrival(
             .navigation
             .and_then(|bridge| bridge.arrival_anchors.get(context.page_id))
         {
-            Some(anchor) => match_arrival_anchor(&scene, anchor, context.journal)?,
+            Some(anchor) => {
+                match_arrival_anchor(&scene, anchor, context.journal, context.evaluator)?
+            }
             None => {
                 context
                     .detector
@@ -727,6 +839,7 @@ fn match_arrival_anchor(
     scene: &Scene,
     anchor: &ArrivalAnchor,
     journal: &OperationJournal,
+    evaluator: &RecognitionEvaluator,
 ) -> DeviceResult<bool> {
     let template_path = journal.pack_root().join(&anchor.template);
     let template = fs::read(&template_path).map_err(|err| {
@@ -736,7 +849,11 @@ fn match_arrival_anchor(
         ))
     })?;
     let matched = scene
-        .match_template(&template, anchor.region.map(pack_rect_to_recognition_rect))
+        .match_template_with_metric(
+            &template,
+            anchor.region.map(pack_rect_to_recognition_rect),
+            evaluator.default_match_metric(),
+        )
         .map_err(|err| DeviceError::fatal(err.to_string()))?;
     Ok(matched.score >= anchor.threshold.unwrap_or(0.9))
 }
@@ -789,6 +906,8 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
 
     let mut overrides = ProbeReferenceOverrides::new();
     let mut arrival_anchors = HashMap::new();
+    let mut drag_targets = HashMap::new();
+    let mut control_points = HashMap::new();
     let page_anchors = navigation
         .pages
         .iter()
@@ -802,10 +921,19 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
         if !route.from_page.is_empty() {
             overrides.insert_page(route.from_page.clone());
         }
-        let Some(click_rect) = route_click_rect(route)? else {
-            continue;
-        };
-        overrides.insert_click_target(navigation_target_id(&route.id), click_rect);
+        let target_id = navigation_target_id(&route.id);
+        match route_input(route)? {
+            NavigationInput::Tap(click_rect) => {
+                overrides.insert_click_target(target_id, click_rect);
+            }
+            NavigationInput::Drag(drag) => {
+                overrides.insert_click_target(target_id.clone(), drag.from);
+                drag_targets.insert(target_id, drag);
+            }
+            NavigationInput::None => {
+                continue;
+            }
+        }
         if !route.to_page.is_empty() {
             overrides.insert_page(route.to_page.clone());
             if let Some(anchor) = page_anchors.get(&route.to_page) {
@@ -817,6 +945,7 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
     }
     for point in &navigation.control_points {
         overrides.insert_click_target(control_target_id(&point.name), point_rect(point.point));
+        control_points.insert(point.name.clone(), point.point);
     }
     let forbidden = navigation
         .destructive_actions
@@ -827,6 +956,8 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
     Ok(NavigationBridge {
         overrides,
         arrival_anchors,
+        drag_targets,
+        control_points,
         forbidden,
     })
 }
@@ -842,7 +973,13 @@ fn page_arrival_anchor(page: &NavigationPage) -> Option<ArrivalAnchor> {
         })
 }
 
-fn route_click_rect(route: &NavigationRoute) -> DeviceResult<Option<PackRect>> {
+enum NavigationInput {
+    Tap(PackRect),
+    Drag(NavigationDrag),
+    None,
+}
+
+fn route_input(route: &NavigationRoute) -> DeviceResult<NavigationInput> {
     match route.click.kind.as_str() {
         "point" => {
             let point = parse_point_string(&route.click.point).map_err(|message| {
@@ -851,23 +988,86 @@ fn route_click_rect(route: &NavigationRoute) -> DeviceResult<Option<PackRect>> {
                     route.id
                 ))
             })?;
-            Ok(Some(point_rect(point)))
+            Ok(NavigationInput::Tap(point_rect(point)))
         }
         "rect" => {
-            let rect = parse_rect_string(&route.click.rect).map_err(|message| {
-                DeviceError::fatal(format!(
-                    "navigation route '{}' invalid rect: {message}",
-                    route.id
-                ))
-            })?;
-            Ok(Some(rect))
+            let rect = route_click_rect(route)?;
+            Ok(NavigationInput::Tap(rect))
+        }
+        "drag" => {
+            let drag = route_drag(route)?;
+            Ok(NavigationInput::Drag(drag))
         }
         "template_center" => {
             let _template_path = &route.click.template_path;
-            Ok(None)
+            Ok(NavigationInput::None)
         }
         other => Err(DeviceError::fatal(format!(
             "navigation route '{}' has unsupported click kind '{other}'",
+            route.id
+        ))),
+    }
+}
+
+fn route_click_rect(route: &NavigationRoute) -> DeviceResult<PackRect> {
+    if !route.click.rect.is_empty() {
+        return parse_rect_string(&route.click.rect).map_err(|message| {
+            DeviceError::fatal(format!(
+                "navigation route '{}' invalid rect: {message}",
+                route.id
+            ))
+        });
+    }
+    route_inline_rect(route, "click")
+}
+
+fn route_drag(route: &NavigationRoute) -> DeviceResult<NavigationDrag> {
+    let from = route.click.from_rect.ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "navigation route '{}' drag click missing from rect",
+            route.id
+        ))
+    })?;
+    let to = route.click.to_rect.ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "navigation route '{}' drag click missing to rect",
+            route.id
+        ))
+    })?;
+    let duration_ms = route.click.duration_ms.ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "navigation route '{}' drag click missing duration_ms",
+            route.id
+        ))
+    })?;
+    if duration_ms == 0 {
+        return Err(DeviceError::fatal(format!(
+            "navigation route '{}' drag duration_ms must be positive",
+            route.id
+        )));
+    }
+    Ok(NavigationDrag {
+        from,
+        to,
+        duration_ms,
+    })
+}
+
+fn route_inline_rect(route: &NavigationRoute, label: &str) -> DeviceResult<PackRect> {
+    match (
+        route.click.x,
+        route.click.y,
+        route.click.width,
+        route.click.height,
+    ) {
+        (Some(x), Some(y), Some(width), Some(height)) => Ok(PackRect {
+            x,
+            y,
+            width,
+            height,
+        }),
+        _ => Err(DeviceError::fatal(format!(
+            "navigation route '{}' {label} rect requires x, y, width, and height",
             route.id
         ))),
     }
@@ -958,6 +1158,14 @@ fn parse_i32_list(value: &str) -> Result<Vec<i32>, String> {
 }
 
 impl NavigationBridge {
+    fn drag_target(&self, target_id: &str) -> Option<NavigationDrag> {
+        self.drag_targets.get(target_id).copied()
+    }
+
+    fn control_point(&self, name: &str) -> Option<[i32; 2]> {
+        self.control_points.get(name).copied()
+    }
+
     fn validate_rect_not_forbidden(&self, rect: PackRect) -> DeviceResult<()> {
         for forbidden in &self.forbidden {
             let intersects_rect = forbidden
@@ -1116,6 +1324,9 @@ impl OperationJournal {
             "premium_currency_allowed": false,
             "auto_refill_allowed": false,
             "guard_failed": state.guard_failed,
+            "initial_page": state.initial_page,
+            "last_before_page": state.last_before_page,
+            "last_after_page": state.last_after_page,
             "final_page": state.final_page,
             "frames": state.frames,
             "observations": state.observations,
@@ -1164,6 +1375,70 @@ fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+fn actual_input_action(
+    click: PackRect,
+    drag: Option<NavigationDrag>,
+    seed: u64,
+) -> DeviceResult<ActualInputAction> {
+    match drag {
+        Some(drag) => {
+            validate_rect_in_click_space(drag.from)?;
+            validate_rect_in_click_space(drag.to)?;
+            let from = actual_click_point(drag.from, seed ^ hash_text("drag.from"));
+            let to = actual_click_point(drag.to, seed ^ hash_text("drag.to"));
+            Ok(ActualInputAction::Drag {
+                from,
+                to,
+                duration_ms: drag.duration_ms,
+            })
+        }
+        None => {
+            validate_rect_in_click_space(click)?;
+            Ok(ActualInputAction::Tap(actual_click_point(click, seed)))
+        }
+    }
+}
+
+fn validate_input_action(
+    action: &ActualInputAction,
+    navigation: Option<&NavigationBridge>,
+) -> DeviceResult<()> {
+    match action {
+        ActualInputAction::Tap(actual) => {
+            validate_point_in_click_space(actual.x, actual.y)?;
+            if let Some(bridge) = navigation {
+                bridge.validate_rect_not_forbidden(actual.rect)?;
+                bridge.validate_point_not_forbidden(actual.x, actual.y)?;
+            }
+        }
+        ActualInputAction::Drag { from, to, .. } => {
+            validate_point_in_click_space(from.x, from.y)?;
+            validate_point_in_click_space(to.x, to.y)?;
+            if let Some(bridge) = navigation {
+                bridge.validate_rect_not_forbidden(from.rect)?;
+                bridge.validate_rect_not_forbidden(to.rect)?;
+                bridge.validate_point_not_forbidden(from.x, from.y)?;
+                bridge.validate_point_not_forbidden(to.x, to.y)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn execute_input_action(
+    backend: &mut MaaTouchBackend,
+    action: ActualInputAction,
+) -> DeviceResult<()> {
+    match action {
+        ActualInputAction::Tap(actual) => backend.tap(actual.x, actual.y),
+        ActualInputAction::Drag {
+            from,
+            to,
+            duration_ms,
+        } => backend.swipe(from.x, from.y, to.x, to.y, duration_ms),
+    }
+}
+
 fn next_u64(state: &mut u64) -> u64 {
     let mut x = *state;
     x ^= x << 13;
@@ -1180,6 +1455,36 @@ fn actual_click_json(actual: ActualClickPoint) -> serde_json::Value {
         "rect": rect_json(actual.rect),
         "point": {"x": actual.x, "y": actual.y}
     })
+}
+
+fn legacy_actual_click_json(action: ActualInputAction) -> serde_json::Value {
+    match action {
+        ActualInputAction::Tap(actual) => actual_click_json(actual),
+        ActualInputAction::Drag { .. } => serde_json::Value::Null,
+    }
+}
+
+fn actual_input_json(action: ActualInputAction) -> serde_json::Value {
+    match action {
+        ActualInputAction::Tap(actual) => {
+            json!({
+                "kind": "tap",
+                "point": actual_click_json(actual)
+            })
+        }
+        ActualInputAction::Drag {
+            from,
+            to,
+            duration_ms,
+        } => {
+            json!({
+                "kind": "drag",
+                "from": actual_click_json(from),
+                "to": actual_click_json(to),
+                "duration_ms": duration_ms
+            })
+        }
+    }
 }
 
 fn record_effect_execution(
@@ -1413,6 +1718,8 @@ mod tests {
         let bridge = NavigationBridge {
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
+            drag_targets: HashMap::new(),
+            control_points: HashMap::new(),
             forbidden: vec![ForbiddenDestructivePoint {
                 id: "collect".to_string(),
                 point: Some([100, 100]),
@@ -1430,6 +1737,8 @@ mod tests {
         let bridge = NavigationBridge {
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
+            drag_targets: HashMap::new(),
+            control_points: HashMap::new(),
             forbidden: vec![ForbiddenDestructivePoint {
                 id: "rect".to_string(),
                 point: None,
@@ -1452,6 +1761,8 @@ mod tests {
         let bridge = NavigationBridge {
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
+            drag_targets: HashMap::new(),
+            control_points: HashMap::new(),
             forbidden: vec![ForbiddenDestructivePoint {
                 id: "radius".to_string(),
                 point: Some([100, 100]),
@@ -1512,6 +1823,17 @@ mod tests {
                     "from_page": "bluearchive/home",
                     "to_page": "bluearchive/task",
                     "click": {"kind": "point", "point": "66,237"}
+                  },
+                  {
+                    "id": "home_drag_to_task",
+                    "from_page": "bluearchive/home",
+                    "to_page": "bluearchive/task",
+                    "click": {
+                      "kind": "drag",
+                      "from": {"x": 300, "y": 600, "width": 30, "height": 20},
+                      "to": {"x": 900, "y": 600, "width": 30, "height": 20},
+                      "duration_ms": 450
+                    }
                   }
                 ],
                 "destructive_actions": [
@@ -1527,6 +1849,23 @@ mod tests {
                 .overrides
                 .click_target("navigation/home_to_task")
                 .is_some()
+        );
+        assert_eq!(
+            bridge
+                .overrides
+                .click_target("navigation/home_drag_to_task")
+                .expect("drag target"),
+            rect(300, 600, 30, 20)
+        );
+        assert_eq!(
+            bridge
+                .drag_target("navigation/home_drag_to_task")
+                .expect("drag"),
+            NavigationDrag {
+                from: rect(300, 600, 30, 20),
+                to: rect(900, 600, 30, 20),
+                duration_ms: 450
+            }
         );
         assert!(bridge.overrides.click_target("control/home").is_some());
         assert!(
