@@ -29,6 +29,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P6b/P6c/P6d probe-loop framework.
 - P6d live validation and limited resource close-out.
 - P6d/P6e-half resource-independent close-out: click page guard, MaaTouch license/path fix, benchmark labeling, and BA regression blocker report.
+- ActingLab-P1 runtime-embedded direction: Python Runtime-side Lab cleanup audit and Rust embedded Lab planning.
 
 ## Recognition score semantics
 
@@ -302,6 +303,71 @@ Treat BA task-center regression as blocked until the BlueArchive resource reposi
 
 Resource-dependent P6e work remains deferred until the resource Operation Bundle provides reviewed reward references, cost references, resource policies, and destructive-zone data.
 
+## ActingLab-P1 Runtime Embedded Lab
+
+ActingLab-P1 is now a Runtime-embedded developer tooling and debug lab, not a standalone Python runtime/debug program.
+
+ActingLab must use the same implementation language and module system as the Runtime mainline. For this repository, that means Rust.
+
+Runtime-embedded ActingLab must reuse existing Runtime modules instead of duplicating them:
+
+- capture backend
+- recognition primitives
+- recognition pack evaluation
+- page detection
+- input backend and click safety
+- scheduler gate/state interfaces
+- poll loops
+- journal and frame-store formats
+
+Runtime-side Python Lab implementations that directly screenshot, recognize, click, poll, or write device-control journals are not allowed in this repository.
+
+The previous Python runtime prototype was already removed from the Rust mainline by commit `557831c` (`Move Python and Go legacy runtime out of Rust mainline`). The current Runtime repository contains no tracked `.py` files.
+
+Resource-repository Python scripts remain allowed when they are offline tooling only. Examples include importers, upstream drift guards, and operation converters. Those tools must not directly control devices or become Runtime-side Lab implementations.
+
+### Lab modes
+
+ActingLab-P1 introduces these Runtime-owned lab modes:
+
+- `exclusive_drain`: request a scoped LabLease, stop new scheduler work for selected or affected instances, wait for the current scoped task to finish or reach a safe checkpoint, then acquire exclusive control and defer upcoming scoped tasks until release.
+- `passive_mirror`: observe Runtime frames, recognition results, scheduler state, and events without pausing the scheduler and without click permission.
+- `scheduler_noop`: let selected scheduler flows tick without executing device actions, recording `would_run` evidence instead.
+
+`exclusive_pause` is not the design target. P1 must not hard-stop a running task by default.
+
+### LabLease contract
+
+Lab clicks require a `LabLease`.
+
+A LabLease must be exclusive with scheduler device execution on the same instance. If the scheduler is currently executing device actions on a scoped instance, ActingLab cannot click until the lease is acquired.
+
+Initial lease state model:
+
+- `idle`
+- `lab_requested`
+- `draining_current_task`
+- `lease_acquired`
+- `lab_active`
+- `releasing`
+- `scheduler_restored`
+- `failed`
+
+If lease acquisition times out, ActingLab must fail visibly and must not click. If scheduler restore fails, the affected instances must remain blocked or require manual review, and the failure must be recorded as fatal evidence.
+
+### Frame stream
+
+P1 frame/video output is a frame-sequence evidence lane, not real-time video encoding.
+
+Minimum outputs:
+
+- `frames/000001.png`
+- `events.jsonl`
+- `summary.json`
+- `recognition.jsonl`
+
+Frame capture must use the Runtime capture backend. Recognition results must use Runtime recognition modules.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -334,15 +400,19 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 - P6b/P6c/P6d device-test click execution is navigation-only and MaaTouch-only.
 - Do not commit MaaTouch binaries; use local-only external tools or `--local <path>`.
 - No upstream source or asset copying without license, attribution, and boundary review.
+- No Runtime-side Python ActingLab/Lab implementation that directly controls devices, captures frames, runs recognition, polls pages, or writes device-control journals.
+- ActingLab Runtime work must be Rust and must reuse Runtime modules instead of duplicating capture, recognition, page detection, click execution, poll, scheduler-state, or journal logic.
 
 ## Next steps
 
-1. Deploy MaaTouch locally outside the repository or pass it with `--local <path>`.
-2. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
-3. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
-4. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-5. Add Arknights operator/menu navigation targets before Arknights probes.
-6. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-7. Define Runtime API contracts for UI integration in a separate milestone.
-8. Define capture metadata and SQLite schema in a separate scoped milestone.
-9. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Start ActingLab-P1a/P1b in Runtime: define Rust `LabMode`, `LabLease`, scoped instance selection, and scheduler gate contracts.
+2. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
+3. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
+4. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+5. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+6. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+7. Add Arknights operator/menu navigation targets before Arknights probes.
+8. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+9. Define Runtime API contracts for UI integration in a separate milestone.
+10. Define capture metadata and SQLite schema in a separate scoped milestone.
+11. Keep `CHECKPOINT.md` updated with every completed Runtime task.

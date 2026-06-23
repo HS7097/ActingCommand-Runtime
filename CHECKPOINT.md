@@ -20,6 +20,66 @@ Future Runtime tasks should update and commit this repository's `PLANS.md` and `
 - P4b recognition pack rule layer:
   - adds data-driven recognition pack parsing, validation, thresholding, and target evaluation
 
+## 2026-06-24 ActingLab-P1 runtime-embedded cleanup audit
+
+### Current status
+
+- Read `C:\Users\Alice\Downloads\ActingLab-P1_runtime_embedded_lab_task_chain_v3.json`.
+- Confirmed the new ActingLab direction: ActingLab-P1 is a Runtime-embedded Rust module, not a standalone Python Lab/runtime debug program.
+- Confirmed Runtime-side Lab code must reuse Runtime capture, recognition, page detection, input/click safety, scheduler gate, poll, journal, and frame-store modules.
+- Confirmed resource-repository Python offline tools, such as importers, drift guards, and converters, are not part of this Runtime-side cleanup.
+- Audited Runtime history for Python runtime/debug code.
+- Found the old Python runtime prototype was added by `3f04663` as `runtime/alice_runtime_orchestrator.py`.
+- Found it was already removed from the Rust mainline by `557831c` (`Move Python and Go legacy runtime out of Rust mainline`).
+- Confirmed the current Runtime working tree has no tracked `.py` files.
+- No revert commit was required because the bad Runtime-side Python runtime is already absent from `main`.
+- Recorded the ActingLab runtime-embedded design in `PLANS.md`.
+- Did not touch the pre-existing uncommitted Rust changes in `apps/device-test/src/probe_run.rs`, `crates/recognition-pack/src/lib.rs`, and `crates/recognition/src/lib.rs`.
+
+### Files changed
+
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -Raw -Encoding UTF8 C:\Users\Alice\Downloads\ActingLab-P1_runtime_embedded_lab_task_chain_v3.json`
+- `rg -n "ActingCommand|PLANS\.md|CHECKPOINT\.md|severe errors|resource repository" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `Get-Content -Raw AGENTS.md`
+- `Get-Content -Raw PLANS.md`
+- `Get-Content -Raw CHECKPOINT.md`
+- `Get-Content -Raw NOTICE.md`
+- `git status --short --branch`
+- `git fetch origin`
+- `git diff -- crates\recognition\src\lib.rs`
+- `git log --name-status --oneline -- "*.py"`
+- `git show --stat --oneline 557831c`
+- `git show --name-only --oneline 557831c`
+- `git show --stat --oneline 3f04663`
+- `git show --stat --oneline c147a65`
+- `rg --files -g "*.py"`
+- `rg -n "ActingLab|actinglab|\blab\b|Python|\.py|screencap|MaaTouch|adb" apps crates contracts resources benchmarks -g "*.rs" -g "*.py" -g "*.md" -g "*.toml" -g "*.json"`
+- `git diff --check`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+
+### Test results
+
+- `rg --files -g "*.py"` returned no files in the Runtime repository.
+- `git diff --check` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` did not pass because of a pre-existing uncommitted `crates/recognition/src/lib.rs` formatting difference. This task did not modify that file and did not format or revert it.
+
+### Current blocker
+
+- None for the Python cleanup audit or ActingLab Runtime-embedded planning update.
+- The repository still has unrelated pre-existing uncommitted modifications in `apps/device-test/src/probe_run.rs`, `crates/recognition-pack/src/lib.rs`, and `crates/recognition/src/lib.rs`; this checkpoint entry intentionally does not modify or revert them.
+
+### Next step
+
+1. Commit and push the Runtime planning/checkpoint update without staging the unrelated recognition change.
+2. Start the next coding milestone as Rust Runtime work: `LabMode`, `LabLease`, scoped scheduler gate, and `exclusive_drain` contracts.
+
 ## 2026-06-22 P6d/P6e-half resource-independent close-out
 
 ### Current status
