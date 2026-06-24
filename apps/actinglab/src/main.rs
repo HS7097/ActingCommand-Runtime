@@ -587,7 +587,6 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
 
 fn run_devices(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
-    require_runtime(global)?;
     let adb_path = effective_adb_path(global, &config);
     let adb = Adb::new(AdbConfig {
         adb_path,
@@ -648,7 +647,6 @@ fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    require_runtime(global)?;
     let flags = FlagArgs::parse(args)?;
     let out = flags.required_path("--out")?;
     let config = read_user_config()?;
@@ -675,10 +673,10 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    let pack_path = flags.required_path("--pack")?;
-    let pack_root = flags.required_path("--pack-root")?;
     let target = flags.required("--target")?;
-    let evaluator = load_evaluator(&pack_path, &pack_root)?;
+    let config = read_user_config()?;
+    let resources = recognition_resources(global, &config, &flags, false)?;
+    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
     if is_click_only_target(&evaluator, &target)? {
         let click = evaluator
             .get_click_target(&target)
@@ -724,10 +722,14 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    let pack_path = flags.required_path("--pack")?;
-    let pack_root = flags.required_path("--pack-root")?;
-    let pages_path = flags.required_path("--pages")?;
-    let (evaluator, detector) = load_evaluator_and_detector(&pack_path, &pack_root, &pages_path)?;
+    let config = read_user_config()?;
+    let resources = recognition_resources(global, &config, &flags, true)?;
+    let pages_path = resources
+        .pages_path
+        .as_ref()
+        .ok_or_else(|| CliError::usage("detect-page requires --pages or --resource-root --game"))?;
+    let (evaluator, detector) =
+        load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
     detector
         .validate(&evaluator)
         .map_err(|err| CliError::usage(err.to_string()))?;
@@ -1130,6 +1132,8 @@ fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<Devi
     let mut target = DeviceTarget::default();
     if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
         target.serial = Some(serial);
+    } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
+        target.serial = Some(instance_id.clone());
     }
     let adb = AdbConfig {
         adb_path: effective_adb_path(global, config),
@@ -1297,6 +1301,76 @@ fn effective_run_root(global: &GlobalOptions, config: &UserConfig) -> Option<Pat
         .run_root
         .clone()
         .or_else(|| config.run_root.as_ref().map(PathBuf::from))
+}
+
+#[derive(Debug, Clone)]
+struct RecognitionResourcePaths {
+    pack_path: PathBuf,
+    pack_root: PathBuf,
+    pages_path: Option<PathBuf>,
+}
+
+fn recognition_resources(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    require_pages: bool,
+) -> CliOutcome<RecognitionResourcePaths> {
+    if let Some(pack_path) = flags.optional_path("--pack") {
+        let pack_root = flags.required_path("--pack-root")?;
+        let pages_path = if require_pages {
+            Some(flags.required_path("--pages")?)
+        } else {
+            flags.optional_path("--pages")
+        };
+        return Ok(RecognitionResourcePaths {
+            pack_path,
+            pack_root,
+            pages_path,
+        });
+    }
+
+    let root = effective_resource_root(global, config).ok_or_else(|| {
+        CliError::usage("command requires --pack/--pack-root or --resource-root with --game")
+    })?;
+    let (game, server) = recognition_selector(global)?;
+    let stem = format!("{game}.{server}");
+    let recognition_dir = root.join("recognition");
+    Ok(RecognitionResourcePaths {
+        pack_path: recognition_dir.join(format!("{stem}.pack.json")),
+        pack_root: root,
+        pages_path: Some(recognition_dir.join(format!("{stem}.pages.json"))),
+    })
+}
+
+fn recognition_selector(global: &GlobalOptions) -> CliOutcome<(String, String)> {
+    let game = global
+        .game
+        .as_deref()
+        .ok_or_else(|| CliError::usage("--game is required when --pack is omitted"))
+        .and_then(canonical_game)?;
+    let server = global
+        .server
+        .clone()
+        .unwrap_or_else(|| default_server_for_game(&game).to_string());
+    Ok((game, server))
+}
+
+fn canonical_game(value: &str) -> CliOutcome<String> {
+    match value.to_ascii_lowercase().as_str() {
+        "ak" | "ark" | "arknights" => Ok("arknights".to_string()),
+        "azur" | "azurlane" | "azur_lane" | "al" => Ok("azurlane".to_string()),
+        "ba" | "bluearchive" | "blue_archive" => Ok("bluearchive".to_string()),
+        other => Err(CliError::usage(format!("unknown game selector: {other}"))),
+    }
+}
+
+fn default_server_for_game(game: &str) -> &'static str {
+    match game {
+        "arknights" => "cn",
+        "azurlane" | "bluearchive" => "jp",
+        _ => "jp",
+    }
 }
 
 #[derive(Debug)]
@@ -1772,7 +1846,6 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         return Scene::from_png(&png).map_err(|err| CliError::device(err.to_string()));
     }
     if flags.bool("--capture") {
-        require_runtime(global)?;
         let config = read_user_config()?;
         let device_config = device_config(global, &config)?;
         let mut backend = ScreencapBackend::new(device_config.adb, device_config.target);
@@ -1888,7 +1961,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
         command_cap("status", ["running_runtime"], "available"),
-        command_cap("devices", ["running_runtime"], "available"),
+        command_cap("devices", ["device"], "available"),
         command_cap("monitor", ["running_runtime"], "reserved"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
@@ -1898,9 +1971,9 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab status", ["running_runtime"], "reserved"),
         command_cap("lab lease", ["running_runtime"], "reserved"),
         command_cap("lab release", ["running_runtime"], "reserved"),
-        command_cap("capture", ["running_runtime", "device"], "available"),
-        command_cap("detect-page", ["running_runtime", "device"], "available"),
-        command_cap("recognize", ["running_runtime", "device"], "available"),
+        command_cap("capture", ["device"], "available"),
+        command_cap("detect-page", ["device"], "available"),
+        command_cap("recognize", ["device"], "available"),
         command_cap("record", ["running_runtime", "device"], "reserved"),
         command_cap(
             "operation dry-run",
@@ -2243,6 +2316,66 @@ mod tests {
                 .and_then(Value::as_str),
             Some("standby")
         );
+    }
+
+    #[test]
+    fn detect_page_resolves_pack_from_resource_root_and_game_alias() {
+        let temp = TempDir::new().unwrap();
+        let recognition = temp.path().join("recognition");
+        fs::create_dir(&recognition).unwrap();
+        let pack = recognition.join("arknights.cn.pack.json");
+        let pages = recognition.join("arknights.cn.pages.json");
+        let scene = temp.path().join("scene.png");
+        fs::write(
+            &pack,
+            r#"{
+                "schema_version":"0.3",
+                "coordinate_space":{"width":1,"height":1},
+                "targets":[{"type":"color","id":"home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            &pages,
+            r#"{"schema_version":"0.3","pages":[{"id":"home","required":["home"]}]}"#,
+        )
+        .unwrap();
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "detect-page",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("page")
+                .and_then(Value::as_str),
+            Some("standby")
+        );
+    }
+
+    #[test]
+    fn bare_instance_argument_is_used_as_adb_serial_without_config_entry() {
+        let global = GlobalOptions {
+            instance: Some("127.0.0.1:16416".to_string()),
+            ..Default::default()
+        };
+        let config = UserConfig::default();
+        let resolved = device_config(&global, &config).expect("device config");
+        assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
     }
 
     fn write_test_zip(path: &Path, files: &[(&str, &[u8])]) {

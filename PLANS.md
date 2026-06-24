@@ -33,6 +33,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab-P1a/P1b Rust embedded lab skeleton: `LabMode`, `LabLeaseRequest`, `SchedulerGate`, scoped instance decisions, and no-click/passive-mode boundaries.
 - ActingLab-P1g global CLI contract shell: `actinglab` app, unified JSON envelope, fixed exit-code mapping, config/doctor/capabilities, package zip safety validation, scheduler/lab safety stubs, and Windows user PATH launchers.
 
+## Current ActingLab read-only recognition round
+
+The current Runtime task makes `actinglab` read-only device/resource checks usable without requiring a resident Runtime service for the narrow commands that are already read-only:
+
+- `devices`
+- `capture`
+- `detect-page`
+- `recognize`
+
+Scope boundaries:
+
+- no click execution;
+- no package-run execution;
+- no scheduler implementation;
+- no monitor stream;
+- no UI;
+- no SQLite;
+- no OCR;
+- no game logic.
+
+Resource-root recognition selection is supported for generated resource repositories:
+
+- `--resource-root <repo> --game arknights` resolves `recognition/arknights.cn.pack.json` and `recognition/arknights.cn.pages.json`;
+- `--resource-root <repo> --game azurlane` resolves `recognition/azurlane.jp.pack.json` and `recognition/azurlane.jp.pages.json`;
+- `--resource-root <repo> --game bluearchive` resolves `recognition/bluearchive.jp.pack.json` and `recognition/bluearchive.jp.pages.json`;
+- explicit `--pack`, `--pack-root`, and `--pages` remain supported for compatibility.
+
+Live retest after game restart showed:
+
+- AK `127.0.0.1:16416` matched `arknights/home`, with `page/home` recognize score `0.999885`;
+- AzurLane `127.0.0.1:16384` captured the visible main/home screen, but `azurlane/home` failed because stale `page/home` color gating expected `107,164,233` and observed `223,225,224`;
+- AzurLane `azurlane/campaign` matched on that same home screen, so it should be treated as an entry-anchor match, not true page-state evidence.
+
+Next steps:
+
+1. Refresh AzurLane `page/home` live anchor/color gate in `ActingCommand-Resources-AzurLane`.
+2. Tighten AzurLane entry-anchor page definitions so visible home-screen buttons do not count as true target pages.
+3. Keep Runtime `actinglab` read-only commands thin; deeper package-run, monitor, scheduler, and click paths still require separate Runtime service/LabLease milestones.
+
 ## Recognition score semantics
 
 P4a.1 clarifies template-match score semantics without starting P4b.

@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-06-24 ActingLab read-only resource recognition bridge
+
+### Current status
+
+- Added direct read-only device/resource execution for narrow `actinglab` commands that do not execute clicks:
+  - `devices`
+  - `capture`
+  - `detect-page`
+  - `recognize`
+- Removed the resident Runtime requirement from those commands while leaving stateful/reserved flows behind Runtime boundaries.
+- Added generated-resource resolution for `detect-page` and `recognize`:
+  - explicit `--pack`, `--pack-root`, and `--pages` still work;
+  - `--resource-root <repo> --game <alias>` resolves the expected generated recognition pack/pages path;
+  - default servers are `cn` for Arknights and `jp` for AzurLane/BlueArchive.
+- Added game aliases:
+  - Arknights: `ak`, `ark`, `arknights`
+  - AzurLane: `azur`, `azurlane`, `azur_lane`, `al`
+  - BlueArchive: `ba`, `bluearchive`, `blue_archive`
+- Added bare `--instance 127.0.0.1:<port>` handling as an ADB serial when no configured instance matches.
+- Updated command capabilities so read-only device commands advertise `device` instead of `running_runtime`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-Arknights`: `HEAD` and `origin/main` at `12eca5b881d5c1fe50a21da7c1c5309e9d14c530`.
+- `ActingCommand-Resources-AzurLane`: `HEAD` and `origin/main` at `3ec82d4b1bd28ffcba29e6aedbefa6f7b59a3d38`.
+- Both resource repositories were clean before Runtime commit validation.
+
+### Live read-only retest after game restart
+
+- Existing `target\debug\actingcommand-device-test.exe` was used for live resource retest before this commit.
+- No taps, swipes, probe-run clicks, package runs, or source edits were performed during that retest.
+- AK on `127.0.0.1:16416`:
+  - capture succeeded at `1280x720`;
+  - `detect-page --page arknights/home --capture` matched;
+  - `recognize --target page/home --capture` passed with score `0.999885` and threshold `0.800000`.
+- AzurLane JP on `127.0.0.1:16384`:
+  - capture succeeded at `1280x720`;
+  - visible screen was main/home;
+  - `detect-page --page azurlane/home --capture` did not match;
+  - `recognize --target page/home --capture` had template score `0.969314` over threshold `0.900000`, but failed the color gate;
+  - observed `page/home` color mean was `223,225,224` versus expected `107,164,233`, with color distance `131.369705` over max `20.000000`;
+  - `detect-page --page azurlane/campaign --capture` matched on the same home screen, so it should be treated as an entry-anchor match, not true campaign page-state evidence.
+
+### Current blocker
+
+- AzurLane `page/home` resource data is stale for the current JP main/home UI; refresh that resource anchor before setting AzurLane `verified_live=true`.
+- AzurLane entry-anchor page definitions such as `azurlane/campaign` need tightening so visible home-screen buttons do not count as true target pages.
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git fetch origin --prune --tags` for `ActingCommand-Resources-Arknights`
+- `git fetch origin --prune --tags` for `ActingCommand-Resources-AzurLane`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed: 12 tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `git diff --check` passed.
+- Runtime `HEAD` matched `origin/main` before commit validation: `b72bd398c6ce98760ca5db6d25b08d11ea8009f4`.
+
+### Next step
+
+1. Push the Runtime commit after validation.
+2. Refresh AzurLane `page/home` in `ActingCommand-Resources-AzurLane` and rerun live `azurlane/home`.
+
 ## 2026-06-24 ActingLab-P1g global CLI contract shell
 
 ### Current status
