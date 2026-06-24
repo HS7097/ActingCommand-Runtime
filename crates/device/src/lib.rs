@@ -5,7 +5,7 @@
 //! This crate is intentionally narrow: MaaTouch is the only touch path here.
 //! MaaTouch failures must surface as fatal device-layer errors during this phase.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod adb;
 pub mod capture;

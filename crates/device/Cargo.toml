@@ -9,3 +9,5 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+libloading = "0.8"

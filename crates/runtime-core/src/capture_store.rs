@@ -207,6 +207,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_device::{CaptureBackendName, PixelFormat};
     use std::fs;
 
     #[test]
@@ -305,11 +306,17 @@ mod tests {
     }
 
     fn test_frame(png: Vec<u8>) -> Frame {
-        Frame {
-            width: 1280,
-            height: 720,
-            png,
-        }
+        let pixels = vec![0; 1280 * 720 * 3];
+        let mut frame = Frame::from_pixels(
+            1280,
+            720,
+            pixels,
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("test frame");
+        frame.png = png;
+        frame
     }
 
     fn assert_ref_is_safe(capture: &CaptureRef) {

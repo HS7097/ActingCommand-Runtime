@@ -228,6 +228,7 @@ acquisitions/
 *.sqlite-wal
 upstream-sources/
 external-tools/*
+!external-tools/NOTICE.md
 !external-tools/maatouch/
 !external-tools/maatouch/maatouch
 !external-tools/maatouch/LICENSE

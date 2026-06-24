@@ -66,6 +66,26 @@ impl Adb {
         )
     }
 
+    pub fn forward(&self, serial: &str, local: &str, remote: &str) -> DeviceResult<CommandOutput> {
+        self.run(&["-s", serial, "forward", local, remote])
+    }
+
+    pub fn shell_spawn(&self, serial: &str, args: &[&str]) -> DeviceResult<Child> {
+        Command::new(&self.config.adb_path)
+            .args(["-s", serial, "shell"])
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| {
+                DeviceError::fatal(format!(
+                    "failed to spawn adb shell {}: {err}",
+                    args.join(" ")
+                ))
+            })
+    }
+
     pub fn push(&self, serial: &str, local: &str, remote: &str) -> DeviceResult<CommandOutput> {
         self.run(&["-s", serial, "push", local, remote])
     }

@@ -1,5 +1,136 @@
 # CHECKPOINT.md
 
+## 2026-06-25 P2.2 capture backends and Lab-1y trusted execution engine
+
+### Current status
+
+- Upgraded `crates/device` capture from ADB-only `Frame { width, height, png }` to a unified synchronous `CaptureBackend` contract.
+- Added common `Frame` metadata:
+  - actual width and height;
+  - raw RGB/RGBA pixels;
+  - PNG artifact bytes;
+  - captured timestamp;
+  - pixel format;
+  - backend name.
+- Kept `adb_screencap` on `adb exec-out screencap -p`; no `adb shell screencap` path was added.
+- Added `droidcast_raw` backend behind an external APK boundary:
+  - discovers APK only through `ACTINGCOMMAND_DROIDCAST_RAW_APK`;
+  - pushes the reviewed local APK to `/data/local/tmp/DroidCast_raw.apk`;
+  - starts `app_process` and reads `/screenshot` RGB565 frames when the external tool is available.
+- Added `nemu_ipc` backend behind a Windows MuMu external DLL boundary:
+  - discovers `external_renderer_ipc.dll` through `ACTINGCOMMAND_NEMU_FOLDER`, `ACTINGCOMMAND_NEMU_IPC_DLL`, or common MuMu install paths;
+  - maps MuMu instance id from ADB serial ports such as `127.0.0.1:16384`;
+  - converts bottom-up BGRA output into RGBA frames.
+- Added `--capture-backend <auto|adb|droidcast_raw|nemu_ipc>` to `device-test` and `actinglab`.
+- Added backend diagnostics to `actinglab capture`, `actinglab lab run`, and `device-test benchmark`.
+- Updated `device-test benchmark` to report availability and latency rows for `adb_screencap`, `droidcast_raw`, and `nemu_ipc`.
+- Upgraded `actinglab lab run` control handling to `Lab-1y.control.v1`.
+- Added Lab-1y execution modes:
+  - `navigable_route`;
+  - `recognize_only`;
+  - `in_page_guard`.
+- Added local per-instance LabLease lock files under `%LOCALAPPDATA%\ActingCommand\actinglab\locks`.
+- Added Lab output stats:
+  - actual capture interval min/median/max;
+  - capture duration min/median/max;
+  - action duration min/median/max;
+  - loop lag min/median/max;
+  - capture backend requested/used and backend attempts.
+- Added `external-tools/NOTICE.md` documenting that DroidCast APKs and MuMu/Nemu DLLs are local-only and not committed.
+- No UI, OCR, SQLite, scheduler implementation, game logic, ADB input fallback, or package script execution was added.
+
+### Files changed
+
+- `.gitignore`
+- `Cargo.lock`
+- `crates/device/Cargo.toml`
+- `crates/device/src/adb.rs`
+- `crates/device/src/capture.rs`
+- `crates/device/src/lib.rs`
+- `crates/device/src/maatouch.rs`
+- `crates/runtime-core/src/capture_store.rs`
+- `apps/device-test/src/main.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `external-tools/NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-AzurLane`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; `HEAD` and `origin/main` at `b3451dd7c85ffc349f043530cf2f04f856180c12`.
+- `ActingCommand-Resources-Arknights`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; `HEAD` and `origin/main` at `eacf3e446ab62c9b3013f653b7986a85a8bf0213`.
+- `ActingCommand-Resources-BlueArchive`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; `HEAD` and `origin/main` at `1b52342c6e0db7b65f8a09d654ec97594921cf7b`.
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git fetch origin --prune --tags` and `git pull --ff-only` in all three resource repositories.
+- `cargo check -p actingcommand-device`
+- `cargo check -p actingcommand-device-test`
+- `cargo check -p actingcommand-actinglab`
+- `cargo check --workspace`
+- `cargo test -p actingcommand-device -p actingcommand-runtime-core -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build -p actingcommand-actinglab -p actingcommand-device-test`
+- `adb devices -l`
+- `target\debug\actinglab.exe --json --instance 127.0.0.1:16384 --capture-backend auto capture --out target\p2_2_smoke\capture-16384.png`
+- `target\debug\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend auto capture --out target\p2_2_smoke\capture-16416.png`
+- `cargo run -q -p actingcommand-device-test -- --port 16384 capture --out target\p2_2_smoke\device-test-capture-16384.png`
+- `cargo run -q -p actingcommand-device-test -- --port 16384 benchmark --rounds 2`
+- `target\debug\actinglab.exe --json schema control`
+- `target\debug\actinglab.exe --json capabilities`
+- `target\debug\actinglab.exe --json --run-root target\p2_2_smoke\lab-runs lab run --zip target\p2_2_smoke\missing.zip --out target\p2_2_smoke\missing-output.zip`
+- `.NET ZipFile OpenRead` over `target\p2_2_smoke\missing-output.zip`
+- `git diff --check`
+- Prohibited/binary scans for `adb shell screencap`, ADB input fallback strings, APK/DLL files tracked by git, OCR, SQLite, and OpenCV terms in the changed Runtime paths.
+
+### Test results
+
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- `actinglab capture` live smoke on `127.0.0.1:16384` succeeded:
+  - backend used: `adb_screencap`;
+  - frame size: `1280x720`;
+  - auto attempts recorded missing Nemu IPC DLL and missing DroidCast_raw APK before ADB fallback.
+- `actinglab capture` live smoke on `127.0.0.1:16416` succeeded:
+  - backend used: `adb_screencap`;
+  - frame size: `1280x720`;
+  - auto attempts recorded missing Nemu IPC DLL and missing DroidCast_raw APK before ADB fallback.
+- `device-test capture` on `127.0.0.1:16384` succeeded:
+  - backend used: `adb_screencap`;
+  - frame size: `1280x720`.
+- `device-test benchmark --rounds 2` on `127.0.0.1:16384` succeeded:
+  - `adb_screencap` available at `1280x720`;
+  - `droidcast_raw` unavailable because `ACTINGCOMMAND_DROIDCAST_RAW_APK` is not set;
+  - `nemu_ipc` unavailable because `external_renderer_ipc.dll` was not found;
+  - MaaTouch control measurement remains `command_submission_only`.
+- `actinglab schema control` reports `Lab-1y.control.v1` with `navigable_route`, `recognize_only`, `in_page_guard`, and capture backend choices.
+- `actinglab capabilities` reports capture backend availability requirements.
+- Failure-output smoke for a missing Lab zip returned non-zero and wrote an output zip containing only `logs/` and `screenshots/` roots.
+- Git-tracked binary scan found no `.apk`, `.dll`, `.exe`, `.msi`, or `.jar` files.
+
+### Current blocker
+
+- DroidCast_raw live validation is blocked until a reviewed DroidCast_raw APK is supplied through `ACTINGCOMMAND_DROIDCAST_RAW_APK`.
+- Nemu IPC live validation is blocked until a reviewed MuMu `external_renderer_ipc.dll` path is supplied or a supported MuMu install is discoverable.
+- Full Lab-1y live navigation validation is blocked until a trusted Lab-1y input package is provided for a known current device state.
+
+### Next step
+
+1. Commit and push the Runtime P2.2/Lab-1y implementation.
+2. Supply reviewed DroidCast_raw and/or Nemu IPC external tool paths, then rerun backend benchmark.
+3. Build or provide a trusted Lab-1y live package and run `actinglab lab run` against a known emulator state.
+4. Keep UI, OCR, SQLite, scheduler, and game logic out of Runtime until separate scoped milestones.
+
 ## 2026-06-24 Lab-1X trusted one-shot package execution engine
 
 ### Current status

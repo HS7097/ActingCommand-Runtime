@@ -33,6 +33,38 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab-P1a/P1b Rust embedded lab skeleton: `LabMode`, `LabLeaseRequest`, `SchedulerGate`, scoped instance decisions, and no-click/passive-mode boundaries.
 - ActingLab-P1g global CLI contract shell: `actinglab` app, unified JSON envelope, fixed exit-code mapping, config/doctor/capabilities, package zip safety validation, scheduler/lab safety stubs, and Windows user PATH launchers.
 - Lab-1X trusted one-shot package execution engine: `actinglab lab run --zip <input.zip> --out <output.zip>` with Lab-1X control/resources ingest, resource integrity checks, Screencap/MaaTouch execution path, page confirmation, output report zips, and device-unreachable failure reporting.
+- P2.2/Lab-1y capture-backend and trusted execution upgrade: unified capture frames, selectable `adb_screencap`/`droidcast_raw`/`nemu_ipc` backends, backend diagnostics, Lab-1y control modes, local LabLease lock, and output timing stats.
+
+## Current P2.2 / Lab-1y Capture Backend And Trusted Execution Round
+
+The current Runtime task upgrades capture and one-shot Lab execution without adding UI, OCR, SQLite, scheduler behavior, or game logic.
+
+P2.2 capture direction:
+
+- `crates/device` owns a single synchronous `CaptureBackend` trait.
+- `Frame` now carries actual dimensions, raw RGB/RGBA pixels, PNG artifact bytes, capture time, pixel format, and backend name.
+- `adb_screencap` remains the always-available baseline using `adb exec-out screencap -p`.
+- `droidcast_raw` is implemented behind an external APK boundary and requires `ACTINGCOMMAND_DROIDCAST_RAW_APK`.
+- `nemu_ipc` is implemented behind a Windows MuMu external DLL boundary and requires local MuMu discovery or `ACTINGCOMMAND_NEMU_FOLDER` / `ACTINGCOMMAND_NEMU_IPC_DLL`.
+- No DroidCast APK or MuMu/Nemu DLL is committed to the repository.
+- Explicit backend selection fails loudly if unavailable.
+- `auto` may downgrade to the next backend, but the failed attempts and chosen backend must be recorded in diagnostics.
+
+Lab-1y execution direction:
+
+- `control.json` uses `Lab-1y.control.v1`.
+- Supported `execution_mode` values are `navigable_route`, `recognize_only`, and `in_page_guard`.
+- `trusted_execution` and `producer` are provenance fields, not semantic blockers.
+- `capture_backend` can be specified in control data, but CLI `--capture-backend` has higher priority.
+- Lab run acquires a local per-instance lock before device execution.
+- Output remains limited to `logs/` and `screenshots/`.
+- Summary and diagnostics include capture backend, backend attempts, capture interval stats, capture duration stats, action duration stats, and loop lag stats.
+
+Current external-tool blockers:
+
+- DroidCast_raw live validation needs a reviewed local APK path.
+- Nemu IPC live validation needs a reviewed local MuMu `external_renderer_ipc.dll` path or discoverable MuMu install.
+- No trusted Lab-1y live package has been provided yet for a full navigation run.
 
 ## Current ActingLab read-only recognition round
 
@@ -73,7 +105,7 @@ Next steps:
 2. Tighten AzurLane entry-anchor page definitions so visible home-screen buttons do not count as true target pages.
 3. Keep Runtime `actinglab` read-only commands thin; deeper package-run, monitor, scheduler, and click paths still require separate Runtime service/LabLease milestones.
 
-## Current ActingLab Lab-1X trusted one-shot package execution round
+## Previous ActingLab Lab-1X Trusted One-Shot Package Execution Round
 
 The current Runtime task promotes `actinglab lab run` into the standard trusted one-shot execution entry:
 

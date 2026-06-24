@@ -5,8 +5,9 @@ use super::{
     effective_run_root, read_user_config,
 };
 use actingcommand_device::{
-    CaptureBackend, DeviceTarget, InputBackend, MaaTouchBackend, MaaTouchConfig, ScreencapBackend,
-    combine_operation_and_close,
+    CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
+    CaptureBackendName, DeviceTarget, InputBackend, MaaTouchBackend, MaaTouchConfig,
+    combine_operation_and_close, create_capture_backend,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::Scene;
@@ -15,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -23,8 +24,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-const CONTROL_SCHEMA: &str = "Lab-1X.control.v1";
-const SUMMARY_SCHEMA: &str = "Lab-1X.summary.v1";
+const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
+const SUMMARY_SCHEMA: &str = "Lab-1y.summary.v1";
 const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 300;
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_STEP_TIMEOUT_MS: u64 = 10_000;
@@ -44,6 +45,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .or_else(|| effective_run_root(global, &config))
         .unwrap_or_else(|| PathBuf::from("target").join("actinglab-runs"));
     let capture_interval_override = parse_optional_u64(&flags, "--capture-interval-ms")?;
+    let capture_backend_override = parse_optional_capture_backend(&flags, "--capture-backend")?;
 
     let mut ctx = LabRunContext::create(&run_root, &zip_path)?;
     ctx.set_phase("run_started");
@@ -58,6 +60,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         &config,
         &zip_path,
         capture_interval_override,
+        capture_backend_override,
     );
     match result {
         Ok(run_state) => {
@@ -87,7 +90,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
                     Err(err)
                 }
                 Err(write_err) => Err(CliError::package_invalid(format!(
-                    "failed to write Lab-1X output package after error: {}; original error: {}",
+                    "failed to write Lab-1y output package after error: {}; original error: {}",
                     write_err.message, err.message
                 ))),
             }
@@ -101,6 +104,7 @@ fn execute_lab_run(
     config: &super::UserConfig,
     zip_path: &Path,
     capture_interval_override: Option<u64>,
+    capture_backend_override: Option<CaptureBackendChoice>,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
     let input_sha256 = file_sha256(zip_path)?;
@@ -117,13 +121,21 @@ fn execute_lab_run(
     let control = read_json_file::<LabControl>(&control_path)?;
     control.validate()?;
     ctx.control = Some(control.clone());
+    if control.producer.is_none() {
+        ctx.event(
+            "producer_missing",
+            json!({"severity": "warning", "message": "control producer is missing; provenance is incomplete but not blocking"}),
+        )?;
+    }
     ctx.event(
         "control_loaded",
         json!({
             "package_id": control.package_id,
             "game": control.game,
             "server": control.server,
-            "entry_task_id": control.entry_task_id
+            "entry_task_id": control.entry_task_id,
+            "producer_present": control.producer.is_some(),
+            "trusted_execution_present": control.trusted_execution.is_some()
         }),
     )?;
 
@@ -165,13 +177,36 @@ fn execute_lab_run(
     ctx.adb_path = Some(effective_adb_path(&effective_global, config));
 
     ctx.set_phase("lab_lease_acquired");
+    let _lease_guard = LabLeaseGuard::acquire(&device.target.resolved_serial())?;
     ctx.event(
         "lab_lease_acquired",
-        json!({"mode": "trusted_one_shot", "instance": ctx.instance}),
+        json!({"mode": "trusted_execution", "instance": ctx.instance}),
     )?;
     ctx.lease_acquired = true;
 
-    let mut capture = ScreencapBackend::new(device.adb.clone(), device.target.clone());
+    let requested_capture_backend = capture_backend_override
+        .or(control.capture_backend_choice()?)
+        .unwrap_or_default();
+    let selected_capture = create_capture_backend(
+        CaptureBackendConfig::new(device.adb.clone(), device.target.clone())
+            .with_requested(requested_capture_backend),
+    )
+    .map_err(|err| CliError::device(err.to_string()))?;
+    ctx.capture_backend_requested = Some(requested_capture_backend);
+    ctx.capture_backend_used = Some(selected_capture.diagnostics.used);
+    ctx.capture_backend_attempts = selected_capture.diagnostics.attempts.clone();
+    for attempt in ctx.capture_backend_attempts.clone() {
+        ctx.event(
+            "capture_backend_attempt",
+            json!({
+                "backend": attempt.backend.as_str(),
+                "ok": attempt.ok,
+                "severity": if attempt.ok { "info" } else { "warning" },
+                "message": attempt.message
+            }),
+        )?;
+    }
+    let mut capture = selected_capture.backend;
     let mut input = None::<MaaTouchBackend>;
     let started = Instant::now();
     let mut state = RunState {
@@ -182,7 +217,7 @@ fn execute_lab_run(
     };
 
     let first = ctx.capture_scene(
-        &mut capture,
+        capture.as_mut(),
         &state.resources.evaluator,
         &state.resources.detector,
         "initial",
@@ -190,10 +225,20 @@ fn execute_lab_run(
     validate_frame_resolution(&state.control, first.width, first.height)?;
     state.current_page = first.matched_page.clone();
 
+    if state.control.execution_mode == "recognize_only" {
+        ctx.event(
+            "recognize_only_finished",
+            json!({"matched_page": state.current_page}),
+        )?;
+        ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
+        ctx.lease_released = true;
+        return Ok(state);
+    }
+
     for step_index in 0..max_steps {
         if started.elapsed() > Duration::from_millis(timeout_ms) {
             return Err(CliError::device(format!(
-                "Lab-1X run timeout after {timeout_ms}ms"
+                "Lab-1y run timeout after {timeout_ms}ms"
             )));
         }
         let Some(current_page) = state.current_page.clone() else {
@@ -238,6 +283,7 @@ fn execute_lab_run(
         let backend = ensure_maatouch(&mut input, &device.target, &device.adb)?;
         match &action {
             LabInputAction::Tap(point) => {
+                let action_started = Instant::now();
                 ctx.event(
                     "click_started",
                     json!({"step_id": operation.id, "actual_click_point": point.to_json()}),
@@ -252,12 +298,15 @@ fn execute_lab_run(
                     "click_finished",
                     json!({"step_id": operation.id, "actual_click_point": point.to_json()}),
                 )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
             }
             LabInputAction::Drag {
                 from,
                 to,
                 duration_ms,
             } => {
+                let action_started = Instant::now();
                 ctx.event(
                     "drag_started",
                     json!({"step_id": operation.id, "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
@@ -272,6 +321,8 @@ fn execute_lab_run(
                     "drag_finished",
                     json!({"step_id": operation.id, "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
                 )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
             }
         }
 
@@ -281,7 +332,7 @@ fn execute_lab_run(
         )?;
         let after = poll_after_operation(
             ctx,
-            &mut capture,
+            capture.as_mut(),
             &state.resources,
             &operation,
             step_timeout_ms,
@@ -346,7 +397,7 @@ fn execute_lab_run(
         combine_operation_and_close(Ok(()), backend.close())
             .map_err(|err| CliError::device(err.to_string()))?;
     }
-    ctx.event("lab_lease_released", json!({"mode": "trusted_one_shot"}))?;
+    ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
     ctx.lease_released = true;
     Ok(state)
 }
@@ -387,16 +438,14 @@ fn ensure_maatouch<'a>(
 
 fn poll_after_operation(
     ctx: &mut LabRunContext,
-    capture: &mut ScreencapBackend,
+    capture: &mut dyn CaptureBackend,
     resources: &LabResources,
     operation: &Operation,
     step_timeout_ms: u64,
 ) -> CliOutcome<CapturedScene> {
     let started = Instant::now();
     loop {
-        std::thread::sleep(Duration::from_millis(
-            ctx.requested_capture_interval_ms.max(1),
-        ));
+        ctx.wait_for_next_capture_start();
         let mut scene = ctx.capture_scene(
             capture,
             &resources.evaluator,
@@ -540,6 +589,12 @@ struct LabControl {
     allow_placeholder_coords: Option<bool>,
     #[serde(default)]
     output: Option<Value>,
+    #[serde(default)]
+    capture_backend: Option<String>,
+    #[serde(default)]
+    producer: Option<Value>,
+    #[serde(default)]
+    trusted_execution: Option<Value>,
 }
 
 impl LabControl {
@@ -550,9 +605,12 @@ impl LabControl {
                 self.schema_version
             )));
         }
-        if self.execution_mode != "trusted_package" {
+        if !matches!(
+            self.execution_mode.as_str(),
+            "navigable_route" | "recognize_only" | "in_page_guard"
+        ) {
             return Err(CliError::package_invalid(format!(
-                "unsupported execution_mode '{}'",
+                "unsupported execution_mode '{}', expected navigable_route, recognize_only, or in_page_guard",
                 self.execution_mode
             )));
         }
@@ -578,7 +636,19 @@ impl LabControl {
                 "capture_interval_ms must be positive when provided",
             ));
         }
+        if let Some(capture_backend) = &self.capture_backend {
+            CaptureBackendChoice::parse(capture_backend)
+                .map_err(|err| CliError::package_invalid(err.to_string()))?;
+        }
         Ok(())
+    }
+
+    fn capture_backend_choice(&self) -> CliOutcome<Option<CaptureBackendChoice>> {
+        self.capture_backend
+            .as_deref()
+            .map(CaptureBackendChoice::parse)
+            .transpose()
+            .map_err(|err| CliError::package_invalid(err.to_string()))
     }
 }
 
@@ -1084,12 +1154,18 @@ struct LabRunContext {
     events: Vec<Value>,
     steps: Vec<Value>,
     intervals_ms: Vec<u64>,
+    capture_durations_ms: Vec<u64>,
+    action_durations_ms: Vec<u64>,
+    loop_lag_ms: Vec<u64>,
     last_capture_at: Option<Instant>,
     frame_index: usize,
     phase: String,
     control: Option<LabControl>,
     instance: Option<String>,
     adb_path: Option<String>,
+    capture_backend_requested: Option<CaptureBackendChoice>,
+    capture_backend_used: Option<CaptureBackendName>,
+    capture_backend_attempts: Vec<CaptureBackendAttempt>,
     lease_acquired: bool,
     lease_released: bool,
 }
@@ -1097,7 +1173,7 @@ struct LabRunContext {
 impl LabRunContext {
     fn create(run_root: &Path, input_zip: &Path) -> CliOutcome<Self> {
         let now = SystemTime::now();
-        let run_id = format!("lab1x-{}", timestamp_file_stem(now));
+        let run_id = format!("lab1y-{}", timestamp_file_stem(now));
         let run_dir = run_root.join(&run_id);
         let input_dir = run_dir.join("input");
         let output_dir = run_dir.join("output");
@@ -1134,12 +1210,18 @@ impl LabRunContext {
             events: Vec::new(),
             steps: Vec::new(),
             intervals_ms: Vec::new(),
+            capture_durations_ms: Vec::new(),
+            action_durations_ms: Vec::new(),
+            loop_lag_ms: Vec::new(),
             last_capture_at: None,
             frame_index: 0,
             phase: "created".to_string(),
             control: None,
             instance: None,
             adb_path: None,
+            capture_backend_requested: None,
+            capture_backend_used: None,
+            capture_backend_attempts: Vec::new(),
             lease_acquired: false,
             lease_released: false,
         })
@@ -1167,9 +1249,24 @@ impl LabRunContext {
         Ok(())
     }
 
+    fn wait_for_next_capture_start(&mut self) {
+        let Some(last) = self.last_capture_at else {
+            return;
+        };
+        let interval = Duration::from_millis(self.requested_capture_interval_ms.max(1));
+        let target = last + interval;
+        let now = Instant::now();
+        if now < target {
+            std::thread::sleep(target.duration_since(now));
+        } else {
+            self.loop_lag_ms
+                .push(now.duration_since(target).as_millis() as u64);
+        }
+    }
+
     fn capture_scene(
         &mut self,
-        capture: &mut ScreencapBackend,
+        capture: &mut dyn CaptureBackend,
         evaluator: &RecognitionEvaluator,
         detector: &PageDetector,
         label: &str,
@@ -1182,6 +1279,8 @@ impl LabRunContext {
         let frame = capture
             .capture()
             .map_err(|err| CliError::device(err.to_string()))?;
+        self.capture_durations_ms
+            .push(now.elapsed().as_millis() as u64);
         self.frame_index += 1;
         let file_name = self.next_screenshot_name(SystemTime::now());
         let relative = format!("screenshots/{file_name}");
@@ -1202,6 +1301,9 @@ impl LabRunContext {
                 "file": relative,
                 "width": frame.width,
                 "height": frame.height,
+                "backend": frame.backend_name.as_str(),
+                "pixel_format": frame.pixel_format.as_str(),
+                "captured_at": timestamp_iso(frame.captured_at),
                 "label": label
             }),
         )?;
@@ -1311,6 +1413,9 @@ impl LabRunContext {
     ) -> Value {
         let finished = SystemTime::now();
         let stats = interval_stats(&self.intervals_ms);
+        let capture_stats = interval_stats(&self.capture_durations_ms);
+        let action_stats = interval_stats(&self.action_durations_ms);
+        let lag_stats = interval_stats(&self.loop_lag_ms);
         let control = self
             .control
             .as_ref()
@@ -1336,6 +1441,17 @@ impl LabRunContext {
             "actual_capture_interval_min_ms": stats.map(|stats| stats.min),
             "actual_capture_interval_median_ms": stats.map(|stats| stats.median),
             "actual_capture_interval_max_ms": stats.map(|stats| stats.max),
+            "capture_duration_min_ms": capture_stats.map(|stats| stats.min),
+            "capture_duration_median_ms": capture_stats.map(|stats| stats.median),
+            "capture_duration_max_ms": capture_stats.map(|stats| stats.max),
+            "action_duration_min_ms": action_stats.map(|stats| stats.min),
+            "action_duration_median_ms": action_stats.map(|stats| stats.median),
+            "action_duration_max_ms": action_stats.map(|stats| stats.max),
+            "loop_lag_min_ms": lag_stats.map(|stats| stats.min),
+            "loop_lag_median_ms": lag_stats.map(|stats| stats.median),
+            "loop_lag_max_ms": lag_stats.map(|stats| stats.max),
+            "capture_backend_requested": self.capture_backend_requested.map(|backend| backend.as_str()),
+            "capture_backend_used": self.capture_backend_used.map(|backend| backend.as_str()),
             "screenshots": self.screenshots.iter().map(|record| json!({
                 "frame_index": record.frame_index,
                 "file": record.file,
@@ -1349,12 +1465,19 @@ impl LabRunContext {
     fn diagnostics_json(&self, failure_reason: Option<&str>, state: Option<&RunState>) -> Value {
         json!({
             "actinglab_cli_version": env!("CARGO_PKG_VERSION"),
-            "runtime_version": "runtime-embedded-lab1x",
+            "runtime_version": "runtime-embedded-lab1y",
             "runtime_commit": git_commit(),
             "os": std::env::consts::OS,
             "timezone": "UTC",
             "adb_path": self.adb_path,
             "serial": self.instance,
+            "capture_backend_requested": self.capture_backend_requested.map(|backend| backend.as_str()),
+            "capture_backend_used": self.capture_backend_used.map(|backend| backend.as_str()),
+            "capture_backend_attempts": self.capture_backend_attempts.iter().map(|attempt| json!({
+                "backend": attempt.backend.as_str(),
+                "ok": attempt.ok,
+                "message": attempt.message
+            })).collect::<Vec<_>>(),
             "input_structure": self.input_entries,
             "resource_load_results": state.map(|state| json!({
                 "manifest": state.resources.manifest_path,
@@ -1375,8 +1498,26 @@ impl LabRunContext {
                 "max_ms": stats.max,
                 "count": stats.count
             })),
+            "capture_duration_stats": interval_stats(&self.capture_durations_ms).map(|stats| json!({
+                "min_ms": stats.min,
+                "median_ms": stats.median,
+                "max_ms": stats.max,
+                "count": stats.count
+            })),
+            "action_duration_stats": interval_stats(&self.action_durations_ms).map(|stats| json!({
+                "min_ms": stats.min,
+                "median_ms": stats.median,
+                "max_ms": stats.max,
+                "count": stats.count
+            })),
+            "loop_lag_stats": interval_stats(&self.loop_lag_ms).map(|stats| json!({
+                "min_ms": stats.min,
+                "median_ms": stats.median,
+                "max_ms": stats.max,
+                "count": stats.count
+            })),
             "error": failure_reason.map(|message| json!({
-                "code": "lab1x_failed",
+                "code": "lab1y_failed",
                 "exception": message,
                 "failure_phase": self.phase
             }))
@@ -1411,7 +1552,7 @@ impl LabRunContext {
             .as_ref()
             .or_else(|| state.map(|state| &state.control));
         format!(
-            "# Lab-1X Result\n\n- Package: {}\n- Game: {}\n- Server: {}\n- Instance: {}\n- Success: {}\n- Failure: {}\n- Screenshots: {}\n- Run ID: {}\n",
+            "# Lab-1y Result\n\n- Package: {}\n- Game: {}\n- Server: {}\n- Instance: {}\n- Success: {}\n- Failure: {}\n- Screenshots: {}\n- Run ID: {}\n",
             control
                 .map(|control| control.package_id.as_str())
                 .unwrap_or("unknown"),
@@ -1448,6 +1589,57 @@ struct ScreenshotRecord {
 struct ArchiveResult {
     path: PathBuf,
     sha256: String,
+}
+
+struct LabLeaseGuard {
+    path: PathBuf,
+    _file: File,
+}
+
+impl LabLeaseGuard {
+    fn acquire(serial: &str) -> CliOutcome<Self> {
+        let root = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("ActingCommand")
+            .join("actinglab")
+            .join("locks");
+        fs::create_dir_all(&root).map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to create LabLease lock directory {}: {err}",
+                root.display()
+            ))
+        })?;
+        let path = root.join(format!("{}.lock", sanitize_path_segment(serial)));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    CliError::safety_blocked(
+                        "lab_lease_lock_conflict",
+                        format!(
+                            "LabLease lock already exists for instance {serial}: {}",
+                            path.display()
+                        ),
+                        &["lab_lease"],
+                    )
+                } else {
+                    CliError::package_invalid(format!(
+                        "failed to acquire LabLease lock {}: {err}",
+                        path.display()
+                    ))
+                }
+            })?;
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for LabLeaseGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1764,6 +1956,19 @@ fn parse_optional_u64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<u64>> {
         .transpose()
 }
 
+fn parse_optional_capture_backend(
+    flags: &FlagArgs,
+    name: &str,
+) -> CliOutcome<Option<CaptureBackendChoice>> {
+    flags
+        .optional(name)
+        .filter(|value| value != "true")
+        .map(|value| {
+            CaptureBackendChoice::parse(&value).map_err(|err| CliError::usage(err.to_string()))
+        })
+        .transpose()
+}
+
 fn file_sha256(path: &Path) -> CliOutcome<String> {
     let bytes = fs::read(path).map_err(|err| {
         CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
@@ -1781,6 +1986,29 @@ fn hash_text(text: &str) -> u64 {
     u64::from_be_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
     ])
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_underscore = false;
+    for ch in value.chars() {
+        let safe = if ch.is_ascii_alphanumeric() { ch } else { '_' };
+        if safe == '_' {
+            if !previous_underscore {
+                output.push(safe);
+            }
+            previous_underscore = true;
+        } else {
+            output.push(safe);
+            previous_underscore = false;
+        }
+    }
+    let output = output.trim_matches('_').to_string();
+    if output.is_empty() {
+        "unknown".to_string()
+    } else {
+        output
+    }
 }
 
 fn git_commit() -> Option<String> {
@@ -1870,7 +2098,7 @@ mod tests {
         let control = LabControl {
             schema_version: CONTROL_SCHEMA.to_string(),
             package_id: "pkg".to_string(),
-            execution_mode: "trusted_package".to_string(),
+            execution_mode: "navigable_route".to_string(),
             game: "arknights".to_string(),
             server: "cn".to_string(),
             resolution: Resolution {
@@ -1887,6 +2115,9 @@ mod tests {
             resource_root: None,
             allow_placeholder_coords: None,
             output: None,
+            capture_backend: None,
+            producer: None,
+            trusted_execution: None,
         };
         let click = OperationClick {
             kind: "rect".to_string(),

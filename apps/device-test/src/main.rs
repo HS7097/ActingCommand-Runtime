@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, InputBackend, MaaTouchBackend,
-    MaaTouchValidationConfig, ScreencapBackend, combine_operation_and_close,
+    CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
+    InputBackend, MaaTouchBackend, MaaTouchValidationConfig, combine_operation_and_close,
+    create_capture_backend,
 };
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
@@ -246,7 +247,10 @@ fn run_capture_command(
         ));
     };
 
-    let mut backend = ScreencapBackend::new(config.adb, config.target);
+    let selected = create_capture_backend(
+        CaptureBackendConfig::new(config.adb, config.target).with_requested(config.capture_backend),
+    )?;
+    let mut backend = selected.backend;
     let frame = backend.capture()?;
     if let Some(parent) = out.parent()
         && !parent.as_os_str().is_empty()
@@ -265,9 +269,10 @@ fn run_capture_command(
         ))
     })?;
     println!(
-        "captured {}x{} -> {}",
+        "captured {}x{} backend={} -> {}",
         frame.width,
         frame.height,
+        frame.backend_name.as_str(),
         out.display()
     );
     Ok(())
@@ -401,13 +406,20 @@ fn run_benchmark_command(
         ));
     }
 
-    let mut capture_backend = ScreencapBackend::new(config.adb.clone(), config.target.clone());
-    let mut capture_ms = Vec::with_capacity(options.rounds);
-    for _ in 0..options.rounds {
-        let started = Instant::now();
-        let _frame = capture_backend.capture()?;
-        capture_ms.push(started.elapsed().as_millis());
-    }
+    let capture_rows = [
+        CaptureBackendChoice::Adb,
+        CaptureBackendChoice::DroidcastRaw,
+        CaptureBackendChoice::NemuIpc,
+    ]
+    .into_iter()
+    .map(|backend| measure_capture_backend(&config, backend, options.rounds))
+    .collect::<Vec<_>>();
+    let capture_stats = capture_rows
+        .iter()
+        .find_map(|row| row.stats)
+        .ok_or_else(|| {
+            DeviceError::fatal("benchmark could not capture a frame with any backend")
+        })?;
 
     let mut control_backend = MaaTouchBackend::new(
         config.adb.clone(),
@@ -424,25 +436,109 @@ fn run_benchmark_command(
     let close = control_backend.close();
     combine_operation_and_close(Ok(()), close)?;
 
-    let capture_stats = LatencyStats::from_samples(&capture_ms)?;
     let control_stats = LatencyStats::from_samples(&control_ms)?;
 
     Ok(format_benchmark_report(
         options.rounds,
+        &capture_rows,
         capture_stats,
         control_stats,
     ))
 }
 
+fn measure_capture_backend(
+    config: &MaaTouchValidationConfig,
+    backend: CaptureBackendChoice,
+    rounds: usize,
+) -> CaptureBenchmarkRow {
+    let name = match backend {
+        CaptureBackendChoice::Adb => CaptureBackendName::AdbScreencap,
+        CaptureBackendChoice::DroidcastRaw => CaptureBackendName::DroidcastRaw,
+        CaptureBackendChoice::NemuIpc => CaptureBackendName::NemuIpc,
+        CaptureBackendChoice::Auto => CaptureBackendName::AdbScreencap,
+    };
+    let selected = create_capture_backend(
+        CaptureBackendConfig::new(config.adb.clone(), config.target.clone())
+            .with_requested(backend),
+    );
+    let mut selected = match selected {
+        Ok(selected) => selected,
+        Err(err) => {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width: None,
+                height: None,
+                best_ms: None,
+                median_ms: None,
+                p90_ms: None,
+                stats: None,
+                error: Some(err.to_string()),
+            };
+        }
+    };
+    let mut capture_ms = Vec::with_capacity(rounds);
+    let mut width = None;
+    let mut height = None;
+    for _ in 0..rounds {
+        let started = Instant::now();
+        match selected.backend.capture() {
+            Ok(frame) => {
+                capture_ms.push(started.elapsed().as_millis());
+                width = Some(frame.width);
+                height = Some(frame.height);
+            }
+            Err(err) => {
+                return CaptureBenchmarkRow {
+                    backend: name,
+                    available: false,
+                    width,
+                    height,
+                    best_ms: None,
+                    median_ms: None,
+                    p90_ms: None,
+                    stats: None,
+                    error: Some(err.to_string()),
+                };
+            }
+        }
+    }
+    match LatencyStats::from_samples(&capture_ms) {
+        Ok(stats) => CaptureBenchmarkRow {
+            backend: name,
+            available: true,
+            width,
+            height,
+            best_ms: Some(stats.best),
+            median_ms: Some(stats.median),
+            p90_ms: Some(stats.p90),
+            stats: Some(stats),
+            error: None,
+        },
+        Err(err) => CaptureBenchmarkRow {
+            backend: name,
+            available: false,
+            width,
+            height,
+            best_ms: None,
+            median_ms: None,
+            p90_ms: None,
+            stats: None,
+            error: Some(err.to_string()),
+        },
+    }
+}
+
 fn format_benchmark_report(
     rounds: usize,
+    capture_rows: &[CaptureBenchmarkRow],
     capture_stats: LatencyStats,
     control_stats: LatencyStats,
 ) -> String {
     let recommend_poll_interval_ms = (capture_stats.p90 + 50).max(capture_stats.median * 2);
     let recommend_min_capture_interval_ms = capture_stats.p90.max(1);
 
-    format!(
+    let mut output = format!(
         "rounds={}\n\
          screenshot_best_ms={}\n\
          screenshot_median_ms={}\n\
@@ -478,7 +574,50 @@ fn format_benchmark_report(
         control_stats.best,
         control_stats.median,
         control_stats.p90,
-    )
+    );
+    output.push_str(
+        "capture_backend_table=backend,available,width,height,best_ms,median_ms,p90_ms,error\n",
+    );
+    for row in capture_rows {
+        output.push_str(&format!(
+            "capture_backend_table={},{},{},{},{},{},{},{}\n",
+            row.backend.as_str(),
+            row.available,
+            row.width
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "not_available".to_string()),
+            row.height
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "not_available".to_string()),
+            row.best_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "not_available".to_string()),
+            row.median_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "not_available".to_string()),
+            row.p90_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "not_available".to_string()),
+            row.error
+                .as_deref()
+                .unwrap_or("none")
+                .replace(['\r', '\n', ','], " ")
+        ));
+    }
+    output
+}
+
+#[derive(Debug, Clone)]
+struct CaptureBenchmarkRow {
+    backend: CaptureBackendName,
+    available: bool,
+    width: Option<u32>,
+    height: Option<u32>,
+    best_ms: Option<u128>,
+    median_ms: Option<u128>,
+    p90_ms: Option<u128>,
+    stats: Option<LatencyStats>,
+    error: Option<String>,
 }
 
 fn run_runner_command(
@@ -583,7 +722,11 @@ fn load_scene(
             ))
         })?
     } else if capture {
-        let mut backend = ScreencapBackend::new(config.adb, config.target);
+        let selected = create_capture_backend(
+            CaptureBackendConfig::new(config.adb, config.target)
+                .with_requested(config.capture_backend),
+        )?;
+        let mut backend = selected.backend;
         backend.capture()?.png
     } else {
         return Err(DeviceError::fatal(format!(
@@ -960,6 +1103,10 @@ where
             "--no-push" => {
                 cfg.maatouch.push = false;
                 index += 1;
+            }
+            "--capture-backend" => {
+                let value = next_token(&tokens, &mut index, "--capture-backend")?;
+                cfg.capture_backend = CaptureBackendChoice::parse(&value)?;
             }
             "--command-timeout-ms" => {
                 cfg.adb.command_timeout = Duration::from_millis(parse_token(
@@ -1503,10 +1650,10 @@ fn print_help() {
          \n\
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
          Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
-         Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode only uses ScreencapBackend.\n\
+         Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode uses the selected CaptureBackend.\n\
          Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps only through MaaTouch.\n\
-         Benchmark uses ScreencapBackend and MaaTouch reset only. Runner executes profile probes once and exits.\n\
-         Options: --adb --serial --host --port --local --remote --no-connect --no-push \\\n\
+         Benchmark compares adb_screencap, droidcast_raw, and nemu_ipc availability plus MaaTouch reset submission. Runner executes profile probes once and exits.\n\
+         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|adb|droidcast_raw|nemu_ipc> \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
 }
@@ -2591,6 +2738,21 @@ mod tests {
     fn benchmark_report_marks_control_as_submission_only() {
         let report = format_benchmark_report(
             3,
+            &[CaptureBenchmarkRow {
+                backend: CaptureBackendName::AdbScreencap,
+                available: true,
+                width: Some(1280),
+                height: Some(720),
+                best_ms: Some(100),
+                median_ms: Some(200),
+                p90_ms: Some(300),
+                stats: Some(LatencyStats {
+                    best: 100,
+                    median: 200,
+                    p90: 300,
+                }),
+                error: None,
+            }],
             LatencyStats {
                 best: 100,
                 median: 200,
@@ -2608,6 +2770,9 @@ mod tests {
         assert!(report.contains("control_submit_best_ms=0"));
         assert!(report.contains("recommend_min_op_interval_ms=not_available"));
         assert!(report.contains("table=control_submission,0,0,1,write_flush_only"));
+        assert!(
+            report.contains("capture_backend_table=adb_screencap,true,1280,720,100,200,300,none")
+        );
         assert!(!report.contains("control_best_ms="));
     }
 

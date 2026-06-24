@@ -160,6 +160,7 @@ pub struct MaaTouchValidationConfig {
     pub adb: AdbConfig,
     pub target: DeviceTarget,
     pub maatouch: MaaTouchConfig,
+    pub capture_backend: crate::CaptureBackendChoice,
     pub touch_plan: TouchPlan,
 }
 

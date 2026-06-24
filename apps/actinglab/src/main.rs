@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_device::{Adb, AdbConfig, CaptureBackend, DeviceTarget, ScreencapBackend};
+use actingcommand_device::{
+    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget,
+    create_capture_backend,
+};
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Scene};
 use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
@@ -249,6 +252,7 @@ struct GlobalOptions {
     game: Option<String>,
     server: Option<String>,
     runtime_endpoint: Option<String>,
+    capture_backend: Option<CaptureBackendChoice>,
     version: bool,
 }
 
@@ -341,6 +345,18 @@ where
             "--runtime-endpoint" => {
                 index += 1;
                 global.runtime_endpoint = Some(require_raw(&raw, index, "--runtime-endpoint")?);
+            }
+            "--capture-backend" => {
+                index += 1;
+                let value = require_raw(&raw, index, "--capture-backend")?;
+                global.capture_backend =
+                    Some(CaptureBackendChoice::parse(&value).map_err(|err| {
+                        (
+                            "help".to_string(),
+                            global.json,
+                            CliError::usage(err.to_string()),
+                        )
+                    })?);
             }
             "--version" => global.version = true,
             other => rest.push(other.to_string()),
@@ -469,6 +485,7 @@ fn help_data() -> Value {
             "--game <game>",
             "--server <server>",
             "--runtime-endpoint <url>",
+            "--capture-backend <auto|adb|droidcast_raw|nemu_ipc>",
             "--dry-run",
             "--verbose",
             "--quiet",
@@ -585,6 +602,12 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
             {"family": "MAA", "game": "ark", "match_metric": "ccoeff_normed"},
             {"family": "Alas", "game": "azur", "match_metric": "ccorr_normed+color"}
         ],
+        "capture_backends": [
+            {"id": "adb", "backend": "adb_screencap", "external_tool": false},
+            {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK"},
+            {"id": "nemu_ipc", "backend": "nemu_ipc", "external_tool_env": "ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL"},
+            {"id": "auto", "fallback_allowed": true, "diagnostics_required": true}
+        ],
         "discovered_recognition_packs": discovered
     }))
 }
@@ -614,8 +637,14 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "step_action_types": ["complete", "click"]
         }),
         "control" => json!({
-            "schema_version": "0.1",
-            "rules": ["navigation_only clicks require LabLease", "unresolved_coords is not executable"]
+            "schema_version": "Lab-1y.control.v1",
+            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
+            "capture_backend": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+            "rules": [
+                "CLI capture backend overrides control capture_backend",
+                "trusted_execution is provenance and does not block semantic actions",
+                "unresolved or placeholder coordinates are not executable"
+            ]
         }),
         "pack" => json!({
             "schema_version": ["0.1", "0.3"],
@@ -655,7 +684,10 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let out = flags.required_path("--out")?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
-    let mut backend = ScreencapBackend::new(device_config.adb, device_config.target);
+    let requested = global.capture_backend.unwrap_or_default();
+    let selected = create_capture_backend(device_config.capture_backend_config(requested))
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let mut backend = selected.backend;
     let frame = backend
         .capture()
         .map_err(|err| CliError::device(err.to_string()))?;
@@ -671,6 +703,12 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     Ok(json!({
         "width": frame.width,
         "height": frame.height,
+        "capture_backend_used": frame.backend_name.as_str(),
+        "capture_backend_attempts": selected.diagnostics.attempts.iter().map(|attempt| json!({
+            "backend": attempt.backend.as_str(),
+            "ok": attempt.ok,
+            "message": attempt.message
+        })).collect::<Vec<_>>(),
         "out": out.display().to_string()
     }))
 }
@@ -1151,6 +1189,12 @@ fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<Devi
 struct DeviceRuntimeConfig {
     adb: AdbConfig,
     target: DeviceTarget,
+}
+
+impl DeviceRuntimeConfig {
+    fn capture_backend_config(&self, requested: CaptureBackendChoice) -> CaptureBackendConfig {
+        CaptureBackendConfig::new(self.adb.clone(), self.target.clone()).with_requested(requested)
+    }
 }
 
 fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<String> {
@@ -1853,7 +1897,10 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
     if flags.bool("--capture") {
         let config = read_user_config()?;
         let device_config = device_config(global, &config)?;
-        let mut backend = ScreencapBackend::new(device_config.adb, device_config.target);
+        let requested = global.capture_backend.unwrap_or_default();
+        let selected = create_capture_backend(device_config.capture_backend_config(requested))
+            .map_err(|err| CliError::device(err.to_string()))?;
+        let mut backend = selected.backend;
         let frame = backend
             .capture()
             .map_err(|err| CliError::device(err.to_string()))?;
