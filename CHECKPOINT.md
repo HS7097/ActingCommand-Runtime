@@ -4,6 +4,7 @@
 
 ### Current status
 
+- Implementation commit: `08fbfc0` (`runtime: add capture backend selection and Lab-1y`).
 - Upgraded `crates/device` capture from ADB-only `Frame { width, height, png }` to a unified synchronous `CaptureBackend` contract.
 - Added common `Frame` metadata:
   - actual width and height;
