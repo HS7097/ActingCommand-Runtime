@@ -1,5 +1,94 @@
 # CHECKPOINT.md
 
+## 2026-06-24 ActingLab-P1g global CLI contract shell
+
+### Current status
+
+- Implemented `apps/actinglab` as the user-facing `actinglab` CLI entry for the Runtime repository.
+- Added a unified JSON envelope for all CLI commands with `schema_version`, `ok`, `command`, `data` or `error`, `cli_version`, and `runtime_version`.
+- Added fixed exit-code mapping:
+  - `0`: ok
+  - `2`: usage or validation failure
+  - `3`: safety blocked
+  - `4`: device or instance issue
+  - `5`: runtime not running
+  - `6`: reserved or not implemented
+- Added offline command support for `--version`, `paths`, `doctor`, `capabilities`, `schema`, `list`, `config get/set`, `resource validate/check-release`, `package validate/inspect`, and `operation validate/inspect/explain`.
+- Added package zip safety validation:
+  - zip-slip path rejection;
+  - backslash, absolute path, drive-prefix, and duplicate path rejection;
+  - `.py`, `.exe`, `.bat`, `.cmd`, `.ps1`, and `.sh` entry rejection;
+  - required manifest and task path checks;
+  - declared hash verification for `hashes` and `files` manifest forms.
+- Added structured safety/stub behavior for commands whose Runtime services are not connected yet:
+  - `status` returns `runtime_not_running` when no Runtime endpoint is configured or reachable.
+  - `scheduler *` returns `scheduler_not_available`.
+  - `package run`, `operation run`, and `control probe-click` require an exclusive `LabLease` and fail visibly instead of faking success.
+- Added `detect-page` standby behavior for scene-driven validation: no matched page returns `page = "standby"` with a recovery hint and no automatic click.
+- Added Windows launcher and user PATH helper scripts under `scripts/actinglab`.
+- Applied a mechanical `while let` clippy cleanup in `benchmarks/rust/src/main.rs` so workspace clippy passes under `-D warnings`.
+- No UI, SQLite, OCR, scheduler implementation, game logic, or real package-run execution was added.
+- No resource repository content was read during validation, so the resource freshness gate was not triggered for this task.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `benchmarks/rust/src/main.rs`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/main.rs`
+- `scripts/actinglab/actinglab.cmd`
+- `scripts/actinglab/actinglab.ps1`
+- `scripts/actinglab/install-user-path.ps1`
+- `scripts/actinglab/uninstall-user-path.ps1`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read task file: `C:\合作工作区\ActingCommand\TASK-ActingLab-P1g-CLI.md`
+- Read task spec: `C:\Users\Alice\Downloads\ActingLab-P1g_CLI_package_monitor_scheduler_task_verified.json`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Checked Runtime repository status.
+- Inspected existing `apps/device-test`, `crates/runtime-core`, `crates/recognition-pack`, `crates/page-detector`, and `crates/task-loop`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `scripts\actinglab\actinglab.cmd --json --version`
+- `powershell -ExecutionPolicy Bypass -File scripts\actinglab\actinglab.ps1 --json --version`
+- `target\debug\actinglab.exe --json capabilities`
+- `target\debug\actinglab.exe --json status`
+- `target\debug\actinglab.exe --json scheduler status`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with 10 tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `.cmd` launcher smoke test returned a valid `--version` JSON envelope with exit code 0.
+- `.ps1` launcher smoke test returned a valid `--version` JSON envelope with exit code 0.
+- `actinglab --json capabilities` returned exit code 0 and reported command `needs` plus recognition match-metric policy.
+- `actinglab --json status` returned exit code 5 with `runtime_not_running`, as expected when no Runtime endpoint is configured.
+- `actinglab --json scheduler status` returned exit code 6 with `scheduler_not_available`, as expected for the reserved scheduler interface.
+
+### Current blocker
+
+- A resident Runtime service endpoint is not implemented yet, so Runtime-attached commands can only expose stable errors or endpoint probing.
+- Real package-run execution, monitor frame streaming, Runtime lab sessions, and scheduler control remain reserved until the Runtime service and LabLease APIs are connected.
+- `actinglab` currently contains some scene-driven read-only recognition plumbing for validation; the next Runtime milestone should move active recognition/capture command execution behind a Runtime service boundary so the CLI remains a pure user-facing entry.
+
+### Next step
+
+1. Commit and push the P1g CLI contract shell.
+2. Connect `actinglab status/devices/lab/monitor` to a resident Runtime endpoint.
+3. Move active `capture`, `detect-page`, `recognize`, `operation dry-run`, and `package run` execution behind the Runtime service boundary.
+4. Implement real package-run only after LabLease, navigation-only, and expect-after Runtime gates are connected.
+
 ## Current status
 
 Runtime repository-local planning has been initialized.

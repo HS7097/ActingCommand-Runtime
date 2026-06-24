@@ -2,6 +2,7 @@
 
 [workspace]
 members = [
+    "apps/actinglab",
     "apps/device-test",
     "benchmarks/rust",
     "crates/actingcommand-contract",

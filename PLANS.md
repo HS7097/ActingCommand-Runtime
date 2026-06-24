@@ -31,6 +31,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P6d/P6e-half resource-independent close-out: click page guard, MaaTouch license/path fix, benchmark labeling, and BA regression blocker report.
 - ActingLab-P1 runtime-embedded direction: Python Runtime-side Lab cleanup audit and Rust embedded Lab planning.
 - ActingLab-P1a/P1b Rust embedded lab skeleton: `LabMode`, `LabLeaseRequest`, `SchedulerGate`, scoped instance decisions, and no-click/passive-mode boundaries.
+- ActingLab-P1g global CLI contract shell: `actinglab` app, unified JSON envelope, fixed exit-code mapping, config/doctor/capabilities, package zip safety validation, scheduler/lab safety stubs, and Windows user PATH launchers.
 
 ## Recognition score semantics
 
@@ -396,6 +397,49 @@ This skeleton deliberately does not start devices, capture frames, run recogniti
 
 The next Runtime milestone should connect this contract to real scheduler state without changing the no-duplicate-runtime-module rule.
 
+### P1g global CLI contract shell
+
+P1g adds `apps/actinglab` as the user-facing global CLI entry.
+
+The CLI owns:
+
+- command parsing without adding a new UI framework or CLI framework dependency;
+- unified `schema_version = 0.2` JSON envelope for success and failure output;
+- stable exit-code mapping:
+  - `0` ok;
+  - `2` usage or validation failure;
+  - `3` safety blocked;
+  - `4` device or instance issue;
+  - `5` runtime not running;
+  - `6` reserved or not implemented;
+- `config get/set` for user-level `adb_path`, `runtime_endpoint`, `run_root`, `resource_root`, and `instance.<id>.serial|game|server`;
+- `doctor`, `paths`, `schema`, `list`, and `capabilities`;
+- capability reporting for command `needs` and recognition match-metric policy;
+- package zip validation and inspection with zip-slip protection, executable/script-entry rejection, and declared hash verification;
+- structured scheduler/lab/package-run safety stubs that do not fake successful execution.
+
+The CLI also includes Windows launchers under `scripts/actinglab`:
+
+- `actinglab.cmd`;
+- `actinglab.ps1`;
+- `install-user-path.ps1`;
+- `uninstall-user-path.ps1`.
+
+The installer scripts only modify the user-level PATH and do not require administrator permissions.
+
+Current P1g limitations are intentional:
+
+- no full scheduler implementation;
+- no resident Runtime service attach protocol beyond endpoint probing;
+- no real `package run` operation execution;
+- no active monitor frame stream;
+- no UI;
+- no SQLite;
+- no OCR;
+- no game logic.
+
+Commands that would require missing Runtime services fail visibly with stable envelope errors instead of returning fake success.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -451,16 +495,19 @@ Remaining BA data work is still resource/live-verification work, not Runtime arc
 
 ## Next steps
 
-1. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
-2. Connect ActingLab `SchedulerGate` to real Runtime scheduler state in a separate scoped milestone.
-3. Add Runtime-owned journal/frame-stream contracts for ActingLab passive-mirror evidence output.
-4. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
-5. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
-6. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
-7. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
-8. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-9. Add Arknights operator/menu navigation targets before Arknights probes.
-10. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-11. Define Runtime API contracts for UI integration in a separate milestone.
-12. Define capture metadata and SQLite schema in a separate scoped milestone.
-13. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Connect `actinglab status/devices/lab/monitor` to a real resident Runtime endpoint instead of endpoint probing.
+2. Move active `capture`, `detect-page`, `recognize`, `operation dry-run`, and `package run` behind a Runtime service boundary while keeping the CLI as a thin user entry.
+3. Implement real package-run operation execution only after LabLease, navigation-only, and expect-after Runtime gates are connected.
+4. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
+5. Connect ActingLab `SchedulerGate` to real Runtime scheduler state in a separate scoped milestone.
+6. Add Runtime-owned journal/frame-stream contracts for ActingLab passive-mirror evidence output.
+7. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
+8. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
+9. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+10. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+11. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+12. Add Arknights operator/menu navigation targets before Arknights probes.
+13. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+14. Define Runtime API contracts for UI integration in a separate milestone.
+15. Define capture metadata and SQLite schema in a separate scoped milestone.
+16. Keep `CHECKPOINT.md` updated with every completed Runtime task.

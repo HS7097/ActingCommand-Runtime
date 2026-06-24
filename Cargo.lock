@@ -19,6 +19,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
+name = "actingcommand-actinglab"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-device",
+ "actingcommand-page-detector",
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
+ "actingcommand-runtime-core",
+ "actingcommand-task-loop",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "actingcommand-contract"
 version = "0.1.0"
 dependencies = [
@@ -265,6 +282,12 @@ name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "byteorder-lite"
@@ -1555,6 +1578,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zip"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
 ]
 
 [[package]]

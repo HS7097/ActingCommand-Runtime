@@ -96,22 +96,17 @@ fn bench_tcp(iterations: usize, payload: &[u8]) {
         let addr = listener.local_addr().expect("local addr");
         addr_tx.send(addr).expect("send addr");
 
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    if stop_rx.try_recv().is_ok() {
+        while let Ok((mut stream, _)) = listener.accept() {
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            thread::spawn(move || {
+                while let Ok(frame) = read_frame(&mut stream) {
+                    if write_frame(&mut stream, &frame).is_err() {
                         break;
                     }
-                    thread::spawn(move || {
-                        while let Ok(frame) = read_frame(&mut stream) {
-                            if write_frame(&mut stream, &frame).is_err() {
-                                break;
-                            }
-                        }
-                    });
                 }
-                Err(_) => break,
-            }
+            });
         }
     });
 
