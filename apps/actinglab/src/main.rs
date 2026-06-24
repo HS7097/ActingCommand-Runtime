@@ -18,11 +18,15 @@ use std::time::Duration;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+mod lab_run;
+
 const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const DEFAULT_ADB_HINT: &str = r"F:\AzurPilot\.venv\Scripts\adb.exe";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
-const DANGEROUS_EXTENSIONS: &[&str] = &["py", "exe", "bat", "cmd", "ps1", "sh"];
+const DANGEROUS_EXTENSIONS: &[&str] = &[
+    "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
+];
 
 fn main() -> ExitCode {
     let json_default = !io::stdout().is_terminal();
@@ -773,6 +777,7 @@ fn run_monitor(global: &GlobalOptions) -> CliOutcome<Value> {
 
 fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
+        "run" => lab_run::run_lab_run(global, args),
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;
@@ -1971,6 +1976,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab status", ["running_runtime"], "reserved"),
         command_cap("lab lease", ["running_runtime"], "reserved"),
         command_cap("lab release", ["running_runtime"], "reserved"),
+        command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),

@@ -32,6 +32,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab-P1 runtime-embedded direction: Python Runtime-side Lab cleanup audit and Rust embedded Lab planning.
 - ActingLab-P1a/P1b Rust embedded lab skeleton: `LabMode`, `LabLeaseRequest`, `SchedulerGate`, scoped instance decisions, and no-click/passive-mode boundaries.
 - ActingLab-P1g global CLI contract shell: `actinglab` app, unified JSON envelope, fixed exit-code mapping, config/doctor/capabilities, package zip safety validation, scheduler/lab safety stubs, and Windows user PATH launchers.
+- Lab-1X trusted one-shot package execution engine: `actinglab lab run --zip <input.zip> --out <output.zip>` with Lab-1X control/resources ingest, resource integrity checks, Screencap/MaaTouch execution path, page confirmation, output report zips, and device-unreachable failure reporting.
 
 ## Current ActingLab read-only recognition round
 
@@ -71,6 +72,35 @@ Next steps:
 1. Refresh AzurLane `page/home` live anchor/color gate in `ActingCommand-Resources-AzurLane`.
 2. Tighten AzurLane entry-anchor page definitions so visible home-screen buttons do not count as true target pages.
 3. Keep Runtime `actinglab` read-only commands thin; deeper package-run, monitor, scheduler, and click paths still require separate Runtime service/LabLease milestones.
+
+## Current ActingLab Lab-1X trusted one-shot package execution round
+
+The current Runtime task promotes `actinglab lab run` into the standard trusted one-shot execution entry:
+
+```text
+input.zip -> actinglab lab run -> output.zip
+```
+
+Scope:
+
+- accept a trusted Lab-1X input zip with `control.json` and `resources/`;
+- reject unsafe paths, executable/script entries, malformed control data, missing resources, unresolved or out-of-bounds coordinates, unknown operation types, capture failures, input failures, and output write failures loudly;
+- load Operation Bundle v0.3 plus generated recognition pack/page data from the zip;
+- use existing Runtime device primitives (`ScreencapBackend` and `MaaTouchBackend`) for capture and input;
+- write output zips containing only `logs/` and `screenshots/`;
+- record actual screenshot intervals instead of claiming the requested interval was achieved;
+- keep semantic safety decisions outside Lab because the package is trusted by its authoring pipeline.
+
+Non-goals:
+
+- no UI;
+- no SQLite;
+- no OCR;
+- no resident Runtime service;
+- no scheduler implementation;
+- no new screenshot backend;
+- no raw ADB tap fallback;
+- no package script execution.
 
 ## Recognition score semantics
 

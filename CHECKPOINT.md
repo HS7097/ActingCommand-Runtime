@@ -1,5 +1,105 @@
 # CHECKPOINT.md
 
+## 2026-06-24 Lab-1X trusted one-shot package execution engine
+
+### Current status
+
+- Implemented `actinglab lab run --zip <input.zip> --out <output.zip>` as the trusted one-shot Lab entry.
+- Added Lab-1X package ingest for root-level `control.json` plus `resources/`.
+- Added strict input zip validation:
+  - rejects zip-slip, unsafe separators, absolute/drive paths, duplicate paths, and executable/script-style extensions;
+  - rejects missing `control.json` or missing `resources/`;
+  - accepts UTF-8 JSON files with a Windows UTF-8 BOM while still failing malformed JSON loudly.
+- Added Lab-1X control validation for schema, execution mode, package metadata, resolution, and capture interval.
+- Added resource validation for:
+  - `resources/manifest.json`;
+  - `resources/operations/<entry_task_id>/task.json`;
+  - generated recognition pack/pages;
+  - operation anchors and verify templates;
+  - optional navigation JSON when present.
+- Added Operation Bundle v0.3 execution support for trusted click/drag operations:
+  - current page detection through existing recognition/page-detector crates;
+  - operation selection from current page;
+  - coordinate bounds and unresolved-coordinate rejection;
+  - ScreencapBackend capture and MaaTouchBackend input;
+  - page confirmation through target page or verify template;
+  - actual click point logging with seed, algorithm, source rect, and final point.
+- Added output zip generation with only `logs/` and `screenshots/` roots:
+  - `logs/events.jsonl`;
+  - `logs/summary.json`;
+  - `logs/result.md`;
+  - `logs/diagnostics.json`;
+  - `logs/environment.json`;
+  - `logs/recognition.jsonl`;
+  - timestamp-based screenshot names when captures succeed.
+- Added failure-output behavior: device/resource/runtime failures return non-zero and still write an output zip when possible.
+- Added `lab run` to `actinglab capabilities`.
+- No UI, SQLite, OCR, scheduler, resident Runtime service, alternate screenshot backend, raw ADB input fallback, package scripts, or semantic safety screening was added.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-AzurLane`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; `HEAD` and `origin/main` at `b3451dd7c85ffc349f043530cf2f04f856180c12`.
+- `ActingCommand-Resources-Arknights`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; `HEAD` and `origin/main` at `eacf3e446ab62c9b3013f653b7986a85a8bf0213`.
+- `ActingCommand-Resources-BlueArchive`: refreshed by `git fetch origin --prune --tags` and `git pull --ff-only`; already up to date at `1b52342c6e0db7b65f8a09d654ec97594921cf7b`.
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git fetch origin --prune --tags` and `git pull --ff-only` in all three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Offline smoke:
+  - `cargo run -p actingcommand-actinglab -- --json --run-root target\lab1x-smoke\runs lab run --zip target\lab1x-smoke\input.zip --out target\lab1x-smoke\output.zip --instance 127.0.0.1:1 --capture-interval-ms 300`
+- Output package inspection:
+  - `.NET ZipFile OpenRead` over `target\lab1x-smoke\output.zip`
+- Prohibited-feature scan over Runtime source paths for raw `adb shell input`, fallback/reconnect, alternate screenshot backends, OCR, SQLite, and UI terms.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed: 15 tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Exact prohibited-feature scans found no `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, alternate screenshot backend names, OCR, or SQLite usage in the Lab-1X implementation path.
+- Offline device-unreachable smoke returned:
+  - JSON envelope `ok=false`;
+  - error code `device_error`;
+  - process exit code `4`;
+  - failure report written to `target\lab1x-smoke\output.zip`.
+- Output zip root entries were limited to:
+  - `logs/`
+  - `screenshots/`
+  - files under `logs/`
+- No real-device click validation was run in this pass because no trusted Lab-1X live package was provided for a selected device state. The offline device-unreachable acceptance path was verified without clicking.
+
+### Current blocker
+
+- No blocker for the implemented Lab-1X CLI engine and offline acceptance path.
+- Live one-shot execution should be validated next with a trusted Lab-1X package selected for a known current device state.
+
+### Next step
+
+1. Commit and push the Lab-1X Runtime implementation.
+2. Build or provide a trusted Lab-1X live package for one known emulator state.
+3. Run `actinglab lab run` against that emulator and inspect `output.zip` screenshots/logs.
+
 ## 2026-06-24 ActingLab read-only resource recognition bridge
 
 ### Current status
