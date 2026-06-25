@@ -648,7 +648,9 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
                 "tier3_ratio": "alarm watermark; CLI --tier3-ratio",
                 "hysteresis_ratio": "release margin for active watermarks; CLI --hysteresis-ratio",
                 "max_mem_bytes": "optional lab frame-store cap; CLI --max-mem-bytes",
-                "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes"
+                "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes",
+                "flush_workspace_reserve_bytes": "required byte gap between tier2 and tier3; CLI --flush-workspace-reserve-bytes",
+                "tier3_pause_timeout_ms": "bounded pause timeout before graceful partial-output failure; CLI --tier3-pause-timeout-ms"
             },
             "rules": [
                 "CLI capture backend overrides control capture_backend",

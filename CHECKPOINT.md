@@ -1,19 +1,25 @@
 # CHECKPOINT.md
 
-## 2026-06-25 Lab-1z ActingLab frame store
+## 2026-06-25 Lab-1z fixes
 
 ### Current status
 
-- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-1z-frame-store.md` with UTF-8 output and confirmed the active scope is ActingLab-only frame storage, deduplication, memory watermarks, and output packaging.
-- Added an ActingLab frame-store layer that keeps raw frames resident by default and materializes final retained screenshots only during Lab finalization.
-- Added dynamic memory budget calculation from available physical memory plus total physical memory, with OS reserve and optional `max_mem_bytes` cap.
-- Added Tier1 deduplication, Tier2 temp-disk spilling of finalized older frames, Tier3 Lab pause/error behavior, and hysteresis release thresholds.
-- Added frame-store control/CLI overrides: `--similarity-threshold`, `--tier1-ratio`, `--tier2-ratio`, `--tier3-ratio`, `--hysteresis-ratio`, `--max-mem-bytes`, and `--os-reserve-bytes`.
-- Added `logs/frame_store.json` and `logs/frame_timeline.jsonl` to Lab output packages.
-- `recognition.jsonl` remains written after recognition and before frame discard decisions are finalized for the current frame.
-- No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, input fallback, or P2.2/P2.3 rollback was added.
-- Implementation commit: `080eeb8` (`Add ActingLab frame store watermarks`).
-- Checkpoint tag: `checkpoint/20260625-lab-1z-frame-store`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-1z-fixes.md` with UTF-8 output and confirmed the active scope is Lab-1z fixes only.
+- Added explicit frame recognition lifecycle state: `Pending`, `Matched { page_id }`, `CompletedNoMatch`, and `Failed { reason }`.
+- Changed frame admission to estimate incoming memory before unconditional resident admission.
+- Limited Tier1 same-page dedupe to non-key `Matched` frames with the same `page_id`; `Pending`, `CompletedNoMatch`, and `Failed` frames do not participate in ordinary same-page dedupe.
+- Added synchronous Tier2 segment zip flushes under `frame-store-temp/segment-*.zip` plus `segment-manifest.jsonl`; no background flush thread was added.
+- Changed Tier3 into a current-frame outcome with structured checkpoint, pause state, and partial-output finalization path.
+- Added Tier3 resume-page safety events: `tier3_resume_capture`, `tier3_resume_page_check`, `tier3_resume_allowed`, and `tier3_resume_blocked`.
+- Fixed spill selection so eligible single-frame and last-frame cases can spill; spill is now based on lifecycle state instead of protecting the final index.
+- Spill I/O failures degrade with warnings and keep the frame resident instead of panicking or failing the entire run mid-flight.
+- Frames involved in a spill failure are marked `spill_failed` to avoid repeated attempts against the same failed frame.
+- Made `resident_bytes` a conservative estimate that includes payload, original PNG, thumbnail, metadata/string overhead, per-entry overhead, encoder workspace reserve, and spilled/dropped diagnostics.
+- Validation now rejects `similarity_threshold = 1.0`, invalid ratios, non-distinct watermarks, invalid release lines, zero budgets, and Tier2/Tier3 gaps below `flush_workspace_reserve_bytes`.
+- Added `flush_workspace_reserve_bytes` and `tier3_pause_timeout_ms` to control JSON, schema output, and CLI flags.
+- Added `frame-store-temp` cleanup after successful finish or partial-output finalization, with cleanup failures logged as warnings.
+- Ensured segment-write failure paths clear `active_segment_id` so checkpoint state does not falsely report an in-flight flush after degradation.
+- No UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loop, scrcpy, minicap, new capture backend, input fallback, or P2.3 capture hot-path rollback was added.
 
 ### Files changed
 
@@ -27,35 +33,74 @@
 
 - `git fetch origin --prune --tags`
 - `git pull --ff-only`
-- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-Lab-1z-frame-store.md' -Encoding UTF8`
-- `cargo test -p actingcommand-actinglab`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-Lab-1z-fixes.md' -Encoding UTF8`
+- `git status --short --branch`
+- `git diff --stat`
+- `rg -n "active_segment_id|write_segment|spill_admission_frame|flush_resident_segment|spill_degraded|tier3_resume|backpressure_paused|RecognitionState|similarity_threshold|flush_workspace_reserve|tier3_pause_timeout" apps/actinglab/src/frame_store.rs apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs`
+- `rg -n "adb shell screencap|scrcpy|minicap|reconnect|retry loop|SQLite|OCR|thread::spawn|std::thread::spawn" apps/actinglab/src/frame_store.rs apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs`
 - `cargo fmt --all`
-- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab`
+- `adb devices -l`
+- Local external-tool path checks for DroidCast_raw APK, MuMu folder, and Nemu IPC DLL.
+- With `ACTINGCOMMAND_DROIDCAST_RAW_APK`, `ACTINGCOMMAND_NEMU_FOLDER`, and `ACTINGCOMMAND_NEMU_IPC_DLL` set to reviewed local paths:
+  - `cargo run -p actingcommand-device-test -- --port 16416 benchmark --rounds 3`
 - `cargo fmt --all -- --check`
+- `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
 - `git diff --check`
-- Prohibited-scope scans over touched ActingLab files for `SQLite`, `sqlite`, `OCR`, `ocr`, `scrcpy`, `minicap`, `adb shell screencap`, `shell screencap`, `AdbInputBackend`, `fallback`, and `reconnect`.
-- Screenshot hot-path scan for `fs::write(&path`, `screenshot_saved`, and `png_for_artifact()`.
+- Prohibited-scope scans over touched ActingLab files for UI-adjacent and capture-backend forbidden terms.
+
+### New unit coverage
+
+- `completed_no_match_frames_do_not_same_page_dedupe`
+- `matched_same_page_frames_can_dedupe`
+- `page_transition_is_retained_even_under_dedup`
+- `single_frame_can_spill`
+- `last_frame_can_spill_when_eligible`
+- `tier3_returns_pause_required_on_current_frame`
+- `tier2_spills_segment_without_pausing`
+- `spilled_segment_materializes_to_screenshot_file`
+- `tier3_alarm_still_materializes_partial_screenshots`
+- `threshold_one_is_rejected`
+- `resident_bytes_include_payload_metadata_thumbnail_and_workspace`
+- `spill_io_failure_degrades_without_panic`
+- `cleanup_temp_removes_segment_directory`
+- `tier2_tier3_gap_too_small_is_rejected`
+- `clock_rollback_does_not_underflow_dwell_delta`
+- `thumbnail_handles_pathological_dimensions_without_panic`
+- `hysteresis_releases_only_below_release_line`
+- `memory_budget_uses_available_total_and_os_reserve`
+
+### Benchmark result
+
+- Device: Arknights `127.0.0.1:16416`.
+- `device-test benchmark --rounds 3` succeeded for `adb_screencap`, `droidcast_raw`, and `nemu_ipc`.
+- `adb_screencap`: `1280x720`, capture-only best/median/p90 `617/626/857ms`, encode-only median `139ms`, end-to-end median `626ms`.
+- `droidcast_raw`: `1280x720`, capture-only best/median/p90 `342/393/1195ms`, encode-only median `108ms`, end-to-end median `502ms`.
+- `nemu_ipc`: `1280x720`, capture-only best/median/p90 `27/29/29ms`, encode-only median `154ms`, end-to-end median `178ms`.
+- P2.3 raw capture hot path remains in the expected tens-of-milliseconds range for Nemu IPC.
+- This task does not claim a 300ms full pipeline target.
 
 ### Test results
 
-- `cargo test -p actingcommand-actinglab` passed with 28 tests.
-- `cargo test --workspace` passed after the Lab-1z implementation.
+- `cargo test -p actingcommand-actinglab` passed with 41 tests.
+- `cargo test --workspace` passed.
 - `cargo fmt --all -- --check` passed.
 - `cargo clippy --workspace -- -D warnings` passed.
 - `git diff --check` passed.
-- Prohibited-scope scans found no new UI, SQLite, OCR, raw ADB input fallback, reconnect path, scrcpy, minicap, or `adb shell screencap` path in the touched ActingLab files. The only `fallback` hit is the pre-existing capability field `fallback_allowed`.
-- Screenshot hot-path scan found `png_for_artifact()` only in `frame_store.rs` materialization / Tier2 temp-disk paths, not in the Lab capture path.
+- Prohibited-scope scans found no new UI, SQLite, OCR, reconnect/retry loop, background flush thread, scrcpy, minicap, or `adb shell screencap` path in the touched ActingLab files.
 
 ### Current blocker
 
 - No implementation blocker.
-- Live Arknights `16416` Lab-1z execution has not been run in this pass.
+- Live Arknights `16416` Lab package execution was not run as gameplay validation in this pass. The live validation performed here was the capture benchmark only.
+- Tier3 pause remains a synchronous graceful failure/finalization path in this task; a richer resumable paused service loop belongs to a later Runtime-service milestone.
 
 ### Next step
 
-1. Commit and push the Runtime Lab-1z implementation with planning files.
-2. Optionally run a live Arknights `16416` Lab-1z package after Alice chooses a safe package and device state.
+1. Commit, checkpoint-tag, and push the Runtime Lab-1z fixes with planning files.
+2. If Alice wants gameplay validation, run a safe Arknights `16416` Lab package separately after selecting a reviewed package and confirming device state.
+3. Plan a later Runtime-service milestone for true paused-run resume rather than extending the synchronous one-shot Lab path here.
 
 ## 2026-06-25 P2.3 capture pipeline refactor
 

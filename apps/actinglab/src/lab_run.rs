@@ -5,7 +5,7 @@ use super::{
     effective_run_root,
     frame_store::{
         FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
-        FrameStoreScreenshot as ScreenshotRecord,
+        FrameStoreScreenshot as ScreenshotRecord, RecognitionState,
     },
     read_user_config,
 };
@@ -1577,11 +1577,15 @@ impl LabRunContext {
             frame_index: self.frame_index,
             file_name,
             label: label.to_string(),
-            matched_page: matched_page.clone(),
+            recognition_state: RecognitionState::from_matched_page(matched_page.clone()),
             frame,
         })?;
         let retained_file = store_outcome.file.clone();
         let merged_into = store_outcome.merged_into.clone();
+        let pause_checkpoint = store_outcome
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.to_json());
         self.event(
             "screenshot_recorded",
             json!({
@@ -1589,6 +1593,14 @@ impl LabRunContext {
                 "file": retained_file.clone(),
                 "retained": store_outcome.retained,
                 "merged_into": merged_into.clone(),
+                "storage_state": store_outcome.storage_state.as_str(),
+                "tier1_active": store_outcome.tier1_active,
+                "tier2_active": store_outcome.tier2_active,
+                "tier3_triggered": store_outcome.tier3_triggered,
+                "backpressure_state": store_outcome.backpressure_state.as_str(),
+                "pause_required": store_outcome.pause_required,
+                "warnings": store_outcome.warnings.clone(),
+                "pause_checkpoint": pause_checkpoint,
                 "width": width,
                 "height": height,
                 "backend": backend,
@@ -1603,7 +1615,9 @@ impl LabRunContext {
             "file": retained_file,
             "retained": store_outcome.retained,
             "merged_into": merged_into,
-            "matched_page": matched_page,
+            "storage_state": store_outcome.storage_state.as_str(),
+            "backpressure_state": store_outcome.backpressure_state.as_str(),
+            "matched_page": matched_page.clone(),
             "candidates": evaluations.iter().map(page_evaluation_json).collect::<Vec<_>>(),
             "diagnostics": {"label": label}
         });
@@ -1612,11 +1626,92 @@ impl LabRunContext {
             "recognition_recorded",
             json!({"frame_index": self.frame_index, "matched_page": matched_page}),
         )?;
-        if store_outcome.tier3_triggered {
+        if store_outcome.tier3_triggered && !store_outcome.pause_required {
+            return self.tier3_resume_check(capture, evaluator, detector, candidate_pages);
+        }
+        if store_outcome.pause_required {
+            self.event(
+                "backpressure_paused",
+                json!({
+                    "reason": "tier3",
+                    "checkpoint": store_outcome.checkpoint.map(|checkpoint| checkpoint.to_json()),
+                    "current_phase": self.phase,
+                    "last_frame_index": self.frame_index,
+                    "last_matched_page": matched_page,
+                    "tier3_pause_timeout_ms": store_outcome.pause_timeout_ms,
+                    "tier3_pause_timeout": true,
+                    "partial_output": true
+                }),
+            )?;
             return Err(CliError::device(
-                "Lab-1z frame store tier3 alarm triggered; pausing current Lab task",
+                "Lab-1z frame store tier3 pause timed out or could not recover; partial output will be written",
             ));
         }
+        Ok(CapturedScene {
+            scene,
+            matched_page,
+            verify_template_matched: false,
+            width,
+            height,
+        })
+    }
+
+    fn tier3_resume_check(
+        &mut self,
+        capture: &mut dyn CaptureBackend,
+        evaluator: &RecognitionEvaluator,
+        detector: &PageDetector,
+        candidate_pages: Option<&[String]>,
+    ) -> CliOutcome<CapturedScene> {
+        self.event(
+            "tier3_resume_capture",
+            json!({"reason": "resident_bytes_below_release_line"}),
+        )?;
+        let started = Instant::now();
+        let frame = capture
+            .capture()
+            .map_err(|err| CliError::device(err.to_string()))?;
+        self.capture_durations_ms
+            .push(started.elapsed().as_millis() as u64);
+        let width = frame.width;
+        let height = frame.height;
+        let scene = scene_from_frame(&frame)?;
+        let evaluations = match candidate_pages {
+            Some(pages) => pages
+                .iter()
+                .map(|page| detector.evaluate_page(evaluator, &scene, page))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| CliError::device(err.to_string()))?,
+            None => detector
+                .evaluate_all(evaluator, &scene)
+                .map_err(|err| CliError::device(err.to_string()))?,
+        };
+        let matched_page = evaluations
+            .iter()
+            .find(|evaluation| evaluation.matched)
+            .map(|evaluation| evaluation.page_id.clone());
+        let allowed = match (&matched_page, candidate_pages) {
+            (Some(page), Some(pages)) => pages.iter().any(|candidate| candidate == page),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        self.event(
+            "tier3_resume_page_check",
+            json!({"matched_page": matched_page, "allowed": allowed}),
+        )?;
+        if !allowed {
+            self.event(
+                "tier3_resume_blocked",
+                json!({"matched_page": matched_page, "reason": "resume page check failed"}),
+            )?;
+            return Err(CliError::device(
+                "Lab-1z tier3 resume blocked; manual review required",
+            ));
+        }
+        self.event(
+            "tier3_resume_allowed",
+            json!({"matched_page": matched_page}),
+        )?;
         Ok(CapturedScene {
             scene,
             matched_page,
@@ -1661,6 +1756,12 @@ impl LabRunContext {
             "frame_store_materialized",
             json!({"screenshot_count": self.screenshots.len()}),
         )?;
+        for warning in self.frame_store.cleanup_temp() {
+            self.event(
+                "frame_store_temp_cleanup_warning",
+                json!({"severity": "warning", "message": warning}),
+            )?;
+        }
         self.event("output_zip_written", json!({"out": out_path}))?;
         self.write_logs(ok, failure_reason, state)?;
         write_output_zip(&self.output_dir, out_path)?;
@@ -1731,6 +1832,8 @@ impl LabRunContext {
                     "dwell_ms": record.dwell_ms,
                     "merged_count": record.merged_count,
                     "matched_page": record.matched_page,
+                    "recognition_state": record.recognition_state.as_json(),
+                    "storage_state": record.storage_state.as_str(),
                     "key_frame": record.key_frame
                 })
             })
@@ -2316,6 +2419,11 @@ fn parse_frame_store_control_from_flags(flags: &FlagArgs) -> CliOutcome<FrameSto
         hysteresis_ratio: parse_optional_f64(flags, "--hysteresis-ratio")?,
         max_mem_bytes: parse_optional_u64(flags, "--max-mem-bytes")?,
         os_reserve_bytes: parse_optional_u64(flags, "--os-reserve-bytes")?,
+        flush_workspace_reserve_bytes: parse_optional_u64(
+            flags,
+            "--flush-workspace-reserve-bytes",
+        )?,
+        tier3_pause_timeout_ms: parse_optional_u64(flags, "--tier3-pause-timeout-ms")?,
     };
     control.validate().map_err(CliError::usage)?;
     Ok(control)
@@ -2603,7 +2711,9 @@ mod tests {
                 frame_index: 1,
                 file_name: "frame1.png".to_string(),
                 label: "initial".to_string(),
-                matched_page: Some("arknights/home".to_string()),
+                recognition_state: RecognitionState::from_matched_page(Some(
+                    "arknights/home".to_string(),
+                )),
                 frame,
             })
             .expect("frame store");

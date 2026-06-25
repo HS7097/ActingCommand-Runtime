@@ -36,35 +36,39 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P2.2/Lab-1y capture-backend and trusted execution upgrade: unified capture frames, selectable `adb_screencap`/`droidcast_raw`/`nemu_ipc` backends, backend diagnostics, Lab-1y control modes, local LabLease lock, and output timing stats.
 - P2.2 capture backend repair close-out: Nemu IPC UTF-16 path passing, DroidCast_raw natural-buffer rotation, `lab run --capture-backend` CLI priority, and auto backend probe downgrade.
 - P2.3 capture pipeline refactor: capture backends now return raw pixel frames without hot-path PNG encoding, ADB preserves original screencap PNG for artifact writes, recognition can consume raw RGB/RGBA pixels, Nemu IPC caches resolution, and `device-test benchmark` reports capture-only, encode-only, and end-to-end timing.
-- Lab-1z ActingLab frame store branch: raw frames stay resident until final materialization, Tier1 deduplicates recognized frames, Tier2 spills finalized frames to temp disk, Tier3 pauses the Lab task with a legal partial output zip, and frame-store knobs are exposed through control JSON and CLI flags.
+- Lab-1z fixes: explicit frame recognition lifecycle, admission-before-store memory estimation, sync segment-zip flush, current-frame Tier3 pause/resume checkpointing, conservative resident-byte accounting, temp cleanup, and P2.3 capture hot-path non-regression benchmark.
 
-## Current Lab-1z ActingLab Frame Store
+## Current Lab-1z Fixes
 
-The current Runtime task is an ActingLab-only branch that adds a debug frame-store layer without adding UI, OCR, SQLite, scheduler behavior, game logic, or new capture/input backends.
+The current Runtime task is an ActingLab-only frame-store fix. It does not add UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loops, new capture backends, or any P2.3 capture hot-path changes.
 
-Lab-1z direction:
+Lab-1z fixed behavior:
 
-- `actinglab lab run` captures raw `Frame` objects, runs page recognition from raw pixels, then sends the recognized frame to an ActingLab frame store instead of writing every PNG immediately.
-- Default behavior keeps full retained frames in memory while the dynamic memory budget permits.
-- Dynamic memory budget is calculated from current available physical memory and total physical memory, with an OS reserve and optional `max_mem_bytes` cap.
-- Tier 1 activates deduplication for already resident and newly captured recognized frames.
-- Tier 2 writes deduplicated finalized older frames to a temp disk area while keeping the current in-flight frame protected.
-- Tier 3 pauses the current Lab task with a visible error, but finalization still writes a partial legal `output.zip`.
-- Deduplication compares only recognized frames, groups by recognized page, preserves page transitions and action-evidence labels, and records merged/dwell metadata.
-- Final `output.zip` still contains only `logs/` and `screenshots/`, with frame-store diagnostics in `logs/frame_store.json` and `logs/frame_timeline.jsonl`.
-- Control JSON may include `frame_store` settings. CLI flags override control values: `--similarity-threshold`, `--tier1-ratio`, `--tier2-ratio`, `--tier3-ratio`, `--hysteresis-ratio`, `--max-mem-bytes`, and `--os-reserve-bytes`.
+- `actinglab lab run` captures raw `Frame` objects, runs page recognition from raw pixels, and passes a completed recognition lifecycle state into the frame store.
+- `RecognitionState` separates `Pending`, `Matched { page_id }`, `CompletedNoMatch`, and `Failed { reason }`.
+- Deduplication only starts after Tier1 and only for non-key `Matched` frames on the same page. `Pending`, `CompletedNoMatch`, and `Failed` frames are not same-page deduped.
+- `add_frame` estimates the incoming frame before unconditional admission. The estimate includes payload, original PNG, thumbnail, string/metadata overhead, per-entry overhead, and encoder workspace reserve.
+- Tier2 uses synchronous segment zip flushes under `frame-store-temp/segment-*.zip` plus `segment-manifest.jsonl`; no background flush thread is introduced.
+- Tier3 is a current-frame decision. It returns structured pause/checkpoint data and stops further actions/captures through a visible Lab failure path that still finalizes a partial valid output zip when possible.
+- Tier3 resume checks must capture a fresh frame and emit `tier3_resume_capture`, `tier3_resume_page_check`, `tier3_resume_allowed`, or `tier3_resume_blocked` events.
+- Spill no longer protects the last frame by index alone. It uses recognition lifecycle state, allows eligible single/last-frame spill, and degrades spill I/O failures with warnings instead of panicking mid-run.
+- `resident_bytes` is a conservative estimate and diagnostics split payload, metadata, thumbnail, encoder workspace, spilled, and dropped bytes.
+- Validation rejects `similarity_threshold = 1.0`, non-finite or boundary ratios, non-distinct watermarks, release lines above activations, zero budgets, and Tier2/Tier3 gaps smaller than `flush_workspace_reserve_bytes`.
+- `frame-store-temp` is cleaned after successful finish or after partial zip finalization; cleanup failures are warning events and do not override the primary result.
+- Control JSON and CLI support `flush_workspace_reserve_bytes` / `--flush-workspace-reserve-bytes` and `tier3_pause_timeout_ms` / `--tier3-pause-timeout-ms` in addition to the earlier frame-store knobs.
 
 Lab-1z validation status:
 
-- `cargo test -p actingcommand-actinglab` passed with frame-store unit coverage for memory budget calculation, Tier1 deduplication, page-transition retention, Tier2 temp-disk spilling, hysteresis release, Tier3 alarm materialization, and failure-zip screenshot materialization.
-- `cargo test --workspace` passed after the initial implementation.
-- `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `git diff --check` passed.
-- Prohibited-scope scans found no new UI, SQLite, OCR, raw ADB input fallback, reconnect path, scrcpy, minicap, or `adb shell screencap` path in the touched ActingLab files.
+- `cargo test -p actingcommand-actinglab` passed with 41 tests covering lifecycle dedupe, page transitions, single/last-frame spill, Tier2 non-pausing segment flush, current-frame Tier3 pause/checkpoint, threshold rejection, conservative resident-byte accounting, spill I/O degradation, temp cleanup, T2/T3 gap validation, clock rollback, pathological thumbnail dimensions, and partial materialization.
+- Full workspace validation is required before each push: `cargo test --workspace`, `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `git diff --check`.
+- Prohibited-scope scans found no new UI, SQLite, OCR, reconnect/retry loop, scrcpy, minicap, `adb shell screencap`, or background segment flush thread in the touched ActingLab files.
+- P2.3 non-regression benchmark on Arknights `127.0.0.1:16416` succeeded in this pass. `nemu_ipc` raw capture best/median/p90 was `27/29/29ms`; end-to-end capture plus artifact PNG best/median/p90 was `173/178/192ms`. This confirms the raw capture hot path remains in the tens-of-milliseconds range, but this task does not claim a 300ms full pipeline target.
 
 Known residuals:
 
+- Tier3 pause uses the synchronous Lab failure/finalization path for this task. A richer resumable paused run loop is a later Runtime-service milestone.
 - Thumbnail/MAD deduplication is intentionally compact and synchronous for this branch; a later task can move heavier perceptual hashing off the capture path if needed.
-- Live Arknights `16416` validation is not yet run for Lab-1z in this pass.
+- Live Arknights `16416` Lab package execution was not run as a gameplay validation for this fix; the live work in this pass was limited to the capture benchmark.
 
 ## Current P2.3 Capture Pipeline Refactor
 
