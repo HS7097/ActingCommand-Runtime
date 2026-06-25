@@ -541,6 +541,28 @@ Current P1g limitations are intentional:
 
 Commands that would require missing Runtime services fail visibly with stable envelope errors instead of returning fake success.
 
+### Lab-1y interpreter namespace normalization + synchronous capture cadence fix
+
+This phase fixes the Lab-1y interpreter path that maps detected page ids to operation anchors.
+
+The interpreter now treats detector page ids such as `arknights/home` as the namespaced form of operation anchors such as `home`. The normalization is applied consistently to:
+
+- initial page confirmation;
+- operation `from` selection;
+- `target_page` stop checks;
+- operation `to` arrival polling;
+- after-state writeback.
+
+The fix uses the known `{game}/` prefix and detector page existence checks instead of blindly splitting page ids on `/`.
+
+Lab-1y route execution also constrains page evaluation to the relevant operation pages for the current task, so waiting and arrival polling continue to produce screenshots and recognition records without evaluating every page in a large resource pack.
+
+`control.json` remains the authority for `entry_task_id`. If `resources/manifest.json` also declares `entry_task_id`, it must match `control.json`; mismatches fail loudly.
+
+`to: null` operation results are no longer treated as verified success when `verify_template` is also null. Such operations are recorded as `executed_unverified`; `to: null` with `verify_template` still requires template verification.
+
+This phase does not claim that TaskRoute, navigation models, or resource bundles are fully verified. Live validation only covered the `open_terminal` Arknights package path enough to confirm the interpreter no longer fails on namespaced page ids.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
@@ -608,7 +630,8 @@ Remaining BA data work is still resource/live-verification work, not Runtime arc
 10. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
 11. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
 12. Add Arknights operator/menu navigation targets before Arknights probes.
-13. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-14. Define Runtime API contracts for UI integration in a separate milestone.
-15. Define capture metadata and SQLite schema in a separate scoped milestone.
-16. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+13. Improve Arknights page templates/guards so `home`, `terminal`, and related menu pages do not all match the same frame.
+14. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+15. Define Runtime API contracts for UI integration in a separate milestone.
+16. Define capture metadata and SQLite schema in a separate scoped milestone.
+17. Keep `CHECKPOINT.md` updated with every completed Runtime task.

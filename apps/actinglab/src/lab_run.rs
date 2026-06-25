@@ -215,20 +215,32 @@ fn execute_lab_run(
         current_page: None,
         failed_step_id: None,
     };
+    let actionable_page_candidates = if state.control.execution_mode == "recognize_only" {
+        None
+    } else {
+        Some(actionable_page_ids(&state.resources, &state.control)?)
+    };
+    let initial_page_candidates = if state.control.execution_mode == "recognize_only" {
+        None
+    } else {
+        Some(initial_page_ids(&state.resources, &state.control)?)
+    };
 
-    let first = ctx.capture_scene(
+    let first = capture_until_matched_page(
+        ctx,
         capture.as_mut(),
-        &state.resources.evaluator,
-        &state.resources.detector,
+        &state.resources,
         "initial",
+        step_timeout_ms,
+        &state.control,
+        initial_page_candidates.as_deref(),
     )?;
-    validate_frame_resolution(&state.control, first.width, first.height)?;
-    state.current_page = first.matched_page.clone();
+    state.current_page = first.matched_anchor(&state.control.game);
 
     if state.control.execution_mode == "recognize_only" {
         ctx.event(
             "recognize_only_finished",
-            json!({"matched_page": state.current_page}),
+            json!({"matched_page": first.matched_page, "matched_anchor": state.current_page}),
         )?;
         ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
         ctx.lease_released = true;
@@ -241,17 +253,31 @@ fn execute_lab_run(
                 "Lab-1y run timeout after {timeout_ms}ms"
             )));
         }
-        let Some(current_page) = state.current_page.clone() else {
-            return Err(CliError::device(
-                "no page matched before operation selection",
-            ));
+        let current_page = match state.current_page.clone() {
+            Some(current_page) => current_page,
+            None => {
+                let scene = capture_until_matched_page(
+                    ctx,
+                    capture.as_mut(),
+                    &state.resources,
+                    "page_wait",
+                    step_timeout_ms,
+                    &state.control,
+                    actionable_page_candidates.as_deref(),
+                )?;
+                let current_page = scene.matched_anchor(&state.control.game).ok_or_else(|| {
+                    CliError::device("no page matched before operation selection")
+                })?;
+                state.current_page = Some(current_page.clone());
+                current_page
+            }
         };
         if state
             .resources
             .operation_bundle
             .target_page
             .as_ref()
-            .is_some_and(|target| target == &current_page)
+            .is_some_and(|target| page_anchor_matches(&state.control.game, &current_page, target))
             && state.control.stop_on_confirmation.unwrap_or(true)
         {
             break;
@@ -262,7 +288,9 @@ fn execute_lab_run(
             .operation_bundle
             .operations
             .iter()
-            .find(|operation| operation.from == current_page)
+            .find(|operation| {
+                page_anchor_matches(&state.control.game, &current_page, &operation.from)
+            })
             .ok_or_else(|| {
                 CliError::device(format!(
                     "no operation can continue from page '{current_page}'"
@@ -336,16 +364,10 @@ fn execute_lab_run(
             &state.resources,
             &operation,
             step_timeout_ms,
+            &state.control.game,
         )?;
-        let guard_passed = operation
-            .to
-            .as_ref()
-            .is_none_or(|to| after.matched_page.as_ref().is_some_and(|page| page == to))
-            || operation
-                .verify_template
-                .as_ref()
-                .is_some_and(|_| after.verify_template_matched);
-        if !guard_passed {
+        let verification = operation_verification_status(&state.control.game, &operation, &after);
+        if verification == OperationVerification::Failed {
             ctx.event(
                 "page_guard_failed",
                 json!({"step_id": operation.id, "expected": operation.to, "after_page": after.matched_page}),
@@ -360,13 +382,18 @@ fn execute_lab_run(
                 operation.id
             )));
         }
+        let guard_event = match verification {
+            OperationVerification::Verified => "page_guard_passed",
+            OperationVerification::ExecutedUnverified => "page_guard_unverified",
+            OperationVerification::Failed => unreachable!("failed verification returned earlier"),
+        };
         ctx.event(
-            "page_guard_passed",
+            guard_event,
             json!({"step_id": operation.id, "after_page": after.matched_page}),
         )?;
         ctx.event(
             "after_page_detected",
-            json!({"step_id": operation.id, "page": after.matched_page}),
+            json!({"step_id": operation.id, "page": after.matched_page, "anchor": after.matched_anchor(&state.control.game)}),
         )?;
 
         ctx.steps.push(json!({
@@ -377,6 +404,7 @@ fn execute_lab_run(
             "to": operation.to,
             "before_page": current_page,
             "after_page": after.matched_page,
+            "after_anchor": after.matched_anchor(&state.control.game),
             "click_count": if matches!(action, LabInputAction::Tap(_)) { 1 } else { 0 },
             "drag_count": if matches!(action, LabInputAction::Drag { .. }) { 1 } else { 0 },
             "actual_input": action.to_json(),
@@ -384,10 +412,13 @@ fn execute_lab_run(
             "produces": operation.produces,
             "verified_live": operation.verified_live,
             "provenance": operation.provenance,
-            "result": "ok"
+            "result": verification.result_label()
         }));
-        ctx.event("step_finished", json!({"step_id": operation.id}))?;
-        state.current_page = after.matched_page.or(operation.to);
+        ctx.event(
+            "step_finished",
+            json!({"step_id": operation.id, "result": verification.result_label()}),
+        )?;
+        state.current_page = next_current_page(&state.control.game, &after, &operation);
         if state.current_page.is_none() {
             break;
         }
@@ -400,6 +431,185 @@ fn execute_lab_run(
     ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
     ctx.lease_released = true;
     Ok(state)
+}
+
+fn capture_until_matched_page(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    resources: &LabResources,
+    label: &str,
+    timeout_ms: u64,
+    control: &LabControl,
+    candidate_pages: Option<&[String]>,
+) -> CliOutcome<CapturedScene> {
+    let started = Instant::now();
+    loop {
+        ctx.wait_for_next_capture_start();
+        let scene = ctx.capture_scene_with_pages(
+            capture,
+            &resources.evaluator,
+            &resources.detector,
+            label,
+            candidate_pages,
+        )?;
+        validate_frame_resolution(control, scene.width, scene.height)?;
+        if scene.matched_page.is_some() {
+            return Ok(scene);
+        }
+        if started.elapsed() >= Duration::from_millis(timeout_ms) {
+            return Ok(scene);
+        }
+    }
+}
+
+fn canonical_page_anchor(game: &str, page_id: &str) -> String {
+    let prefix = format!("{game}/");
+    page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
+}
+
+fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &str) -> bool {
+    observed_or_anchor == expected_anchor
+        || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
+        || observed_or_anchor == format!("{game}/{expected_anchor}")
+}
+
+fn matched_page_matches_anchor(
+    game: &str,
+    matched_page: Option<&str>,
+    expected_anchor: &str,
+) -> bool {
+    matched_page.is_some_and(|page| page_anchor_matches(game, page, expected_anchor))
+}
+
+fn next_current_page(game: &str, after: &CapturedScene, operation: &Operation) -> Option<String> {
+    after.matched_anchor(game).or_else(|| {
+        operation
+            .to
+            .as_ref()
+            .map(|to| canonical_page_anchor(game, to))
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationVerification {
+    Verified,
+    ExecutedUnverified,
+    Failed,
+}
+
+impl OperationVerification {
+    fn result_label(self) -> &'static str {
+        match self {
+            OperationVerification::Verified => "ok",
+            OperationVerification::ExecutedUnverified => "executed_unverified",
+            OperationVerification::Failed => "failed",
+        }
+    }
+}
+
+fn operation_verification_status(
+    game: &str,
+    operation: &Operation,
+    after: &CapturedScene,
+) -> OperationVerification {
+    let matched_to = operation
+        .to
+        .as_ref()
+        .is_some_and(|to| matched_page_matches_anchor(game, after.matched_page.as_deref(), to));
+    let matched_template = operation.verify_template.is_some() && after.verify_template_matched;
+    if matched_to || matched_template {
+        return OperationVerification::Verified;
+    }
+    if operation.to.is_none() && operation.verify_template.is_none() {
+        return OperationVerification::ExecutedUnverified;
+    }
+    OperationVerification::Failed
+}
+
+fn actionable_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
+    let mut pages = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(entry_page) = &resources.operation_bundle.entry_page
+        && entry_page != "any"
+    {
+        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
+    }
+    if let Some(target_page) = &resources.operation_bundle.target_page {
+        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
+    }
+    for operation in &resources.operation_bundle.operations {
+        push_resolved_page_id(
+            &mut pages,
+            &mut seen,
+            resources,
+            &control.game,
+            &operation.from,
+        )?;
+        if let Some(to) = &operation.to {
+            push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, to)?;
+        }
+    }
+    Ok(pages)
+}
+
+fn initial_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
+    let mut pages = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(entry_page) = &resources.operation_bundle.entry_page
+        && entry_page != "any"
+    {
+        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
+    }
+    if let Some(target_page) = &resources.operation_bundle.target_page {
+        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
+    }
+    if pages.is_empty() {
+        return actionable_page_ids(resources, control);
+    }
+    Ok(pages)
+}
+
+fn operation_arrival_page_ids(
+    resources: &LabResources,
+    game: &str,
+    operation: &Operation,
+) -> CliOutcome<Option<Vec<String>>> {
+    operation
+        .to
+        .as_ref()
+        .map(|to| resolve_detector_page_id(resources, game, to).map(|page| vec![page]))
+        .transpose()
+}
+
+fn resolve_detector_page_id(
+    resources: &LabResources,
+    game: &str,
+    anchor: &str,
+) -> CliOutcome<String> {
+    let namespaced = format!("{game}/{anchor}");
+    if resources.detector.contains_page(&namespaced) {
+        return Ok(namespaced);
+    }
+    if resources.detector.contains_page(anchor) {
+        return Ok(anchor.to_string());
+    }
+    Err(CliError::package_invalid(format!(
+        "operation page anchor '{anchor}' does not resolve to a detector page id"
+    )))
+}
+
+fn push_resolved_page_id(
+    pages: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    resources: &LabResources,
+    game: &str,
+    anchor: &str,
+) -> CliOutcome<()> {
+    let page = resolve_detector_page_id(resources, game, anchor)?;
+    if seen.insert(page.clone()) {
+        pages.push(page);
+    }
+    Ok(())
 }
 
 fn close_backend_after_error<T>(
@@ -442,15 +652,18 @@ fn poll_after_operation(
     resources: &LabResources,
     operation: &Operation,
     step_timeout_ms: u64,
+    game: &str,
 ) -> CliOutcome<CapturedScene> {
     let started = Instant::now();
+    let arrival_page_candidates = operation_arrival_page_ids(resources, game, operation)?;
     loop {
         ctx.wait_for_next_capture_start();
-        let mut scene = ctx.capture_scene(
+        let mut scene = ctx.capture_scene_with_pages(
             capture,
             &resources.evaluator,
             &resources.detector,
             &operation.id,
+            arrival_page_candidates.as_deref(),
         )?;
         if let Some(template) = &operation.verify_template {
             scene.verify_template_matched = verify_template(
@@ -463,8 +676,9 @@ fn poll_after_operation(
         let matched_to = operation
             .to
             .as_ref()
-            .is_some_and(|to| scene.matched_page.as_ref().is_some_and(|page| page == to));
-        if matched_to || scene.verify_template_matched || operation.to.is_none() {
+            .is_some_and(|to| matched_page_matches_anchor(game, scene.matched_page.as_deref(), to));
+        let unverified_single_frame = operation.to.is_none() && operation.verify_template.is_none();
+        if matched_to || scene.verify_template_matched || unverified_single_frame {
             return Ok(scene);
         }
         if started.elapsed() >= Duration::from_millis(step_timeout_ms) {
@@ -503,6 +717,7 @@ fn load_lab_resources(ctx: &LabRunContext, control: &LabControl) -> CliOutcome<L
     }
     let manifest_path = resource_root.join("manifest.json");
     let manifest = read_json_value(&manifest_path)?;
+    validate_manifest_entry_task_id(&manifest_path, &manifest, control)?;
     let operation_dir = resource_root
         .join("operations")
         .join(&control.entry_task_id);
@@ -560,6 +775,31 @@ fn load_detector(path: &Path, evaluator: &RecognitionEvaluator) -> CliOutcome<Pa
         .validate(evaluator)
         .map_err(|err| CliError::package_invalid(err.to_string()))?;
     Ok(detector)
+}
+
+fn validate_manifest_entry_task_id(
+    manifest_path: &Path,
+    manifest: &Value,
+    control: &LabControl,
+) -> CliOutcome<()> {
+    let Some(value) = manifest.get("entry_task_id") else {
+        return Ok(());
+    };
+    let Some(manifest_entry_task_id) = value.as_str() else {
+        return Err(CliError::package_invalid(format!(
+            "{} entry_task_id must be a string when present",
+            manifest_path.display()
+        )));
+    };
+    if manifest_entry_task_id != control.entry_task_id {
+        return Err(CliError::package_invalid(format!(
+            "{} entry_task_id '{}' conflicts with control entry_task_id '{}'",
+            manifest_path.display(),
+            manifest_entry_task_id,
+            control.entry_task_id
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1264,12 +1504,13 @@ impl LabRunContext {
         }
     }
 
-    fn capture_scene(
+    fn capture_scene_with_pages(
         &mut self,
         capture: &mut dyn CaptureBackend,
         evaluator: &RecognitionEvaluator,
         detector: &PageDetector,
         label: &str,
+        candidate_pages: Option<&[String]>,
     ) -> CliOutcome<CapturedScene> {
         let now = Instant::now();
         if let Some(last) = self.last_capture_at.replace(now) {
@@ -1309,9 +1550,16 @@ impl LabRunContext {
         )?;
 
         let scene = Scene::from_png(&frame.png).map_err(|err| CliError::device(err.to_string()))?;
-        let evaluations = detector
-            .evaluate_all(evaluator, &scene)
-            .map_err(|err| CliError::device(err.to_string()))?;
+        let evaluations = match candidate_pages {
+            Some(pages) => pages
+                .iter()
+                .map(|page| detector.evaluate_page(evaluator, &scene, page))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| CliError::device(err.to_string()))?,
+            None => detector
+                .evaluate_all(evaluator, &scene)
+                .map_err(|err| CliError::device(err.to_string()))?,
+        };
         let matched_page = evaluations
             .iter()
             .find(|evaluation| evaluation.matched)
@@ -1577,6 +1825,14 @@ struct CapturedScene {
     verify_template_matched: bool,
     width: u32,
     height: u32,
+}
+
+impl CapturedScene {
+    fn matched_anchor(&self, game: &str) -> Option<String> {
+        self.matched_page
+            .as_deref()
+            .map(|page| canonical_page_anchor(game, page))
+    }
 }
 
 struct ScreenshotRecord {
@@ -2135,6 +2391,78 @@ mod tests {
     }
 
     #[test]
+    fn page_namespace_matches_operation_anchors_without_blind_split() {
+        assert_eq!(canonical_page_anchor("arknights", "arknights/home"), "home");
+        assert_eq!(
+            canonical_page_anchor("arknights", "arknights/navigation/home_to_task"),
+            "navigation/home_to_task"
+        );
+        assert_eq!(canonical_page_anchor("arknights", "home"), "home");
+        assert!(page_anchor_matches("arknights", "arknights/home", "home"));
+        assert!(page_anchor_matches("arknights", "home", "home"));
+        assert!(page_anchor_matches(
+            "arknights",
+            "arknights/quickswitch_dropdown",
+            "quickswitch_dropdown"
+        ));
+        assert!(!page_anchor_matches(
+            "arknights",
+            "bluearchive/home",
+            "home"
+        ));
+    }
+
+    #[test]
+    fn operation_verification_marks_to_null_without_template_unverified() {
+        let operation = test_operation(None, None);
+        let scene = captured_scene(Some("arknights/home"), false);
+
+        let result = operation_verification_status("arknights", &operation, &scene);
+
+        assert_eq!(result, OperationVerification::ExecutedUnverified);
+        assert_eq!(result.result_label(), "executed_unverified");
+    }
+
+    #[test]
+    fn operation_verification_requires_template_when_to_is_null_with_template() {
+        let operation = test_operation(None, Some("terminal.png"));
+        let failed = captured_scene(Some("arknights/home"), false);
+        let passed = captured_scene(Some("arknights/home"), true);
+
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &failed),
+            OperationVerification::Failed
+        );
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &passed),
+            OperationVerification::Verified
+        );
+    }
+
+    #[test]
+    fn operation_verification_accepts_namespaced_arrival_page() {
+        let operation = test_operation(Some("terminal"), None);
+        let scene = captured_scene(Some("arknights/terminal"), false);
+
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &scene),
+            OperationVerification::Verified
+        );
+    }
+
+    #[test]
+    fn manifest_entry_task_id_conflict_is_fatal() {
+        let control = test_control();
+        let manifest = json!({"entry_task_id": "other_task"});
+
+        let err = validate_manifest_entry_task_id(Path::new("manifest.json"), &manifest, &control)
+            .expect_err("conflict is fatal");
+
+        assert_eq!(err.code, "package_invalid");
+        assert!(err.message.contains("conflicts with control entry_task_id"));
+    }
+
+    #[test]
     fn screenshot_names_are_timestamp_based_with_suffixes() {
         let temp = TempDir::new().expect("temp");
         let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
@@ -2145,6 +2473,75 @@ mod tests {
         assert!(first.ends_with(".png"));
         assert!(second.ends_with("_02.png"));
         assert!(first.starts_with("20230101_000000_123"));
+    }
+
+    fn test_control() -> LabControl {
+        LabControl {
+            schema_version: CONTROL_SCHEMA.to_string(),
+            package_id: "pkg".to_string(),
+            execution_mode: "navigable_route".to_string(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            resolution: Resolution {
+                width: 1280,
+                height: 720,
+            },
+            entry_task_id: "task".to_string(),
+            capture_interval_ms: None,
+            timeout_ms: None,
+            step_timeout_ms: None,
+            max_steps: None,
+            stop_on_error: None,
+            stop_on_confirmation: None,
+            resource_root: None,
+            allow_placeholder_coords: None,
+            output: None,
+            capture_backend: None,
+            producer: None,
+            trusted_execution: None,
+        }
+    }
+
+    fn test_operation(to: Option<&str>, verify_template: Option<&str>) -> Operation {
+        Operation {
+            id: "open_terminal".to_string(),
+            purpose: "test".to_string(),
+            from: "home".to_string(),
+            to: to.map(str::to_string),
+            click: OperationClick {
+                kind: "point".to_string(),
+                x: Some(100),
+                y: Some(100),
+                width: None,
+                height: None,
+                from_rect: None,
+                to_rect: None,
+                duration_ms: None,
+            },
+            verify_template: verify_template.map(str::to_string),
+            consumes: Vec::new(),
+            produces: Vec::new(),
+            verified_live: None,
+            provenance: None,
+        }
+    }
+
+    fn captured_scene(page: Option<&str>, verify_template_matched: bool) -> CapturedScene {
+        CapturedScene {
+            scene: Scene::from_png(one_pixel_png()).expect("scene"),
+            matched_page: page.map(str::to_string),
+            verify_template_matched,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn one_pixel_png() -> &'static [u8] {
+        &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0,
+            5, 0, 1, 13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ]
     }
 
     fn write_test_zip(path: &Path, files: &[(&str, &[u8])]) {

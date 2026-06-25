@@ -1,5 +1,94 @@
 # CHECKPOINT.md
 
+## 2026-06-25 Lab-1y interpreter namespace normalization + synchronous capture cadence fix
+
+### Current status
+
+- Fixed Lab-1y interpreter page-id handling for namespaced detector pages such as `arknights/home` versus operation anchors such as `home`.
+- Applied the same page-anchor normalization to:
+  - initial page confirmation;
+  - operation `from` selection;
+  - `target_page` stop checks;
+  - operation `to` arrival polling;
+  - after-state writeback.
+- Added task-scoped page evaluation for Lab-1y route execution so large page sets are not evaluated wholesale on every frame.
+- Added `entry_task_id` integrity checking:
+  - `control.json` remains authoritative;
+  - if `resources/manifest.json` also declares `entry_task_id`, mismatches fail loudly.
+- Updated `to: null` semantics:
+  - `to: null` plus `verify_template: null` records `executed_unverified`;
+  - `to: null` plus `verify_template` requires the template to verify.
+- Kept the copied local helper script `tests/build_lab_pkg.py` in the working tree for this task. It is not committed in this checkpoint.
+- No TaskRoute, full navigation model, OCR, SQLite, UI, or resource-bundle completion is claimed here.
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-AzurLane`: refreshed before the task; `HEAD` at `b3451dd7c85ffc349f043530cf2f04f856180c12`.
+- `ActingCommand-Resources-Arknights`: refreshed before the task; `HEAD` at `eacf3e446ab62c9b3013f653b7986a85a8bf0213`.
+- `ActingCommand-Resources-BlueArchive`: refreshed before the task; `HEAD` at `1b52342c6e0db7b65f8a09d654ec97594921cf7b`.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-1y-fix-namespace-and-cadence.md`.
+- Copied `C:\.ClaudeCode\ActingCommand\tests\build_lab_pkg.py` into `tests\build_lab_pkg.py` for local package-building assistance.
+- `git status --short --branch`
+- `git fetch origin --prune --tags`
+- `git pull --ff-only`
+- `git rev-parse HEAD` in Runtime and the three resource repositories.
+- `python --version`
+- `python tests\build_lab_pkg.py open_terminal navigable_route`
+- `target\debug\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend auto capture --out target\actinglab-labpkg\ak16416-retest-current.png`
+- `target\debug\actinglab.exe --json --run-root target\actinglab-labpkg\runs-retest lab run --zip target\actinglab-labpkg\in_open_terminal.zip --out target\actinglab-labpkg\out_open_terminal_retest.zip --instance 127.0.0.1:16416 --capture-backend auto`
+- `cargo build -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+
+### Live validation result
+
+- Device: `127.0.0.1:16416`
+- Package: `target\actinglab-labpkg\in_open_terminal.zip`
+- Output: `target\actinglab-labpkg\out_open_terminal_retest.zip`
+- Run directory: `target\actinglab-labpkg\runs-retest\lab1y-20260625_051921_950`
+- Result: `ok=true`
+- `executed_step_count=2`
+- `screenshot_count=3`
+- Observed route:
+  - `home_open_quickswitch`: `home` -> `arknights/quickswitch_dropdown`
+  - `quickswitch_to_terminal`: `quickswitch_dropdown` -> `arknights/terminal`
+- The package stopped at `target_page=terminal`.
+- The resource-consuming `terminal_start_mission` step did not run.
+- No `actinglab` process or LabLease lock remained after the run.
+- A previous live attempt was discarded as noisy because another program was using the same emulator.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with 20 tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- Current Arknights page resources can match multiple coarse pages on the same frame, for example `home` and `terminal` on the home frame. The interpreter fix avoids the namespace failure, but page-template quality still needs resource work.
+- The local helper `tests/build_lab_pkg.py` remains untracked for this task and should be either promoted deliberately as an offline test helper or removed later.
+
+### Next step
+
+1. Commit and push this Runtime fix with `PLANS.md` and `CHECKPOINT.md`.
+2. Improve Arknights page templates/guards so `home`, `terminal`, and related quickswitch pages are not all matched by the same frame.
+3. Add a committed, sanitized package-builder fixture only if this helper should become part of the repository test workflow.
+
 ## 2026-06-25 P2.2 capture backends and Lab-1y trusted execution engine
 
 ### Current status
