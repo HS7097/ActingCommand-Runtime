@@ -12,6 +12,8 @@
 - Added `logs/frame_store.json` and `logs/frame_timeline.jsonl` to Lab output packages.
 - `recognition.jsonl` remains written after recognition and before frame discard decisions are finalized for the current frame.
 - No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, input fallback, or P2.2/P2.3 rollback was added.
+- Implementation commit: `080eeb8` (`Add ActingLab frame store watermarks`).
+- Checkpoint tag: `checkpoint/20260625-lab-1z-frame-store`.
 
 ### Files changed
 
