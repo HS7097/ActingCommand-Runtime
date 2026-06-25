@@ -2,7 +2,12 @@
 
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, device_config, effective_adb_path,
-    effective_run_root, read_user_config,
+    effective_run_root,
+    frame_store::{
+        FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
+        FrameStoreScreenshot as ScreenshotRecord,
+    },
+    read_user_config,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
@@ -46,6 +51,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .unwrap_or_else(|| PathBuf::from("target").join("actinglab-runs"));
     let capture_interval_override = parse_optional_u64(&flags, "--capture-interval-ms")?;
     let capture_backend_override = parse_optional_capture_backend(&flags, "--capture-backend")?;
+    let frame_store_cli = parse_frame_store_control_from_flags(&flags)?;
 
     let mut ctx = LabRunContext::create(&run_root, &zip_path)?;
     ctx.set_phase("run_started");
@@ -61,6 +67,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         &zip_path,
         capture_interval_override,
         capture_backend_override,
+        frame_store_cli,
     );
     match result {
         Ok(run_state) => {
@@ -105,6 +112,7 @@ fn execute_lab_run(
     zip_path: &Path,
     capture_interval_override: Option<u64>,
     capture_backend_override: Option<CaptureBackendChoice>,
+    frame_store_cli: FrameStoreControl,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
     let input_sha256 = file_sha256(zip_path)?;
@@ -121,6 +129,10 @@ fn execute_lab_run(
     let control = read_json_file::<LabControl>(&control_path)?;
     control.validate()?;
     ctx.control = Some(control.clone());
+    let mut frame_store_config = FrameStoreConfig::default();
+    control.frame_store.apply_to(&mut frame_store_config);
+    frame_store_cli.apply_to(&mut frame_store_config);
+    ctx.set_frame_store_config(frame_store_config)?;
     if control.producer.is_none() {
         ctx.event(
             "producer_missing",
@@ -834,6 +846,8 @@ struct LabControl {
     #[serde(default)]
     capture_backend: Option<String>,
     #[serde(default)]
+    frame_store: FrameStoreControl,
+    #[serde(default)]
     producer: Option<Value>,
     #[serde(default)]
     trusted_execution: Option<Value>,
@@ -882,6 +896,9 @@ impl LabControl {
             CaptureBackendChoice::parse(capture_backend)
                 .map_err(|err| CliError::package_invalid(err.to_string()))?;
         }
+        self.frame_store
+            .validate()
+            .map_err(CliError::package_invalid)?;
         Ok(())
     }
 
@@ -1392,6 +1409,7 @@ struct LabRunContext {
     requested_capture_interval_ms: u64,
     screenshot_names: HashMap<String, usize>,
     screenshots: Vec<ScreenshotRecord>,
+    frame_store: FrameStore,
     recognition: Vec<Value>,
     events: Vec<Value>,
     steps: Vec<Value>,
@@ -1433,6 +1451,10 @@ impl LabRunContext {
                 screenshots_dir.display()
             ))
         })?;
+        let frame_store = FrameStore::new(
+            run_dir.join("frame-store-temp"),
+            FrameStoreConfig::default(),
+        )?;
         Ok(Self {
             run_id,
             run_seed: hash_text(&input_zip.display().to_string()),
@@ -1448,6 +1470,7 @@ impl LabRunContext {
             requested_capture_interval_ms: DEFAULT_CAPTURE_INTERVAL_MS,
             screenshot_names: HashMap::new(),
             screenshots: Vec::new(),
+            frame_store,
             recognition: Vec::new(),
             events: Vec::new(),
             steps: Vec::new(),
@@ -1471,6 +1494,10 @@ impl LabRunContext {
 
     fn set_phase(&mut self, phase: &str) {
         self.phase = phase.to_string();
+    }
+
+    fn set_frame_store_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
+        self.frame_store.set_config(config)
     }
 
     fn event(&mut self, event: &str, data: Value) -> CliOutcome<()> {
@@ -1526,34 +1553,11 @@ impl LabRunContext {
             .push(now.elapsed().as_millis() as u64);
         self.frame_index += 1;
         let file_name = self.next_screenshot_name(SystemTime::now());
-        let relative = format!("screenshots/{file_name}");
-        let path = self.screenshots_dir.join(&file_name);
-        let png = frame
-            .png_for_artifact()
-            .map_err(|err| CliError::device(err.to_string()))?;
-        fs::write(&path, &png).map_err(|err| {
-            CliError::device(format!("failed to write {}: {err}", path.display()))
-        })?;
-        self.screenshots.push(ScreenshotRecord {
-            frame_index: self.frame_index,
-            file: relative.clone(),
-            width: frame.width,
-            height: frame.height,
-        });
-        self.event(
-            "screenshot_saved",
-            json!({
-                "frame_index": self.frame_index,
-                "file": relative,
-                "width": frame.width,
-                "height": frame.height,
-                "backend": frame.backend_name.as_str(),
-                "pixel_format": frame.pixel_format.as_str(),
-                "captured_at": timestamp_iso(frame.captured_at),
-                "label": label
-            }),
-        )?;
-
+        let width = frame.width;
+        let height = frame.height;
+        let backend = frame.backend_name.as_str();
+        let pixel_format = frame.pixel_format.as_str();
+        let captured_at = frame.captured_at;
         let scene = scene_from_frame(&frame)?;
         let evaluations = match candidate_pages {
             Some(pages) => pages
@@ -1569,10 +1573,36 @@ impl LabRunContext {
             .iter()
             .find(|evaluation| evaluation.matched)
             .map(|evaluation| evaluation.page_id.clone());
+        let store_outcome = self.frame_store.add_frame(FrameStoreFrameInput {
+            frame_index: self.frame_index,
+            file_name,
+            label: label.to_string(),
+            matched_page: matched_page.clone(),
+            frame,
+        })?;
+        let retained_file = store_outcome.file.clone();
+        let merged_into = store_outcome.merged_into.clone();
+        self.event(
+            "screenshot_recorded",
+            json!({
+                "frame_index": self.frame_index,
+                "file": retained_file.clone(),
+                "retained": store_outcome.retained,
+                "merged_into": merged_into.clone(),
+                "width": width,
+                "height": height,
+                "backend": backend,
+                "pixel_format": pixel_format,
+                "captured_at": timestamp_iso(captured_at),
+                "label": label
+            }),
+        )?;
         let recognition = json!({
             "timestamp": timestamp_iso(SystemTime::now()),
             "frame_index": self.frame_index,
-            "file": self.screenshots.last().map(|record| record.file.clone()),
+            "file": retained_file,
+            "retained": store_outcome.retained,
+            "merged_into": merged_into,
             "matched_page": matched_page,
             "candidates": evaluations.iter().map(page_evaluation_json).collect::<Vec<_>>(),
             "diagnostics": {"label": label}
@@ -1582,12 +1612,17 @@ impl LabRunContext {
             "recognition_recorded",
             json!({"frame_index": self.frame_index, "matched_page": matched_page}),
         )?;
+        if store_outcome.tier3_triggered {
+            return Err(CliError::device(
+                "Lab-1z frame store tier3 alarm triggered; pausing current Lab task",
+            ));
+        }
         Ok(CapturedScene {
             scene,
             matched_page,
             verify_template_matched: false,
-            width: frame.width,
-            height: frame.height,
+            width,
+            height,
         })
     }
 
@@ -1620,6 +1655,12 @@ impl LabRunContext {
             final_event,
             json!({"ok": ok, "failure_reason": failure_reason}),
         )?;
+        self.frame_store.materialize(&self.screenshots_dir)?;
+        self.screenshots = self.frame_store.screenshots();
+        self.event(
+            "frame_store_materialized",
+            json!({"screenshot_count": self.screenshots.len()}),
+        )?;
         self.event("output_zip_written", json!({"out": out_path}))?;
         self.write_logs(ok, failure_reason, state)?;
         write_output_zip(&self.output_dir, out_path)?;
@@ -1638,6 +1679,14 @@ impl LabRunContext {
     ) -> CliOutcome<()> {
         write_json_lines(&self.logs_dir.join("events.jsonl"), &self.events)?;
         write_json_lines(&self.logs_dir.join("recognition.jsonl"), &self.recognition)?;
+        write_json_lines(
+            &self.logs_dir.join("frame_timeline.jsonl"),
+            &self.frame_store.timeline(),
+        )?;
+        write_json(
+            &self.logs_dir.join("frame_store.json"),
+            &self.frame_store.diagnostics_json(),
+        )?;
         write_json(
             &self.logs_dir.join("summary.json"),
             &self.summary_json(ok, failure_reason, state),
@@ -1669,6 +1718,23 @@ impl LabRunContext {
         let capture_stats = interval_stats(&self.capture_durations_ms);
         let action_stats = interval_stats(&self.action_durations_ms);
         let lag_stats = interval_stats(&self.loop_lag_ms);
+        let frame_store = self.frame_store.diagnostics_json();
+        let screenshots = self
+            .screenshots
+            .iter()
+            .map(|record| {
+                json!({
+                    "frame_index": record.frame_index,
+                    "file": record.file,
+                    "width": record.width,
+                    "height": record.height,
+                    "dwell_ms": record.dwell_ms,
+                    "merged_count": record.merged_count,
+                    "matched_page": record.matched_page,
+                    "key_frame": record.key_frame
+                })
+            })
+            .collect::<Vec<_>>();
         let control = self
             .control
             .as_ref()
@@ -1705,17 +1771,14 @@ impl LabRunContext {
             "loop_lag_max_ms": lag_stats.map(|stats| stats.max),
             "capture_backend_requested": self.capture_backend_requested.map(|backend| backend.as_str()),
             "capture_backend_used": self.capture_backend_used.map(|backend| backend.as_str()),
-            "screenshots": self.screenshots.iter().map(|record| json!({
-                "frame_index": record.frame_index,
-                "file": record.file,
-                "width": record.width,
-                "height": record.height
-            })).collect::<Vec<_>>(),
+            "frame_store": frame_store,
+            "screenshots": screenshots,
             "steps": self.steps
         })
     }
 
     fn diagnostics_json(&self, failure_reason: Option<&str>, state: Option<&RunState>) -> Value {
+        let frame_store = self.frame_store.diagnostics_json();
         json!({
             "actinglab_cli_version": env!("CARGO_PKG_VERSION"),
             "runtime_version": "runtime-embedded-lab1y",
@@ -1731,6 +1794,7 @@ impl LabRunContext {
                 "ok": attempt.ok,
                 "message": attempt.message
             })).collect::<Vec<_>>(),
+            "frame_store": frame_store,
             "input_structure": self.input_entries,
             "resource_load_results": state.map(|state| json!({
                 "manifest": state.resources.manifest_path,
@@ -1847,13 +1911,6 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
     };
     Scene::from_pixels(frame.width, frame.height, &frame.pixels, pixel_format)
         .map_err(|err| CliError::device(err.to_string()))
-}
-
-struct ScreenshotRecord {
-    frame_index: usize,
-    file: String,
-    width: u32,
-    height: u32,
 }
 
 struct ArchiveResult {
@@ -2226,6 +2283,44 @@ fn parse_optional_u64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<u64>> {
         .transpose()
 }
 
+fn parse_optional_f32(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f32>> {
+    flags
+        .optional(name)
+        .filter(|value| value != "true")
+        .map(|value| {
+            value.parse::<f32>().map_err(|err| {
+                CliError::usage(format!("failed to parse {name} value '{value}': {err}"))
+            })
+        })
+        .transpose()
+}
+
+fn parse_optional_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
+    flags
+        .optional(name)
+        .filter(|value| value != "true")
+        .map(|value| {
+            value.parse::<f64>().map_err(|err| {
+                CliError::usage(format!("failed to parse {name} value '{value}': {err}"))
+            })
+        })
+        .transpose()
+}
+
+fn parse_frame_store_control_from_flags(flags: &FlagArgs) -> CliOutcome<FrameStoreControl> {
+    let control = FrameStoreControl {
+        similarity_threshold: parse_optional_f32(flags, "--similarity-threshold")?,
+        tier1_ratio: parse_optional_f64(flags, "--tier1-ratio")?,
+        tier2_ratio: parse_optional_f64(flags, "--tier2-ratio")?,
+        tier3_ratio: parse_optional_f64(flags, "--tier3-ratio")?,
+        hysteresis_ratio: parse_optional_f64(flags, "--hysteresis-ratio")?,
+        max_mem_bytes: parse_optional_u64(flags, "--max-mem-bytes")?,
+        os_reserve_bytes: parse_optional_u64(flags, "--os-reserve-bytes")?,
+    };
+    control.validate().map_err(CliError::usage)?;
+    Ok(control)
+}
+
 fn parse_optional_capture_backend(
     flags: &FlagArgs,
     name: &str,
@@ -2386,6 +2481,7 @@ mod tests {
             allow_placeholder_coords: None,
             output: None,
             capture_backend: None,
+            frame_store: FrameStoreControl::default(),
             producer: None,
             trusted_execution: None,
         };
@@ -2489,6 +2585,40 @@ mod tests {
         assert!(first.starts_with("20230101_000000_123"));
     }
 
+    #[test]
+    fn failure_zip_materializes_frame_store_screenshots() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let frame = Frame::from_pixels(
+            1,
+            1,
+            vec![0, 0, 0, 255],
+            PixelFormat::Rgba8,
+            CaptureBackendName::NemuIpc,
+        )
+        .expect("frame");
+        ctx.frame_index = 1;
+        ctx.frame_store
+            .add_frame(FrameStoreFrameInput {
+                frame_index: 1,
+                file_name: "frame1.png".to_string(),
+                label: "initial".to_string(),
+                matched_page: Some("arknights/home".to_string()),
+                frame,
+            })
+            .expect("frame store");
+        let out = temp.path().join("out.zip");
+
+        ctx.finish(&out, false, Some("synthetic failure"), None)
+            .expect("finish");
+
+        let file = File::open(&out).expect("zip");
+        let mut archive = ZipArchive::new(file).expect("archive");
+        assert!(archive.by_name("screenshots/frame1.png").is_ok());
+        assert!(archive.by_name("logs/frame_store.json").is_ok());
+        assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
+    }
+
     fn test_control() -> LabControl {
         LabControl {
             schema_version: CONTROL_SCHEMA.to_string(),
@@ -2511,6 +2641,7 @@ mod tests {
             allow_placeholder_coords: None,
             output: None,
             capture_backend: None,
+            frame_store: FrameStoreControl::default(),
             producer: None,
             trusted_execution: None,
         }

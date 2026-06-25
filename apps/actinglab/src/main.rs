@@ -21,6 +21,7 @@ use std::time::Duration;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+mod frame_store;
 mod lab_run;
 
 const SCHEMA_VERSION: &str = "0.2";
@@ -640,8 +641,18 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "schema_version": "Lab-1y.control.v1",
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
             "capture_backend": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+            "frame_store": {
+                "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
+                "tier1_ratio": "warning watermark; CLI --tier1-ratio",
+                "tier2_ratio": "temp-disk spill watermark; CLI --tier2-ratio",
+                "tier3_ratio": "alarm watermark; CLI --tier3-ratio",
+                "hysteresis_ratio": "release margin for active watermarks; CLI --hysteresis-ratio",
+                "max_mem_bytes": "optional lab frame-store cap; CLI --max-mem-bytes",
+                "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes"
+            },
             "rules": [
                 "CLI capture backend overrides control capture_backend",
+                "CLI frame-store flags override control frame_store values",
                 "trusted_execution is provenance and does not block semantic actions",
                 "unresolved or placeholder coordinates are not executable"
             ]

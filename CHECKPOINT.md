@@ -1,5 +1,60 @@
 # CHECKPOINT.md
 
+## 2026-06-25 Lab-1z ActingLab frame store
+
+### Current status
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-1z-frame-store.md` with UTF-8 output and confirmed the active scope is ActingLab-only frame storage, deduplication, memory watermarks, and output packaging.
+- Added an ActingLab frame-store layer that keeps raw frames resident by default and materializes final retained screenshots only during Lab finalization.
+- Added dynamic memory budget calculation from available physical memory plus total physical memory, with OS reserve and optional `max_mem_bytes` cap.
+- Added Tier1 deduplication, Tier2 temp-disk spilling of finalized older frames, Tier3 Lab pause/error behavior, and hysteresis release thresholds.
+- Added frame-store control/CLI overrides: `--similarity-threshold`, `--tier1-ratio`, `--tier2-ratio`, `--tier3-ratio`, `--hysteresis-ratio`, `--max-mem-bytes`, and `--os-reserve-bytes`.
+- Added `logs/frame_store.json` and `logs/frame_timeline.jsonl` to Lab output packages.
+- `recognition.jsonl` remains written after recognition and before frame discard decisions are finalized for the current frame.
+- No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, input fallback, or P2.2/P2.3 rollback was added.
+
+### Files changed
+
+- `apps/actinglab/src/frame_store.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git pull --ff-only`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-Lab-1z-frame-store.md' -Encoding UTF8`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Prohibited-scope scans over touched ActingLab files for `SQLite`, `sqlite`, `OCR`, `ocr`, `scrcpy`, `minicap`, `adb shell screencap`, `shell screencap`, `AdbInputBackend`, `fallback`, and `reconnect`.
+- Screenshot hot-path scan for `fs::write(&path`, `screenshot_saved`, and `png_for_artifact()`.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with 28 tests.
+- `cargo test --workspace` passed after the Lab-1z implementation.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Prohibited-scope scans found no new UI, SQLite, OCR, raw ADB input fallback, reconnect path, scrcpy, minicap, or `adb shell screencap` path in the touched ActingLab files. The only `fallback` hit is the pre-existing capability field `fallback_allowed`.
+- Screenshot hot-path scan found `png_for_artifact()` only in `frame_store.rs` materialization / Tier2 temp-disk paths, not in the Lab capture path.
+
+### Current blocker
+
+- No implementation blocker.
+- Live Arknights `16416` Lab-1z execution has not been run in this pass.
+
+### Next step
+
+1. Commit and push the Runtime Lab-1z implementation with planning files.
+2. Optionally run a live Arknights `16416` Lab-1z package after Alice chooses a safe package and device state.
+
 ## 2026-06-25 P2.3 capture pipeline refactor
 
 ### Current status
