@@ -24,7 +24,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -36,6 +37,9 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_STEP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_STEPS: usize = 50;
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
+const MAX_LAB_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_LAB_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
@@ -1428,6 +1432,7 @@ struct LabRunContext {
     capture_backend_attempts: Vec<CaptureBackendAttempt>,
     lease_acquired: bool,
     lease_released: bool,
+    partial_output: bool,
 }
 
 impl LabRunContext {
@@ -1489,6 +1494,7 @@ impl LabRunContext {
             capture_backend_attempts: Vec::new(),
             lease_acquired: false,
             lease_released: false,
+            partial_output: false,
         })
     }
 
@@ -1630,6 +1636,7 @@ impl LabRunContext {
             return self.tier3_resume_check(capture, evaluator, detector, candidate_pages);
         }
         if store_outcome.pause_required {
+            self.partial_output = true;
             self.event(
                 "backpressure_paused",
                 json!({
@@ -1638,8 +1645,7 @@ impl LabRunContext {
                     "current_phase": self.phase,
                     "last_frame_index": self.frame_index,
                     "last_matched_page": matched_page,
-                    "tier3_pause_timeout_ms": store_outcome.pause_timeout_ms,
-                    "tier3_pause_timeout": true,
+                    "tier3_mode": "synchronous_graceful_failure",
                     "partial_output": true
                 }),
             )?;
@@ -1766,10 +1772,15 @@ impl LabRunContext {
         self.write_logs(ok, failure_reason, state)?;
         write_output_zip(&self.output_dir, out_path)?;
         let sha256 = file_sha256(out_path)?;
+        self.cleanup_run_dir();
         Ok(ArchiveResult {
             path: out_path.to_path_buf(),
             sha256,
         })
+    }
+
+    fn cleanup_run_dir(&self) {
+        let _ = fs::remove_dir_all(&self.run_dir);
     }
 
     fn write_logs(
@@ -1858,6 +1869,7 @@ impl LabRunContext {
             "executed_step_count": self.steps.len(),
             "failed_step_id": state.and_then(|state| state.failed_step_id.as_deref()),
             "failure_reason": failure_reason,
+            "partial_output": self.partial_output,
             "screenshot_count": self.screenshots.len(),
             "requested_capture_interval_ms": self.requested_capture_interval_ms,
             "actual_capture_interval_min_ms": stats.map(|stats| stats.min),
@@ -2116,6 +2128,7 @@ fn unpack_lab_input(zip_path: &Path, input_dir: &Path) -> CliOutcome<LabInput> {
     let mut has_control = false;
     let mut has_resources = false;
     let mut dangerous = Vec::new();
+    let mut total_uncompressed = 0u64;
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -2132,19 +2145,33 @@ fn unpack_lab_input(zip_path: &Path, input_dir: &Path) -> CliOutcome<LabInput> {
         }
         if has_dangerous_extension(&path_name) {
             dangerous.push(path_name.clone());
+            continue;
         }
         has_control |= path_name == "control.json";
         has_resources |= path_name.starts_with("resources/");
+        let entry_size = entry.size();
+        if entry_size > MAX_LAB_ZIP_ENTRY_BYTES {
+            return Err(CliError::package_invalid(format!(
+                "zip entry {path_name} exceeds {} bytes",
+                MAX_LAB_ZIP_ENTRY_BYTES
+            )));
+        }
         let target = input_dir.join(&path_name);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
             })?;
         }
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(|err| {
-            CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
-        })?;
+        let bytes = read_zip_entry_limited(&mut entry, &path_name, MAX_LAB_ZIP_ENTRY_BYTES)?;
+        total_uncompressed = total_uncompressed
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| CliError::package_invalid("input zip uncompressed size overflowed"))?;
+        if total_uncompressed > MAX_LAB_ZIP_TOTAL_BYTES {
+            return Err(CliError::package_invalid(format!(
+                "input zip exceeds total uncompressed limit of {} bytes",
+                MAX_LAB_ZIP_TOTAL_BYTES
+            )));
+        }
         fs::write(&target, bytes).map_err(|err| {
             CliError::package_invalid(format!("failed to write {}: {err}", target.display()))
         })?;
@@ -2163,6 +2190,24 @@ fn unpack_lab_input(zip_path: &Path, input_dir: &Path) -> CliOutcome<LabInput> {
         return Err(CliError::package_invalid("missing resources/"));
     }
     Ok(LabInput { entries })
+}
+
+fn read_zip_entry_limited<R: Read>(
+    reader: &mut R,
+    path_name: &str,
+    limit: u64,
+) -> CliOutcome<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut limited = reader.take(limit.saturating_add(1));
+    limited.read_to_end(&mut bytes).map_err(|err| {
+        CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
+    })?;
+    if bytes.len() as u64 > limit {
+        return Err(CliError::package_invalid(format!(
+            "zip entry {path_name} exceeds {limit} bytes"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn normalize_lab_zip_path(name: &str) -> CliOutcome<Option<String>> {
@@ -2268,6 +2313,14 @@ fn write_json_lines(path: &Path, values: &[Value]) -> CliOutcome<()> {
 }
 
 fn write_output_zip(output_dir: &Path, out_path: &Path) -> CliOutcome<()> {
+    let result = write_output_zip_inner(output_dir, out_path);
+    if result.is_err() {
+        let _ = fs::remove_file(out_path);
+    }
+    result
+}
+
+fn write_output_zip_inner(output_dir: &Path, out_path: &Path) -> CliOutcome<()> {
     if let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -2423,7 +2476,6 @@ fn parse_frame_store_control_from_flags(flags: &FlagArgs) -> CliOutcome<FrameSto
             flags,
             "--flush-workspace-reserve-bytes",
         )?,
-        tier3_pause_timeout_ms: parse_optional_u64(flags, "--tier3-pause-timeout-ms")?,
     };
     control.validate().map_err(CliError::usage)?;
     Ok(control)
@@ -2485,14 +2537,35 @@ fn sanitize_path_segment(value: &str) -> String {
 }
 
 fn git_commit() -> Option<String> {
-    let output = Command::new("git")
+    let mut child = Command::new("git")
         .args(["rev-parse", "HEAD"])
-        .output()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "echo")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
+        if started.elapsed() >= GIT_COMMIT_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+
+    if !status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let mut stdout = Vec::new();
+    child.stdout.take()?.read_to_end(&mut stdout).ok()?;
+    Some(String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
 fn timestamp_iso(time: SystemTime) -> String {
@@ -2727,6 +2800,41 @@ mod tests {
         assert!(archive.by_name("screenshots/frame1.png").is_ok());
         assert!(archive.by_name("logs/frame_store.json").is_ok());
         assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
+        assert!(!ctx.run_dir.exists());
+    }
+
+    #[test]
+    fn rejects_dangerous_zip_entry_without_writing_it() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_test_zip(
+            &zip,
+            &[
+                ("control.json", br#"{}"#),
+                ("resources/manifest.json", br#"{}"#),
+                ("resources/tool.exe", b"danger"),
+            ],
+        );
+        let input_dir = temp.path().join("input");
+
+        let err = match unpack_lab_input(&zip, &input_dir) {
+            Ok(_) => panic!("dangerous entry accepted"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.code, "package_invalid");
+        assert!(!input_dir.join("resources").join("tool.exe").exists());
+    }
+
+    #[test]
+    fn read_zip_entry_limited_rejects_oversized_entry() {
+        let mut input = std::io::Cursor::new(vec![1, 2, 3]);
+
+        let err =
+            read_zip_entry_limited(&mut input, "resources/large.bin", 2).expect_err("oversized");
+
+        assert_eq!(err.code, "package_invalid");
+        assert!(err.message.contains("exceeds 2 bytes"));
     }
 
     fn test_control() -> LabControl {

@@ -37,38 +37,59 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P2.2 capture backend repair close-out: Nemu IPC UTF-16 path passing, DroidCast_raw natural-buffer rotation, `lab run --capture-backend` CLI priority, and auto backend probe downgrade.
 - P2.3 capture pipeline refactor: capture backends now return raw pixel frames without hot-path PNG encoding, ADB preserves original screencap PNG for artifact writes, recognition can consume raw RGB/RGBA pixels, Nemu IPC caches resolution, and `device-test benchmark` reports capture-only, encode-only, and end-to-end timing.
 - Lab-1z fixes: explicit frame recognition lifecycle, admission-before-store memory estimation, sync segment-zip flush, current-frame Tier3 pause/resume checkpointing, conservative resident-byte accounting, temp cleanup, and P2.3 capture hot-path non-regression benchmark.
+- Lab-1z Round2 stability close-out: P2.2 device deadlines, Lab-1y cleanup, frame-store accounting/spill fixes, P1g package hardening, and release benchmark non-regression.
 
-## Current Lab-1z Fixes
+## Current Lab-1z Round2 Stability Close-Out
 
-The current Runtime task is an ActingLab-only frame-store fix. It does not add UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loops, new capture backends, or any P2.3 capture hot-path changes.
+The current Runtime task closes the Lab-1z Round2 stability batch in dependency order:
 
-Lab-1z fixed behavior:
+1. P2.2 device-layer stability.
+2. Lab-1y execution stability.
+3. Lab-1z frame-store accounting and spill semantics.
+4. P1g CLI/package robustness.
+5. P2.3 release benchmark non-regression.
 
-- `actinglab lab run` captures raw `Frame` objects, runs page recognition from raw pixels, and passes a completed recognition lifecycle state into the frame store.
-- `RecognitionState` separates `Pending`, `Matched { page_id }`, `CompletedNoMatch`, and `Failed { reason }`.
-- Deduplication only starts after Tier1 and only for non-key `Matched` frames on the same page. `Pending`, `CompletedNoMatch`, and `Failed` frames are not same-page deduped.
-- `add_frame` estimates the incoming frame before unconditional admission. The estimate includes payload, original PNG, thumbnail, string/metadata overhead, per-entry overhead, and encoder workspace reserve.
-- Tier2 uses synchronous segment zip flushes under `frame-store-temp/segment-*.zip` plus `segment-manifest.jsonl`; no background flush thread is introduced.
-- Tier3 is a current-frame decision. It returns structured pause/checkpoint data and stops further actions/captures through a visible Lab failure path that still finalizes a partial valid output zip when possible.
-- Tier3 resume checks must capture a fresh frame and emit `tier3_resume_capture`, `tier3_resume_page_check`, `tier3_resume_allowed`, or `tier3_resume_blocked` events.
-- Spill no longer protects the last frame by index alone. It uses recognition lifecycle state, allows eligible single/last-frame spill, and degrades spill I/O failures with warnings instead of panicking mid-run.
-- `resident_bytes` is a conservative estimate and diagnostics split payload, metadata, thumbnail, encoder workspace, spilled, and dropped bytes.
-- Validation rejects `similarity_threshold = 1.0`, non-finite or boundary ratios, non-distinct watermarks, release lines above activations, zero budgets, and Tier2/Tier3 gaps smaller than `flush_workspace_reserve_bytes`.
-- `frame-store-temp` is cleaned after successful finish or after partial zip finalization; cleanup failures are warning events and do not override the primary result.
-- Control JSON and CLI support `flush_workspace_reserve_bytes` / `--flush-workspace-reserve-bytes` and `tier3_pause_timeout_ms` / `--tier3-pause-timeout-ms` in addition to the earlier frame-store knobs.
+This task does not add UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loops, new capture backends, ADB input fallback, scrcpy, minicap, or new P2.3 capture hot-path behavior.
 
-Lab-1z validation status:
+Round2 fixed behavior:
 
-- `cargo test -p actingcommand-actinglab` passed with 41 tests covering lifecycle dedupe, page transitions, single/last-frame spill, Tier2 non-pausing segment flush, current-frame Tier3 pause/checkpoint, threshold rejection, conservative resident-byte accounting, spill I/O degradation, temp cleanup, T2/T3 gap validation, clock rollback, pathological thumbnail dimensions, and partial materialization.
-- Full workspace validation is required before each push: `cargo test --workspace`, `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `git diff --check`.
-- Prohibited-scope scans found no new UI, SQLite, OCR, reconnect/retry loop, scrcpy, minicap, `adb shell screencap`, or background segment flush thread in the touched ActingLab files.
-- P2.3 non-regression benchmark on Arknights `127.0.0.1:16416` succeeded in this pass. `nemu_ipc` raw capture best/median/p90 was `27/29/29ms`; end-to-end capture plus artifact PNG best/median/p90 was `173/178/192ms`. This confirms the raw capture hot path remains in the tens-of-milliseconds range, but this task does not claim a 300ms full pipeline target.
+- ADB timeout handling now returns a fatal error immediately if child termination fails, instead of joining pipe-reader threads that may block forever.
+- DroidCast raw capture cleans stale children before spawning and reads HTTP responses with a wall-clock deadline plus a bounded maximum response size.
+- Nemu IPC capture now runs behind a backend-scoped worker with request timeouts and poison-on-timeout behavior. The worker probes display dimensions before the unsafe capture write and resizes its reusable buffer before capture.
+- MaaTouch caps long gesture durations and preserves stderr reader errors in diagnostics.
+- Lab input unpacking and package validation enforce per-entry and total decompressed-size limits.
+- Dangerous zip entries are skipped before disk write, then reported as invalid input.
+- Output zip creation removes partial archives on write failure.
+- `git_commit()` is noninteractive and bounded by timeout.
+- `finish()` cleans the per-run directory after successful or failed finalization.
+- `summary.json` records `partial_output`.
+- `backpressure_paused` reports Tier3 as `synchronous_graceful_failure`; the former Tier3 pause-timeout control is no longer part of the active schema/CLI.
+- Frame-store resident accounting now replaces retained estimates atomically and maintains total plus payload, metadata, thumbnail, and encoder subcounters.
+- Dropped entries no longer remain in resident-byte accounting.
+- Spilled retained frames keep their thumbnails for later dedupe.
+- Global spill-unavailable failures produce a global warning/backoff event without permanently poisoning every frame.
+- Per-frame spill failures are localized to the failed frame.
+- Admission-spill failure no longer leaves encoder workspace reserve counted as permanent resident pressure.
+- CLI manifest hash paths are validated before use and unsafe traversal strings are not echoed.
+- Unknown list kinds now return usage errors instead of panicking.
+- Run listing keeps directory-entry warnings visible in JSON output.
+
+Round2 validation status:
+
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo test -p actingcommand-actinglab` passed with 47 tests.
+- `cargo test -p actingcommand-device` passed with 33 tests.
+- Device-layer prohibited scan over `crates/device` found no `adb shell screencap`, `adb shell input`, `fallback`, `reconnect`, `println!`, or `eprintln!`.
+- Release benchmark on Arknights `127.0.0.1:16416` passed. `nemu_ipc` capture-only best/median/p90 was `4/4/6ms`; end-to-end capture plus artifact PNG best/median/p90 was `11/11/13ms`.
 
 Known residuals:
 
-- Tier3 pause uses the synchronous Lab failure/finalization path for this task. A richer resumable paused run loop is a later Runtime-service milestone.
-- Thumbnail/MAD deduplication is intentionally compact and synchronous for this branch; a later task can move heavier perceptual hashing off the capture path if needed.
-- Live Arknights `16416` Lab package execution was not run as a gameplay validation for this fix; the live work in this pass was limited to the capture benchmark.
+- A Rust thread blocked inside a stuck Nemu FFI call cannot be force-killed in-process. The current worker is poisoned and abandoned on timeout; true hard-kill isolation remains a later helper-process milestone if needed.
+- The aggregate screenshot benchmark row may still be dominated by slower backends, but the backend table confirms the `nemu_ipc` release path remains healthy.
+- Live gameplay package execution was not rerun in this pass; the live work here was the release benchmark only.
 
 ## Current P2.3 Capture Pipeline Refactor
 

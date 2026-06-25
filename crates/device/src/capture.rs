@@ -8,10 +8,12 @@ use image::{
 };
 use libloading::Library;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
@@ -20,6 +22,8 @@ const DEFAULT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_DROIDCAST_LOCAL_PORT: u16 = 53516;
 const DEFAULT_DROIDCAST_REMOTE_PATH: &str = "/data/local/tmp/DroidCast_raw.apk";
 const DROIDCAST_MAIN_CLASS: &str = "ink.mol.droidcast_raw.Main";
+const DROIDCAST_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const DROIDCAST_READ_CHUNK_BYTES: usize = 16 * 1024;
 
 /// Single-shot screenshot boundary for device capture backends.
 pub trait CaptureBackend {
@@ -542,6 +546,7 @@ impl DroidcastRawBackend {
         if self.started {
             return Ok((width, height));
         }
+        self.stop_child_if_present();
 
         let local_apk = self.config.local_apk.as_ref().ok_or_else(|| {
             DeviceError::fatal("DroidCast_raw local APK disappeared before start")
@@ -562,9 +567,19 @@ impl DroidcastRawBackend {
             &[&classpath, "app_process", "/", DROIDCAST_MAIN_CLASS],
         )?;
         self.child = Some(child);
-        wait_for_droidcast(self.config.local_port, self.capture_timeout)?;
+        if let Err(err) = wait_for_droidcast(self.config.local_port, self.capture_timeout) {
+            self.stop_child_if_present();
+            return Err(err);
+        }
         self.started = true;
         Ok((width, height))
+    }
+
+    fn stop_child_if_present(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = stop_child(&mut child, Duration::from_millis(500));
+        }
+        self.started = false;
     }
 }
 
@@ -601,9 +616,7 @@ impl CaptureBackend for DroidcastRawBackend {
 
 impl Drop for DroidcastRawBackend {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = stop_child(&mut child, Duration::from_millis(500));
-        }
+        self.stop_child_if_present();
     }
 }
 
@@ -616,12 +629,7 @@ pub struct NemuIpcConfig {
 }
 
 pub struct NemuIpcBackend {
-    library: Library,
-    nemu_folder: Vec<u16>,
-    instance_id: i32,
-    display_id: i32,
-    connect_id: i32,
-    capture_timeout: Duration,
+    worker: Option<NemuIpcWorker>,
     frame_width: u32,
     frame_height: u32,
 }
@@ -651,6 +659,170 @@ impl NemuIpcBackend {
                 ))
             })?;
         let (nemu_folder, dll_path) = resolve_nemu_paths(config.nemu_folder, config.dll_path)?;
+        let mut worker = NemuIpcWorker::spawn(
+            nemu_folder,
+            dll_path,
+            instance_id,
+            config.display_id,
+            capture_timeout,
+        );
+        let (frame_width, frame_height) = worker.probe_resolution()?;
+        Ok(Self {
+            worker: Some(worker),
+            frame_width,
+            frame_height,
+        })
+    }
+}
+
+enum NemuIpcCommand {
+    Probe(mpsc::Sender<DeviceResult<(u32, u32)>>),
+    Capture(mpsc::Sender<DeviceResult<NemuCapturedFrame>>),
+    Shutdown(mpsc::Sender<()>),
+}
+
+struct NemuCapturedFrame {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+struct NemuIpcWorker {
+    tx: mpsc::Sender<NemuIpcCommand>,
+    handle: Option<JoinHandle<()>>,
+    timeout: Duration,
+    poisoned: bool,
+}
+
+impl NemuIpcWorker {
+    fn spawn(
+        nemu_folder: PathBuf,
+        dll_path: PathBuf,
+        instance_id: i32,
+        display_id: i32,
+        timeout: Duration,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let mut state =
+                NemuIpcWorkerState::load(nemu_folder, dll_path, instance_id, display_id);
+            while let Ok(command) = rx.recv() {
+                match command {
+                    NemuIpcCommand::Probe(response) => {
+                        let _ = response.send(worker_state_result(&mut state, |state| {
+                            state.probe_resolution()
+                        }));
+                    }
+                    NemuIpcCommand::Capture(response) => {
+                        let _ = response.send(worker_state_result(&mut state, |state| {
+                            state.capture_frame()
+                        }));
+                    }
+                    NemuIpcCommand::Shutdown(response) => {
+                        if let Ok(state) = state.as_mut() {
+                            state.disconnect();
+                        }
+                        let _ = response.send(());
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            tx,
+            handle: Some(handle),
+            timeout,
+            poisoned: false,
+        }
+    }
+
+    fn probe_resolution(&mut self) -> DeviceResult<(u32, u32)> {
+        self.request(NemuIpcCommand::Probe)
+    }
+
+    fn capture_frame(&mut self) -> DeviceResult<NemuCapturedFrame> {
+        self.request(NemuIpcCommand::Capture)
+    }
+
+    fn request<T: Send + 'static>(
+        &mut self,
+        command: impl FnOnce(mpsc::Sender<DeviceResult<T>>) -> NemuIpcCommand,
+    ) -> DeviceResult<T> {
+        if self.poisoned {
+            return Err(DeviceError::fatal(
+                "Nemu IPC backend is poisoned after a previous timeout",
+            ));
+        }
+
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(command(tx)).map_err(|err| {
+            DeviceError::fatal(format!("failed to send Nemu IPC worker command: {err}"))
+        })?;
+        match rx.recv_timeout(self.timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.poisoned = true;
+                Err(DeviceError::fatal(format!(
+                    "Nemu IPC worker timed out after {:?}; backend marked poisoned and will not be reused",
+                    self.timeout
+                )))
+            }
+            Err(err) => {
+                self.poisoned = true;
+                Err(DeviceError::fatal(format!(
+                    "Nemu IPC worker disconnected: {err}"
+                )))
+            }
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if self.poisoned {
+            self.handle.take();
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        if self.tx.send(NemuIpcCommand::Shutdown(tx)).is_err() {
+            self.handle.take();
+            return;
+        }
+        if rx.recv_timeout(self.timeout).is_err() {
+            self.poisoned = true;
+            self.handle.take();
+            return;
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for NemuIpcWorker {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+struct NemuIpcWorkerState {
+    library: Library,
+    nemu_folder: Vec<u16>,
+    instance_id: i32,
+    display_id: i32,
+    connect_id: i32,
+    raw_buffer: Vec<u8>,
+    frame_width: u32,
+    frame_height: u32,
+}
+
+impl NemuIpcWorkerState {
+    fn load(
+        nemu_folder: PathBuf,
+        dll_path: PathBuf,
+        instance_id: i32,
+        display_id: i32,
+    ) -> DeviceResult<Self> {
         let nemu_folder = nul_terminated_utf16_path(&nemu_folder)?;
         let library = unsafe { Library::new(&dll_path) }.map_err(|err| {
             DeviceError::fatal(format!(
@@ -658,20 +830,16 @@ impl NemuIpcBackend {
                 dll_path.display()
             ))
         })?;
-        let mut backend = Self {
+        Ok(Self {
             library,
             nemu_folder,
             instance_id,
-            display_id: config.display_id,
+            display_id,
             connect_id: 0,
-            capture_timeout,
+            raw_buffer: Vec::new(),
             frame_width: 0,
             frame_height: 0,
-        };
-        let (frame_width, frame_height) = backend.probe_resolution()?;
-        backend.frame_width = frame_width;
-        backend.frame_height = frame_height;
-        Ok(backend)
+        })
     }
 
     fn connect(&mut self) -> DeviceResult<()> {
@@ -679,14 +847,7 @@ impl NemuIpcBackend {
             return Ok(());
         }
         let connect = unsafe { self.symbol::<NemuConnect>(b"nemu_connect\0")? };
-        let started = Instant::now();
         let connect_id = unsafe { connect(self.nemu_folder.as_ptr(), self.instance_id) };
-        if started.elapsed() > self.capture_timeout {
-            return Err(DeviceError::fatal(format!(
-                "Nemu IPC connect exceeded capture timeout {:?}",
-                self.capture_timeout
-            )));
-        }
         if connect_id == 0 {
             return Err(DeviceError::fatal(
                 "Nemu IPC connect returned 0; check MuMu path and running instance",
@@ -737,23 +898,30 @@ impl NemuIpcBackend {
         }
         Ok((width as u32, height as u32))
     }
-}
 
-impl CaptureBackend for NemuIpcBackend {
-    fn capture(&mut self) -> DeviceResult<Frame> {
-        self.connect()?;
-        let width = self.frame_width;
-        let height = self.frame_height;
+    fn capture_frame(&mut self) -> DeviceResult<NemuCapturedFrame> {
+        let (width, height) = self.probe_resolution()?;
+        let pixel_len = checked_pixel_len(width, height, PixelFormat::Rgba8)?;
+        if width != self.frame_width
+            || height != self.frame_height
+            || self.raw_buffer.len() != pixel_len
+        {
+            self.raw_buffer.resize(pixel_len, 0);
+            self.frame_width = width;
+            self.frame_height = height;
+        }
+
         let capture_display =
             unsafe { self.symbol::<NemuCaptureDisplay>(b"nemu_capture_display\0")? };
-        let pixel_len = checked_pixel_len(width, height, PixelFormat::Rgba8)?;
         let mut width_i32 = i32::try_from(width)
             .map_err(|_| DeviceError::fatal(format!("Nemu IPC width exceeds i32: {width}")))?;
         let mut height_i32 = i32::try_from(height)
             .map_err(|_| DeviceError::fatal(format!("Nemu IPC height exceeds i32: {height}")))?;
-        let mut raw = vec![0u8; pixel_len];
-        let length = i32::try_from(raw.len()).map_err(|_| {
-            DeviceError::fatal(format!("Nemu IPC frame is too large: {} bytes", raw.len()))
+        let length = i32::try_from(self.raw_buffer.len()).map_err(|_| {
+            DeviceError::fatal(format!(
+                "Nemu IPC frame is too large: {} bytes",
+                self.raw_buffer.len()
+            ))
         })?;
         let ret = unsafe {
             capture_display(
@@ -762,7 +930,7 @@ impl CaptureBackend for NemuIpcBackend {
                 length,
                 &mut width_i32,
                 &mut height_i32,
-                raw.as_mut_ptr(),
+                self.raw_buffer.as_mut_ptr(),
             )
         };
         if ret > 0 {
@@ -775,20 +943,55 @@ impl CaptureBackend for NemuIpcBackend {
                 "Nemu IPC capture returned invalid resolution {width_i32}x{height_i32}"
             )));
         }
-        let width = width_i32 as u32;
-        let height = height_i32 as u32;
-        if width != self.frame_width || height != self.frame_height {
+        let captured_width = width_i32 as u32;
+        let captured_height = height_i32 as u32;
+        if captured_width != width || captured_height != height {
             return Err(DeviceError::fatal(format!(
-                "Nemu IPC frame dimensions changed from cached {}x{} to {}x{}",
-                self.frame_width, self.frame_height, width, height
+                "Nemu IPC frame dimensions changed during capture from probed {width}x{height} to {captured_width}x{captured_height}"
             )));
         }
-        validate_pixel_buffer(width, height, PixelFormat::Rgba8, raw.len())?;
-        let pixels = bgra_bottom_up_to_rgba(&raw, width, height)?;
-        Frame::from_pixels(
+        let pixels = bgra_bottom_up_to_rgba(&self.raw_buffer, width, height)?;
+        Ok(NemuCapturedFrame {
             width,
             height,
             pixels,
+        })
+    }
+
+    fn disconnect(&mut self) {
+        if self.connect_id <= 0 {
+            return;
+        }
+        if let Ok(disconnect) = unsafe { self.symbol::<NemuDisconnect>(b"nemu_disconnect\0") } {
+            let _ = unsafe { disconnect(self.connect_id) };
+        }
+        self.connect_id = 0;
+    }
+}
+
+fn worker_state_result<T>(
+    state: &mut DeviceResult<NemuIpcWorkerState>,
+    operation: impl FnOnce(&mut NemuIpcWorkerState) -> DeviceResult<T>,
+) -> DeviceResult<T> {
+    match state {
+        Ok(state) => operation(state),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+impl CaptureBackend for NemuIpcBackend {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        let worker = self
+            .worker
+            .as_mut()
+            .ok_or_else(|| DeviceError::fatal("Nemu IPC worker is unavailable"))?;
+        let frame = worker.capture_frame()?;
+        self.frame_width = frame.width;
+        self.frame_height = frame.height;
+        Frame::from_pixels(
+            frame.width,
+            frame.height,
+            frame.pixels,
             PixelFormat::Rgba8,
             CaptureBackendName::NemuIpc,
         )
@@ -797,13 +1000,9 @@ impl CaptureBackend for NemuIpcBackend {
 
 impl Drop for NemuIpcBackend {
     fn drop(&mut self) {
-        if self.connect_id <= 0 {
-            return;
+        if let Some(mut worker) = self.worker.take() {
+            worker.shutdown();
         }
-        if let Ok(disconnect) = unsafe { self.symbol::<NemuDisconnect>(b"nemu_disconnect\0") } {
-            let _ = unsafe { disconnect(self.connect_id) };
-        }
-        self.connect_id = 0;
     }
 }
 
@@ -1151,10 +1350,7 @@ fn http_get_bytes(
     stream
         .write_all(request.as_bytes())
         .map_err(|err| DeviceError::fatal(format!("failed to send DroidCast request: {err}")))?;
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .map_err(|err| DeviceError::fatal(format!("failed to read DroidCast response: {err}")))?;
+    let response = read_droidcast_response(&mut stream, timeout)?;
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -1177,6 +1373,50 @@ fn http_get_bytes(
 
 fn parse_http_status(line: &str) -> Option<u16> {
     line.split_whitespace().nth(1)?.parse().ok()
+}
+
+fn read_droidcast_response(stream: &mut TcpStream, timeout: Duration) -> DeviceResult<Vec<u8>> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| DeviceError::fatal("DroidCast read timeout overflowed"))?;
+    let mut response = Vec::new();
+    let mut buffer = [0u8; DROIDCAST_READ_CHUNK_BYTES];
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(DeviceError::fatal(format!(
+                "timed out after {:?} reading DroidCast response",
+                timeout
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        stream
+            .set_read_timeout(Some(remaining.min(Duration::from_millis(200))))
+            .map_err(|err| {
+                DeviceError::fatal(format!("failed to update DroidCast read timeout: {err}"))
+            })?;
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(response),
+            Ok(read) => {
+                let next_len = response.len().checked_add(read).ok_or_else(|| {
+                    DeviceError::fatal("DroidCast response length overflowed usize")
+                })?;
+                if next_len > DROIDCAST_MAX_RESPONSE_BYTES {
+                    return Err(DeviceError::fatal(format!(
+                        "DroidCast response exceeded {} bytes",
+                        DROIDCAST_MAX_RESPONSE_BYTES
+                    )));
+                }
+                response.extend_from_slice(&buffer[..read]);
+            }
+            Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(err) => {
+                return Err(DeviceError::fatal(format!(
+                    "failed to read DroidCast response: {err}"
+                )));
+            }
+        }
+    }
 }
 
 fn rgb565_to_rgb8(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {

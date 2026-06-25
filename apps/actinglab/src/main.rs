@@ -31,6 +31,8 @@ const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
+const MAX_PACKAGE_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PACKAGE_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn main() -> ExitCode {
     let json_default = !io::stdout().is_terminal();
@@ -650,7 +652,7 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
                 "max_mem_bytes": "optional lab frame-store cap; CLI --max-mem-bytes",
                 "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes",
                 "flush_workspace_reserve_bytes": "required byte gap between tier2 and tier3; CLI --flush-workspace-reserve-bytes",
-                "tier3_pause_timeout_ms": "bounded pause timeout before graceful partial-output failure; CLI --tier3-pause-timeout-ms"
+                "tier3_mode": "synchronous graceful partial-output failure; no runtime pause/resume wait is performed in this CLI"
             },
             "rules": [
                 "CLI capture backend overrides control capture_backend",
@@ -1460,6 +1462,7 @@ fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
     let mut entries = BTreeMap::<String, Vec<u8>>::new();
     let mut dangerous = Vec::new();
     let mut module_roots = BTreeSet::new();
+    let mut total_uncompressed = 0u64;
 
     for index in 0..archive.len() {
         let mut file = archive
@@ -1479,10 +1482,22 @@ fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
         if has_dangerous_extension(&path_name) {
             dangerous.push(path_name.clone());
         }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|err| {
-            CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
-        })?;
+        if file.size() > MAX_PACKAGE_ZIP_ENTRY_BYTES {
+            return Err(CliError::package_invalid(format!(
+                "zip entry {path_name} exceeds {} bytes",
+                MAX_PACKAGE_ZIP_ENTRY_BYTES
+            )));
+        }
+        let bytes = read_zip_entry_limited(&mut file, &path_name, MAX_PACKAGE_ZIP_ENTRY_BYTES)?;
+        total_uncompressed = total_uncompressed
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| CliError::package_invalid("package uncompressed size overflowed"))?;
+        if total_uncompressed > MAX_PACKAGE_ZIP_TOTAL_BYTES {
+            return Err(CliError::package_invalid(format!(
+                "package exceeds total uncompressed limit of {} bytes",
+                MAX_PACKAGE_ZIP_TOTAL_BYTES
+            )));
+        }
         entries.insert(path_name, bytes);
     }
 
@@ -1528,6 +1543,24 @@ fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
     })
 }
 
+fn read_zip_entry_limited<R: Read>(
+    reader: &mut R,
+    path_name: &str,
+    limit: u64,
+) -> CliOutcome<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut limited = reader.take(limit.saturating_add(1));
+    limited.read_to_end(&mut bytes).map_err(|err| {
+        CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
+    })?;
+    if bytes.len() as u64 > limit {
+        return Err(CliError::package_invalid(format!(
+            "zip entry {path_name} exceeds {limit} bytes"
+        )));
+    }
+    Ok(bytes)
+}
+
 fn normalize_zip_path(name: &str) -> CliOutcome<Option<String>> {
     if name.ends_with('/') {
         return Ok(None);
@@ -1567,7 +1600,7 @@ fn validate_manifest_hashes(
     entries: &BTreeMap<String, Vec<u8>>,
     module: &str,
 ) -> CliOutcome<()> {
-    for (path, expected) in manifest_hashes(manifest) {
+    for (path, expected) in manifest_hashes(manifest)? {
         let resolved = if entries.contains_key(&path) {
             path
         } else {
@@ -1590,12 +1623,12 @@ fn validate_manifest_hashes(
     Ok(())
 }
 
-fn manifest_hashes(manifest: &Value) -> Vec<(String, String)> {
+fn manifest_hashes(manifest: &Value) -> CliOutcome<Vec<(String, String)>> {
     let mut hashes = Vec::new();
     if let Some(object) = manifest.get("hashes").and_then(Value::as_object) {
         for (path, value) in object {
             if let Some(hash) = value.as_str() {
-                hashes.push((path.clone(), hash.to_string()));
+                hashes.push((normalize_manifest_hash_path(path)?, hash.to_string()));
             }
         }
     }
@@ -1609,11 +1642,28 @@ fn manifest_hashes(manifest: &Value) -> Vec<(String, String)> {
                 .or_else(|| file.get("hash"))
                 .and_then(Value::as_str);
             if let Some(hash) = hash {
-                hashes.push((path.to_string(), hash.to_string()));
+                hashes.push((normalize_manifest_hash_path(path)?, hash.to_string()));
             }
         }
     }
-    hashes
+    Ok(hashes)
+}
+
+fn normalize_manifest_hash_path(path: &str) -> CliOutcome<String> {
+    if path.ends_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.starts_with('/')
+        || Path::new(path).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::package_invalid("manifest hash path is unsafe"));
+    }
+    Ok(path.to_string())
 }
 
 fn package_validation_json(validation: &PackageValidation, include_entries: bool) -> Value {
@@ -1808,21 +1858,26 @@ fn validate_json_file(path: &Path) -> CliOutcome<Value> {
 }
 
 fn list_runs(run_root: &Path) -> CliOutcome<Value> {
-    let runs = if run_root.is_dir() {
-        fs::read_dir(run_root)
-            .map_err(|err| {
-                CliError::usage(format!("failed to list {}: {err}", run_root.display()))
-            })?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_dir())
-            .map(|entry| entry.file_name().to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let mut runs = Vec::new();
+    let mut warnings = Vec::new();
+    if run_root.is_dir() {
+        for entry in fs::read_dir(run_root).map_err(|err| {
+            CliError::usage(format!("failed to list {}: {err}", run_root.display()))
+        })? {
+            match entry {
+                Ok(entry) => {
+                    if entry.path().is_dir() {
+                        runs.push(entry.file_name().to_string_lossy().to_string());
+                    }
+                }
+                Err(err) => warnings.push(format!("failed to read run directory entry: {err}")),
+            }
+        }
+    }
     Ok(json!({
         "run_root": run_root.display().to_string(),
-        "runs": runs
+        "runs": runs,
+        "warnings": warnings
     }))
 }
 
@@ -1832,7 +1887,7 @@ fn list_resource_kind(root: &Path, kind: &str) -> CliOutcome<Value> {
         "pages" => ".pages.json",
         "tasks" | "bundles" => "task.json",
         "controls" => ".controls.json",
-        _ => unreachable!("validated list kind"),
+        other => return Err(CliError::usage(format!("unknown list kind: {other}"))),
     };
     let files = find_files(root, |path| {
         path.file_name()
@@ -2345,6 +2400,59 @@ mod tests {
                 .message
                 .contains("hash mismatch")
         );
+    }
+
+    #[test]
+    fn package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"hashes":{"../outside.json":"sha256:0000"}}"#.as_slice(),
+                ),
+                ("module/operations/task/task.json", br#"{}"#.as_slice()),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        let message = &result.envelope.error.as_ref().unwrap().message;
+        assert!(message.contains("manifest hash path is unsafe"));
+        assert!(!message.contains(".."));
+    }
+
+    #[test]
+    fn read_package_zip_entry_limited_rejects_oversized_entry() {
+        let mut input = std::io::Cursor::new(vec![1, 2, 3]);
+
+        let err = read_zip_entry_limited(&mut input, "module/large.bin", 2).expect_err("oversized");
+
+        assert_eq!(err.code, "package_invalid");
+        assert!(err.message.contains("exceeds 2 bytes"));
+    }
+
+    #[test]
+    fn list_resource_kind_unknown_returns_usage_error() {
+        let temp = TempDir::new().unwrap();
+
+        let err = list_resource_kind(temp.path(), "future-kind").expect_err("unknown kind");
+
+        assert_eq!(err.code, "validation_failed");
+        assert!(err.message.contains("unknown list kind"));
     }
 
     #[test]

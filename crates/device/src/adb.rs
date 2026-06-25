@@ -178,7 +178,14 @@ fn run_raw_with_timeout(
             return collect_raw_output(status, stdout_thread, stderr_thread);
         }
         if started.elapsed() >= timeout {
-            stop_child(&mut child, Duration::from_millis(500));
+            let stopped = stop_child(&mut child, Duration::from_millis(500));
+            if !stopped {
+                return Err(DeviceError::fatal(format!(
+                    "adb {} timed out after {:?}; adb process did not exit after kill and pipe reader threads were detached to avoid a shutdown hang",
+                    args.join(" "),
+                    timeout
+                )));
+            }
             let stdout = join_pipe_reader(stdout_thread, "stdout")?;
             let stderr = join_pipe_reader(stderr_thread, "stderr")?;
             let stdout = String::from_utf8_lossy(&stdout);

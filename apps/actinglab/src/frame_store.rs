@@ -18,7 +18,6 @@ const DEFAULT_TIER3_RATIO: f64 = 0.90;
 const DEFAULT_HYSTERESIS_RATIO: f64 = 0.10;
 const DEFAULT_OS_RESERVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES: u64 = 8 * 1024 * 1024;
-const DEFAULT_TIER3_PAUSE_TIMEOUT_MS: u64 = 30_000;
 const ENTRY_BASE_METADATA_BYTES: u64 = 512;
 const SEGMENT_METADATA_BYTES: u64 = 256;
 const WRITER_BUFFER_BYTES: u64 = 64 * 1024;
@@ -43,8 +42,6 @@ pub(super) struct FrameStoreControl {
     pub(super) os_reserve_bytes: Option<u64>,
     #[serde(default)]
     pub(super) flush_workspace_reserve_bytes: Option<u64>,
-    #[serde(default)]
-    pub(super) tier3_pause_timeout_ms: Option<u64>,
 }
 
 impl FrameStoreControl {
@@ -69,11 +66,6 @@ impl FrameStoreControl {
             return Err(
                 "frame_store.flush_workspace_reserve_bytes must be positive when provided"
                     .to_string(),
-            );
-        }
-        if self.tier3_pause_timeout_ms == Some(0) {
-            return Err(
-                "frame_store.tier3_pause_timeout_ms must be positive when provided".to_string(),
             );
         }
         Ok(())
@@ -104,9 +96,6 @@ impl FrameStoreControl {
         if let Some(value) = self.flush_workspace_reserve_bytes {
             config.flush_workspace_reserve_bytes = value;
         }
-        if let Some(value) = self.tier3_pause_timeout_ms {
-            config.tier3_pause_timeout_ms = value;
-        }
     }
 }
 
@@ -120,7 +109,6 @@ pub(super) struct FrameStoreConfig {
     pub(super) max_mem_bytes: Option<u64>,
     pub(super) os_reserve_bytes: u64,
     pub(super) flush_workspace_reserve_bytes: u64,
-    pub(super) tier3_pause_timeout_ms: u64,
     memory_sample_override: Option<MemorySample>,
 }
 
@@ -135,7 +123,6 @@ impl Default for FrameStoreConfig {
             max_mem_bytes: None,
             os_reserve_bytes: DEFAULT_OS_RESERVE_BYTES,
             flush_workspace_reserve_bytes: DEFAULT_FLUSH_WORKSPACE_RESERVE_BYTES,
-            tier3_pause_timeout_ms: DEFAULT_TIER3_PAUSE_TIMEOUT_MS,
             memory_sample_override: None,
         }
     }
@@ -156,9 +143,6 @@ impl FrameStoreConfig {
         }
         if self.flush_workspace_reserve_bytes == 0 {
             return Err("flush_workspace_reserve_bytes must be positive".to_string());
-        }
-        if self.tier3_pause_timeout_ms == 0 {
-            return Err("tier3_pause_timeout_ms must be positive".to_string());
         }
         Ok(())
     }
@@ -491,6 +475,7 @@ impl FrameStore {
         let mut tier3_triggered = false;
         let mut pause_required = false;
         let mut admission_spill_warning = None;
+        let mut admission_spill_failed = false;
 
         if projected >= self.budget.tier3_bytes {
             tier3_triggered = true;
@@ -506,7 +491,9 @@ impl FrameStore {
                     Ok(None) => {}
                     Err(message) => {
                         warnings.push(message.clone());
+                        admission_spill_failed = message.starts_with("spill_degraded");
                         admission_spill_warning = Some(message);
+                        resident_estimate = estimate.without_encoder_workspace();
                         backpressure_state = BackpressureState::SpillDegraded;
                     }
                 }
@@ -539,13 +526,17 @@ impl FrameStore {
             segment_id,
             segment_path,
             spill_attempted: storage_state == FrameStorageState::Segment,
-            spill_failed: admission_spill_warning.is_some(),
+            spill_failed: admission_spill_failed,
         };
         self.add_estimate(entry.resident_estimate);
         self.entries.push(entry);
         let entry_index = self.entries.len() - 1;
         if let Some(message) = &admission_spill_warning {
-            self.record_spill_warning(input.frame_index, &file, message);
+            if admission_spill_failed {
+                self.record_spill_warning(input.frame_index, &file, message);
+            } else {
+                self.record_spill_unavailable_warning(message);
+            }
         }
         self.timeline.push(json!({
             "event": "frame_retained",
@@ -594,7 +585,6 @@ impl FrameStore {
             pause_required,
             warnings,
             checkpoint: tier3_triggered.then(|| self.pause_checkpoint(input.frame_index)),
-            pause_timeout_ms: self.config.tier3_pause_timeout_ms,
         })
     }
 
@@ -698,7 +688,7 @@ impl FrameStore {
                 "max_mem_bytes": self.config.max_mem_bytes,
                 "os_reserve_bytes": self.config.os_reserve_bytes,
                 "flush_workspace_reserve_bytes": self.config.flush_workspace_reserve_bytes,
-                "tier3_pause_timeout_ms": self.config.tier3_pause_timeout_ms
+                "tier3_mode": "synchronous_graceful_failure"
             },
             "budget": self.budget.to_json(),
             "resident_bytes": self.resident_bytes,
@@ -867,18 +857,13 @@ impl FrameStore {
     }
 
     fn release_large_objects(&mut self, index: usize) -> u64 {
-        let released = self.entries[index].resident_estimate.releasable();
-        match std::mem::replace(&mut self.entries[index].storage, FrameStorage::Dropped) {
-            FrameStorage::Resident(_) => {
-                self.subtract_releasable_estimate(self.entries[index].resident_estimate);
-                self.entries[index].resident_estimate =
-                    self.entries[index].resident_estimate.metadata_only();
-                self.resident_bytes = self
-                    .resident_bytes
-                    .saturating_add(self.entries[index].resident_estimate.total());
-            }
-            FrameStorage::Spilled { .. } | FrameStorage::Dropped => {}
-        }
+        let released =
+            match std::mem::replace(&mut self.entries[index].storage, FrameStorage::Dropped) {
+                FrameStorage::Resident(_) | FrameStorage::Spilled { .. } => {
+                    self.replace_resident_estimate(index, ResidentEstimate::default())
+                }
+                FrameStorage::Dropped => 0,
+            };
         self.entries[index].thumb.values.clear();
         released
     }
@@ -888,19 +873,18 @@ impl FrameStore {
         if indexes.is_empty() {
             return;
         }
-        let failed_frames = indexes
-            .iter()
-            .map(|index| {
-                (
-                    self.entries[*index].frame_index,
-                    self.entries[*index].file.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        if let Err(message) = self.write_segment(indexes) {
-            warnings.push(message.clone());
-            for (frame_index, file) in failed_frames {
-                self.record_spill_warning(frame_index, &file, &message);
+        match self.write_segment(indexes) {
+            Ok(report) => {
+                for failure in report.frame_failures {
+                    warnings.push(failure.message.clone());
+                    let frame_index = self.entries[failure.index].frame_index;
+                    let file = self.entries[failure.index].file.clone();
+                    self.record_spill_warning(frame_index, &file, &failure.message);
+                }
+            }
+            Err(message) => {
+                warnings.push(message.clone());
+                self.record_spill_unavailable_warning(&message);
             }
         }
     }
@@ -919,7 +903,25 @@ impl FrameStore {
             .collect()
     }
 
-    fn write_segment(&mut self, indexes: Vec<usize>) -> Result<(), String> {
+    fn write_segment(&mut self, indexes: Vec<usize>) -> Result<SegmentWriteReport, String> {
+        let mut encoded = Vec::new();
+        let mut frame_failures = Vec::new();
+        for index in indexes {
+            let FrameStorage::Resident(frame) = &self.entries[index].storage else {
+                continue;
+            };
+            match frame.png_for_artifact() {
+                Ok(png) => encoded.push((index, png)),
+                Err(err) => frame_failures.push(SegmentFrameFailure {
+                    index,
+                    message: format!("spill_degraded: failed to encode frame: {err}"),
+                }),
+            }
+        }
+        if encoded.is_empty() {
+            return Ok(SegmentWriteReport { frame_failures });
+        }
+
         fs::create_dir_all(&self.temp_dir).map_err(|err| {
             format!(
                 "spill_unavailable: failed to create {}: {err}",
@@ -941,16 +943,6 @@ impl FrameStore {
                 FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             let mut zip = ZipWriter::new(file);
             let mut manifest = Vec::new();
-            let mut encoded = Vec::new();
-            for index in &indexes {
-                let FrameStorage::Resident(frame) = &self.entries[*index].storage else {
-                    continue;
-                };
-                let png = frame
-                    .png_for_artifact()
-                    .map_err(|err| format!("spill_degraded: failed to encode frame: {err}"))?;
-                encoded.push((*index, png));
-            }
             for (index, png) in &encoded {
                 let zip_name = self.entries[*index].file_name.clone();
                 zip.start_file(&zip_name, options).map_err(|err| {
@@ -990,6 +982,7 @@ impl FrameStore {
             Ok(encoded) => encoded,
             Err(message) => {
                 self.active_segment_id = None;
+                let _ = fs::remove_file(&segment_path);
                 return Err(message);
             }
         };
@@ -998,7 +991,7 @@ impl FrameStore {
             self.mark_spilled(index, segment_id, &segment_path, png.len() as u64);
         }
         self.active_segment_id = None;
-        Ok(())
+        Ok(SegmentWriteReport { frame_failures })
     }
 
     fn spill_admission_frame(
@@ -1101,13 +1094,8 @@ impl FrameStore {
     }
 
     fn mark_spilled(&mut self, index: usize, segment_id: u64, segment_path: &Path, png_bytes: u64) {
-        let released = self.entries[index].resident_estimate.releasable();
-        self.subtract_releasable_estimate(self.entries[index].resident_estimate);
-        self.entries[index].resident_estimate =
-            self.entries[index].resident_estimate.metadata_only();
-        self.resident_bytes = self
-            .resident_bytes
-            .saturating_add(self.entries[index].resident_estimate.total());
+        let new_estimate = self.entries[index].resident_estimate.metadata_only();
+        let released = self.replace_resident_estimate(index, new_estimate);
         self.entries[index].storage = FrameStorage::Spilled {
             segment_id,
             segment_path: segment_path.to_path_buf(),
@@ -1117,7 +1105,6 @@ impl FrameStore {
         self.entries[index].segment_id = Some(segment_id);
         self.entries[index].segment_path = Some(segment_path.to_path_buf());
         self.entries[index].spill_attempted = true;
-        self.entries[index].thumb.values.clear();
         self.spilled_count = self.spilled_count.saturating_add(1);
         self.spilled_bytes = self.spilled_bytes.saturating_add(png_bytes);
         self.timeline.push(json!({
@@ -1148,6 +1135,14 @@ impl FrameStore {
         }));
     }
 
+    fn record_spill_unavailable_warning(&mut self, warning: &str) {
+        self.spill_warning_count = self.spill_warning_count.saturating_add(1);
+        self.timeline.push(json!({
+            "event": "spill_unavailable",
+            "warning": warning
+        }));
+    }
+
     fn add_estimate(&mut self, estimate: ResidentEstimate) {
         self.resident_bytes = self.resident_bytes.saturating_add(estimate.total());
         self.payload_bytes = self.payload_bytes.saturating_add(estimate.payload);
@@ -1162,9 +1157,20 @@ impl FrameStore {
             .saturating_add(estimate.encoder_workspace);
     }
 
-    fn subtract_releasable_estimate(&mut self, estimate: ResidentEstimate) {
-        self.resident_bytes = self.resident_bytes.saturating_sub(estimate.releasable());
+    fn replace_resident_estimate(&mut self, index: usize, estimate: ResidentEstimate) -> u64 {
+        let old = self.entries[index].resident_estimate;
+        self.subtract_estimate(old);
+        self.entries[index].resident_estimate = estimate;
+        self.add_estimate(estimate);
+        old.total().saturating_sub(estimate.total())
+    }
+
+    fn subtract_estimate(&mut self, estimate: ResidentEstimate) {
+        self.resident_bytes = self.resident_bytes.saturating_sub(estimate.total());
         self.payload_bytes = self.payload_bytes.saturating_sub(estimate.payload);
+        self.metadata_estimated_bytes = self
+            .metadata_estimated_bytes
+            .saturating_sub(estimate.metadata);
         self.thumbnail_estimated_bytes = self
             .thumbnail_estimated_bytes
             .saturating_sub(estimate.thumbnail);
@@ -1238,7 +1244,6 @@ pub(super) struct FrameStoreOutcome {
     pub(super) pause_required: bool,
     pub(super) warnings: Vec<String>,
     pub(super) checkpoint: Option<Tier3PauseCheckpoint>,
-    pub(super) pause_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1280,6 +1285,15 @@ struct FrameEntry {
     segment_path: Option<PathBuf>,
     spill_attempted: bool,
     spill_failed: bool,
+}
+
+struct SegmentWriteReport {
+    frame_failures: Vec<SegmentFrameFailure>,
+}
+
+struct SegmentFrameFailure {
+    index: usize,
+    message: String,
 }
 
 enum FrameStorage {
@@ -1329,12 +1343,6 @@ impl ResidentEstimate {
             .saturating_add(self.encoder_workspace)
     }
 
-    fn releasable(self) -> u64 {
-        self.payload
-            .saturating_add(self.thumbnail)
-            .saturating_add(self.encoder_workspace)
-    }
-
     fn metadata_only(self) -> Self {
         Self {
             payload: 0,
@@ -1346,6 +1354,13 @@ impl ResidentEstimate {
 
     fn spilled_resident(self) -> Self {
         self.metadata_only()
+    }
+
+    fn without_encoder_workspace(self) -> Self {
+        Self {
+            encoder_workspace: 0,
+            ..self
+        }
     }
 }
 
@@ -1660,6 +1675,7 @@ mod tests {
         let screenshots = store.screenshots();
         assert_eq!(screenshots.len(), 1);
         assert_eq!(screenshots[0].merged_count, 2);
+        assert_resident_accounting(&store);
     }
 
     #[test]
@@ -1709,6 +1725,22 @@ mod tests {
                 .join("segment-manifest.jsonl")
                 .is_file()
         );
+        assert_resident_accounting(&store);
+    }
+
+    #[test]
+    fn spilled_frame_keeps_thumbnail_for_later_dedup() {
+        let temp = TempDir::new().expect("temp");
+        let mut store = small_store(temp.path(), 70_000);
+
+        let first = add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        assert_eq!(first.storage_state, FrameStorageState::Segment);
+        add_test_frame(&mut store, 2, 10, matched("arknights/home"), "page_wait");
+
+        let screenshots = store.screenshots();
+        assert_eq!(screenshots.len(), 1);
+        assert_eq!(screenshots[0].merged_count, 1);
+        assert_resident_accounting(&store);
     }
 
     #[test]
@@ -1766,7 +1798,6 @@ mod tests {
         assert!(outcome.tier3_triggered);
         assert!(outcome.pause_required);
         assert!(outcome.checkpoint.is_some());
-        assert_eq!(outcome.pause_timeout_ms, DEFAULT_TIER3_PAUSE_TIMEOUT_MS);
     }
 
     #[test]
@@ -1804,8 +1835,10 @@ mod tests {
                 .any(|warning| warning.contains("spill"))
         );
         assert_eq!(outcome.backpressure_state, BackpressureState::SpillDegraded);
-        assert_eq!(store.spill_warning_count, 1);
-        assert!(store.entries.iter().any(|entry| entry.spill_failed));
+        assert!(store.spill_warning_count >= 1);
+        assert!(store.entries.iter().all(|entry| !entry.spill_failed));
+        assert_eq!(store.encoder_workspace_reserved_bytes, 0);
+        assert_resident_accounting(&store);
     }
 
     #[test]
@@ -1959,5 +1992,32 @@ mod tests {
                 frame,
             })
             .expect("add frame")
+    }
+
+    fn assert_resident_accounting(store: &FrameStore) {
+        let mut estimate = ResidentEstimate::default();
+        for entry in store.entries.iter().filter(|entry| entry.retained) {
+            estimate.payload = estimate
+                .payload
+                .saturating_add(entry.resident_estimate.payload);
+            estimate.metadata = estimate
+                .metadata
+                .saturating_add(entry.resident_estimate.metadata);
+            estimate.thumbnail = estimate
+                .thumbnail
+                .saturating_add(entry.resident_estimate.thumbnail);
+            estimate.encoder_workspace = estimate
+                .encoder_workspace
+                .saturating_add(entry.resident_estimate.encoder_workspace);
+        }
+
+        assert_eq!(store.resident_bytes, estimate.total());
+        assert_eq!(store.payload_bytes, estimate.payload);
+        assert_eq!(store.metadata_estimated_bytes, estimate.metadata);
+        assert_eq!(store.thumbnail_estimated_bytes, estimate.thumbnail);
+        assert_eq!(
+            store.encoder_workspace_reserved_bytes,
+            estimate.encoder_workspace
+        );
     }
 }

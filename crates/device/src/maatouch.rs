@@ -15,6 +15,7 @@ const DEFAULT_PRESSURE: i32 = 50;
 const TAP_HOLD_MS: u64 = 80;
 const SWIPE_FRAME_MS: u64 = 16;
 const MAX_SWIPE_STEPS: u64 = 60;
+const MAX_GESTURE_MS: u64 = 60_000;
 
 #[derive(Debug, Clone)]
 pub struct DeviceTarget {
@@ -475,6 +476,7 @@ impl InputBackend for MaaTouchBackend {
     }
 
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+        let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.maatouch_config.default_pressure;
         self.validate_input(x, y, pressure)?;
         self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
@@ -484,6 +486,7 @@ impl InputBackend for MaaTouchBackend {
     }
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+        let duration_ms = bounded_gesture_duration_ms(duration_ms);
         let pressure = self.maatouch_config.default_pressure;
         self.validate_input(x1, y1, pressure)?;
         self.validate_input(x2, y2, pressure)?;
@@ -666,7 +669,12 @@ fn spawn_stderr_reader(
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut text = String::new();
-        let _ = reader.read_to_string(&mut text);
+        if let Err(err) = reader.read_to_string(&mut text) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&format!("MaaTouch stderr reader error: {err}"));
+        }
         if let Ok(mut target) = target.lock() {
             *target = text;
         }
@@ -756,6 +764,10 @@ fn swipe_step_delay(duration_ms: u64, point_count: usize) -> Duration {
     Duration::from_millis((duration_ms / (point_count as u64 + 1)).max(1))
 }
 
+fn bounded_gesture_duration_ms(duration_ms: u64) -> u64 {
+    duration_ms.min(MAX_GESTURE_MS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn maatouch_fallback_prefers_repo_external_tool_path_under_target() {
+    fn maatouch_default_path_prefers_repo_external_tool_path_under_target() {
         let exe = PathBuf::from("repo")
             .join("target")
             .join("debug")
@@ -817,6 +829,15 @@ mod tests {
     fn swipe_points_include_intermediate_points_only() {
         let points = swipe_points(0, 0, 100, 0, 64);
         assert_eq!(points, vec![(25, 0), (50, 0), (75, 0)]);
+    }
+
+    #[test]
+    fn gesture_duration_is_capped() {
+        assert_eq!(
+            bounded_gesture_duration_ms(MAX_GESTURE_MS + 1),
+            MAX_GESTURE_MS
+        );
+        assert_eq!(bounded_gesture_duration_ms(123), 123);
     }
 
     #[test]

@@ -1,5 +1,106 @@
 # CHECKPOINT.md
 
+## 2026-06-25 Lab-1z Round2 stability close-out
+
+### Current status
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-1z-fixes-round2.md` and its referenced P2.2, Lab-1y, P1g, and P2.3 fix guides.
+- Confirmed local `main` was aligned with `origin/main` at `abe39fd2b4e69eb67fed71ad6c66dcc010266d59` before the Round2 edits.
+- Implemented the Round2 fixes in dependency order: device-layer stability, Lab execution stability, frame-store accounting/spill semantics, CLI/package robustness, then release benchmark validation.
+- Device-layer fixes now cover ADB timeout kill-failure handling, bounded DroidCast response reads and child cleanup, backend-scoped Nemu IPC worker timeout/poison behavior, pre-capture Nemu dimension probe and buffer resize, MaaTouch gesture-duration cap, and MaaTouch stderr reader diagnostics.
+- Lab execution fixes now cover bounded zip unpacking, dangerous zip entry skip-before-write, output zip partial cleanup, bounded noninteractive git commit lookup, per-run directory cleanup after finalization, and `partial_output` in `summary.json`.
+- Frame-store fixes now cover zero-drift resident accounting, dropped-entry subtraction, spilled-thumbnail retention for later dedupe, global spill-unavailable warnings without poisoning every frame, per-frame spill failure isolation, and admission-spill failure without permanent encoder reserve pressure.
+- Tier3 is documented and emitted as synchronous graceful partial-output failure. The former Tier3 pause-timeout control is no longer part of the active schema or CLI.
+- CLI/package robustness fixes now cover package zip size limits, manifest hash path validation without echoing unsafe traversal strings, unknown list-kind usage errors instead of panic, and visible list warning collection.
+- No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, ADB input fallback, scrcpy, minicap, reconnect loop, or retry loop was added.
+- Current implementation commit: `79a20e439724dc2d1a581acf278c9d65e5042491` (`Fix Lab-1z Round2 stability issues`).
+- Checkpoint tag: `checkpoint/20260625-lab-1z-round2-stability`.
+
+### Files changed
+
+- `crates/device/src/adb.rs`
+- `crates/device/src/capture.rs`
+- `crates/device/src/maatouch.rs`
+- `apps/actinglab/src/frame_store.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `git status --short --branch`
+- `git diff --stat`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-Lab-1z-fixes-round2.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\FIX-P2.2-capture-input-stability.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\FIX-Lab-1y-stability.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\FIX-P1g-cli-robustness.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\FIX-P2.3-nemu-capture-perf.md' -Encoding UTF8`
+- `cargo test -p actingcommand-device`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-device -- -D warnings`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "adb shell screencap|adb shell input|fallback|reconnect|println!|eprintln!" crates\device`
+- `cargo build --release -p actingcommand-device-test`
+- Release benchmark on `127.0.0.1:16416` with reviewed local DroidCast_raw and Nemu IPC external-tool paths:
+  - `target\release\actingcommand-device-test.exe --port 16416 benchmark --rounds 5`
+
+### New or updated unit coverage
+
+- `gesture_duration_is_capped`
+- `matched_same_page_frames_can_dedupe`
+- `tier2_spills_segment_without_pausing`
+- `spilled_frame_keeps_thumbnail_for_later_dedup`
+- `spill_io_failure_degrades_without_panic`
+- `failure_zip_materializes_frame_store_screenshots`
+- `rejects_dangerous_zip_entry_without_writing_it`
+- `read_zip_entry_limited_rejects_oversized_entry`
+- `package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal`
+- `read_package_zip_entry_limited_rejects_oversized_entry`
+- `list_resource_kind_unknown_returns_usage_error`
+
+### Benchmark result
+
+- Device: Arknights `127.0.0.1:16416`.
+- `benchmark --rounds 5` succeeded.
+- `adb_screencap`: `1280x720`, capture best/median/p90 `467/471/544ms`, encode best/median/p90 `6/6/8ms`, end-to-end best/median/p90 `468/471/544ms`.
+- `droidcast_raw`: `1280x720`, capture best/median/p90 `224/234/811ms`, encode best/median/p90 `5/5/5ms`, end-to-end best/median/p90 `231/239/816ms`.
+- `nemu_ipc`: `1280x720`, capture best/median/p90 `4/4/6ms`, encode best/median/p90 `6/6/7ms`, end-to-end best/median/p90 `11/11/13ms`.
+- `recommend_poll_interval_ms=942`.
+- `recommend_min_capture_interval_ms=544`.
+- Control timing remains command-submission-only because MaaTouch reset has no device acknowledgement.
+
+### Test results
+
+- `cargo test -p actingcommand-device` passed with 33 tests.
+- `cargo test -p actingcommand-actinglab` passed with 47 tests.
+- `cargo test --workspace` passed.
+- `cargo clippy -p actingcommand-device -- -D warnings` passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Device-layer prohibited scan over `crates/device` returned no matches for `adb shell screencap`, `adb shell input`, `fallback`, `reconnect`, `println!`, or `eprintln!`.
+
+### Current blocker
+
+- No implementation blocker.
+- A Nemu IPC worker blocked inside a stuck C FFI call cannot be force-killed in-process. Current behavior marks the backend poisoned and avoids repeated use; true hard-kill isolation remains a later helper-process milestone if needed.
+- Live gameplay package execution was not rerun in this pass; live validation was limited to the release benchmark.
+
+### Next step
+
+1. Push `main` and the checkpoint tag to GitHub.
+2. Await user-side validation or the next Runtime milestone.
+
 ## 2026-06-25 Lab-1z fixes
 
 ### Current status
@@ -16,7 +117,7 @@
 - Frames involved in a spill failure are marked `spill_failed` to avoid repeated attempts against the same failed frame.
 - Made `resident_bytes` a conservative estimate that includes payload, original PNG, thumbnail, metadata/string overhead, per-entry overhead, encoder workspace reserve, and spilled/dropped diagnostics.
 - Validation now rejects `similarity_threshold = 1.0`, invalid ratios, non-distinct watermarks, invalid release lines, zero budgets, and Tier2/Tier3 gaps below `flush_workspace_reserve_bytes`.
-- Added `flush_workspace_reserve_bytes` and `tier3_pause_timeout_ms` to control JSON, schema output, and CLI flags.
+- Added `flush_workspace_reserve_bytes` and a temporary Tier3 pause-timeout control to control JSON, schema output, and CLI flags. The Round2 close-out above removes that timeout control from the active schema and CLI.
 - Added `frame-store-temp` cleanup after successful finish or partial-output finalization, with cleanup failures logged as warnings.
 - Ensured segment-write failure paths clear `active_segment_id` so checkpoint state does not falsely report an in-flight flush after degradation.
 - No UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loop, scrcpy, minicap, new capture backend, input fallback, or P2.3 capture hot-path rollback was added.
