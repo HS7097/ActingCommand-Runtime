@@ -2,11 +2,11 @@
 
 use super::{load_evaluator_and_detector, page_error, task_error};
 use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, InputBackend, MaaTouchBackend,
-    MaaTouchValidationConfig, ScreencapBackend, combine_operation_and_close,
+    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, MaaTouchBackend,
+    MaaTouchValidationConfig, PixelFormat, ScreencapBackend, combine_operation_and_close,
 };
 use actingcommand_page_detector::PageDetector;
-use actingcommand_recognition::{Rect as RecognitionRect, Scene};
+use actingcommand_recognition::{Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator};
 use actingcommand_task_loop::{
     ProbeClickEffect, ProbeDecisionLoop, ProbeReferenceOverrides, ProbeStepDecision,
@@ -346,7 +346,7 @@ fn execute_probe_run(
     if let Some(finish) = maybe_checkpoint(options, journal, state, "initial_frame")? {
         return Ok(finish);
     }
-    let mut scene = Scene::from_png(&before).map_err(|err| DeviceError::fatal(err.to_string()))?;
+    let mut scene = scene_from_frame(&before)?;
     let seed_base = run_seed();
     let mut backend = None::<MaaTouchBackend>;
     let initial_page = detect_current_page(&detector, &evaluator, &scene)?;
@@ -375,7 +375,7 @@ fn execute_probe_run(
         )?;
         let after_wake = capture_frame(&mut capture, journal, "001_after_wake.png", "after_wake")?;
         state.frames += 1;
-        scene = Scene::from_png(&after_wake).map_err(|err| DeviceError::fatal(err.to_string()))?;
+        scene = scene_from_frame(&after_wake)?;
         let after_wake_page = detect_current_page(&detector, &evaluator, &scene)?;
         state.initial_page = after_wake_page.clone();
         state.final_page = after_wake_page.clone();
@@ -778,9 +778,9 @@ fn poll_arrival(
             frames + 1,
             safe_file_part(context.step_id)
         );
-        let png = capture_frame(capture, context.journal, &frame_name, "poll")?;
+        let frame = capture_frame(capture, context.journal, &frame_name, "poll")?;
         frames += 1;
-        let scene = Scene::from_png(&png).map_err(|err| DeviceError::fatal(err.to_string()))?;
+        let scene = scene_from_frame(&frame)?;
         let matched = match context
             .navigation
             .and_then(|bridge| bridge.arrival_anchors.get(context.page_id))
@@ -813,6 +813,7 @@ fn poll_arrival(
                 frames,
                 safe_file_part(context.page_id)
             );
+            let png = frame.png_for_artifact()?;
             fs::write(context.journal.frames.join(&arrived_name), &png).map_err(|err| {
                 DeviceError::fatal(format!(
                     "failed to write arrived frame {}: {err}",
@@ -863,11 +864,12 @@ fn capture_frame(
     journal: &OperationJournal,
     name: &str,
     label: &str,
-) -> DeviceResult<Vec<u8>> {
+) -> DeviceResult<Frame> {
     journal.event("capture_started", json!({"label": label, "frame": name}))?;
     let started = Instant::now();
     let frame = capture.capture()?;
-    fs::write(journal.frames.join(name), &frame.png)
+    let png = frame.png_for_artifact()?;
+    fs::write(journal.frames.join(name), &png)
         .map_err(|err| DeviceError::fatal(format!("failed to write frame {}: {err}", name)))?;
     journal.event(
         "capture_done",
@@ -879,7 +881,16 @@ fn capture_frame(
             "elapsed_ms": started.elapsed().as_millis()
         }),
     )?;
-    Ok(frame.png)
+    Ok(frame)
+}
+
+fn scene_from_frame(frame: &Frame) -> DeviceResult<Scene> {
+    let pixel_format = match frame.pixel_format {
+        PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
+        PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
+    };
+    Scene::from_pixels(frame.width, frame.height, &frame.pixels, pixel_format)
+        .map_err(|err| DeviceError::fatal(err.to_string()))
 }
 
 fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {

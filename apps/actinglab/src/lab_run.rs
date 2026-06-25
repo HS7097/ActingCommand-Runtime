@@ -6,11 +6,11 @@ use super::{
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
-    CaptureBackendName, DeviceTarget, InputBackend, MaaTouchBackend, MaaTouchConfig,
-    combine_operation_and_close, create_capture_backend,
+    CaptureBackendName, DeviceTarget, Frame, InputBackend, MaaTouchBackend, MaaTouchConfig,
+    PixelFormat, combine_operation_and_close, create_capture_backend,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
-use actingcommand_recognition::Scene;
+use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator, load_pack_from_json_str};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1528,7 +1528,10 @@ impl LabRunContext {
         let file_name = self.next_screenshot_name(SystemTime::now());
         let relative = format!("screenshots/{file_name}");
         let path = self.screenshots_dir.join(&file_name);
-        fs::write(&path, &frame.png).map_err(|err| {
+        let png = frame
+            .png_for_artifact()
+            .map_err(|err| CliError::device(err.to_string()))?;
+        fs::write(&path, &png).map_err(|err| {
             CliError::device(format!("failed to write {}: {err}", path.display()))
         })?;
         self.screenshots.push(ScreenshotRecord {
@@ -1551,7 +1554,7 @@ impl LabRunContext {
             }),
         )?;
 
-        let scene = Scene::from_png(&frame.png).map_err(|err| CliError::device(err.to_string()))?;
+        let scene = scene_from_frame(&frame)?;
         let evaluations = match candidate_pages {
             Some(pages) => pages
                 .iter()
@@ -1835,6 +1838,15 @@ impl CapturedScene {
             .as_deref()
             .map(|page| canonical_page_anchor(game, page))
     }
+}
+
+fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
+    let pixel_format = match frame.pixel_format {
+        PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
+        PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
+    };
+    Scene::from_pixels(frame.width, frame.height, &frame.pixels, pixel_format)
+        .map_err(|err| CliError::device(err.to_string()))
 }
 
 struct ScreenshotRecord {

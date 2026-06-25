@@ -75,6 +75,9 @@ impl CaptureStore {
     ) -> CaptureStoreResult<CaptureRef> {
         validate_reason(reason)?;
         validate_frame(frame)?;
+        let png = frame
+            .png_for_artifact()
+            .map_err(|err| CaptureStoreError::InvalidInput(err.to_string()))?;
 
         let now = OffsetDateTime::now_utc();
         let captured_at = now.format(&Rfc3339)?;
@@ -82,7 +85,7 @@ impl CaptureStore {
         let stamp = now.format(format_description!(
             "[year][month][day]T[hour][minute][second][subsecond digits:9]Z"
         ))?;
-        let hex = sha256_hex(&frame.png);
+        let hex = sha256_hex(&png);
         let hash8 = &hex[..8];
         let image_hash = Some(format!("sha256:{hex}"));
         let safe_id = sanitize(device_or_profile_id);
@@ -99,7 +102,7 @@ impl CaptureStore {
             ))
         })?;
         fs::create_dir_all(parent)?;
-        fs::write(&abs, &frame.png)?;
+        fs::write(&abs, &png)?;
 
         Ok(CaptureRef {
             id: capture_id,
@@ -135,11 +138,6 @@ fn validate_reason(reason: &str) -> CaptureStoreResult<()> {
 }
 
 fn validate_frame(frame: &Frame) -> CaptureStoreResult<()> {
-    if frame.png.is_empty() {
-        return Err(CaptureStoreError::InvalidInput(
-            "frame PNG bytes are empty".to_string(),
-        ));
-    }
     if frame.width == 0 || frame.height == 0 {
         return Err(CaptureStoreError::InvalidInput(format!(
             "frame dimensions must be non-zero: {}x{}",
@@ -214,7 +212,8 @@ mod tests {
     fn save_frame_writes_png_and_returns_capture_ref() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = CaptureStore::new(temp.path().to_path_buf());
-        let frame = test_frame(b"png bytes".to_vec());
+        let frame = test_frame([1, 2, 3]);
+        let expected = frame.png_for_artifact().expect("artifact png");
 
         let capture = store
             .save_frame("127.0.0.1:16384", "manual", &frame)
@@ -222,7 +221,7 @@ mod tests {
 
         let saved = temp.path().join(&capture.image_ref);
         assert!(saved.exists());
-        assert_eq!(fs::read(&saved).expect("saved bytes"), frame.png);
+        assert_eq!(fs::read(&saved).expect("saved bytes"), expected);
         assert!(capture.image_ref.contains("127.0.0.1_16384"));
         assert_ref_is_safe(&capture);
         assert_hash_shape(capture.image_hash.as_deref());
@@ -238,7 +237,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = CaptureStore::new(temp.path().to_path_buf());
         let err = store
-            .save_frame("profile", "manual now", &test_frame(b"png bytes".to_vec()))
+            .save_frame("profile", "manual now", &test_frame([1, 2, 3]))
             .expect_err("invalid reason");
 
         assert!(matches!(err, CaptureStoreError::InvalidReason(_)));
@@ -250,10 +249,10 @@ mod tests {
         let store = CaptureStore::new(temp.path().to_path_buf());
 
         let first = store
-            .save_frame("profile", "manual", &test_frame(b"first".to_vec()))
+            .save_frame("profile", "manual", &test_frame([1, 2, 3]))
             .expect("first save");
         let second = store
-            .save_frame("profile", "manual", &test_frame(b"second".to_vec()))
+            .save_frame("profile", "manual", &test_frame([4, 5, 6]))
             .expect("second save");
 
         assert_ne!(first.id, second.id);
@@ -281,7 +280,7 @@ mod tests {
     fn save_frame_with_path_traversal_profile_id_stays_under_root() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = CaptureStore::new(temp.path().to_path_buf());
-        let frame = test_frame(b"png bytes".to_vec());
+        let frame = test_frame([1, 2, 3]);
 
         let capture = store
             .save_frame("..", "manual", &frame)
@@ -305,18 +304,19 @@ mod tests {
         assert!(matches!(err, CaptureStoreError::InvalidInput(_)));
     }
 
-    fn test_frame(png: Vec<u8>) -> Frame {
-        let pixels = vec![0; 1280 * 720 * 3];
-        let mut frame = Frame::from_pixels(
-            1280,
-            720,
+    fn test_frame(color: [u8; 3]) -> Frame {
+        let mut pixels = Vec::new();
+        for _ in 0..4 {
+            pixels.extend_from_slice(&color);
+        }
+        Frame::from_pixels(
+            2,
+            2,
             pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
-        .expect("test frame");
-        frame.png = png;
-        frame
+        .expect("test frame")
     }
 
     fn assert_ref_is_safe(capture: &CaptureRef) {

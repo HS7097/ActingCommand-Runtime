@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget,
+    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, Frame, PixelFormat,
     create_capture_backend,
 };
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
-use actingcommand_recognition::{MatchMetric, Scene};
+use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -698,7 +698,10 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             CliError::device(format!("failed to create {}: {err}", parent.display()))
         })?;
     }
-    fs::write(&out, &frame.png)
+    let png = frame
+        .png_for_artifact()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    fs::write(&out, &png)
         .map_err(|err| CliError::device(format!("failed to write {}: {err}", out.display())))?;
     Ok(json!({
         "width": frame.width,
@@ -1904,11 +1907,20 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         let frame = backend
             .capture()
             .map_err(|err| CliError::device(err.to_string()))?;
-        return Scene::from_png(&frame.png).map_err(|err| CliError::device(err.to_string()));
+        return scene_from_frame(&frame);
     }
     Err(CliError::usage(
         "command requires --scene <png> or --capture",
     ))
+}
+
+fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
+    let pixel_format = match frame.pixel_format {
+        PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
+        PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
+    };
+    Scene::from_pixels(frame.width, frame.height, &frame.pixels, pixel_format)
+        .map_err(|err| CliError::device(err.to_string()))
 }
 
 fn load_evaluator(pack_path: &Path, pack_root: &Path) -> CliOutcome<RecognitionEvaluator> {

@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-25 P2.3 capture pipeline refactor
+
+### Current status
+
+- Re-read the updated `C:\合作工作区\ActingCommand\TASK-P2.3-capture-pipeline.md` and implemented the revised mainline capture pipeline task.
+- Refactored `Frame` so capture backends return raw pixels plus metadata without encoding PNG in `Frame::from_pixels`.
+- Added optional `Frame::original_png` for ADB screencap frames and `Frame::png_for_artifact()` for save paths.
+- Added fast PNG artifact encoding with `CompressionType::Fast` and `FilterType::NoFilter`.
+- Added `Scene::from_rgb8`, `Scene::from_rgba8`, and `Scene::from_pixels` so recognition consumers can use raw captured pixels directly.
+- Updated `device-test`, `actinglab`, Lab-1y capture loops, probe-run capture, and `CaptureStore` to use raw-frame recognition and artifact-only PNG writes.
+- Cached Nemu IPC resolution at backend initialization and reused the cached dimensions per capture.
+- Updated `device-test benchmark` to report capture-only, encode-only, and end-to-end capture-plus-artifact timing per backend.
+- No Lab deduplication, frame-store watermarks, UI, OCR, SQLite, scheduler, game logic, ADB input fallback, scrcpy, minicap, or new fast screenshot backend was added.
+
+### Files changed
+
+- `crates/device/src/capture.rs`
+- `crates/recognition/src/lib.rs`
+- `crates/runtime-core/src/capture_store.rs`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git pull --ff-only`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-P2.3-capture-pipeline.md' -Encoding UTF8`
+- `cargo check --workspace`
+- `cargo test --workspace`
+- `cargo fmt --all`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `adb devices -l`
+- With `ACTINGCOMMAND_DROIDCAST_RAW_APK`, `ACTINGCOMMAND_NEMU_FOLDER`, and `ACTINGCOMMAND_NEMU_IPC_DLL` set to local reviewed external-tool paths:
+  - `cargo run -p actingcommand-device-test -- --port 16416 benchmark --rounds 3`
+- Prohibited-feature scans for old `frame.png` field usage, `adb shell screencap`, `shell screencap`, `scrcpy`, `minicap`, reconnect, retry-loop, OCR, and SQLite terms in Runtime paths.
+
+### Live benchmark result
+
+- Device: Arknights `127.0.0.1:16416`.
+- External tools:
+  - DroidCast_raw APK: `C:\.ClaudeCode\upstream-refs\AzurPilot\bin\DroidCast\DroidCast_raw-release-1.1.apk`
+  - MuMu folder: `D:\BST\MuMuPlayer`
+  - Nemu IPC DLL: `D:\BST\MuMuPlayer\nx_device\12.0\shell\sdk\external_renderer_ipc.dll`
+- `device-test benchmark --rounds 3` succeeded for all three backends:
+  - `adb_screencap`: `1280x720`, capture-only median `632ms`, encode-only median `142ms`, end-to-end median `632ms`.
+  - `droidcast_raw`: `1280x720`, capture-only median `376ms`, encode-only median `118ms`, end-to-end median `482ms`.
+  - `nemu_ipc`: `1280x720`, capture-only median `26ms`, encode-only median `136ms`, end-to-end median `164ms`.
+- Nemu IPC capture-only is now in the expected tens-of-milliseconds range.
+- The Nemu IPC DLL still printed external diagnostic lines before the benchmark output; this remains the known stdout-isolation residual.
+
+### Test results
+
+- `cargo check --workspace` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Prohibited scans found no `adb shell screencap`, no `shell screencap`, no `scrcpy`, no `minicap`, no reconnect or retry-loop logic in the changed capture path, and no remaining `frame.png` struct-field usage.
+- Scan hits for `frame.png` were only literal output file names or `png_for_artifact()` method calls; the OCR hit was the pre-existing primitive contract method name, not new OCR implementation.
+
+### Current blocker
+
+- No blocker for P2.3.
+- Later stdout isolation is still needed if Nemu-backed CLI output must be strict machine-readable JSON.
+- Further PNG cost reduction should be handled by later frame-store/persistence design, not by adding Lab deduplication in P2.3.
+
+### Next step
+
+1. Run final verification after documentation updates.
+2. Commit and push the Runtime P2.3 implementation with `PLANS.md` and `CHECKPOINT.md`.
+3. Plan a separate stdout-isolation task for external Nemu IPC DLL diagnostics if strict JSON output is required.
+4. Keep Lab deduplication / frame-store watermarks for the separate Lab-1z branch.
+
 ## 2026-06-25 P2.2 capture backend repair close-out
 
 ### Current status

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use image::{GrayImage, ImageError, ImageFormat, RgbImage, imageops};
+use image::{DynamicImage, GrayImage, ImageError, ImageFormat, RgbImage, RgbaImage, imageops};
 use imageproc::template_matching::{
     MatchTemplateMethod, find_extremes, match_template as match_template_map,
 };
@@ -88,10 +88,48 @@ pub struct Scene {
     gray: GrayImage,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenePixelFormat {
+    Rgb8,
+    Rgba8,
+}
+
 impl Scene {
     pub fn from_png(png: &[u8]) -> RecognitionResult<Scene> {
         let image = image::load_from_memory_with_format(png, ImageFormat::Png)
             .map_err(|err| decode_error("scene PNG", err))?;
+        Ok(Scene {
+            rgb: image.to_rgb8(),
+            gray: image.to_luma8(),
+        })
+    }
+
+    pub fn from_pixels(
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        pixel_format: ScenePixelFormat,
+    ) -> RecognitionResult<Scene> {
+        match pixel_format {
+            ScenePixelFormat::Rgb8 => Self::from_rgb8(width, height, pixels),
+            ScenePixelFormat::Rgba8 => Self::from_rgba8(width, height, pixels),
+        }
+    }
+
+    pub fn from_rgb8(width: u32, height: u32, pixels: &[u8]) -> RecognitionResult<Scene> {
+        validate_pixels(width, height, pixels.len(), 3, "RGB8")?;
+        let rgb = RgbImage::from_raw(width, height, pixels.to_vec())
+            .ok_or_else(|| RecognitionError::fatal("failed to build RGB8 scene from raw pixels"))?;
+        let gray = DynamicImage::ImageRgb8(rgb.clone()).to_luma8();
+        Ok(Scene { rgb, gray })
+    }
+
+    pub fn from_rgba8(width: u32, height: u32, pixels: &[u8]) -> RecognitionResult<Scene> {
+        validate_pixels(width, height, pixels.len(), 4, "RGBA8")?;
+        let rgba = RgbaImage::from_raw(width, height, pixels.to_vec()).ok_or_else(|| {
+            RecognitionError::fatal("failed to build RGBA8 scene from raw pixels")
+        })?;
+        let image = DynamicImage::ImageRgba8(rgba);
         Ok(Scene {
             rgb: image.to_rgb8(),
             gray: image.to_luma8(),
@@ -337,6 +375,39 @@ fn validate_rect(rect: Rect, frame_width: u32, frame_height: u32) -> Recognition
     })
 }
 
+fn validate_pixels(
+    width: u32,
+    height: u32,
+    len: usize,
+    bytes_per_pixel: usize,
+    label: &str,
+) -> RecognitionResult<()> {
+    if width == 0 || height == 0 {
+        return Err(RecognitionError::fatal(format!(
+            "{label} scene dimensions must be non-zero: {width}x{height}"
+        )));
+    }
+    let expected = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+        .ok_or_else(|| {
+            RecognitionError::fatal(format!(
+                "{label} scene dimensions overflow: {width}x{height}"
+            ))
+        })?;
+    if len != expected {
+        return Err(RecognitionError::fatal(format!(
+            "{label} scene pixel length mismatch for {width}x{height}: got {len}, expected {expected}"
+        )));
+    }
+    Ok(())
+}
+
 fn decode_error(label: &str, err: ImageError) -> RecognitionError {
     RecognitionError::fatal(format!("failed to decode {label}: {err}"))
 }
@@ -362,6 +433,30 @@ mod tests {
     use super::*;
     use image::{DynamicImage, ImageBuffer, Rgb};
     use std::io::Cursor;
+
+    #[test]
+    fn scene_from_rgb8_uses_raw_pixels() {
+        let scene = Scene::from_rgb8(2, 1, &[255, 0, 0, 0, 255, 0]).expect("rgb scene");
+
+        assert_eq!(scene.width(), 2);
+        assert_eq!(scene.height(), 1);
+    }
+
+    #[test]
+    fn scene_from_rgba8_uses_raw_pixels() {
+        let scene = Scene::from_rgba8(1, 2, &[255, 0, 0, 255, 0, 255, 0, 128]).expect("rgba scene");
+
+        assert_eq!(scene.width(), 1);
+        assert_eq!(scene.height(), 2);
+    }
+
+    #[test]
+    fn scene_from_pixels_rejects_bad_length() {
+        let err =
+            Scene::from_pixels(2, 2, &[0, 1, 2], ScenePixelFormat::Rgb8).expect_err("bad length");
+
+        assert_eq!(err.severity(), RecognitionErrorSeverity::Fatal);
+    }
 
     #[test]
     fn template_match_finds_non_uniform_template() {

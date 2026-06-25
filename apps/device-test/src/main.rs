@@ -2,13 +2,13 @@
 
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
-    InputBackend, MaaTouchBackend, MaaTouchValidationConfig, combine_operation_and_close,
-    create_capture_backend,
+    Frame, InputBackend, MaaTouchBackend, MaaTouchValidationConfig, PixelFormat,
+    combine_operation_and_close, create_capture_backend,
 };
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
 };
-use actingcommand_recognition::Scene;
+use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, RecognitionPack, RecognitionTarget, TargetEvaluation,
     TargetKind, load_pack_from_json_str,
@@ -252,6 +252,7 @@ fn run_capture_command(
     )?;
     let mut backend = selected.backend;
     let frame = backend.capture()?;
+    let png = frame.png_for_artifact()?;
     if let Some(parent) = out.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -262,7 +263,7 @@ fn run_capture_command(
             ))
         })?;
     }
-    fs::write(out, &frame.png).map_err(|err| {
+    fs::write(out, &png).map_err(|err| {
         DeviceError::fatal(format!(
             "failed to write capture output {}: {err}",
             out.display()
@@ -414,9 +415,9 @@ fn run_benchmark_command(
     .into_iter()
     .map(|backend| measure_capture_backend(&config, backend, options.rounds))
     .collect::<Vec<_>>();
-    let capture_stats = capture_rows
+    let end_to_end_stats = capture_rows
         .iter()
-        .find_map(|row| row.stats)
+        .find_map(|row| row.end_to_end_stats)
         .ok_or_else(|| {
             DeviceError::fatal("benchmark could not capture a frame with any backend")
         })?;
@@ -441,7 +442,7 @@ fn run_benchmark_command(
     Ok(format_benchmark_report(
         options.rounds,
         &capture_rows,
-        capture_stats,
+        end_to_end_stats,
         control_stats,
     ))
 }
@@ -469,24 +470,26 @@ fn measure_capture_backend(
                 available: false,
                 width: None,
                 height: None,
-                best_ms: None,
-                median_ms: None,
-                p90_ms: None,
-                stats: None,
+                capture_stats: None,
+                encode_stats: None,
+                end_to_end_stats: None,
                 error: Some(err.to_string()),
             };
         }
     };
     let mut capture_ms = Vec::with_capacity(rounds);
+    let mut encode_ms = Vec::with_capacity(rounds);
+    let mut end_to_end_ms = Vec::with_capacity(rounds);
     let mut width = None;
     let mut height = None;
     for _ in 0..rounds {
-        let started = Instant::now();
-        match selected.backend.capture() {
+        let end_to_end_started = Instant::now();
+        let capture_started = Instant::now();
+        let frame = match selected.backend.capture() {
             Ok(frame) => {
-                capture_ms.push(started.elapsed().as_millis());
                 width = Some(frame.width);
                 height = Some(frame.height);
+                frame
             }
             Err(err) => {
                 return CaptureBenchmarkRow {
@@ -494,38 +497,96 @@ fn measure_capture_backend(
                     available: false,
                     width,
                     height,
-                    best_ms: None,
-                    median_ms: None,
-                    p90_ms: None,
-                    stats: None,
+                    capture_stats: None,
+                    encode_stats: None,
+                    end_to_end_stats: None,
                     error: Some(err.to_string()),
                 };
             }
+        };
+        capture_ms.push(capture_started.elapsed().as_millis());
+        if let Err(err) = frame.png_for_artifact() {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width,
+                height,
+                capture_stats: LatencyStats::from_samples(&capture_ms).ok(),
+                encode_stats: None,
+                end_to_end_stats: None,
+                error: Some(err.to_string()),
+            };
         }
+        end_to_end_ms.push(end_to_end_started.elapsed().as_millis());
+        let encode_started = Instant::now();
+        if let Err(err) = frame.encode_png_fast() {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width,
+                height,
+                capture_stats: LatencyStats::from_samples(&capture_ms).ok(),
+                encode_stats: None,
+                end_to_end_stats: LatencyStats::from_samples(&end_to_end_ms).ok(),
+                error: Some(err.to_string()),
+            };
+        }
+        encode_ms.push(encode_started.elapsed().as_millis());
     }
-    match LatencyStats::from_samples(&capture_ms) {
-        Ok(stats) => CaptureBenchmarkRow {
-            backend: name,
-            available: true,
-            width,
-            height,
-            best_ms: Some(stats.best),
-            median_ms: Some(stats.median),
-            p90_ms: Some(stats.p90),
-            stats: Some(stats),
-            error: None,
-        },
-        Err(err) => CaptureBenchmarkRow {
-            backend: name,
-            available: false,
-            width,
-            height,
-            best_ms: None,
-            median_ms: None,
-            p90_ms: None,
-            stats: None,
-            error: Some(err.to_string()),
-        },
+    let capture_stats = match LatencyStats::from_samples(&capture_ms) {
+        Ok(stats) => stats,
+        Err(err) => {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width,
+                height,
+                capture_stats: None,
+                encode_stats: None,
+                end_to_end_stats: None,
+                error: Some(err.to_string()),
+            };
+        }
+    };
+    let encode_stats = match LatencyStats::from_samples(&encode_ms) {
+        Ok(stats) => stats,
+        Err(err) => {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width,
+                height,
+                capture_stats: Some(capture_stats),
+                encode_stats: None,
+                end_to_end_stats: None,
+                error: Some(err.to_string()),
+            };
+        }
+    };
+    let end_to_end_stats = match LatencyStats::from_samples(&end_to_end_ms) {
+        Ok(stats) => stats,
+        Err(err) => {
+            return CaptureBenchmarkRow {
+                backend: name,
+                available: false,
+                width,
+                height,
+                capture_stats: Some(capture_stats),
+                encode_stats: Some(encode_stats),
+                end_to_end_stats: None,
+                error: Some(err.to_string()),
+            };
+        }
+    };
+    CaptureBenchmarkRow {
+        backend: name,
+        available: true,
+        width,
+        height,
+        capture_stats: Some(capture_stats),
+        encode_stats: Some(encode_stats),
+        end_to_end_stats: Some(end_to_end_stats),
+        error: None,
     }
 }
 
@@ -544,6 +605,7 @@ fn format_benchmark_report(
          screenshot_median_ms={}\n\
          screenshot_p90_ms={}\n\
          screenshot_rating={}\n\
+         screenshot_measurement=end_to_end_capture_plus_artifact_png\n\
          control_measurement=command_submission_only\n\
          control_roundtrip_available=false\n\
          control_note=maatouch_reset_writes_only_no_device_ack\n\
@@ -575,12 +637,10 @@ fn format_benchmark_report(
         control_stats.median,
         control_stats.p90,
     );
-    output.push_str(
-        "capture_backend_table=backend,available,width,height,best_ms,median_ms,p90_ms,error\n",
-    );
+    output.push_str("capture_backend_table=backend,available,width,height,capture_best_ms,capture_median_ms,capture_p90_ms,encode_best_ms,encode_median_ms,encode_p90_ms,end_to_end_best_ms,end_to_end_median_ms,end_to_end_p90_ms,error\n");
     for row in capture_rows {
         output.push_str(&format!(
-            "capture_backend_table={},{},{},{},{},{},{},{}\n",
+            "capture_backend_table={},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             row.backend.as_str(),
             row.available,
             row.width
@@ -589,15 +649,15 @@ fn format_benchmark_report(
             row.height
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "not_available".to_string()),
-            row.best_ms
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "not_available".to_string()),
-            row.median_ms
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "not_available".to_string()),
-            row.p90_ms
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "not_available".to_string()),
+            format_stats_value(row.capture_stats, |stats| stats.best),
+            format_stats_value(row.capture_stats, |stats| stats.median),
+            format_stats_value(row.capture_stats, |stats| stats.p90),
+            format_stats_value(row.encode_stats, |stats| stats.best),
+            format_stats_value(row.encode_stats, |stats| stats.median),
+            format_stats_value(row.encode_stats, |stats| stats.p90),
+            format_stats_value(row.end_to_end_stats, |stats| stats.best),
+            format_stats_value(row.end_to_end_stats, |stats| stats.median),
+            format_stats_value(row.end_to_end_stats, |stats| stats.p90),
             row.error
                 .as_deref()
                 .unwrap_or("none")
@@ -613,10 +673,9 @@ struct CaptureBenchmarkRow {
     available: bool,
     width: Option<u32>,
     height: Option<u32>,
-    best_ms: Option<u128>,
-    median_ms: Option<u128>,
-    p90_ms: Option<u128>,
-    stats: Option<LatencyStats>,
+    capture_stats: Option<LatencyStats>,
+    encode_stats: Option<LatencyStats>,
+    end_to_end_stats: Option<LatencyStats>,
     error: Option<String>,
 }
 
@@ -714,27 +773,45 @@ fn load_scene(
     capture: bool,
     command: &str,
 ) -> DeviceResult<Scene> {
-    let scene_png = if let Some(scene) = scene {
-        fs::read(scene).map_err(|err| {
+    if let Some(scene) = scene {
+        let scene_png = fs::read(scene).map_err(|err| {
             DeviceError::fatal(format!(
                 "failed to read scene PNG {}: {err}",
                 scene.display()
             ))
-        })?
-    } else if capture {
+        })?;
+        return Scene::from_png(&scene_png).map_err(|err| DeviceError::fatal(err.to_string()));
+    }
+
+    if capture {
         let selected = create_capture_backend(
             CaptureBackendConfig::new(config.adb, config.target)
                 .with_requested(config.capture_backend),
         )?;
         let mut backend = selected.backend;
-        backend.capture()?.png
-    } else {
-        return Err(DeviceError::fatal(format!(
-            "{command} requires exactly one of --scene <png> or --capture"
-        )));
-    };
+        let frame = backend.capture()?;
+        return scene_from_frame(&frame);
+    }
 
-    Scene::from_png(&scene_png).map_err(|err| DeviceError::fatal(err.to_string()))
+    Err(DeviceError::fatal(format!(
+        "{command} requires exactly one of --scene <png> or --capture"
+    )))
+}
+
+fn scene_from_frame(frame: &Frame) -> DeviceResult<Scene> {
+    let pixel_format = match frame.pixel_format {
+        PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
+        PixelFormat::Rgba8 => ScenePixelFormat::Rgba8,
+    };
+    Scene::from_pixels(frame.width, frame.height, &frame.pixels, pixel_format)
+        .map_err(|err| DeviceError::fatal(err.to_string()))
+}
+
+fn format_stats_value(stats: Option<LatencyStats>, value: impl Fn(LatencyStats) -> u128) -> String {
+    stats
+        .map(value)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "not_available".to_string())
 }
 
 fn load_evaluator_and_detector(
@@ -2743,13 +2820,20 @@ mod tests {
                 available: true,
                 width: Some(1280),
                 height: Some(720),
-                best_ms: Some(100),
-                median_ms: Some(200),
-                p90_ms: Some(300),
-                stats: Some(LatencyStats {
+                capture_stats: Some(LatencyStats {
                     best: 100,
                     median: 200,
                     p90: 300,
+                }),
+                encode_stats: Some(LatencyStats {
+                    best: 5,
+                    median: 6,
+                    p90: 7,
+                }),
+                end_to_end_stats: Some(LatencyStats {
+                    best: 110,
+                    median: 210,
+                    p90: 310,
                 }),
                 error: None,
             }],
@@ -2768,11 +2852,13 @@ mod tests {
         assert!(report.contains("control_measurement=command_submission_only"));
         assert!(report.contains("control_roundtrip_available=false"));
         assert!(report.contains("control_submit_best_ms=0"));
+        assert!(report.contains("screenshot_measurement=end_to_end_capture_plus_artifact_png"));
         assert!(report.contains("recommend_min_op_interval_ms=not_available"));
         assert!(report.contains("table=control_submission,0,0,1,write_flush_only"));
-        assert!(
-            report.contains("capture_backend_table=adb_screencap,true,1280,720,100,200,300,none")
-        );
+        assert!(report.contains("capture_backend_table=backend,available,width,height,capture_best_ms,capture_median_ms,capture_p90_ms,encode_best_ms,encode_median_ms,encode_p90_ms,end_to_end_best_ms,end_to_end_median_ms,end_to_end_p90_ms,error"));
+        assert!(report.contains(
+            "capture_backend_table=adb_screencap,true,1280,720,100,200,300,5,6,7,110,210,310,none"
+        ));
         assert!(!report.contains("control_best_ms="));
     }
 

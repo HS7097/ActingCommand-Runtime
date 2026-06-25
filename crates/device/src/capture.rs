@@ -2,7 +2,10 @@
 
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
-use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
+use image::{
+    ColorType, ImageEncoder,
+    codecs::png::{CompressionType, FilterType, PngEncoder},
+};
 use libloading::Library;
 use std::fs;
 use std::io::{Read, Write};
@@ -101,14 +104,14 @@ impl CaptureBackendChoice {
     }
 }
 
-/// Device frame in a common pixel contract plus a PNG representation for artifacts.
+/// Device frame in a common raw-pixel contract.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
     pub pixel_format: PixelFormat,
-    pub png: Vec<u8>,
+    pub original_png: Option<Vec<u8>>,
     pub captured_at: SystemTime,
     pub backend_name: CaptureBackendName,
 }
@@ -124,7 +127,7 @@ impl Frame {
             height,
             pixels: image.into_raw(),
             pixel_format: PixelFormat::Rgba8,
-            png,
+            original_png: Some(png),
             captured_at: SystemTime::now(),
             backend_name,
         })
@@ -138,16 +141,26 @@ impl Frame {
         backend_name: CaptureBackendName,
     ) -> DeviceResult<Self> {
         validate_pixel_buffer(width, height, pixel_format, pixels.len())?;
-        let png = encode_png(width, height, &pixels, pixel_format)?;
         Ok(Self {
             width,
             height,
             pixels,
             pixel_format,
-            png,
+            original_png: None,
             captured_at: SystemTime::now(),
             backend_name,
         })
+    }
+
+    pub fn encode_png_fast(&self) -> DeviceResult<Vec<u8>> {
+        encode_png_fast(self.width, self.height, &self.pixels, self.pixel_format)
+    }
+
+    pub fn png_for_artifact(&self) -> DeviceResult<Vec<u8>> {
+        match &self.original_png {
+            Some(png) => Ok(png.clone()),
+            None => self.encode_png_fast(),
+        }
     }
 }
 
@@ -609,6 +622,8 @@ pub struct NemuIpcBackend {
     display_id: i32,
     connect_id: i32,
     capture_timeout: Duration,
+    frame_width: u32,
+    frame_height: u32,
 }
 
 type NemuConnect = unsafe extern "C" fn(*const u16, i32) -> i32;
@@ -643,14 +658,20 @@ impl NemuIpcBackend {
                 dll_path.display()
             ))
         })?;
-        Ok(Self {
+        let mut backend = Self {
             library,
             nemu_folder,
             instance_id,
             display_id: config.display_id,
             connect_id: 0,
             capture_timeout,
-        })
+            frame_width: 0,
+            frame_height: 0,
+        };
+        let (frame_width, frame_height) = backend.probe_resolution()?;
+        backend.frame_width = frame_width;
+        backend.frame_height = frame_height;
+        Ok(backend)
     }
 
     fn connect(&mut self) -> DeviceResult<()> {
@@ -688,7 +709,7 @@ impl NemuIpcBackend {
         Ok(*symbol)
     }
 
-    fn resolution(&mut self) -> DeviceResult<(u32, u32)> {
+    fn probe_resolution(&mut self) -> DeviceResult<(u32, u32)> {
         self.connect()?;
         let capture_display =
             unsafe { self.symbol::<NemuCaptureDisplay>(b"nemu_capture_display\0")? };
@@ -720,7 +741,9 @@ impl NemuIpcBackend {
 
 impl CaptureBackend for NemuIpcBackend {
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let (width, height) = self.resolution()?;
+        self.connect()?;
+        let width = self.frame_width;
+        let height = self.frame_height;
         let capture_display =
             unsafe { self.symbol::<NemuCaptureDisplay>(b"nemu_capture_display\0")? };
         let pixel_len = checked_pixel_len(width, height, PixelFormat::Rgba8)?;
@@ -754,6 +777,12 @@ impl CaptureBackend for NemuIpcBackend {
         }
         let width = width_i32 as u32;
         let height = height_i32 as u32;
+        if width != self.frame_width || height != self.frame_height {
+            return Err(DeviceError::fatal(format!(
+                "Nemu IPC frame dimensions changed from cached {}x{} to {}x{}",
+                self.frame_width, self.frame_height, width, height
+            )));
+        }
         validate_pixel_buffer(width, height, PixelFormat::Rgba8, raw.len())?;
         let pixels = bgra_bottom_up_to_rgba(&raw, width, height)?;
         Frame::from_pixels(
@@ -823,7 +852,7 @@ pub fn parse_png_dimensions(png: &[u8]) -> DeviceResult<(u32, u32)> {
     Ok((width, height))
 }
 
-fn encode_png(
+pub fn encode_png_fast(
     width: u32,
     height: u32,
     pixels: &[u8],
@@ -831,7 +860,8 @@ fn encode_png(
 ) -> DeviceResult<Vec<u8>> {
     validate_pixel_buffer(width, height, pixel_format, pixels.len())?;
     let mut png = Vec::new();
-    let encoder = PngEncoder::new(&mut png);
+    let encoder =
+        PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::NoFilter);
     encoder
         .write_image(pixels, width, height, pixel_format.color_type().into())
         .map_err(|err| DeviceError::fatal(format!("failed to encode frame PNG: {err}")))?;
@@ -1355,6 +1385,40 @@ mod tests {
             CaptureBackendChoice::parse("nemu").expect("nemu"),
             CaptureBackendChoice::NemuIpc
         );
+    }
+
+    #[test]
+    fn frame_from_pixels_keeps_png_encoding_out_of_capture_path() {
+        let frame = Frame::from_pixels(
+            1,
+            1,
+            vec![1, 2, 3],
+            PixelFormat::Rgb8,
+            CaptureBackendName::DroidcastRaw,
+        )
+        .expect("raw frame");
+
+        assert!(frame.original_png.is_none());
+        let png = frame.encode_png_fast().expect("artifact PNG");
+        assert_eq!(parse_png_dimensions(&png).expect("dimensions"), (1, 1));
+    }
+
+    #[test]
+    fn frame_from_png_preserves_adb_original_png() {
+        let source = Frame::from_pixels(
+            1,
+            1,
+            vec![1, 2, 3],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("raw frame");
+        let png = source.encode_png_fast().expect("source PNG");
+        let frame =
+            Frame::from_png(png.clone(), CaptureBackendName::AdbScreencap).expect("PNG frame");
+
+        assert_eq!(frame.original_png.as_deref(), Some(png.as_slice()));
+        assert_eq!((frame.width, frame.height), (1, 1));
     }
 
     #[test]

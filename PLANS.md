@@ -35,6 +35,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Lab-1X trusted one-shot package execution engine: `actinglab lab run --zip <input.zip> --out <output.zip>` with Lab-1X control/resources ingest, resource integrity checks, Screencap/MaaTouch execution path, page confirmation, output report zips, and device-unreachable failure reporting.
 - P2.2/Lab-1y capture-backend and trusted execution upgrade: unified capture frames, selectable `adb_screencap`/`droidcast_raw`/`nemu_ipc` backends, backend diagnostics, Lab-1y control modes, local LabLease lock, and output timing stats.
 - P2.2 capture backend repair close-out: Nemu IPC UTF-16 path passing, DroidCast_raw natural-buffer rotation, `lab run --capture-backend` CLI priority, and auto backend probe downgrade.
+- P2.3 capture pipeline refactor: capture backends now return raw pixel frames without hot-path PNG encoding, ADB preserves original screencap PNG for artifact writes, recognition can consume raw RGB/RGBA pixels, Nemu IPC caches resolution, and `device-test benchmark` reports capture-only, encode-only, and end-to-end timing.
+
+## Current P2.3 Capture Pipeline Refactor
+
+The current Runtime task removes PNG encoding from the capture hot path and keeps the screenshot pipeline split into explicit stages.
+
+P2.3 capture direction:
+
+- `Frame` is a raw pixel frame with width, height, pixels, pixel format, capture time, backend name, and optional `original_png`.
+- `Frame::from_pixels` does not encode PNG during `capture()`.
+- `Frame::from_png` decodes pixels once and preserves the source PNG in `original_png`, so ADB screencap artifacts can be written without decode-and-reencode.
+- Artifact writes use `Frame::png_for_artifact()`: original PNG when available, otherwise fast PNG encoding.
+- Fast PNG encoding uses `CompressionType::Fast` and `FilterType::NoFilter`.
+- `Scene::from_rgb8`, `Scene::from_rgba8`, and `Scene::from_pixels` let Runtime recognition consume captured pixels directly.
+- `device-test`, `actinglab capture`, `actinglab` read-only recognition, Lab-1y capture loops, probe-run frame capture, and `CaptureStore` now use the raw-frame/artifact boundary.
+- `NemuIpcBackend` probes resolution at backend initialization and reuses the cached dimensions for captures.
+- `device-test benchmark` reports capture-only, encode-only, and end-to-end capture-plus-artifact timing for each capture backend.
+
+P2.3 validation status:
+
+- Arknights `127.0.0.1:16416` benchmark with all three backends succeeded.
+- Observed medians in this pass:
+  - `adb_screencap`: capture-only `632ms`, encode-only `142ms`, end-to-end `632ms`.
+  - `droidcast_raw`: capture-only `376ms`, encode-only `118ms`, end-to-end `482ms`.
+  - `nemu_ipc`: capture-only `26ms`, encode-only `136ms`, end-to-end `164ms`.
+- Nemu capture-only is now in the expected tens-of-milliseconds range.
+
+Known residuals:
+
+- The Nemu IPC DLL still prints external diagnostic lines to process stdout. This is not a screenshot pipeline blocker, but strict JSON consumers still need a later stdout-isolation task.
+- `encode-only` still costs roughly `118-142ms` for `1280x720` frames with the current fast PNG path; later frame-store work may avoid PNG encoding entirely where only in-memory recognition is needed.
 
 ## Current P2.2 / Lab-1y Capture Backend And Trusted Execution Round
 
@@ -629,20 +660,22 @@ Remaining BA data work is still resource/live-verification work, not Runtime arc
 
 ## Next steps
 
-1. Connect `actinglab status/devices/lab/monitor` to a real resident Runtime endpoint instead of endpoint probing.
-2. Move active `capture`, `detect-page`, `recognize`, `operation dry-run`, and `package run` behind a Runtime service boundary while keeping the CLI as a thin user entry.
-3. Implement real package-run operation execution only after LabLease, navigation-only, and expect-after Runtime gates are connected.
-4. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
-5. Connect ActingLab `SchedulerGate` to real Runtime scheduler state in a separate scoped milestone.
-6. Add Runtime-owned journal/frame-stream contracts for ActingLab passive-mirror evidence output.
-7. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
-8. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
-9. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
-10. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
-11. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
-12. Add Arknights operator/menu navigation targets before Arknights probes.
-13. Improve Arknights page templates/guards so `home`, `terminal`, and related menu pages do not all match the same frame.
-14. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
-15. Define Runtime API contracts for UI integration in a separate milestone.
-16. Define capture metadata and SQLite schema in a separate scoped milestone.
-17. Keep `CHECKPOINT.md` updated with every completed Runtime task.
+1. Keep Lab deduplication, frame-store watermarks, and retention policy out of P2.3 and handle them in the separate Lab-1z branch/task.
+2. Decide whether to add stdout isolation for the external Nemu IPC DLL diagnostics before any strict JSON consumer depends on Nemu-backed capture output.
+3. Connect `actinglab status/devices/lab/monitor` to a real resident Runtime endpoint instead of endpoint probing.
+4. Move active `capture`, `detect-page`, `recognize`, `operation dry-run`, and `package run` behind a Runtime service boundary while keeping the CLI as a thin user entry.
+5. Implement real package-run operation execution only after LabLease, navigation-only, and expect-after Runtime gates are connected.
+6. Continue the BA resource control-refinement task with live CCOEFF ROI capture and sentinel-coordinate resolution.
+7. Connect ActingLab `SchedulerGate` to real Runtime scheduler state in a separate scoped milestone.
+8. Add Runtime-owned journal/frame-stream contracts for ActingLab passive-mirror evidence output.
+9. Keep `device-test lab ...` as a thin wrapper only if used; actual lab logic must live in Runtime-owned Rust modules.
+10. Preserve resource-repository offline Python tools as offline importer/drift/converter code only.
+11. Fix BlueArchive `home_to_task` navigation and task-center arrival-anchor resource data before treating BA task regression as green.
+12. Upgrade BA arrival anchors from the temporary `device-test` direct bridge into recognition-pack targets with positive and negative samples.
+13. Add resource definitions for AzurLane mission/commission pages before AzurLane probes.
+14. Add Arknights operator/menu navigation targets before Arknights probes.
+15. Improve Arknights page templates/guards so `home`, `terminal`, and related menu pages do not all match the same frame.
+16. Resume FreeClaim and ConsumeRegeneratingResource preflight only after the resource Operation Bundle lands reviewed reward/cost/resource-policy data.
+17. Define Runtime API contracts for UI integration in a separate milestone.
+18. Define capture metadata and SQLite schema in a separate scoped milestone.
+19. Keep `CHECKPOINT.md` updated with every completed Runtime task.
