@@ -13,7 +13,7 @@
 - Tier3 is documented and emitted as synchronous graceful partial-output failure. The former Tier3 pause-timeout control is no longer part of the active schema or CLI.
 - CLI/package robustness fixes now cover package zip size limits, manifest hash path validation without echoing unsafe traversal strings, unknown list-kind usage errors instead of panic, and visible list warning collection.
 - No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, ADB input fallback, scrcpy, minicap, reconnect loop, or retry loop was added.
-- Current implementation commit: `79a20e439724dc2d1a581acf278c9d65e5042491` (`Fix Lab-1z Round2 stability issues`).
+- Current implementation commit: `33ee9840982e46011ac2dafb311af740e371ad53` (`Fix Lab-1z Round2 stability issues`).
 - Checkpoint tag: `checkpoint/20260625-lab-1z-round2-stability`.
 
 ### Files changed
