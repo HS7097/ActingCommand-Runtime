@@ -20,6 +20,8 @@
 - Added `frame-store-temp` cleanup after successful finish or partial-output finalization, with cleanup failures logged as warnings.
 - Ensured segment-write failure paths clear `active_segment_id` so checkpoint state does not falsely report an in-flight flush after degradation.
 - No UI, OCR, SQLite, scheduler behavior, game logic, reconnect/retry loop, scrcpy, minicap, new capture backend, input fallback, or P2.3 capture hot-path rollback was added.
+- Implementation commit: `2fdaeb71bb4778338b92ad88a5042c15ad6c90c6` (`Implement Lab-1z frame store fixes`).
+- Checkpoint tag: `checkpoint/20260625-lab-1z-fixes`.
 
 ### Files changed
 
