@@ -34,6 +34,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab-P1g global CLI contract shell: `actinglab` app, unified JSON envelope, fixed exit-code mapping, config/doctor/capabilities, package zip safety validation, scheduler/lab safety stubs, and Windows user PATH launchers.
 - Lab-1X trusted one-shot package execution engine: `actinglab lab run --zip <input.zip> --out <output.zip>` with Lab-1X control/resources ingest, resource integrity checks, Screencap/MaaTouch execution path, page confirmation, output report zips, and device-unreachable failure reporting.
 - P2.2/Lab-1y capture-backend and trusted execution upgrade: unified capture frames, selectable `adb_screencap`/`droidcast_raw`/`nemu_ipc` backends, backend diagnostics, Lab-1y control modes, local LabLease lock, and output timing stats.
+- P2.2 capture backend repair close-out: Nemu IPC UTF-16 path passing, DroidCast_raw natural-buffer rotation, `lab run --capture-backend` CLI priority, and auto backend probe downgrade.
 
 ## Current P2.2 / Lab-1y Capture Backend And Trusted Execution Round
 
@@ -49,6 +50,9 @@ P2.2 capture direction:
 - No DroidCast APK or MuMu/Nemu DLL is committed to the repository.
 - Explicit backend selection fails loudly if unavailable.
 - `auto` may downgrade to the next backend, but the failed attempts and chosen backend must be recorded in diagnostics.
+- `nemu_ipc` passes the MuMu folder to `nemu_connect` as a NUL-terminated UTF-16 path.
+- `droidcast_raw` requests the orientation-adjusted endpoint size but decodes MuMu raw frames as the natural buffer before orienting them into the Runtime display coordinate space.
+- `auto` probes each candidate with one capture; a connection, initialization, or first-capture failure marks that backend unavailable and continues to the next candidate.
 
 Lab-1y execution direction:
 
@@ -60,11 +64,18 @@ Lab-1y execution direction:
 - Output remains limited to `logs/` and `screenshots/`.
 - Summary and diagnostics include capture backend, backend attempts, capture interval stats, capture duration stats, action duration stats, and loop lag stats.
 
-Current external-tool blockers:
+Current P2.2 repair validation status:
 
-- DroidCast_raw live validation needs a reviewed local APK path.
-- Nemu IPC live validation needs a reviewed local MuMu `external_renderer_ipc.dll` path or discoverable MuMu install.
-- No trusted Lab-1y live package has been provided yet for a full navigation run.
+- Arknights `127.0.0.1:16416` explicit `nemu_ipc` capture succeeded at `1280x720`.
+- Arknights `127.0.0.1:16416` explicit `droidcast_raw` capture succeeded at `1280x720`, and the generated PNG was visually readable.
+- `auto` selected `nemu_ipc` when available, downgraded to `droidcast_raw` when the Nemu DLL path was intentionally invalid, and downgraded to `adb_screencap` when both Nemu and DroidCast paths were intentionally invalid.
+- `actinglab lab run --capture-backend droidcast_raw` completed the existing safe `open_terminal` package with `executed_step_count=2` and `screenshot_count=3`.
+- 16416 benchmark medians measured in this pass: `adb_screencap` about `655ms`, `droidcast_raw` about `676ms`, and `nemu_ipc` about `515ms`. Do not claim a 300ms capture target from this evidence.
+
+Known residuals:
+
+- The Nemu IPC DLL writes its own diagnostic lines to process stdout before JSON output. Screenshot functionally succeeds, but strict JSON consumers need a later stdout isolation fix.
+- Current Arknights page resources still have broad page-template false positives on the home/terminal-style frame. This is resource data quality work, not a P2.2 screenshot backend blocker.
 
 ## Current ActingLab read-only recognition round
 

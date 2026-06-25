@@ -4,11 +4,9 @@ use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
 use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
 use libloading::Library;
-use std::ffi::CString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant, SystemTime};
@@ -277,20 +275,29 @@ fn create_auto_capture_backend(
         config.capture_timeout,
     ) {
         Ok(backend) => {
-            let used = CaptureBackendName::NemuIpc;
-            attempts.push(CaptureBackendAttempt {
-                backend: used,
-                ok: true,
-                message: "auto selected available Windows MuMu IPC backend".to_string(),
-            });
-            return Ok(SelectedCaptureBackend {
-                backend: Box::new(backend),
-                diagnostics: CaptureBackendDiagnostics {
-                    requested: CaptureBackendChoice::Auto,
-                    used,
-                    attempts,
-                },
-            });
+            match prime_capture_backend(CaptureBackendName::NemuIpc, Box::new(backend)) {
+                Ok((backend, message)) => {
+                    let used = CaptureBackendName::NemuIpc;
+                    attempts.push(CaptureBackendAttempt {
+                        backend: used,
+                        ok: true,
+                        message,
+                    });
+                    return Ok(SelectedCaptureBackend {
+                        backend,
+                        diagnostics: CaptureBackendDiagnostics {
+                            requested: CaptureBackendChoice::Auto,
+                            used,
+                            attempts,
+                        },
+                    });
+                }
+                Err(message) => attempts.push(CaptureBackendAttempt {
+                    backend: CaptureBackendName::NemuIpc,
+                    ok: false,
+                    message,
+                }),
+            }
         }
         Err(err) => attempts.push(CaptureBackendAttempt {
             backend: CaptureBackendName::NemuIpc,
@@ -306,20 +313,29 @@ fn create_auto_capture_backend(
         config.capture_timeout,
     ) {
         Ok(backend) => {
-            let used = CaptureBackendName::DroidcastRaw;
-            attempts.push(CaptureBackendAttempt {
-                backend: used,
-                ok: true,
-                message: "auto selected available DroidCast_raw backend".to_string(),
-            });
-            return Ok(SelectedCaptureBackend {
-                backend: Box::new(backend),
-                diagnostics: CaptureBackendDiagnostics {
-                    requested: CaptureBackendChoice::Auto,
-                    used,
-                    attempts,
-                },
-            });
+            match prime_capture_backend(CaptureBackendName::DroidcastRaw, Box::new(backend)) {
+                Ok((backend, message)) => {
+                    let used = CaptureBackendName::DroidcastRaw;
+                    attempts.push(CaptureBackendAttempt {
+                        backend: used,
+                        ok: true,
+                        message,
+                    });
+                    return Ok(SelectedCaptureBackend {
+                        backend,
+                        diagnostics: CaptureBackendDiagnostics {
+                            requested: CaptureBackendChoice::Auto,
+                            used,
+                            attempts,
+                        },
+                    });
+                }
+                Err(message) => attempts.push(CaptureBackendAttempt {
+                    backend: CaptureBackendName::DroidcastRaw,
+                    ok: false,
+                    message,
+                }),
+            }
         }
         Err(err) => attempts.push(CaptureBackendAttempt {
             backend: CaptureBackendName::DroidcastRaw,
@@ -328,23 +344,89 @@ fn create_auto_capture_backend(
         }),
     }
 
-    let used = CaptureBackendName::AdbScreencap;
-    attempts.push(CaptureBackendAttempt {
-        backend: used,
-        ok: true,
-        message: "auto fell back to adb exec-out screencap".to_string(),
-    });
-    Ok(SelectedCaptureBackend {
-        backend: Box::new(
-            ScreencapBackend::new(config.adb_config, config.target)
-                .with_capture_timeout(config.capture_timeout),
-        ),
-        diagnostics: CaptureBackendDiagnostics {
-            requested: CaptureBackendChoice::Auto,
-            used,
-            attempts,
-        },
-    })
+    let adb_backend = ScreencapBackend::new(config.adb_config, config.target)
+        .with_capture_timeout(config.capture_timeout);
+    match prime_capture_backend(CaptureBackendName::AdbScreencap, Box::new(adb_backend)) {
+        Ok((backend, message)) => {
+            let used = CaptureBackendName::AdbScreencap;
+            attempts.push(CaptureBackendAttempt {
+                backend: used,
+                ok: true,
+                message,
+            });
+            return Ok(SelectedCaptureBackend {
+                backend,
+                diagnostics: CaptureBackendDiagnostics {
+                    requested: CaptureBackendChoice::Auto,
+                    used,
+                    attempts,
+                },
+            });
+        }
+        Err(err) => attempts.push(CaptureBackendAttempt {
+            backend: CaptureBackendName::AdbScreencap,
+            ok: false,
+            message: err,
+        }),
+    }
+
+    Err(DeviceError::fatal(format!(
+        "auto capture backend selection failed; attempts: {}",
+        format_backend_attempts(&attempts)
+    )))
+}
+
+struct PrimedCaptureBackend {
+    inner: Box<dyn CaptureBackend>,
+    primed: Option<Frame>,
+}
+
+impl CaptureBackend for PrimedCaptureBackend {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        if let Some(frame) = self.primed.take() {
+            return Ok(frame);
+        }
+        self.inner.capture()
+    }
+}
+
+fn prime_capture_backend(
+    name: CaptureBackendName,
+    mut backend: Box<dyn CaptureBackend>,
+) -> Result<(Box<dyn CaptureBackend>, String), String> {
+    match backend.capture() {
+        Ok(frame) => {
+            let message = format!(
+                "auto selected available {} backend after probe capture {}x{}",
+                name.as_str(),
+                frame.width,
+                frame.height
+            );
+            Ok((
+                Box::new(PrimedCaptureBackend {
+                    inner: backend,
+                    primed: Some(frame),
+                }),
+                message,
+            ))
+        }
+        Err(err) => Err(err.message().to_string()),
+    }
+}
+
+fn format_backend_attempts(attempts: &[CaptureBackendAttempt]) -> String {
+    attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "{}={}:{}",
+                attempt.backend.as_str(),
+                attempt.ok,
+                attempt.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// ADB `exec-out screencap -p` capture backend with no persistent session.
@@ -475,17 +557,28 @@ impl DroidcastRawBackend {
 
 impl CaptureBackend for DroidcastRawBackend {
     fn capture(&mut self) -> DeviceResult<Frame> {
-        let (width, height) = self.start_if_needed()?;
-        let raw = http_get_bytes(
-            self.config.local_port,
-            "/screenshot",
-            self.capture_timeout,
-            true,
+        let (natural_width, natural_height) = self.start_if_needed()?;
+        let rotation = read_device_rotation(&Adb::new(self.adb_config.clone()), &self.serial)?;
+        let (display_width, display_height) =
+            display_size_from_natural(natural_width, natural_height, rotation);
+        let (request_width, request_height) =
+            droidcast_request_size(natural_width, natural_height, rotation);
+        let path = format!("/screenshot?width={request_width}&height={request_height}");
+        let raw = http_get_bytes(self.config.local_port, &path, self.capture_timeout, true)?;
+        let (decode_width, decode_height) =
+            droidcast_decode_size(natural_width, natural_height, display_width, display_height);
+        let pixels = rgb565_to_rgb8(&raw, decode_width, decode_height)?;
+        let (frame_width, frame_height, pixels) = orient_rgb8_frame_to_display(
+            pixels,
+            decode_width,
+            decode_height,
+            display_width,
+            display_height,
+            rotation,
         )?;
-        let pixels = rgb565_to_rgb8(&raw, width, height)?;
         Frame::from_pixels(
-            width,
-            height,
+            frame_width,
+            frame_height,
             pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::DroidcastRaw,
@@ -511,14 +604,14 @@ pub struct NemuIpcConfig {
 
 pub struct NemuIpcBackend {
     library: Library,
-    nemu_folder: CString,
+    nemu_folder: Vec<u16>,
     instance_id: i32,
     display_id: i32,
     connect_id: i32,
     capture_timeout: Duration,
 }
 
-type NemuConnect = unsafe extern "C" fn(*const c_char, i32) -> i32;
+type NemuConnect = unsafe extern "C" fn(*const u16, i32) -> i32;
 type NemuDisconnect = unsafe extern "C" fn(i32) -> i32;
 type NemuCaptureDisplay = unsafe extern "C" fn(i32, i32, i32, *mut i32, *mut i32, *mut u8) -> i32;
 
@@ -543,12 +636,7 @@ impl NemuIpcBackend {
                 ))
             })?;
         let (nemu_folder, dll_path) = resolve_nemu_paths(config.nemu_folder, config.dll_path)?;
-        let nemu_folder =
-            CString::new(nemu_folder.to_string_lossy().as_bytes()).map_err(|err| {
-                DeviceError::fatal(format!(
-                    "Nemu IPC folder contains an interior NUL byte: {err}"
-                ))
-            })?;
+        let nemu_folder = nul_terminated_utf16_path(&nemu_folder)?;
         let library = unsafe { Library::new(&dll_path) }.map_err(|err| {
             DeviceError::fatal(format!(
                 "Nemu IPC unavailable: failed to load {}: {err}",
@@ -809,6 +897,27 @@ fn require_file(path: &Path, label: &str) -> DeviceResult<()> {
     Ok(())
 }
 
+fn nul_terminated_utf16_path(path: &Path) -> DeviceResult<Vec<u16>> {
+    let text = path.to_str().ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "Nemu IPC folder path is not valid Unicode: {}",
+            path.display()
+        ))
+    })?;
+    let mut wide = Vec::new();
+    for unit in text.encode_utf16() {
+        if unit == 0 {
+            return Err(DeviceError::fatal(format!(
+                "Nemu IPC folder contains an interior NUL: {}",
+                path.display()
+            )));
+        }
+        wide.push(unit);
+    }
+    wide.push(0);
+    Ok(wide)
+}
+
 fn parse_screen_size(text: &str) -> DeviceResult<(u32, u32)> {
     let raw = text
         .split_whitespace()
@@ -829,6 +938,147 @@ fn parse_screen_size(text: &str) -> DeviceResult<(u32, u32)> {
         )));
     }
     Ok((width, height))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceRotation {
+    R0,
+    R90,
+    R180,
+    R270,
+}
+
+fn read_device_rotation(adb: &Adb, serial: &str) -> DeviceResult<DeviceRotation> {
+    let output = adb.run(&["-s", serial, "shell", "dumpsys", "display"])?;
+    if let Some(rotation) = parse_display_orientation(&output.stdout)? {
+        return Ok(rotation);
+    }
+    let output = adb.run(&[
+        "-s",
+        serial,
+        "shell",
+        "settings",
+        "get",
+        "system",
+        "user_rotation",
+    ])?;
+    parse_device_rotation(&output.stdout)
+}
+
+fn parse_display_orientation(text: &str) -> DeviceResult<Option<DeviceRotation>> {
+    for line in text.lines() {
+        if let Some(index) = line.find("orientation=") {
+            let rest = &line[index + "orientation=".len()..];
+            let value = rest
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>();
+            if !value.is_empty() {
+                return parse_device_rotation(&value).map(Some);
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn parse_device_rotation(text: &str) -> DeviceResult<DeviceRotation> {
+    match text.trim() {
+        "0" => Ok(DeviceRotation::R0),
+        "1" => Ok(DeviceRotation::R90),
+        "2" => Ok(DeviceRotation::R180),
+        "3" => Ok(DeviceRotation::R270),
+        other => Err(DeviceError::fatal(format!(
+            "failed to parse device user_rotation value: {other:?}"
+        ))),
+    }
+}
+
+fn droidcast_request_size(width: u32, height: u32, rotation: DeviceRotation) -> (u32, u32) {
+    match rotation {
+        DeviceRotation::R90 | DeviceRotation::R270 => (height, width),
+        DeviceRotation::R0 | DeviceRotation::R180 => (width, height),
+    }
+}
+
+fn display_size_from_natural(width: u32, height: u32, rotation: DeviceRotation) -> (u32, u32) {
+    match rotation {
+        DeviceRotation::R90 | DeviceRotation::R270 => (height, width),
+        DeviceRotation::R0 | DeviceRotation::R180 => (width, height),
+    }
+}
+
+fn droidcast_decode_size(
+    natural_width: u32,
+    natural_height: u32,
+    display_width: u32,
+    display_height: u32,
+) -> (u32, u32) {
+    if natural_width == display_height && natural_height == display_width {
+        (natural_width, natural_height)
+    } else {
+        (display_width, display_height)
+    }
+}
+
+fn orient_rgb8_frame_to_display(
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    display_width: u32,
+    display_height: u32,
+    rotation: DeviceRotation,
+) -> DeviceResult<(u32, u32, Vec<u8>)> {
+    if width == display_width && height == display_height {
+        return Ok((width, height, pixels));
+    }
+    if width != display_height || height != display_width {
+        return Err(DeviceError::fatal(format!(
+            "DroidCast_raw frame dimensions {width}x{height} cannot be oriented to display {display_width}x{display_height}"
+        )));
+    }
+
+    let rotated = match rotation {
+        DeviceRotation::R270 => rotate_rgb8_counterclockwise(&pixels, width, height)?,
+        DeviceRotation::R90 | DeviceRotation::R0 | DeviceRotation::R180 => {
+            rotate_rgb8_clockwise(&pixels, width, height)?
+        }
+    };
+    Ok((display_width, display_height, rotated))
+}
+
+fn rotate_rgb8_clockwise(pixels: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {
+    rotate_rgb8(pixels, width, height, |x, y, _width, height| {
+        (height - 1 - y) + x * height
+    })
+}
+
+fn rotate_rgb8_counterclockwise(pixels: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {
+    rotate_rgb8(pixels, width, height, |x, y, width, height| {
+        y + (width - 1 - x) * height
+    })
+}
+
+fn rotate_rgb8(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    map_dest: impl Fn(usize, usize, usize, usize) -> usize,
+) -> DeviceResult<Vec<u8>> {
+    validate_pixel_buffer(width, height, PixelFormat::Rgb8, pixels.len())?;
+    let width = usize::try_from(width)
+        .map_err(|_| DeviceError::fatal("DroidCast width does not fit usize"))?;
+    let height = usize::try_from(height)
+        .map_err(|_| DeviceError::fatal("DroidCast height does not fit usize"))?;
+    let mut output = vec![0u8; pixels.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let src = (y * width + x) * 3;
+            let dst_index = map_dest(x, y, width, height);
+            let dst = dst_index * 3;
+            output[dst..dst + 3].copy_from_slice(&pixels[src..src + 3]);
+        }
+    }
+    Ok(output)
 }
 
 fn wait_for_droidcast(port: u16, timeout: Duration) -> DeviceResult<()> {
@@ -1133,6 +1383,75 @@ mod tests {
     }
 
     #[test]
+    fn parses_device_rotation_and_droidcast_request_size() {
+        assert_eq!(
+            parse_device_rotation("1\n").expect("rotation"),
+            DeviceRotation::R90
+        );
+        assert_eq!(
+            parse_display_orientation("DisplayViewport{orientation=1, deviceWidth=1280}")
+                .expect("display orientation"),
+            Some(DeviceRotation::R90)
+        );
+        assert_eq!(
+            droidcast_request_size(1280, 720, DeviceRotation::R90),
+            (720, 1280)
+        );
+        assert_eq!(
+            droidcast_request_size(1280, 720, DeviceRotation::R0),
+            (1280, 720)
+        );
+        assert_eq!(
+            display_size_from_natural(720, 1280, DeviceRotation::R90),
+            (1280, 720)
+        );
+        assert_eq!(droidcast_decode_size(720, 1280, 1280, 720), (720, 1280));
+    }
+
+    #[test]
+    fn keeps_droidcast_frame_when_already_display_sized() {
+        let pixels = rgb8_ids(&[0, 1, 2, 3, 4, 5]);
+        let (width, height, output) =
+            orient_rgb8_frame_to_display(pixels.clone(), 3, 2, 3, 2, DeviceRotation::R90)
+                .expect("display sized");
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(output, pixels);
+    }
+
+    #[test]
+    fn rotates_droidcast_swapped_frames_to_display_orientation() {
+        let pixels = rgb8_ids(&[0, 1, 2, 3, 4, 5]);
+        let (width, height, clockwise) =
+            orient_rgb8_frame_to_display(pixels.clone(), 2, 3, 3, 2, DeviceRotation::R90)
+                .expect("clockwise");
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(rgb8_red_ids(&clockwise), vec![4, 2, 0, 5, 3, 1]);
+
+        let (width, height, counterclockwise) =
+            orient_rgb8_frame_to_display(pixels.clone(), 2, 3, 3, 2, DeviceRotation::R270)
+                .expect("ccw");
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(rgb8_red_ids(&counterclockwise), vec![1, 3, 5, 0, 2, 4]);
+
+        let (width, height, stale_rotation) =
+            orient_rgb8_frame_to_display(pixels, 2, 3, 3, 2, DeviceRotation::R0)
+                .expect("stale orientation");
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(rgb8_red_ids(&stale_rotation), vec![4, 2, 0, 5, 3, 1]);
+    }
+
+    #[test]
+    fn encodes_nemu_folder_as_utf16_with_nul() {
+        let path = Path::new(r"D:\BST\MuMuPlayer");
+        let wide = nul_terminated_utf16_path(path).expect("wide path");
+        let expected = r"D:\BST\MuMuPlayer"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        assert_eq!(wide, expected);
+    }
+
+    #[test]
     fn maps_nemu_instance_id_from_serial() {
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16384"), Some(0));
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16416"), Some(1));
@@ -1152,5 +1471,13 @@ mod tests {
     fn assert_fatal(result: DeviceResult<(u32, u32)>) {
         let err = result.expect_err("expected fatal device error");
         assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
+    }
+
+    fn rgb8_ids(ids: &[u8]) -> Vec<u8> {
+        ids.iter().flat_map(|id| [*id, 0, 0]).collect()
+    }
+
+    fn rgb8_red_ids(pixels: &[u8]) -> Vec<u8> {
+        pixels.chunks_exact(3).map(|chunk| chunk[0]).collect()
     }
 }

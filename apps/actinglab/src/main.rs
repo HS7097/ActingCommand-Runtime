@@ -2421,6 +2421,32 @@ mod tests {
     }
 
     #[test]
+    fn lab_run_capture_backend_flag_is_global_even_after_subcommand() {
+        let invocation = parse_invocation(
+            [
+                "--json",
+                "lab",
+                "run",
+                "--zip",
+                "in.zip",
+                "--capture-backend",
+                "nemu_ipc",
+                "--out",
+                "out.zip",
+            ],
+            true,
+        )
+        .expect("invocation");
+
+        assert_eq!(
+            invocation.global.capture_backend,
+            Some(CaptureBackendChoice::NemuIpc)
+        );
+        assert_eq!(invocation.command, ["lab", "run"]);
+        assert_eq!(invocation.args, ["--zip", "in.zip", "--out", "out.zip"]);
+    }
+
+    #[test]
     fn bare_instance_argument_is_used_as_adb_serial_without_config_entry() {
         let global = GlobalOptions {
             instance: Some("127.0.0.1:16416".to_string()),

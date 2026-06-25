@@ -1,5 +1,125 @@
 # CHECKPOINT.md
 
+## 2026-06-25 P2.2 capture backend repair close-out
+
+### Current status
+
+- Re-read the updated `TASK-P2.2-capture-backend-fixes.md` and adjusted the implementation to the revised DroidCast rule: do not rotate frames that are already in the Runtime display coordinate size.
+- Fixed Nemu IPC path passing:
+  - `nemu_connect` now takes `*const u16`;
+  - the MuMu folder path is passed as NUL-terminated UTF-16;
+  - `disconnect` and `capture_display` signatures remain unchanged.
+- Fixed DroidCast_raw display orientation:
+  - reads MuMu natural screen size separately from display coordinate size;
+  - reads active display orientation from `dumpsys display`, with `settings get system user_rotation` as a secondary source;
+  - requests the orientation-adjusted DroidCast endpoint size;
+  - decodes the raw RGB565 bytes as the MuMu natural buffer when natural and display dimensions are swapped;
+  - rotates only when the decoded dimensions do not already match the display coordinate size.
+- Fixed `actinglab lab run --capture-backend` priority:
+  - global CLI `--capture-backend` now overrides the subcommand flag, which overrides `control.json`, which overrides default `auto`.
+- Fixed `auto` backend downgrade:
+  - each candidate backend is probed with one capture;
+  - failed initialization, connection, or first capture records a failed attempt and continues to the next backend;
+  - explicit single-backend selection still fails loudly.
+- No UI, OCR, SQLite, scheduler behavior, game logic, ADB input fallback, reconnect, retry loop, scrcpy, minicap, or adb shell screencap path was added.
+- The local helper `tests/build_lab_pkg.py` remains untracked and retained per Alice's instruction.
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-Arknights`: refreshed before read-only resource recognition validation; `HEAD` at `eacf3e446ab62c9b3013f653b7986a85a8bf0213`.
+
+### Files changed
+
+- `crates/device/src/capture.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-P2.2-capture-backend-fixes.md`.
+- Inspected AzurPilot local reference files:
+  - `C:\.ClaudeCode\upstream-refs\AzurPilot\module\device\method\droidcast.py`
+  - `C:\.ClaudeCode\upstream-refs\AzurPilot\module\device\screenshot.py`
+- `cargo check -p actingcommand-device`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-device capture::tests`
+- `cargo test -p actingcommand-actinglab lab_run_capture_backend_flag_is_global_even_after_subcommand`
+- `adb devices -l`
+- `cargo build -p actingcommand-actinglab -p actingcommand-device-test`
+- `adb -s 127.0.0.1:16416 shell wm size`
+- `adb -s 127.0.0.1:16416 shell settings get system user_rotation`
+- `adb -s 127.0.0.1:16416 shell dumpsys display`
+- `git fetch origin --prune --tags` in `ActingCommand-Resources-Arknights`
+- `git pull --ff-only` in `ActingCommand-Resources-Arknights`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Prohibited scans for `adb shell screencap`, `println!/eprintln!` in `crates/device`, and quick-backend/reconnect/retry terms in the touched capture/lab-run paths.
+
+### Live validation result
+
+- Device: Arknights `127.0.0.1:16416`.
+- External tools:
+  - DroidCast_raw APK: `C:\.ClaudeCode\upstream-refs\AzurPilot\bin\DroidCast\DroidCast_raw-release-1.1.apk`
+  - MuMu folder: `D:\BST\MuMuPlayer`
+  - Nemu IPC DLL: `D:\BST\MuMuPlayer\nx_device\12.0\shell\sdk\external_renderer_ipc.dll`
+- Explicit `nemu_ipc` capture succeeded:
+  - output: `target\p2_2_fix\nemu-16416.png`
+  - size: `1280x720`
+- Explicit `droidcast_raw` capture succeeded after the natural-buffer decode fix:
+  - output: `target\p2_2_fix\droidcast-16416-readable.png`
+  - size: `1280x720`
+  - visual inspection showed a readable Arknights home/terminal screen, not the earlier stripe-noise image.
+- `auto` backend selection succeeded:
+  - normal environment selected `nemu_ipc`;
+  - intentionally invalid Nemu DLL path downgraded to `droidcast_raw`;
+  - intentionally invalid Nemu DLL and DroidCast APK paths downgraded to `adb_screencap`.
+- `actinglab detect-page --capture --capture-backend droidcast_raw` with Arknights resources completed without a dimension mismatch.
+- `actinglab lab run --capture-backend droidcast_raw` completed the existing safe `open_terminal` package:
+  - output: `target\p2_2_fix\out_open_terminal_droidcast.zip`
+  - run directory: `target\p2_2_fix\lab-runs\lab1y-20260625_064257_259`
+  - `executed_step_count=2`
+  - `screenshot_count=3`
+  - `capture_backend_requested=droidcast_raw`
+  - `capture_backend_used=droidcast_raw`
+  - observed safe route stopped at `quickswitch_dropdown` then `terminal`.
+- `device-test benchmark --rounds 3` on `127.0.0.1:16416` after rebuilding `device-test`:
+  - `adb_screencap`: available, `1280x720`, median about `655ms`;
+  - `droidcast_raw`: available, `1280x720`, median about `676ms`;
+  - `nemu_ipc`: available, `1280x720`, median about `515ms`;
+  - no 300ms capture claim is supported by this run.
+
+### Test results
+
+- `cargo check -p actingcommand-device` passed.
+- `cargo check -p actingcommand-actinglab` passed.
+- `cargo test -p actingcommand-device capture::tests` passed with 16 tests.
+- `cargo test -p actingcommand-actinglab lab_run_capture_backend_flag_is_global_even_after_subcommand` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Prohibited scans passed:
+  - no `adb shell screencap` or `shell screencap` in Runtime device/CLI paths;
+  - no `println!`/`eprintln!` in `crates/device/src`;
+  - no `scrcpy`, `minicap`, `reconnect`, or `retry` in the touched capture/lab-run paths.
+
+### Current blocker
+
+- No blocker for the P2.2 screenshot backend repair itself.
+- The Nemu IPC DLL prints external diagnostic lines to process stdout before JSON output, for example during `nemu_ipc` capture. This should be handled in a later stdout-isolation task if strict machine-readable JSON is required for Nemu capture commands.
+- Current Arknights resource page templates still match too broadly on the visible home/terminal-style frame; this remains resource data quality work.
+
+### Next step
+
+1. Commit and push this Runtime repair with `PLANS.md` and `CHECKPOINT.md`.
+2. Decide whether to isolate external DLL stdout for strict JSON output.
+3. Continue Arknights resource-template tightening separately from P2.2 backend repair.
+
 ## 2026-06-25 Lab-1y interpreter namespace normalization + synchronous capture cadence fix
 
 ### Current status

@@ -184,7 +184,9 @@ fn execute_lab_run(
     )?;
     ctx.lease_acquired = true;
 
-    let requested_capture_backend = capture_backend_override
+    let requested_capture_backend = global
+        .capture_backend
+        .or(capture_backend_override)
         .or(control.capture_backend_choice()?)
         .unwrap_or_default();
     let selected_capture = create_capture_backend(
