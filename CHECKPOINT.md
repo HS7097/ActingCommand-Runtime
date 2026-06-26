@@ -12,7 +12,7 @@
 - Large `ccorr_normed` searches use the same bounded coarse/refine strategy.
 - Target matching has a wall-clock deadline and returns a fatal recognition error instead of hanging forever.
 - `crates/page-detector` now has a regression test proving `evaluate_page` does not evaluate unrelated pages.
-- Implementation commit: pending until this checkpoint is committed.
+- Implementation commit: `5711f1f1e240789c12672c3fc56439166c8493b0` (`Fix large recognition search hangs`).
 
 ### Resource mirrors used
 
@@ -96,10 +96,8 @@
 
 ### Next step
 
-1. Commit the source and planning/checkpoint changes.
-2. Update this checkpoint with the implementation commit hash.
-3. Add a checkpoint tag for this stable milestone.
-4. Push Runtime `main` and the checkpoint tag to GitHub.
+1. Add a checkpoint tag for this stable milestone.
+2. Push Runtime `main` and the checkpoint tag to GitHub.
 
 ## 2026-06-26 Runtime ADB connection hardening
 
