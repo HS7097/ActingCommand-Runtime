@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-06-26 Round2 regression close-out
+
+### Current status
+
+- Re-read `C:\合作工作区\ActingCommand\FIX-round2-regressions.md` and confirmed the active scope is RR-01, RR-02, RR-03, and RR-04.
+- Confirmed local `main` was aligned with `origin/main` at `5836281bdf6c1ebde0997af84fb60f44f2f58d87` before this task.
+- RR-01: `write_segment` now returns a structured segment write error carrying both the global spill-unavailable message and any per-frame encoding failures already collected. `flush_resident_segment` records those per-frame failures before recording the global spill-unavailable warning.
+- RR-02: `run_lab_run` rejects `--out` paths inside the generated run directory, captures the run directory string before successful cleanup, reports `run_dir_cleaned: true` on success, and only removes the run directory on successful finalization. Failure finalization preserves the run directory for diagnostics.
+- RR-03: removed the explicit `NemuIpcBackend::Drop` worker shutdown so `NemuIpcWorker::Drop` owns shutdown exactly once.
+- RR-04: `Tier3PauseCheckpoint` now carries current step index, current step id, current operation id, current phase, expected page, and last matched page. `LabRunContext` fills those fields when a checkpoint is emitted.
+- Out-of-scope items were not implemented: no Nemu helper-process isolation and no live gameplay package rerun.
+- No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, ADB input fallback, reconnect loop, or retry loop was added.
+- Current implementation commit: pending.
+- Checkpoint tag: pending.
+
+### Files changed
+
+- `apps/actinglab/src/frame_store.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `crates/device/src/capture.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch origin --prune --tags`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `git status --short --branch`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\FIX-round2-regressions.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'AGENTS.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'PLANS.md' -Encoding UTF8 -TotalCount 180`
+- `Get-Content -LiteralPath 'CHECKPOINT.md' -Encoding UTF8 -TotalCount 180`
+- `Get-Content -LiteralPath 'NOTICE.md' -Encoding UTF8`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab frame_store::tests::spill_io_failure_preserves_per_frame_encode_failures`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-device`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "adb shell screencap|adb shell input|fallback|reconnect|println!|eprintln!" crates\device`
+- `rg -n "helper process|live gameplay|SQLite|OCR|scrcpy|minicap|adb shell screencap|adb shell input|retry loop|reconnect" apps\actinglab\src crates\device\src`
+
+### New or updated unit coverage
+
+- `spill_io_failure_preserves_per_frame_encode_failures`
+- `success_finish_cleans_run_dir_but_keeps_outside_zip`
+- `path_inside_detects_run_dir_output`
+- `tier3_pause_checkpoint_includes_step_context`
+- Updated `failure_zip_materializes_frame_store_screenshots` to assert failed runs keep `run_dir` for diagnostics.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with 51 tests.
+- `cargo test -p actingcommand-device` passed with 33 tests.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Device-layer prohibited scan returned no matches for `adb shell screencap`, `adb shell input`, `fallback`, `reconnect`, `println!`, or `eprintln!`.
+- Round3 scope scan returned no matches for helper-process implementation, live gameplay implementation, UI-adjacent data layers, quick screenshot backends, retry loops, or reconnect loops in the touched Runtime source paths.
+
+### Current blocker
+
+- No implementation blocker.
+- Nemu IPC helper-process isolation remains intentionally out of scope for this task.
+- Live gameplay rerun remains intentionally out of scope for this task.
+
+### Next step
+
+1. Run full workspace validation gates.
+2. Commit the Runtime changes with planning/checkpoint files.
+3. Create a checkpoint tag and push `main` plus the tag to GitHub.
+
 ## 2026-06-25 Lab-1z Round2 stability close-out
 
 ### Current status

@@ -5,7 +5,7 @@ use super::{
     effective_run_root,
     frame_store::{
         FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
-        FrameStoreScreenshot as ScreenshotRecord, RecognitionState,
+        FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
     },
     read_user_config,
 };
@@ -58,6 +58,13 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let frame_store_cli = parse_frame_store_control_from_flags(&flags)?;
 
     let mut ctx = LabRunContext::create(&run_root, &zip_path)?;
+    let run_dir = ctx.run_dir.clone();
+    if path_is_inside(&out_path, &run_dir) {
+        return Err(CliError::usage(
+            "--out must not be inside the Lab run directory",
+        ));
+    }
+    let run_dir_string = run_dir.display().to_string();
     ctx.set_phase("run_started");
     ctx.event(
         "run_started",
@@ -79,7 +86,8 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
             Ok(json!({
                 "ok": true,
                 "run_id": ctx.run_id,
-                "run_dir": ctx.run_dir.display().to_string(),
+                "run_dir": run_dir_string,
+                "run_dir_cleaned": true,
                 "out": archive.path.display().to_string(),
                 "output_zip_sha256": archive.sha256,
                 "screenshot_count": ctx.screenshots.len(),
@@ -316,6 +324,7 @@ fn execute_lab_run(
             })?
             .clone();
 
+        ctx.set_step_context(step_index, &operation);
         ctx.event(
             "step_started",
             json!({"step_id": operation.id, "index": step_index, "operation_id": operation.id}),
@@ -437,6 +446,7 @@ fn execute_lab_run(
             json!({"step_id": operation.id, "result": verification.result_label()}),
         )?;
         state.current_page = next_current_page(&state.control.game, &after, &operation);
+        ctx.clear_step_context();
         if state.current_page.is_none() {
             break;
         }
@@ -1433,6 +1443,10 @@ struct LabRunContext {
     lease_acquired: bool,
     lease_released: bool,
     partial_output: bool,
+    current_step_index: Option<usize>,
+    current_step_id: Option<String>,
+    current_operation_id: Option<String>,
+    expected_page: Option<String>,
 }
 
 impl LabRunContext {
@@ -1495,11 +1509,29 @@ impl LabRunContext {
             lease_acquired: false,
             lease_released: false,
             partial_output: false,
+            current_step_index: None,
+            current_step_id: None,
+            current_operation_id: None,
+            expected_page: None,
         })
     }
 
     fn set_phase(&mut self, phase: &str) {
         self.phase = phase.to_string();
+    }
+
+    fn set_step_context(&mut self, step_index: usize, operation: &Operation) {
+        self.current_step_index = Some(step_index);
+        self.current_step_id = Some(operation.id.clone());
+        self.current_operation_id = Some(operation.id.clone());
+        self.expected_page = operation.to.clone();
+    }
+
+    fn clear_step_context(&mut self) {
+        self.current_step_index = None;
+        self.current_step_id = None;
+        self.current_operation_id = None;
+        self.expected_page = None;
     }
 
     fn set_frame_store_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
@@ -1579,13 +1611,16 @@ impl LabRunContext {
             .iter()
             .find(|evaluation| evaluation.matched)
             .map(|evaluation| evaluation.page_id.clone());
-        let store_outcome = self.frame_store.add_frame(FrameStoreFrameInput {
+        let mut store_outcome = self.frame_store.add_frame(FrameStoreFrameInput {
             frame_index: self.frame_index,
             file_name,
             label: label.to_string(),
             recognition_state: RecognitionState::from_matched_page(matched_page.clone()),
             frame,
         })?;
+        if let Some(checkpoint) = store_outcome.checkpoint.as_mut() {
+            self.fill_pause_checkpoint(checkpoint, matched_page.as_deref());
+        }
         let retained_file = store_outcome.file.clone();
         let merged_into = store_outcome.merged_into.clone();
         let pause_checkpoint = store_outcome
@@ -1660,6 +1695,19 @@ impl LabRunContext {
             width,
             height,
         })
+    }
+
+    fn fill_pause_checkpoint(
+        &self,
+        checkpoint: &mut Tier3PauseCheckpoint,
+        matched_page: Option<&str>,
+    ) {
+        checkpoint.current_step_index = self.current_step_index;
+        checkpoint.current_step_id = self.current_step_id.clone();
+        checkpoint.current_operation_id = self.current_operation_id.clone();
+        checkpoint.current_phase = Some(self.phase.clone());
+        checkpoint.expected_page = self.expected_page.clone();
+        checkpoint.last_matched_page = matched_page.map(str::to_string);
     }
 
     fn tier3_resume_check(
@@ -1772,7 +1820,9 @@ impl LabRunContext {
         self.write_logs(ok, failure_reason, state)?;
         write_output_zip(&self.output_dir, out_path)?;
         let sha256 = file_sha256(out_path)?;
-        self.cleanup_run_dir();
+        if ok {
+            self.cleanup_run_dir();
+        }
         Ok(ArchiveResult {
             path: out_path.to_path_buf(),
             sha256,
@@ -2266,6 +2316,38 @@ fn validate_relative_path(relative: &str) -> CliOutcome<()> {
         )));
     }
     Ok(())
+}
+
+fn path_is_inside(path: &Path, parent: &Path) -> bool {
+    let path = normalized_absolute_path(path);
+    let parent = normalized_absolute_path(parent);
+    path != parent && path.starts_with(parent)
+}
+
+fn normalized_absolute_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    normalize_path_components(&absolute)
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(value) => normalized.push(value),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn read_json_file<T>(path: &Path) -> CliOutcome<T>
@@ -2800,7 +2882,64 @@ mod tests {
         assert!(archive.by_name("screenshots/frame1.png").is_ok());
         assert!(archive.by_name("logs/frame_store.json").is_ok());
         assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
+        assert!(ctx.run_dir.exists());
+    }
+
+    #[test]
+    fn success_finish_cleans_run_dir_but_keeps_outside_zip() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let out = temp.path().join("out.zip");
+
+        ctx.finish(&out, true, None, None).expect("finish");
+
+        assert!(out.is_file());
         assert!(!ctx.run_dir.exists());
+    }
+
+    #[test]
+    fn path_inside_detects_run_dir_output() {
+        let temp = TempDir::new().expect("temp");
+        let ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let inside = ctx.run_dir.join("result.zip");
+        let outside = temp.path().join("result.zip");
+
+        assert!(path_is_inside(&inside, &ctx.run_dir));
+        assert!(!path_is_inside(&outside, &ctx.run_dir));
+    }
+
+    #[test]
+    fn tier3_pause_checkpoint_includes_step_context() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.set_phase("page_guard_started");
+        let operation = test_operation(Some("terminal"), None);
+        ctx.set_step_context(7, &operation);
+        let mut checkpoint = Tier3PauseCheckpoint {
+            last_frame_index: 12,
+            resident_bytes: 34,
+            tier1_bytes: 10,
+            tier2_bytes: 20,
+            tier3_bytes: 30,
+            active_segment_id: None,
+            in_flight_flush_state: "idle".to_string(),
+            current_step_index: None,
+            current_step_id: None,
+            current_operation_id: None,
+            current_phase: None,
+            expected_page: None,
+            last_matched_page: None,
+        };
+
+        ctx.fill_pause_checkpoint(&mut checkpoint, Some("arknights/home"));
+        let json = checkpoint.to_json();
+
+        assert_eq!(json["current_step_index"], 7);
+        assert_eq!(json["current_step_id"], "open_terminal");
+        assert_eq!(json["current_operation_id"], "open_terminal");
+        assert_eq!(json["current_phase"], "page_guard_started");
+        assert_eq!(json["expected_page"], "terminal");
+        assert_eq!(json["last_matched_page"], "arknights/home");
     }
 
     #[test]

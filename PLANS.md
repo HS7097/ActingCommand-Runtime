@@ -38,6 +38,32 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - P2.3 capture pipeline refactor: capture backends now return raw pixel frames without hot-path PNG encoding, ADB preserves original screencap PNG for artifact writes, recognition can consume raw RGB/RGBA pixels, Nemu IPC caches resolution, and `device-test benchmark` reports capture-only, encode-only, and end-to-end timing.
 - Lab-1z fixes: explicit frame recognition lifecycle, admission-before-store memory estimation, sync segment-zip flush, current-frame Tier3 pause/resume checkpointing, conservative resident-byte accounting, temp cleanup, and P2.3 capture hot-path non-regression benchmark.
 - Lab-1z Round2 stability close-out: P2.2 device deadlines, Lab-1y cleanup, frame-store accounting/spill fixes, P1g package hardening, and release benchmark non-regression.
+- Round2 regression close-out: segment-write failure keeps per-frame encode failures, Lab run-dir cleanup no longer deletes diagnostics or in-run outputs, Tier3 checkpoints include step context, and Nemu IPC worker shutdown is no longer double-invoked.
+
+## Current Round2 Regression Close-Out
+
+The current Runtime task fixes regressions introduced or revealed by the Lab-1z Round2 stability batch.
+
+Scope:
+
+- Fix RR-01, RR-02, RR-03, and RR-04 from `C:\合作工作区\ActingCommand\FIX-round2-regressions.md`.
+- Do not implement Nemu IPC helper-process isolation in this task.
+- Do not perform live gameplay package reruns as part of this code fix.
+- Do not add UI, OCR, SQLite, scheduler behavior, game logic, new capture backends, ADB input fallback, reconnect loops, or retry loops.
+
+Fixed behavior:
+
+- Segment write failures now carry any per-frame encoding failures collected earlier in the same spill attempt. Even if segment zip creation/write/finish fails globally, frames that could not encode are still marked `spill_failed` and are not re-encoded forever.
+- Successful Lab runs reject `--out` paths inside the generated run directory, report `run_dir_cleaned: true`, and clean the run directory only after the output archive has been written outside that directory.
+- Failed Lab runs preserve the run directory for diagnostics.
+- Tier3 pause checkpoints now include diagnostic step context: current step index, current step id, current operation id, current phase, expected page, and last matched page. This remains diagnostic/future-resume metadata; it does not change the current synchronous graceful-failure Tier3 behavior.
+- `NemuIpcBackend` no longer explicitly shuts down its worker in its own `Drop`; `NemuIpcWorker::Drop` owns shutdown exactly once.
+
+Validation status:
+
+- Targeted `cargo test -p actingcommand-actinglab` passed with 51 tests after adding regression coverage.
+- Targeted `cargo test -p actingcommand-device` passed with 33 tests.
+- Full validation passed: `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all -- --check`, `git diff --check`, device-layer prohibited scan, and Round3 scope scan.
 
 ## Current Lab-1z Round2 Stability Close-Out
 

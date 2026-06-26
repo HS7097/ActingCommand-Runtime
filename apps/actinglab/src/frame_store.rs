@@ -361,6 +361,12 @@ pub(super) struct Tier3PauseCheckpoint {
     pub(super) tier3_bytes: u64,
     pub(super) active_segment_id: Option<u64>,
     pub(super) in_flight_flush_state: String,
+    pub(super) current_step_index: Option<usize>,
+    pub(super) current_step_id: Option<String>,
+    pub(super) current_operation_id: Option<String>,
+    pub(super) current_phase: Option<String>,
+    pub(super) expected_page: Option<String>,
+    pub(super) last_matched_page: Option<String>,
 }
 
 impl Tier3PauseCheckpoint {
@@ -372,7 +378,13 @@ impl Tier3PauseCheckpoint {
             "tier2_bytes": self.tier2_bytes,
             "tier3_bytes": self.tier3_bytes,
             "active_segment_id": self.active_segment_id,
-            "in_flight_flush_state": self.in_flight_flush_state
+            "in_flight_flush_state": self.in_flight_flush_state,
+            "current_step_index": self.current_step_index,
+            "current_step_id": self.current_step_id,
+            "current_operation_id": self.current_operation_id,
+            "current_phase": self.current_phase,
+            "expected_page": self.expected_page,
+            "last_matched_page": self.last_matched_page
         })
     }
 }
@@ -882,7 +894,14 @@ impl FrameStore {
                     self.record_spill_warning(frame_index, &file, &failure.message);
                 }
             }
-            Err(message) => {
+            Err(error) => {
+                for failure in error.frame_failures {
+                    warnings.push(failure.message.clone());
+                    let frame_index = self.entries[failure.index].frame_index;
+                    let file = self.entries[failure.index].file.clone();
+                    self.record_spill_warning(frame_index, &file, &failure.message);
+                }
+                let message = error.message;
                 warnings.push(message.clone());
                 self.record_spill_unavailable_warning(&message);
             }
@@ -903,7 +922,10 @@ impl FrameStore {
             .collect()
     }
 
-    fn write_segment(&mut self, indexes: Vec<usize>) -> Result<SegmentWriteReport, String> {
+    fn write_segment(
+        &mut self,
+        indexes: Vec<usize>,
+    ) -> Result<SegmentWriteReport, SegmentWriteError> {
         let mut encoded = Vec::new();
         let mut frame_failures = Vec::new();
         for index in indexes {
@@ -922,21 +944,30 @@ impl FrameStore {
             return Ok(SegmentWriteReport { frame_failures });
         }
 
-        fs::create_dir_all(&self.temp_dir).map_err(|err| {
-            format!(
-                "spill_unavailable: failed to create {}: {err}",
-                self.temp_dir.display()
-            )
-        })?;
+        if let Err(err) = fs::create_dir_all(&self.temp_dir) {
+            return Err(SegmentWriteError {
+                message: format!(
+                    "spill_unavailable: failed to create {}: {err}",
+                    self.temp_dir.display()
+                ),
+                frame_failures,
+            });
+        }
         let segment_id = self.next_segment_id;
         self.next_segment_id = self.next_segment_id.saturating_add(1);
         let segment_path = self.temp_dir.join(format!("segment-{segment_id:06}.zip"));
-        let file = File::create(&segment_path).map_err(|err| {
-            format!(
-                "spill_unavailable: failed to create {}: {err}",
-                segment_path.display()
-            )
-        })?;
+        let file = match File::create(&segment_path) {
+            Ok(file) => file,
+            Err(err) => {
+                return Err(SegmentWriteError {
+                    message: format!(
+                        "spill_unavailable: failed to create {}: {err}",
+                        segment_path.display()
+                    ),
+                    frame_failures,
+                });
+            }
+        };
         self.active_segment_id = Some(segment_id);
         let result = (|| -> Result<Vec<(usize, Vec<u8>)>, String> {
             let options =
@@ -983,7 +1014,10 @@ impl FrameStore {
             Err(message) => {
                 self.active_segment_id = None;
                 let _ = fs::remove_file(&segment_path);
-                return Err(message);
+                return Err(SegmentWriteError {
+                    message,
+                    frame_failures,
+                });
             }
         };
 
@@ -1212,6 +1246,12 @@ impl FrameStore {
             } else {
                 "idle".to_string()
             },
+            current_step_index: None,
+            current_step_id: None,
+            current_operation_id: None,
+            current_phase: None,
+            expected_page: None,
+            last_matched_page: None,
         }
     }
 
@@ -1288,6 +1328,11 @@ struct FrameEntry {
 }
 
 struct SegmentWriteReport {
+    frame_failures: Vec<SegmentFrameFailure>,
+}
+
+struct SegmentWriteError {
+    message: String,
     frame_failures: Vec<SegmentFrameFailure>,
 }
 
@@ -1838,6 +1883,46 @@ mod tests {
         assert!(store.spill_warning_count >= 1);
         assert!(store.entries.iter().all(|entry| !entry.spill_failed));
         assert_eq!(store.encoder_workspace_reserved_bytes, 0);
+        assert_resident_accounting(&store);
+    }
+
+    #[test]
+    fn spill_io_failure_preserves_per_frame_encode_failures() {
+        let temp = TempDir::new().expect("temp");
+        let config = test_config(10_000_000).with_memory_sample(MemorySample {
+            total_bytes: 20_000_000,
+            available_bytes: 20_000_000,
+        });
+        let mut store = FrameStore::new(temp.path().join("temp"), config).expect("store");
+        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(
+            &mut store,
+            2,
+            20,
+            matched("arknights/terminal"),
+            "page_wait",
+        );
+        if let FrameStorage::Resident(frame) = &mut store.entries[0].storage {
+            frame.pixels = vec![0];
+        }
+        fs::create_dir_all(temp.path().join("temp").join("segment-000001.zip"))
+            .expect("segment path blocker");
+        let mut warnings = Vec::new();
+
+        store.flush_resident_segment(&mut warnings);
+
+        assert!(store.entries[0].spill_failed);
+        assert!(!store.entries[1].spill_failed);
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("failed to encode frame"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("spill_unavailable"))
+        );
         assert_resident_accounting(&store);
     }
 

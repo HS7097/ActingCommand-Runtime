@@ -998,14 +998,6 @@ impl CaptureBackend for NemuIpcBackend {
     }
 }
 
-impl Drop for NemuIpcBackend {
-    fn drop(&mut self) {
-        if let Some(mut worker) = self.worker.take() {
-            worker.shutdown();
-        }
-    }
-}
-
 fn verify_adb_device(adb: &Adb, target: &DeviceTarget, serial: &str) -> DeviceResult<()> {
     if target.connect {
         adb.connect(serial)?;
