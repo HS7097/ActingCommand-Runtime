@@ -41,6 +41,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Round2 regression close-out: segment-write failure keeps per-frame encode failures, Lab run-dir cleanup no longer deletes diagnostics or in-run outputs, Tier3 checkpoints include step context, and Nemu IPC worker shutdown is no longer double-invoked.
 - ActingLab direct touch CLI: main `actinglab` now exposes trusted manual `tap`, `swipe`, and `long-tap` commands through the existing MaaTouch backend, while `capture` remains the screenshot side of the unified CLI.
 - Lab packager foundation and production builder: `resource convert` is now Rust-backed with converter parity, `lab validate` validates Lab-1y input zips offline, and `package build-task` / `package build-pack` can build self-contained Lab packages from local or explicitly cloned resource repositories.
+- Runtime ADB connection hardening: Runtime and CLI device entry points now resolve one matching adb path through the device layer, prefer the reviewed MuMu adb, avoid PATH/venv adb defaults, preserve wall-clock command deadlines, and only perform one bounded `adb connect` when device state is unavailable.
+
+## Current Runtime ADB Connection Hardening
+
+The current Runtime task addresses the adb version conflict reported in `TASK-runtime-adb-connection-hardening.md`.
+
+Implementation direction:
+
+- `crates/device` exposes a shared adb resolver.
+- Resolution order is `ACTINGCOMMAND_ADB_PATH`, MuMu discovery, then user-configured `adb_path`.
+- MuMu discovery prefers `nx_main\adb.exe`, then sorted `nx_device\*\shell\adb.exe` candidates.
+- Runtime intentionally does not fall back to a bare `adb` on `PATH`.
+- `actinglab`, `device-test`, screencap capture, and MaaTouch device verification all use the same device-layer adb path model.
+- Device-state recovery is bounded to one `adb connect` attempt when the target allows connect.
+- Runtime does not call `adb kill-server`.
+- ADB screencap remains `adb exec-out screencap -p` with the existing wall-clock timeout path.
+
+Validation status:
+
+- `actinglab paths` and `actinglab doctor` report `D:\BST\MuMuPlayer\nx_main\adb.exe` from `mumu_discovery`.
+- A deliberately invalid `ACTINGCOMMAND_ADB_PATH` reports a visible fatal diagnostic in `actinglab paths` and does not silently fall back.
+- AK-only live smoke on `127.0.0.1:16416` captured `1280x720` through both `device-test capture` and `actinglab capture`.
+- BA `127.0.0.1:16481` and AzurLane `127.0.0.1:16385` live validation were intentionally skipped because another process was using those emulators.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no `adb shell screencap`, no ADB input fallback, no old `F:\AzurPilot` adb hint, no `adb kill-server`, and no reconnect or retry loop implementation.
 
 ## Current ActingLab Direct Touch CLI
 

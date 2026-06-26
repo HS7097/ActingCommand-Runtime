@@ -256,7 +256,7 @@ fn execute_lab_run(
     }
     let device = device_config(&effective_global, config)?;
     ctx.instance = Some(device.target.resolved_serial());
-    ctx.adb_path = Some(effective_adb_path(&effective_global, config));
+    ctx.adb_path = Some(effective_adb_path(config)?.path);
 
     ctx.set_phase("lab_lease_acquired");
     let _lease_guard = LabLeaseGuard::acquire(&device.target.resolved_serial())?;

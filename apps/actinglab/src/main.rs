@@ -3,7 +3,7 @@
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, Frame, HandshakeInfo,
     InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat, combine_operation_and_close,
-    create_capture_backend,
+    create_capture_backend, resolve_adb_path,
 };
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
@@ -29,7 +29,6 @@ mod resource_convert;
 
 const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
-const DEFAULT_ADB_HINT: &str = r"F:\AzurPilot\.venv\Scripts\adb.exe";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
@@ -517,12 +516,13 @@ fn version_data() -> Value {
 
 fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
+    let adb = resolved_adb_json(&config);
     Ok(json!({
         "config_path": config_path()?.display().to_string(),
         "run_root": global.run_root.as_ref().map(|path| path_string(path)).or(config.run_root),
         "resource_root": global.resource_root.as_ref().map(|path| path_string(path)).or(config.resource_root),
         "runtime_endpoint": global.runtime_endpoint.clone().or(config.runtime_endpoint),
-        "default_adb_hint": DEFAULT_ADB_HINT
+        "adb": adb
     }))
 }
 
@@ -560,7 +560,7 @@ fn run_config(sub: &str, args: &[String]) -> CliOutcome<Value> {
 
 fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
-    let adb_path = effective_adb_path(global, &config);
+    let adb_resolution = resolve_adb_path(config.adb_path.as_deref());
     let runtime_endpoint = effective_runtime_endpoint(global, &config);
     let resource_root = effective_resource_root(global, &config);
     let run_root = effective_run_root(global, &config);
@@ -571,12 +571,22 @@ fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
         "ok": config_path()?.exists(),
         "path": config_path()?.display().to_string()
     }));
-    checks.push(json!({
-        "name": "adb",
-        "ok": Path::new(&adb_path).is_file() || adb_path == "adb",
-        "path": adb_path,
-        "hint": DEFAULT_ADB_HINT
-    }));
+    let adb_check = match adb_resolution {
+        Ok(resolved) => json!({
+            "name": "adb",
+            "ok": true,
+            "path": resolved.path,
+            "source": resolved.source.as_str()
+        }),
+        Err(err) => json!({
+            "name": "adb",
+            "ok": false,
+            "error": err.to_string(),
+            "required_env": "ACTINGCOMMAND_ADB_PATH",
+            "mumu_env": "ACTINGCOMMAND_NEMU_FOLDER"
+        }),
+    };
+    checks.push(adb_check);
     checks.push(json!({
         "name": "runtime_endpoint",
         "ok": runtime_endpoint.as_ref().map(|endpoint| runtime_tcp_available(endpoint)).unwrap_or(false),
@@ -623,11 +633,11 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
     }))
 }
 
-fn run_devices(global: &GlobalOptions) -> CliOutcome<Value> {
+fn run_devices(_global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
-    let adb_path = effective_adb_path(global, &config);
+    let resolved = effective_adb_path(&config)?;
     let adb = Adb::new(AdbConfig {
-        adb_path,
+        adb_path: resolved.path.clone(),
         ..Default::default()
     });
     let output = adb
@@ -635,7 +645,9 @@ fn run_devices(global: &GlobalOptions) -> CliOutcome<Value> {
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "adb_stdout": output.stdout,
-        "adb_stderr": output.stderr
+        "adb_stderr": output.stderr,
+        "adb_path": resolved.path,
+        "adb_source": resolved.source.as_str()
     }))
 }
 
@@ -1388,7 +1400,7 @@ fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<Devi
         target.serial = Some(instance_id.clone());
     }
     let adb = AdbConfig {
-        adb_path: effective_adb_path(global, config),
+        adb_path: effective_adb_path(config)?.path,
         ..Default::default()
     };
     Ok(DeviceRuntimeConfig { adb, target })
@@ -1533,11 +1545,24 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
     Ok(())
 }
 
-fn effective_adb_path(_global: &GlobalOptions, config: &UserConfig) -> String {
-    config
-        .adb_path
-        .clone()
-        .unwrap_or_else(|| DEFAULT_ADB_HINT.to_string())
+fn effective_adb_path(config: &UserConfig) -> CliOutcome<actingcommand_device::ResolvedAdbPath> {
+    resolve_adb_path(config.adb_path.as_deref()).map_err(|err| CliError::device(err.to_string()))
+}
+
+fn resolved_adb_json(config: &UserConfig) -> Value {
+    match resolve_adb_path(config.adb_path.as_deref()) {
+        Ok(resolved) => json!({
+            "ok": true,
+            "path": resolved.path,
+            "source": resolved.source.as_str()
+        }),
+        Err(err) => json!({
+            "ok": false,
+            "error": err.to_string(),
+            "required_env": "ACTINGCOMMAND_ADB_PATH",
+            "mumu_env": "ACTINGCOMMAND_NEMU_FOLDER"
+        }),
+    }
 }
 
 fn effective_runtime_endpoint(global: &GlobalOptions, config: &UserConfig) -> Option<String> {

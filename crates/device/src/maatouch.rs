@@ -235,11 +235,7 @@ impl MaaTouchBackend {
         }
 
         let adb = Adb::new(self.adb_config.clone());
-        if self.target.connect {
-            adb.connect(&self.serial)?;
-        }
-
-        let device = verify_device(&adb, &self.serial)?;
+        let device = verify_device(&adb, &self.serial, self.target.connect)?;
         self.install(&adb)?;
         self.start()?;
         Ok(device)
@@ -638,8 +634,8 @@ fn require_file(path: &PathBuf) -> DeviceResult<()> {
     Ok(())
 }
 
-fn verify_device(adb: &Adb, serial: &str) -> DeviceResult<DeviceInfo> {
-    let state = adb.get_state(serial).map_err(|err| {
+fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult<DeviceInfo> {
+    let state = adb.ensure_device(serial, connect_allowed).map_err(|err| {
         let devices = adb
             .run(&["devices", "-l"])
             .map(|out| out.stdout)

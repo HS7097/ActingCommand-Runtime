@@ -3,7 +3,7 @@
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
     Frame, InputBackend, MaaTouchBackend, MaaTouchValidationConfig, PixelFormat,
-    combine_operation_and_close, create_capture_backend,
+    combine_operation_and_close, create_capture_backend, resolve_adb_path,
 };
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
@@ -152,7 +152,8 @@ fn main() {
 }
 
 fn run() -> DeviceResult<()> {
-    let (config, commands) = parse_args(env::args().skip(1))?;
+    let (mut config, commands) = parse_args(env::args().skip(1))?;
+    resolve_adb_for_device_commands(&mut config, &commands)?;
     match commands.as_slice() {
         [DeviceCommand::Capture { .. }] => {
             return run_capture_command(config, &commands);
@@ -217,6 +218,33 @@ fn run() -> DeviceResult<()> {
 
     println!("PASS");
     Ok(())
+}
+
+fn resolve_adb_for_device_commands(
+    config: &mut MaaTouchValidationConfig,
+    commands: &[DeviceCommand],
+) -> DeviceResult<()> {
+    if !commands_need_device(commands) || !config.adb.adb_path.trim().is_empty() {
+        return Ok(());
+    }
+    config.adb.adb_path = resolve_adb_path(None)?.path;
+    Ok(())
+}
+
+fn commands_need_device(commands: &[DeviceCommand]) -> bool {
+    commands.iter().any(|command| match command {
+        DeviceCommand::Reset
+        | DeviceCommand::Tap { .. }
+        | DeviceCommand::LongTap { .. }
+        | DeviceCommand::Swipe { .. }
+        | DeviceCommand::Capture { .. }
+        | DeviceCommand::Benchmark { .. }
+        | DeviceCommand::ProbeRun { .. }
+        | DeviceCommand::Runner { .. } => true,
+        DeviceCommand::Recognize { options } => options.capture,
+        DeviceCommand::DetectPage { options } => options.capture,
+        DeviceCommand::TaskDryRun { options } => options.capture,
+    })
 }
 
 fn has_read_only_command(commands: &[DeviceCommand]) -> bool {

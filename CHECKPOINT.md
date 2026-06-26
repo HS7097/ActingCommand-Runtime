@@ -1,5 +1,102 @@
 # CHECKPOINT.md
 
+## 2026-06-26 Runtime ADB connection hardening
+
+### Current status
+
+- Implemented the ADB connection hardening task from `TASK-runtime-adb-connection-hardening.md`.
+- Unified Runtime adb resolution in `crates/device` instead of relying on PATH adb or the old `F:\AzurPilot` venv hint.
+- Resolution order is `ACTINGCOMMAND_ADB_PATH`, MuMu discovery, then user-configured `adb_path`.
+- MuMu discovery prefers `D:\BST\MuMuPlayer\nx_main\adb.exe`, then sorted `nx_device\*\shell\adb.exe` candidates.
+- `actinglab`, `device-test`, ADB screencap capture, and MaaTouch device verification now share the same device-layer adb path model.
+- Device verification now does at most one bounded `adb connect` when the target allows connect and the current state is not `device`.
+- Runtime does not call `adb kill-server`.
+- `adb exec-out screencap -p` remains the ADB screenshot path and keeps the existing wall-clock timeout.
+- Added `external-tools/NOTICE.md` documentation for the MuMu adb version boundary and the no-committed-adb rule.
+- Device-test CLI parsing no longer forces adb discovery for offline parse-only commands; device commands resolve adb before execution.
+- AK-only live validation used `127.0.0.1:16416`.
+- BA `127.0.0.1:16481` and AzurLane `127.0.0.1:16385` validation were skipped because those emulators were occupied by another process.
+- Implementation commit: pending.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/device-test/src/main.rs`
+- `crates/device/src/adb.rs`
+- `crates/device/src/capture.rs`
+- `crates/device/src/maatouch.rs`
+- `external-tools/NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -LiteralPath 'C:\Users\Alice\.codex\skills\implement\SKILL.md'`
+- `rg -n "ActingCommand|ADB|adb|BlueArchive|match_metric|actingcommand-device-test" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `git status --short --branch`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\TASK-runtime-adb-connection-hardening.md`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md`
+- `git diff -- crates/device/src/adb.rs`
+- `git diff -- crates/device/src/capture.rs crates/device/src/maatouch.rs`
+- `git diff -- apps/actinglab/src/main.rs apps/actinglab/src/lab_run.rs apps/device-test/src/main.rs`
+- `git diff -- external-tools/NOTICE.md`
+- `rg -n "parse_args|MaaTouchValidationConfig::default|--adb|capture --out|resolve_adb_path" apps\device-test\src\main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-device adb::tests`
+- `cargo run -p actingcommand-actinglab -- --json paths`
+- `cargo run -p actingcommand-actinglab -- --json doctor`
+- `cargo run -p actingcommand-device-test -- --port 16416 --capture-backend adb capture --out target\adb-hardening-smoke\ak-device-test.png`
+- `cargo run -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb capture --out target\adb-hardening-smoke\ak-actinglab.png`
+- `$env:ACTINGCOMMAND_ADB_PATH='C:\definitely-missing\adb.exe'; cargo run -p actingcommand-actinglab -- --json paths`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo clippy -p actingcommand-device -p actingcommand-actinglab -p actingcommand-device-test -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source scans for old adb hints, `adb shell screencap`, `adb shell input`, `adb kill-server`, reconnect loops, retry loops, and `println!/eprintln!` in `crates/device`.
+
+### Test results
+
+- `cargo test -p actingcommand-device-test` passed with 54 tests.
+- `cargo test -p actingcommand-device adb::tests` passed with 3 tests.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo clippy -p actingcommand-device -p actingcommand-actinglab -p actingcommand-device-test -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+
+### Live smoke results
+
+- `actinglab paths` reported adb path `D:\BST\MuMuPlayer\nx_main\adb.exe` with source `mumu_discovery`.
+- `actinglab doctor` reported adb path `D:\BST\MuMuPlayer\nx_main\adb.exe` with source `mumu_discovery`.
+- Invalid `ACTINGCOMMAND_ADB_PATH=C:\definitely-missing\adb.exe` produced a visible fatal diagnostic in `actinglab paths` and did not silently fall back to another adb.
+- `device-test capture` on AK `127.0.0.1:16416` wrote `target\adb-hardening-smoke\ak-device-test.png` at `1280x720`.
+- `actinglab capture` on AK `127.0.0.1:16416` wrote `target\adb-hardening-smoke\ak-actinglab.png` at `1280x720`.
+- Captured AK PNG was visually inspected and was a readable Arknights main-screen frame.
+- BA and AzurLane live validation were intentionally skipped to avoid interfering with another active process.
+
+### Scope scan
+
+- No old `F:\AzurPilot` adb hint remains in Runtime source paths.
+- No default bare `"adb"` path remains in Runtime source paths.
+- No `adb shell screencap` or `adb shell input` path was found in Runtime source paths.
+- No `adb kill-server` call was found.
+- No reconnect loop or retry loop implementation was found.
+- No `println!` or `eprintln!` exists in `crates/device/src`.
+
+### Current blocker
+
+- No implementation blocker.
+- BA and AzurLane live validation remains paused while those emulators are owned by another process.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Add a checkpoint tag after push.
+3. If BA/AzurLane become available later, repeat live capture validation on those ports with the same MuMu adb.
+
 ## 2026-06-26 Lab packager
 
 ### Current status

@@ -999,15 +999,7 @@ impl CaptureBackend for NemuIpcBackend {
 }
 
 fn verify_adb_device(adb: &Adb, target: &DeviceTarget, serial: &str) -> DeviceResult<()> {
-    if target.connect {
-        adb.connect(serial)?;
-    }
-    let state = adb.get_state(serial)?;
-    if state != "device" {
-        return Err(DeviceError::fatal(format!(
-            "target device {serial} is not in device state: {state:?}"
-        )));
-    }
+    adb.ensure_device(serial, target.connect)?;
     Ok(())
 }
 
