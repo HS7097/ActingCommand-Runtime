@@ -503,6 +503,16 @@ impl InputBackend for MaaTouchBackend {
         Ok(())
     }
 
+    fn key(&mut self, key: &str) -> DeviceResult<()> {
+        let key = validate_maatouch_line_token("key", key)?;
+        self.write_and_flush(&format!("k {key} o\nc\n"))
+    }
+
+    fn text(&mut self, text: &str) -> DeviceResult<()> {
+        let text = validate_maatouch_line_token("text", text)?;
+        self.write_and_flush(&format!("t {text}\nc\n"))
+    }
+
     fn reset(&mut self) -> DeviceResult<()> {
         self.write_and_flush("r\nc\n")
     }
@@ -762,6 +772,20 @@ fn swipe_step_delay(duration_ms: u64, point_count: usize) -> Duration {
 
 fn bounded_gesture_duration_ms(duration_ms: u64) -> u64 {
     duration_ms.min(MAX_GESTURE_MS)
+}
+
+fn validate_maatouch_line_token<'a>(name: &str, value: &'a str) -> DeviceResult<&'a str> {
+    if value.is_empty() {
+        return Err(DeviceError::fatal(format!(
+            "MaaTouch {name} must not be empty"
+        )));
+    }
+    if value.contains('\n') || value.contains('\r') {
+        return Err(DeviceError::fatal(format!(
+            "MaaTouch {name} must not contain newlines"
+        )));
+    }
+    Ok(value)
 }
 
 #[cfg(test)]

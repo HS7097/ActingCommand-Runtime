@@ -17,8 +17,9 @@ use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::process::ExitCode;
-use std::time::Duration;
+use std::process::{Command, ExitCode, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
@@ -30,6 +31,10 @@ mod resource_convert;
 const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
+const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
+const SESSION_INFO_FILE: &str = "session.json";
+const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
+const SESSION_STOP_FILE: &str = "stop.request";
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
@@ -276,6 +281,22 @@ struct InstanceConfig {
     serial: Option<String>,
     game: Option<String>,
     server: Option<String>,
+    package: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionInfo {
+    pid: u32,
+    started_at_unix_ms: u128,
+    state_dir: String,
+    runtime_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionHeartbeat {
+    pid: u32,
+    updated_at_unix_ms: u128,
+    state: String,
 }
 
 #[derive(Debug, Clone)]
@@ -403,7 +424,7 @@ fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
         "config" | "lab" | "package" | "operation" | "control" | "scheduler" | "resource"
-        | "run" | "report" => rest.get(1).map(|_| 2).unwrap_or(1),
+        | "run" | "report" | "session" => rest.get(1).map(|_| 2).unwrap_or(1),
         _ => 1,
     };
     let command = rest.iter().take(path_len).cloned().collect::<Vec<_>>();
@@ -442,6 +463,8 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "swipe" => run_direct_touch(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "long-tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
+        [cmd] if cmd == "key" => run_direct_input(&invocation.global, cmd, &invocation.args),
+        [cmd] if cmd == "text" => run_direct_input(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "capture" => run_capture(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
@@ -465,6 +488,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "scheduler" => run_scheduler(sub, &invocation.global),
         [group, sub] if group == "resource" => {
             run_resource(sub, &invocation.global, &invocation.args)
+        }
+        [group, sub] if group == "session" => {
+            run_session(sub, &invocation.global, &invocation.args)
         }
         [group, sub] if group == "run" => run_run_report(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "report" => run_report(sub, &invocation.global, &invocation.args),
@@ -720,12 +746,14 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
     let requested = global.capture_backend.unwrap_or_default();
-    let selected = create_capture_backend(device_config.capture_backend_config(requested))
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let mut backend = selected.backend;
-    let frame = backend
-        .capture()
-        .map_err(|err| CliError::device(err.to_string()))?;
+    let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
+    let captured = capture_for_command(
+        &device_config,
+        requested,
+        flags.bool("--require-fresh"),
+        fresh_delay,
+    )?;
+    let frame = captured.frame;
     if let Some(parent) = out.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -742,13 +770,167 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "width": frame.width,
         "height": frame.height,
         "capture_backend_used": frame.backend_name.as_str(),
-        "capture_backend_attempts": selected.diagnostics.attempts.iter().map(|attempt| json!({
-            "backend": attempt.backend.as_str(),
-            "ok": attempt.ok,
-            "message": attempt.message
-        })).collect::<Vec<_>>(),
+        "capture_backend_attempts": captured.attempts,
+        "freshness": captured.freshness,
         "out": out.display().to_string()
     }))
+}
+
+struct CaptureCommandResult {
+    frame: Frame,
+    attempts: Vec<Value>,
+    freshness: Value,
+}
+
+fn capture_for_command(
+    device_config: &DeviceRuntimeConfig,
+    requested: CaptureBackendChoice,
+    require_fresh: bool,
+    fresh_delay: Duration,
+) -> CliOutcome<CaptureCommandResult> {
+    if require_fresh {
+        return capture_require_fresh(device_config, requested, fresh_delay);
+    }
+
+    let selected = create_capture_backend(device_config.capture_backend_config(requested))
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let attempts = capture_attempts_json(&selected.diagnostics.attempts);
+    let mut backend = selected.backend;
+    let frame = backend
+        .capture()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(CaptureCommandResult {
+        frame,
+        attempts,
+        freshness: json!({ "required": false }),
+    })
+}
+
+fn capture_require_fresh(
+    device_config: &DeviceRuntimeConfig,
+    requested: CaptureBackendChoice,
+    fresh_delay: Duration,
+) -> CliOutcome<CaptureCommandResult> {
+    let mut attempts = Vec::new();
+    for choice in fresh_probe_choices(requested) {
+        let selected = match create_capture_backend(device_config.capture_backend_config(choice)) {
+            Ok(selected) => selected,
+            Err(err) => {
+                attempts.push(json!({
+                    "backend": choice.as_str(),
+                    "ok": false,
+                    "stage": "create",
+                    "message": err.to_string()
+                }));
+                continue;
+            }
+        };
+        let backend_used = selected.diagnostics.used.as_str();
+        attempts.extend(capture_attempts_json(&selected.diagnostics.attempts));
+        let mut backend = selected.backend;
+        let first = match backend.capture() {
+            Ok(frame) => frame,
+            Err(err) => {
+                attempts.push(json!({
+                    "backend": backend_used,
+                    "ok": false,
+                    "stage": "first_capture",
+                    "message": err.to_string()
+                }));
+                continue;
+            }
+        };
+        thread::sleep(fresh_delay);
+        let second = match backend.capture() {
+            Ok(frame) => frame,
+            Err(err) => {
+                attempts.push(json!({
+                    "backend": backend_used,
+                    "ok": false,
+                    "stage": "second_capture",
+                    "message": err.to_string()
+                }));
+                continue;
+            }
+        };
+        let first_hash = frame_digest(&first);
+        let second_hash = frame_digest(&second);
+        let fresh = first_hash != second_hash;
+        attempts.push(json!({
+            "backend": backend_used,
+            "ok": fresh,
+            "stage": "fresh_probe",
+            "first_hash": first_hash,
+            "second_hash": second_hash,
+            "stale_suspected": !fresh,
+            "delay_ms": fresh_delay.as_millis()
+        }));
+        if fresh {
+            return Ok(CaptureCommandResult {
+                frame: second,
+                attempts,
+                freshness: json!({
+                    "required": true,
+                    "fresh": true,
+                    "backend": backend_used,
+                    "first_hash": first_hash,
+                    "second_hash": second_hash
+                }),
+            });
+        }
+    }
+
+    Err(CliError::device(format!(
+        "fresh capture required but no backend produced a changing probe frame; attempts={}",
+        serde_json::to_string(&attempts).unwrap_or_else(|_| "[]".to_string())
+    )))
+}
+
+fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt]) -> Vec<Value> {
+    attempts
+        .iter()
+        .map(|attempt| {
+            json!({
+                "backend": attempt.backend.as_str(),
+                "ok": attempt.ok,
+                "message": attempt.message
+            })
+        })
+        .collect()
+}
+
+fn fresh_probe_choices(requested: CaptureBackendChoice) -> Vec<CaptureBackendChoice> {
+    match requested {
+        CaptureBackendChoice::Auto => vec![
+            CaptureBackendChoice::NemuIpc,
+            CaptureBackendChoice::DroidcastRaw,
+            CaptureBackendChoice::Adb,
+        ],
+        other => vec![other],
+    }
+}
+
+fn frame_digest(frame: &Frame) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(frame.width.to_le_bytes());
+    hasher.update(frame.height.to_le_bytes());
+    hasher.update(format!("{:?}", frame.pixel_format).as_bytes());
+    hasher.update(&frame.pixels);
+    format!("{:x}", hasher.finalize())
+}
+
+fn parse_optional_duration_ms(
+    flags: &FlagArgs,
+    name: &str,
+    default_ms: u64,
+) -> CliOutcome<Duration> {
+    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
+        return Ok(Duration::from_millis(default_ms));
+    };
+    let ms = value
+        .parse::<u64>()
+        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
+    Ok(Duration::from_millis(ms))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -891,6 +1073,95 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
         "handshake": handshake.map(handshake_json),
         "action": command.to_json()
     }))
+}
+
+fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let command = DirectInputCommand::parse(command, &flags)?;
+    let config = read_user_config()?;
+    let device_config = device_config(global, &config)?;
+    let mut backend = MaaTouchBackend::new(
+        device_config.adb,
+        device_config.target,
+        MaaTouchConfig::default(),
+    );
+    let serial = backend.serial().to_string();
+    let device = backend
+        .connect()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let handshake = backend.handshake_info().cloned();
+    let operation = command.run(&mut backend);
+    let close = backend.close();
+    combine_operation_and_close(operation, close)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "status": "sent",
+        "backend": "maatouch",
+        "control_mode": "direct_trusted_manual",
+        "safety_gate": "not_required_for_manual_control",
+        "serial": serial,
+        "device_state": device.state,
+        "screen_size": device.screen_size,
+        "handshake": handshake.map(handshake_json),
+        "action": command.to_json()
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectInputCommand {
+    Key(String),
+    Text(String),
+}
+
+impl DirectInputCommand {
+    fn parse(command: &str, flags: &FlagArgs) -> CliOutcome<Self> {
+        flags.reject_flags(command)?;
+        match command {
+            "key" => {
+                flags.expect_positionals("key", 1)?;
+                Ok(Self::Key(canonical_key(
+                    flags.required_positional(0, "key")?,
+                )))
+            }
+            "text" => {
+                if flags.positionals.is_empty() {
+                    return Err(CliError::usage(
+                        "text expects at least one positional argument",
+                    ));
+                }
+                Ok(Self::Text(flags.positionals.join(" ")))
+            }
+            other => Err(CliError::usage(format!(
+                "unknown direct input command: {other}"
+            ))),
+        }
+    }
+
+    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+        match self {
+            Self::Key(key) => backend.key(key),
+            Self::Text(text) => backend.text(text),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Key(key) => json!({ "type": "key", "key": key }),
+            Self::Text(text) => json!({ "type": "text", "text": text }),
+        }
+    }
+}
+
+fn canonical_key(key: &str) -> String {
+    let lower = key.to_ascii_lowercase();
+    match lower.as_str() {
+        "back" => "4".to_string(),
+        "home" => "3".to_string(),
+        "menu" => "82".to_string(),
+        "enter" => "66".to_string(),
+        "escape" | "esc" => "111".to_string(),
+        _ => key.to_string(),
+    }
 }
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -1165,6 +1436,431 @@ fn run_scheduler(sub: &str, _global: &GlobalOptions) -> CliOutcome<Value> {
     }
 }
 
+fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    match sub {
+        "status" => run_session_status(args),
+        "start" => run_session_start(args),
+        "stop" => run_session_stop(args),
+        "daemon" => run_session_daemon(args),
+        "instance" => run_session_instance(global, args),
+        "app" => run_session_app(global, args),
+        "capture" => run_capture(global, args),
+        "lease" => run_session_lease(global, args),
+        _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
+    }
+}
+
+fn run_session_status(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let info_path = session_info_path(&state_dir);
+    let heartbeat_path = session_heartbeat_path(&state_dir);
+    let info = read_json_file::<SessionInfo>(&info_path)?;
+    let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+    Ok(json!({
+        "state_dir": state_dir.display().to_string(),
+        "running": info.is_some(),
+        "info": info,
+        "heartbeat": heartbeat
+    }))
+}
+
+#[cfg(windows)]
+fn spawn_session_daemon(exe: &Path, state_dir: &Path) -> CliOutcome<()> {
+    let state_dir = absolutize_path(state_dir);
+    let command_text = format!(
+        "$p = Start-Process -FilePath {} -ArgumentList {} -WindowStyle Hidden -PassThru; $p.Id",
+        powershell_quote(&exe.display().to_string()),
+        powershell_array(&[
+            "--json".to_string(),
+            "session".to_string(),
+            "daemon".to_string(),
+            "--state-dir".to_string(),
+            state_dir.display().to_string(),
+        ])
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"])
+        .arg(command_text)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to invoke PowerShell Start-Process: {err}"
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(CliError::runtime_not_running(format!(
+            "PowerShell Start-Process failed with status {}; stdout={}; stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn spawn_session_daemon(exe: &Path, state_dir: &Path) -> CliOutcome<()> {
+    let stdout = File::create(state_dir.join("daemon.out.log")).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to create daemon stdout log: {err}"))
+    })?;
+    let stderr = File::create(state_dir.join("daemon.err.log")).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to create daemon stderr log: {err}"))
+    })?;
+    let _child = Command::new(exe)
+        .arg("--json")
+        .arg("session")
+        .arg("daemon")
+        .arg("--state-dir")
+        .arg(state_dir)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .map_err(|err| CliError::runtime_not_running(format!("failed to start session: {err}")))?;
+    Ok(())
+}
+
+fn absolutize_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+#[cfg(windows)]
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn powershell_array(values: &[String]) -> String {
+    format!(
+        "@({})",
+        values
+            .iter()
+            .map(|value| powershell_quote(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn run_session_start(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+
+    let info_path = session_info_path(&state_dir);
+    if let Some(info) = read_json_file::<SessionInfo>(&info_path)? {
+        return Ok(json!({
+            "status": "already_running",
+            "state_dir": state_dir.display().to_string(),
+            "info": info
+        }));
+    }
+
+    let stop_path = session_stop_path(&state_dir);
+    if stop_path.exists() {
+        fs::remove_file(&stop_path).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to remove stale stop request {}: {err}",
+                stop_path.display()
+            ))
+        })?;
+    }
+
+    let exe = env::current_exe().map_err(|err| {
+        CliError::runtime_not_running(format!("failed to resolve actinglab executable: {err}"))
+    })?;
+    spawn_session_daemon(&exe, &state_dir)?;
+
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        if let Some(info) = read_json_file::<SessionInfo>(&info_path)? {
+            return Ok(json!({
+                "status": "started",
+                "state_dir": state_dir.display().to_string(),
+                "spawned_pid": info.pid,
+                "info": info
+            }));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(CliError::runtime_not_running(format!(
+        "session daemon did not write {} within startup deadline",
+        info_path.display()
+    )))
+}
+
+fn run_session_stop(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let info_path = session_info_path(&state_dir);
+    let info = read_json_file::<SessionInfo>(&info_path)?;
+    if info.is_none() {
+        return Ok(json!({
+            "status": "not_running",
+            "state_dir": state_dir.display().to_string()
+        }));
+    }
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    fs::write(session_stop_path(&state_dir), current_unix_ms().to_string()).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to write session stop request: {err}"))
+    })?;
+
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        if !info_path.exists() {
+            return Ok(json!({
+                "status": "stopped",
+                "state_dir": state_dir.display().to_string()
+            }));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Ok(json!({
+        "status": "stop_requested",
+        "state_dir": state_dir.display().to_string(),
+        "info": info
+    }))
+}
+
+fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let info = SessionInfo {
+        pid: std::process::id(),
+        started_at_unix_ms: current_unix_ms(),
+        state_dir: state_dir.display().to_string(),
+        runtime_version: RUNTIME_VERSION.to_string(),
+    };
+    write_json_file(&session_info_path(&state_dir), &info)?;
+    let stop_path = session_stop_path(&state_dir);
+    while !stop_path.exists() {
+        let heartbeat = SessionHeartbeat {
+            pid: std::process::id(),
+            updated_at_unix_ms: current_unix_ms(),
+            state: "idle".to_string(),
+        };
+        write_json_file(&session_heartbeat_path(&state_dir), &heartbeat)?;
+        thread::sleep(Duration::from_millis(500));
+    }
+    let _ = fs::remove_file(session_info_path(&state_dir));
+    let _ = fs::remove_file(stop_path);
+    Ok(json!({
+        "status": "stopped",
+        "state_dir": state_dir.display().to_string()
+    }))
+}
+
+fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let action = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session instance requires list|health|reconnect"))?;
+    let flags = FlagArgs::parse(&args[1..])?;
+    let config = read_user_config()?;
+    match action {
+        "list" => Ok(json!({
+            "instances": config.instances.iter().map(|(id, instance)| json!({
+                "id": id,
+                "serial": instance.serial,
+                "game": instance.game,
+                "server": instance.server,
+                "package": instance.package
+            })).collect::<Vec<_>>()
+        })),
+        "health" | "reconnect" => {
+            let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+            let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
+            let serial = device_config.target.resolved_serial();
+            let adb = Adb::new(device_config.adb);
+            let state = adb
+                .ensure_device(&serial, device_config.target.connect)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            let screen_size = adb
+                .screen_size(&serial)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            Ok(json!({
+                "instance": instance_id,
+                "serial": serial,
+                "state": state,
+                "screen_size": screen_size,
+                "action": action
+            }))
+        }
+        other => Err(CliError::usage(format!(
+            "unknown session instance action: {other}"
+        ))),
+    }
+}
+
+fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let action = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session app requires launch|stop|restart"))?;
+    let flags = FlagArgs::parse(&args[1..])?;
+    let config = read_user_config()?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+    let package = resolve_app_package(global, &config, &flags, &instance_id)?;
+    let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
+    let serial = device_config.target.resolved_serial();
+    let adb = Adb::new(device_config.adb);
+    adb.ensure_device(&serial, device_config.target.connect)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    match action {
+        "launch" => {
+            let output = adb
+                .launch_package(&serial, &package)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            Ok(json!({
+                "action": "launch",
+                "instance": instance_id,
+                "serial": serial,
+                "package": package,
+                "stdout": output.stdout,
+                "stderr": output.stderr
+            }))
+        }
+        "stop" => {
+            let output = adb
+                .force_stop(&serial, &package)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            Ok(json!({
+                "action": "stop",
+                "instance": instance_id,
+                "serial": serial,
+                "package": package,
+                "stdout": output.stdout,
+                "stderr": output.stderr
+            }))
+        }
+        "restart" => {
+            let stop = adb
+                .force_stop(&serial, &package)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            thread::sleep(Duration::from_millis(500));
+            let launch = adb
+                .launch_package(&serial, &package)
+                .map_err(|err| CliError::device(err.to_string()))?;
+            Ok(json!({
+                "action": "restart",
+                "instance": instance_id,
+                "serial": serial,
+                "package": package,
+                "stop_stdout": stop.stdout,
+                "stop_stderr": stop.stderr,
+                "launch_stdout": launch.stdout,
+                "launch_stderr": launch.stderr
+            }))
+        }
+        other => Err(CliError::usage(format!(
+            "unknown session app action: {other}"
+        ))),
+    }
+}
+
+fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let action = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session lease requires acquire|release|preempt|status"))?;
+    let flags = FlagArgs::parse(&args[1..])?;
+    let config = read_user_config()?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+    let holder = flags
+        .optional("--holder")
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| "manual".to_string());
+    let lease_path = state_dir.join(format!("lease-{}.json", safe_file_stem(&instance_id)));
+    match action {
+        "status" => Ok(json!({
+            "instance": instance_id,
+            "lease": read_json_value(&lease_path)?,
+            "path": lease_path.display().to_string()
+        })),
+        "acquire" => {
+            if lease_path.exists() {
+                return Err(CliError::safety_blocked(
+                    "lease_conflict",
+                    format!("session lease already exists for {instance_id}"),
+                    &["lab_lease"],
+                ));
+            }
+            let lease = json!({
+                "instance": instance_id,
+                "holder": holder,
+                "acquired_at_unix_ms": current_unix_ms(),
+                "preempted": false
+            });
+            write_json_file(&lease_path, &lease)?;
+            Ok(
+                json!({ "status": "acquired", "lease": lease, "path": lease_path.display().to_string() }),
+            )
+        }
+        "preempt" => {
+            let lease = json!({
+                "instance": instance_id,
+                "holder": holder,
+                "acquired_at_unix_ms": current_unix_ms(),
+                "preempted": true
+            });
+            write_json_file(&lease_path, &lease)?;
+            Ok(
+                json!({ "status": "preempted", "lease": lease, "path": lease_path.display().to_string() }),
+            )
+        }
+        "release" => {
+            let existed = lease_path.exists();
+            if existed {
+                fs::remove_file(&lease_path).map_err(|err| {
+                    CliError::runtime_not_running(format!(
+                        "failed to remove lease {}: {err}",
+                        lease_path.display()
+                    ))
+                })?;
+            }
+            Ok(json!({
+                "status": if existed { "released" } else { "not_held" },
+                "instance": instance_id,
+                "path": lease_path.display().to_string()
+            }))
+        }
+        other => Err(CliError::usage(format!(
+            "unknown session lease action: {other}"
+        ))),
+    }
+}
+
 fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let repo = flags.required_path("--repo")?;
@@ -1391,7 +2087,18 @@ fn parse_endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
 }
 
 fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<DeviceRuntimeConfig> {
-    let instance_id = resolve_instance_id(global, config)?;
+    device_config_for_instance(global, config, None)
+}
+
+fn device_config_for_instance(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    instance_override: Option<&str>,
+) -> CliOutcome<DeviceRuntimeConfig> {
+    let instance_id = match instance_override {
+        Some(instance) => instance.to_string(),
+        None => resolve_instance_id(global, config)?,
+    };
     let instance = config.instances.get(&instance_id);
     let mut target = DeviceTarget::default();
     if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
@@ -1440,6 +2147,63 @@ fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcom
     ))
 }
 
+fn resolve_instance_id_for_flags(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+) -> CliOutcome<String> {
+    if let Some(instance) = flags.optional("--instance").filter(|value| value != "true") {
+        return Ok(instance);
+    }
+    resolve_instance_id(global, config)
+}
+
+fn resolve_app_package(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<String> {
+    if let Some(package) = flags.optional("--package").filter(|value| value != "true") {
+        return Ok(package);
+    }
+    let instance = config.instances.get(instance_id);
+    if let Some(package) = instance.and_then(|instance| instance.package.clone()) {
+        return Ok(package);
+    }
+    let game = global
+        .game
+        .clone()
+        .or_else(|| instance.and_then(|instance| instance.game.clone()));
+    let server = global
+        .server
+        .clone()
+        .or_else(|| instance.and_then(|instance| instance.server.clone()));
+    default_package_name(game.as_deref(), server.as_deref())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CliError::usage(
+                "session app requires --package, instance.<id>.package, or a known game/server",
+            )
+        })
+}
+
+fn default_package_name(game: Option<&str>, server: Option<&str>) -> Option<&'static str> {
+    let game = match game?.to_ascii_lowercase().as_str() {
+        "ak" | "ark" | "arknights" => "arknights",
+        "azur" | "azurlane" | "azur_lane" | "al" => "azurlane",
+        "ba" | "bluearchive" | "blue_archive" => "bluearchive",
+        _ => return None,
+    };
+    let server = server.unwrap_or_else(|| default_server_for_game(game));
+    match (game, server) {
+        ("arknights", "cn") => Some("com.hypergryph.arknights.bilibili"),
+        ("azurlane", "jp") => Some("com.YoStarJP.AzurLane"),
+        ("bluearchive", "jp") => Some("com.YostarJP.BlueArchive"),
+        _ => None,
+    }
+}
+
 fn read_user_config() -> CliOutcome<UserConfig> {
     let path = config_path()?;
     if !path.exists() {
@@ -1479,13 +2243,89 @@ fn config_path() -> CliOutcome<PathBuf> {
     if let Ok(path) = env::var(CONFIG_ENV) {
         return Ok(PathBuf::from(path));
     }
+    Ok(app_state_root()?.join("config.json"))
+}
+
+fn app_state_root() -> CliOutcome<PathBuf> {
     let root = env::var("LOCALAPPDATA")
         .or_else(|_| env::var("APPDATA"))
-        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for config path"))?;
-    Ok(PathBuf::from(root)
-        .join("ActingCommand")
-        .join("actinglab")
-        .join("config.json"))
+        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for ActingLab state"))?;
+    Ok(PathBuf::from(root).join("ActingCommand").join("actinglab"))
+}
+
+fn session_state_dir_from_flags(flags: &FlagArgs) -> CliOutcome<PathBuf> {
+    if let Some(path) = flags.optional_path("--state-dir") {
+        return Ok(path);
+    }
+    if let Ok(path) = env::var(SESSION_STATE_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(app_state_root()?.join("session"))
+}
+
+fn session_info_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_INFO_FILE)
+}
+
+fn session_heartbeat_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_HEARTBEAT_FILE)
+}
+
+fn session_stop_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_STOP_FILE)
+}
+
+fn current_unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn read_json_file<T>(path: &Path) -> CliOutcome<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
+    let value = serde_json::from_str(&text)
+        .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", path.display())))?;
+    Ok(Some(value))
+}
+
+fn read_json_value(path: &Path) -> CliOutcome<Option<Value>> {
+    read_json_file(path)
+}
+
+fn write_json_file<T>(path: &Path, value: &T) -> CliOutcome<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            CliError::usage(format!("failed to create {}: {err}", parent.display()))
+        })?;
+    }
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|err| CliError::usage(format!("failed to serialize JSON: {err}")))?;
+    fs::write(path, text)
+        .map_err(|err| CliError::usage(format!("failed to write {}: {err}", path.display())))
+}
+
+fn safe_file_stem(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {
@@ -1515,7 +2355,7 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server",
+            "instance config keys use instance.<id>.serial|game|server|package",
         ));
     }
     let instance = config.instances.get(parts[1]);
@@ -1523,6 +2363,7 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
         "serial" => instance.and_then(|instance| instance.serial.clone()),
         "game" => instance.and_then(|instance| instance.game.clone()),
         "server" => instance.and_then(|instance| instance.server.clone()),
+        "package" => instance.and_then(|instance| instance.package.clone()),
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     };
     Ok(json!(value))
@@ -1532,7 +2373,7 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server",
+            "instance config keys use instance.<id>.serial|game|server|package",
         ));
     }
     let instance = config.instances.entry(parts[1].to_string()).or_default();
@@ -1540,6 +2381,7 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
         "serial" => instance.serial = Some(value.to_string()),
         "game" => instance.game = Some(value.to_string()),
         "server" => instance.server = Some(value.to_string()),
+        "package" => instance.package = Some(value.to_string()),
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     }
     Ok(())
@@ -2315,6 +3157,15 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("tap", ["device"], "available"),
         command_cap("swipe", ["device"], "available"),
         command_cap("long-tap", ["device"], "available"),
+        command_cap("key", ["device"], "available"),
+        command_cap("text", ["device"], "available"),
+        command_cap("session status", ["offline"], "available"),
+        command_cap("session start", ["offline"], "available"),
+        command_cap("session stop", ["offline"], "available"),
+        command_cap("session instance", ["offline", "device"], "available"),
+        command_cap("session app", ["device"], "available"),
+        command_cap("session capture", ["device"], "available"),
+        command_cap("session lease", ["offline"], "available"),
         command_cap("monitor", ["running_runtime"], "reserved"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
@@ -2479,6 +3330,108 @@ mod tests {
     }
 
     #[test]
+    fn config_set_and_get_instance_package() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let set = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak.package",
+                "com.hypergryph.arknights.bilibili",
+            ],
+            true,
+        );
+        assert_eq!(set.exit_code(), 0);
+        let get = run_cli(["--json", "config", "get", "instance.ak.package"], true);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        assert_eq!(get.exit_code(), 0);
+        assert_eq!(
+            get.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("com.hypergryph.arknights.bilibili")
+        );
+    }
+
+    #[test]
+    fn session_status_without_daemon_is_offline_ok() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(["--json", "session", "status"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("running")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_instance_list_reads_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let _ = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.azur.serial",
+                "127.0.0.1:16385",
+            ],
+            true,
+        );
+        let _ = run_cli(
+            ["--json", "config", "set", "instance.azur.game", "azurlane"],
+            true,
+        );
+        let _ = run_cli(
+            ["--json", "config", "set", "instance.azur.server", "jp"],
+            true,
+        );
+        let result = run_cli(["--json", "session", "instance", "list"], true);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        assert_eq!(result.exit_code(), 0);
+        let instances = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("instances")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].get("id").and_then(Value::as_str), Some("azur"));
+    }
+
+    #[test]
     fn capabilities_are_offline() {
         let result = run_cli(["--json", "capabilities"], true);
         assert_eq!(result.exit_code(), 0);
@@ -2542,9 +3495,40 @@ mod tests {
     }
 
     #[test]
+    fn direct_input_positionals_parse() {
+        let key = FlagArgs::parse(&["back".to_string()]).unwrap();
+        assert_eq!(
+            DirectInputCommand::parse("key", &key).unwrap(),
+            DirectInputCommand::Key("4".to_string())
+        );
+
+        let text = FlagArgs::parse(&["hello".to_string(), "world".to_string()]).unwrap();
+        assert_eq!(
+            DirectInputCommand::parse("text", &text).unwrap(),
+            DirectInputCommand::Text("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn fresh_auto_probe_prefers_fast_backends_before_adb() {
+        assert_eq!(
+            fresh_probe_choices(CaptureBackendChoice::Auto),
+            vec![
+                CaptureBackendChoice::NemuIpc,
+                CaptureBackendChoice::DroidcastRaw,
+                CaptureBackendChoice::Adb,
+            ]
+        );
+        assert_eq!(
+            fresh_probe_choices(CaptureBackendChoice::Adb),
+            vec![CaptureBackendChoice::Adb]
+        );
+    }
+
+    #[test]
     fn direct_touch_commands_are_capability_registered() {
         let commands = command_capabilities();
-        for command in ["tap", "swipe", "long-tap"] {
+        for command in ["tap", "swipe", "long-tap", "key", "text"] {
             let capability = commands
                 .iter()
                 .find(|value| value.get("command").and_then(Value::as_str) == Some(command))
@@ -2556,6 +3540,22 @@ mod tests {
             assert_eq!(
                 capability.get("needs").and_then(Value::as_array).unwrap(),
                 &vec![Value::String("device".to_string())]
+            );
+        }
+        for command in [
+            "session status",
+            "session instance",
+            "session app",
+            "session capture",
+            "session lease",
+        ] {
+            let capability = commands
+                .iter()
+                .find(|value| value.get("command").and_then(Value::as_str) == Some(command))
+                .unwrap_or_else(|| panic!("{command} capability missing"));
+            assert_eq!(
+                capability.get("status").and_then(Value::as_str),
+                Some("available")
             );
         }
     }

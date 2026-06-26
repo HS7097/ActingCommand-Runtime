@@ -43,6 +43,32 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Lab packager foundation and production builder: `resource convert` is now Rust-backed with converter parity, `lab validate` validates Lab-1y input zips offline, and `package build-task` / `package build-pack` can build self-contained Lab packages from local or explicitly cloned resource repositories.
 - Runtime ADB connection hardening: Runtime and CLI device entry points now resolve one matching adb path through the device layer, prefer the reviewed MuMu adb, avoid PATH/venv adb defaults, preserve wall-clock command deadlines, and only perform one bounded `adb connect` when device state is unavailable.
 - Runtime full-frame recognition hang fix: large template searches now use a bounded pyramid/refine path with a fatal deadline, including `full_frame`, explicit whole-frame rectangles, and large bounded regions.
+- ActingLab session layer Phase A: local session daemon lifecycle, instance health/reconnect, app launch/stop/restart, explicit MaaTouch key/text input, and stale-aware `--require-fresh` capture diagnostics.
+
+## Current ActingLab Session Layer Phase A
+
+The current Runtime task implements the Phase A portion of `TASK-Lab-session-layer.md`, informed by `FINDING-AK-game-freeze-2026-06-27.md`.
+
+Scope:
+
+- Add an ActingLab local session daemon lifecycle through `session start`, `session status`, `session stop`, and internal `session daemon`.
+- Keep the session layer as a mechanism boundary only. It does not implement the scheduler, UI, OCR, SQLite, route semantics, monitoring, self-heal, or recording phases.
+- Add `session instance list|health|reconnect` for instance diagnostics and bounded ADB device-state checks.
+- Add `session app launch|stop|restart` with explicit package resolution from `--package`, `instance.<id>.package`, or known game/server defaults.
+- Add `session lease acquire|release|preempt|status` as a local lease interface placeholder for later scheduler arbitration.
+- Add `key` and `text` direct trusted-manual commands through MaaTouch. No ADB input fallback is introduced.
+- Add `capture --require-fresh` and `session capture --require-fresh`, which compare two captured raw-pixel frames and report stale-frame diagnostics. In `auto` mode the fresh probe tries `nemu_ipc`, `droidcast_raw`, then `adb_screencap`.
+
+Validation status:
+
+- Runtime and the three resource repositories were mirrored before work.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `session start/status/stop` smoke passed with `target\session-smoke16`; no `actinglab` process remained afterward.
+- Read-only AK capture on `127.0.0.1:16416` wrote `1280x720` PNG output.
+- Read-only AK `capture --require-fresh --fresh-delay-ms 250` succeeded; the two probe frame hashes differed, so stale capture was not suspected in that smoke.
+- Scope scan found no ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, or game logic in the touched paths.
 
 ## Current Runtime Full-Frame Recognition Hang Fix
 

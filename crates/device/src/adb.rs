@@ -189,6 +189,24 @@ impl Adb {
         Ok(output.stdout.trim().to_string())
     }
 
+    pub fn force_stop(&self, serial: &str, package: &str) -> DeviceResult<CommandOutput> {
+        self.run(&["-s", serial, "shell", "am", "force-stop", package])
+    }
+
+    pub fn launch_package(&self, serial: &str, package: &str) -> DeviceResult<CommandOutput> {
+        self.run(&[
+            "-s",
+            serial,
+            "shell",
+            "monkey",
+            "-p",
+            package,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        ])
+    }
+
     pub fn screencap(&self, serial: &str, timeout: Duration) -> DeviceResult<BinaryOutput> {
         run_binary_with_timeout(
             &self.config.adb_path,

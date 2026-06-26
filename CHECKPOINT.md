@@ -1,5 +1,97 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session layer Phase A
+
+### Current status
+
+- Implemented the Phase A mechanism layer from `TASK-Lab-session-layer.md`, with the AK stale-capture finding from `FINDING-AK-game-freeze-2026-06-27.md` reflected in capture diagnostics.
+- Added `session start`, `session status`, `session stop`, and internal `session daemon`.
+- The session daemon writes `session.json` and `heartbeat.json` under the requested session state directory and survives the parent CLI command.
+- Windows session start uses `PowerShell Start-Process` without stdout/stderr redirection so the parent CLI returns a visible JSON result and the daemon does not inherit the caller's output handle.
+- Added `session instance list|health|reconnect`.
+- Added `session app launch|stop|restart` with explicit package resolution from `--package`, `instance.<id>.package`, or known game/server defaults.
+- Added `session lease acquire|release|preempt|status` as a local lease interface placeholder. This is not a scheduler implementation.
+- Added MaaTouch `key` and `text` support through the `InputBackend` trait and `MaaTouchBackend`; no ADB input fallback was added.
+- Added top-level `key` and `text` trusted-manual CLI commands.
+- Added `capture --require-fresh` and `session capture --require-fresh`; fresh capture compares two raw-pixel frame hashes and reports stale-frame diagnostics. `auto` fresh probing tries `nemu_ipc`, `droidcast_raw`, then `adb_screencap`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `3c76360`.
+- `ActingCommand-Resources-Arknights`: `7509ed1`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `crates/device/src/adb.rs`
+- `crates/device/src/input.rs`
+- `crates/device/src/maatouch.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Mirrored Runtime from `origin/main` and verified baseline `3c76360`.
+- Mirrored Arknights, AzurLane, and BlueArchive resource repositories from their remotes.
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this split Runtime repo.
+- Read the task files from `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` and `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- `cargo fmt --all`
+- `cargo build -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-device`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `target\debug\actinglab.exe --json session start --state-dir target\session-smoke16`
+- `target\debug\actinglab.exe --json session status --state-dir target\session-smoke16`
+- `target\debug\actinglab.exe --json session stop --state-dir target\session-smoke16`
+- `target\debug\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb capture --out target\session-layer-smoke\ak-capture.png`
+- `target\debug\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb capture --out target\session-layer-smoke\ak-capture-fresh.png --require-fresh --fresh-delay-ms 250`
+- `git diff --check`
+- Scope scan for `adb shell input`, `shell input`, `input tap`, `input swipe`, `adb shell screencap`, retry/reconnect/fallback strings, SQLite, OCR, OpenCV, and Tesseract in touched source paths.
+- `Get-Process actinglab -ErrorAction SilentlyContinue`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with `70` tests.
+- `cargo test -p actingcommand-device` passed with `36` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+
+### Live read-only smoke results
+
+- `session start/status/stop` passed using `target\session-smoke16`.
+- After `session stop`, `Get-Process actinglab` found no remaining `actinglab` process.
+- AK `127.0.0.1:16416` read-only capture wrote `target\session-layer-smoke\ak-capture.png` at `1280x720`.
+- AK `127.0.0.1:16416` read-only `--require-fresh` capture wrote `target\session-layer-smoke\ak-capture-fresh.png` at `1280x720`.
+- The fresh probe reported different hashes:
+  - first: `9ff265caf49f3736016515cd9e0a2ee23fd83828f0cc38c075381f6b6c3a0afd`
+  - second: `0df20dc844a3b61019375d92882b0316cba85fd4e4d6db712ea8f6e4e60ac9ee`
+- No click, MaaTouch tap, task run, purchase, sortie, exercise, gacha, or resource-consuming action was executed during live smoke.
+
+### Scope scan
+
+- No ADB input fallback was added.
+- No `adb shell screencap` path was added.
+- No SQLite, OCR, OpenCV, Tesseract, UI, scheduler implementation, recording implementation, semantic navigation, monitoring, or game logic was added.
+- Scan hits for `fallback` are existing capability metadata.
+- Scan hits for `reconnect` are the explicit `session instance reconnect` command requested by the session layer.
+
+### Current blocker
+
+- No implementation blocker for Phase A.
+- Later phases still need semantic navigation, monitoring/self-heal, record/amend/build-task, stream mode, and scheduler-owned arbitration.
+
+### Next step
+
+1. Commit and push this Phase A Runtime change.
+2. Add a checkpoint tag if this is accepted as the stable session-layer Phase A rollback point.
+3. Continue with Phase B semantic layer only after the user confirms this Phase A boundary.
+
 ## 2026-06-26 Runtime full-frame recognition hang fix
 
 ### Current status

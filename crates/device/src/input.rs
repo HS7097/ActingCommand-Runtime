@@ -9,6 +9,10 @@ pub trait InputBackend {
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()>;
 
+    fn key(&mut self, key: &str) -> DeviceResult<()>;
+
+    fn text(&mut self, text: &str) -> DeviceResult<()>;
+
     fn reset(&mut self) -> DeviceResult<()>;
 
     fn close(&mut self) -> DeviceResult<()>;
