@@ -21,6 +21,7 @@
 - Confirmed the actual `lab run` route model: it executes only the selected entry task's own `operation_bundle.operations` by matching the current page to operation `from`; it does not route across tasks through the generated navigation graph.
 - Final `build-task` closure strategy: include the selected task bundle by default; include `return_home` only when `--include-recovery` is explicitly requested and present.
 - No UI, SQLite, OCR, scheduler implementation, capture hot-path rollback, ADB input fallback, reconnect loop, retry loop, game logic, or live emulator operation was added.
+- Implementation commit: `f3e5c0eb3ce77c7f331a24c5dc9c31c0f5f0f993` (`Add Lab packager commands`).
 
 ### Files changed
 
