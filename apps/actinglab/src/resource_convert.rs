@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, canonical_game};
+use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, ResolvedResourceRoot, canonical_game};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -12,8 +12,9 @@ const FULL_FRAME_SENTINEL: &str = "full_frame";
 pub(super) fn run_resource_convert(
     global: &GlobalOptions,
     flags: &FlagArgs,
-    repo: &Path,
+    resource_root: &ResolvedResourceRoot,
 ) -> CliOutcome<Value> {
+    let repo = &resource_root.root;
     let game_override = flags.optional("--game").or_else(|| global.game.clone());
     let game_override = game_override.as_deref().map(canonical_game).transpose()?;
     let server_override = flags.optional("--server").or_else(|| global.server.clone());
@@ -30,7 +31,9 @@ pub(super) fn run_resource_convert(
         outputs.write(repo)?;
     }
     Ok(json!({
-        "repo": repo.display().to_string(),
+        "repo": resource_root.input.display().to_string(),
+        "resource_root": repo.display().to_string(),
+        "resource_layout": resource_root.layout,
         "game": converter.game,
         "server": converter.server,
         "locale": converter.locale,

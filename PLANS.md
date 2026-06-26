@@ -46,6 +46,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session layer Phase A: local session daemon lifecycle, instance health/reconnect, app launch/stop/restart, explicit MaaTouch key/text input, and stale-aware `--require-fresh` capture diagnostics.
 - ActingLab session layer Phase B: semantic `current-page`, `is-visible`, `locate`, `tap-target`, and `navigate` CLI entry points with navigation-only safety gates.
 - ActingLab session layer Phase C diagnosis and initial recovery: `monitor --once` reports current session health and recovery availability; `session recover` plans or executes maintenance-only recovery toward a known target page, using standby wake control points and safe navigation routes.
+- Resource repository reorganization compatibility: ActingLab resource, recognition, navigation, and package-build entry points accept both direct resource roots and reorganized repository roots that contain `ours/`.
+
+## Current Resource Repository Reorganization Compatibility
+
+The current Runtime task keeps the Codex workspace executable after the resource repositories were reorganized into `upstream-derived/` and `ours/`.
+
+Scope:
+
+- `--resource-root <repo>` now resolves to `<repo>/ours` when the input is a reorganized resource repository root.
+- `--resource-root <repo>/ours` remains a direct resource root.
+- `resource validate --repo <repo>` reports the original input, resolved resource root, and layout.
+- `resource convert --repo <repo>` uses the resolved resource root and reports `resource_layout`.
+- `package build-task` and `package build-pack` resolve local and cloned resource repositories to `ours` before loading operations, recognition, and navigation data.
+- The packaged output format remains unchanged: package resources are still emitted under `resources/`.
+
+Safety direction:
+
+- This is a resource-root compatibility change only.
+- No device input, capture backend, recognition hot-path, scheduler, UI, SQLite, OCR, or game-task logic is changed.
+- If neither the provided path nor `<path>/ours` looks like a resource root, existing fatal validation errors still surface from the attempted direct path.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- `detect-page --check-pages` passed for Arknights, AzurLane, and BlueArchive when `--resource-root` was set to the repository root rather than `ours`.
+- `resource convert --dry-run` passed for Arknights, AzurLane, and BlueArchive when `--repo` was set to the repository root.
+- `package build-task --dry-run` passed for Arknights `open_terminal` from the repository root.
+- `package build-pack --dry-run` passed for BlueArchive from the repository root.
+
+Known follow-ups:
+
+- `--from-remote` package builds should be smoke-tested against remote resource repository URLs before a release package flow depends on that path.
+- Older checkpoint examples still contain historical pre-reorganization paths and should be treated as archival command records, not current invocation templates.
 
 ## Current ActingLab Session Layer Phase C Diagnosis And Initial Recovery
 

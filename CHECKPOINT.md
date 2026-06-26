@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-27 Resource repository `ours` compatibility
+
+### Current status
+
+- Implemented resource-root compatibility for the 2026-06-26 resource repository reorganization.
+- `--resource-root <repo>` now resolves to `<repo>\ours` when the input is a reorganized resource repository root.
+- `resource validate --repo <repo>` reports `input`, resolved `resource_root`, and `resource_layout`.
+- `resource convert --repo <repo>` uses the resolved resource root and reports `resource_layout`.
+- `package build-task` and `package build-pack` resolve local or cloned repository roots to `ours` before loading operations, recognition, and navigation data.
+- Direct `--resource-root <repo>\ours` and direct `--repo <repo>\ours` still work unchanged.
+- No device input, capture backend, recognition hot-path, scheduler, UI, SQLite, OCR, recording, or game-task logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `983d69c40dff`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/package_build.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` for Runtime and the three resource repositories.
+- `git status --short --branch` and hash checks for Runtime and the three resource repositories.
+- Read `C:\合作工作区\ActingCommand\NOTICE-resource-repo-reorg-2026-06-26.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab detect_page_accepts_reorganized_repo_root_resource_root`
+- `cargo test -p actingcommand-actinglab build_task_accepts_reorganized_repo_root_with_ours_layout`
+- `cargo run -q -p actingcommand-actinglab -- --json resource validate --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+- `cargo run -q -p actingcommand-actinglab -- --json resource validate --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+- `cargo run -q -p actingcommand-actinglab -- --json resource validate --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azur detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game ba detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azur --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game ba --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_terminal --game ark --server cn --out target\resource-root-compat\ak-open-terminal.zip`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game ba --server jp --entry-task return_home --out target\resource-root-compat\ba-full.zip`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, scheduler implementation, recording implementation, fallback, reconnect, retry, MaaTouch startup additions, and direct touch additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab detect_page_accepts_reorganized_repo_root_resource_root` passed.
+- `cargo test -p actingcommand-actinglab build_task_accepts_reorganized_repo_root_with_ours_layout` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- `resource validate --repo <resource repo root>` passed for Arknights, AzurLane, and BlueArchive and resolved each to `<repo>\ours`.
+- `detect-page --check-pages` passed for all three games using the resource repository root as `--resource-root`.
+- `resource convert --dry-run` passed for all three games using the resource repository root as `--repo`.
+- Arknights `package build-task --dry-run` for `open_terminal` passed using the resource repository root as `--repo`.
+- BlueArchive `package build-pack --dry-run` passed using the resource repository root as `--repo`.
+
+### Current blocker
+
+- No blocker for this compatibility task.
+- `--from-remote` package builds should be smoke-tested against actual remote resource repository URLs before a release package flow depends on that path.
+
+### Next step
+
+1. Commit and push the resource-root compatibility Runtime changes.
+2. Continue the session-layer Phase C self-heal/login resource policy in a separately scoped task.
+
 ## 2026-06-27 ActingLab session layer Phase C monitor once
 
 ### Current status

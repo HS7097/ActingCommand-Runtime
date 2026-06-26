@@ -4,7 +4,7 @@ use super::lab_run;
 use super::resource_convert::{Bundle, ConvertOutputs, OperationConverter};
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, canonical_game, default_server_for_game,
-    hex_sha256, zip_io_error, zip_write_error,
+    hex_sha256, resolve_resource_root, zip_io_error, zip_write_error,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,7 +19,8 @@ use zip::write::FileOptions;
 pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let mut source = ResolvedRepo::from_flags(flags)?;
     let repo = source.path().to_path_buf();
-    let converter = load_converter(global, flags, &repo)?;
+    let resource_root = resolve_resource_root(&repo);
+    let converter = load_converter(global, flags, &resource_root.root)?;
     let task_id = flags.required("--task")?;
     let mut task_ids = vec![task_id.clone()];
     if flags.bool("--include-recovery")
@@ -54,7 +55,13 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
             &task_id,
         ),
     )?;
-    add_resources_json(&mut entries, &repo, &converter, &task_ids, true)?;
+    add_resources_json(
+        &mut entries,
+        &resource_root.root,
+        &converter,
+        &task_ids,
+        true,
+    )?;
     add_selected_operations(&mut entries, &converter, &task_ids)?;
     add_generated_outputs(&mut entries, &converter, &outputs)?;
     entries.add_manifest(&task_id)?;
@@ -67,6 +74,8 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         "status": if dry_run { "validated" } else { "written" },
         "mode": "build-task",
         "repo": repo.display().to_string(),
+        "resource_root": resource_root.root.display().to_string(),
+        "resource_layout": resource_root.layout,
         "from_remote": source.remote_url(),
         "task_id": task_id,
         "included_tasks": task_ids,
@@ -83,7 +92,8 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
 pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let mut source = ResolvedRepo::from_flags(flags)?;
     let repo = source.path().to_path_buf();
-    let converter = load_converter(global, flags, &repo)?;
+    let resource_root = resolve_resource_root(&repo);
+    let converter = load_converter(global, flags, &resource_root.root)?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
 
     if let Some(split_dir) = flags.optional_path("--split-dir") {
@@ -115,7 +125,13 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
                     &bundle.task_id,
                 ),
             )?;
-            add_resources_json(&mut entries, &repo, &converter, &task_ids, true)?;
+            add_resources_json(
+                &mut entries,
+                &resource_root.root,
+                &converter,
+                &task_ids,
+                true,
+            )?;
             add_selected_operations(&mut entries, &converter, &task_ids)?;
             add_generated_outputs(&mut entries, &converter, &outputs)?;
             entries.add_manifest(&bundle.task_id)?;
@@ -147,6 +163,8 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
             "status": if dry_run { "validated" } else { "written" },
             "mode": "build-pack-split",
             "repo": repo.display().to_string(),
+            "resource_root": resource_root.root.display().to_string(),
+            "resource_layout": resource_root.layout,
             "from_remote": source.remote_url(),
             "game": converter.game,
             "server": converter.server,
@@ -188,7 +206,13 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
             &entry_task,
         ),
     )?;
-    add_resources_json(&mut entries, &repo, &converter, &all_task_ids, false)?;
+    add_resources_json(
+        &mut entries,
+        &resource_root.root,
+        &converter,
+        &all_task_ids,
+        false,
+    )?;
     add_selected_operations(&mut entries, &converter, &all_task_ids)?;
     add_generated_outputs(&mut entries, &converter, &outputs)?;
     entries.add_manifest(&entry_task)?;
@@ -198,6 +222,8 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         "status": if dry_run { "validated" } else { "written" },
         "mode": "build-pack",
         "repo": repo.display().to_string(),
+        "resource_root": resource_root.root.display().to_string(),
+        "resource_layout": resource_root.layout,
         "from_remote": source.remote_url(),
         "game": converter.game,
         "server": converter.server,
@@ -886,6 +912,42 @@ mod tests {
             operator["required"],
             json!(["page/operator_0", "page/operator_1"])
         );
+    }
+
+    #[test]
+    fn build_task_accepts_reorganized_repo_root_with_ours_layout() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo.join("ours"));
+        let out = temp.path().join("task.zip");
+
+        let result = super::super::run_cli(
+            [
+                "--json",
+                "package",
+                "build-task",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--task",
+                "operator_task",
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let data = result.envelope.data.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(
+            data.get("resource_layout").and_then(Value::as_str),
+            Some("repo_ours")
+        );
+        assert!(
+            data.get("resource_root")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.ends_with("ours"))
+        );
+        assert!(out.is_file());
     }
 
     #[test]

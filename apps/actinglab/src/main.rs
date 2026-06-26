@@ -3143,13 +3143,33 @@ fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
 fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let repo = flags.required_path("--repo")?;
+    let resource_root = resolve_resource_root(&repo);
     match sub {
-        "validate" => validate_resource_repo(&repo),
-        "convert" => resource_convert::run_resource_convert(global, &flags, &repo),
+        "validate" => {
+            let mut validation = validate_resource_repo(&resource_root.root)?;
+            if let Some(object) = validation.as_object_mut() {
+                object.insert(
+                    "input".to_string(),
+                    Value::String(resource_root.input.display().to_string()),
+                );
+                object.insert(
+                    "resource_root".to_string(),
+                    Value::String(resource_root.root.display().to_string()),
+                );
+                object.insert(
+                    "resource_layout".to_string(),
+                    Value::String(resource_root.layout.to_string()),
+                );
+            }
+            Ok(validation)
+        }
+        "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "import-alas" | "drift-alas" => {
             let alas_root = flags.required_path("--alas-root")?;
             Ok(json!({
                 "repo": repo.display().to_string(),
+                "resource_root": resource_root.root.display().to_string(),
+                "resource_layout": resource_root.layout,
                 "alas_root": alas_root.display().to_string(),
                 "status": "reserved",
                 "command": sub
@@ -3157,6 +3177,8 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
         }
         "check-release" => Ok(json!({
             "repo": repo.display().to_string(),
+            "resource_root": resource_root.root.display().to_string(),
+            "resource_layout": resource_root.layout,
             "exists": repo.is_dir(),
             "status": if repo.is_dir() { "checked" } else { "missing" }
         })),
@@ -3698,6 +3720,7 @@ fn effective_resource_root(global: &GlobalOptions, config: &UserConfig) -> Optio
         .resource_root
         .clone()
         .or_else(|| config.resource_root.as_ref().map(PathBuf::from))
+        .map(|path| resolve_resource_root(&path).root)
 }
 
 fn effective_run_root(global: &GlobalOptions, config: &UserConfig) -> Option<PathBuf> {
@@ -3705,6 +3728,41 @@ fn effective_run_root(global: &GlobalOptions, config: &UserConfig) -> Option<Pat
         .run_root
         .clone()
         .or_else(|| config.run_root.as_ref().map(PathBuf::from))
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedResourceRoot {
+    input: PathBuf,
+    root: PathBuf,
+    layout: &'static str,
+}
+
+fn resolve_resource_root(input: &Path) -> ResolvedResourceRoot {
+    if looks_like_resource_root(input) {
+        return ResolvedResourceRoot {
+            input: input.to_path_buf(),
+            root: input.to_path_buf(),
+            layout: "direct",
+        };
+    }
+    let ours = input.join("ours");
+    if looks_like_resource_root(&ours) {
+        return ResolvedResourceRoot {
+            input: input.to_path_buf(),
+            root: ours,
+            layout: "repo_ours",
+        };
+    }
+    ResolvedResourceRoot {
+        input: input.to_path_buf(),
+        root: input.to_path_buf(),
+        layout: "unresolved",
+    }
+}
+
+fn looks_like_resource_root(path: &Path) -> bool {
+    path.join("operations").is_dir()
+        && (path.join("recognition").is_dir() || path.join("navigation").is_dir())
 }
 
 #[derive(Debug, Clone)]
@@ -5172,6 +5230,61 @@ mod tests {
                 .get("page")
                 .and_then(Value::as_str),
             Some("standby")
+        );
+    }
+
+    #[test]
+    fn detect_page_accepts_reorganized_repo_root_resource_root() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        let ours = repo.join("ours");
+        let recognition = ours.join("recognition");
+        let operations = ours.join("operations");
+        fs::create_dir_all(&recognition).unwrap();
+        fs::create_dir_all(&operations).unwrap();
+        let pack = recognition.join("arknights.cn.pack.json");
+        let pages = recognition.join("arknights.cn.pages.json");
+        let scene = temp.path().join("scene.png");
+        fs::write(
+            &pack,
+            r#"{
+                "schema_version":"0.3",
+                "coordinate_space":{"width":1,"height":1},
+                "targets":[{"type":"color","id":"home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            &pages,
+            r#"{"schema_version":"0.3","pages":[{"id":"home","required":["home"]}]}"#,
+        )
+        .unwrap();
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                repo.to_str().unwrap(),
+                "--game",
+                "ark",
+                "detect-page",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("page")
+                .and_then(Value::as_str),
+            Some("home")
         );
     }
 
