@@ -24,6 +24,8 @@ use zip::{ZipArchive, ZipWriter};
 
 mod frame_store;
 mod lab_run;
+mod package_build;
+mod resource_convert;
 
 const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
@@ -462,7 +464,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             run_control(sub, &invocation.global, &invocation.args)
         }
         [group, sub] if group == "scheduler" => run_scheduler(sub, &invocation.global),
-        [group, sub] if group == "resource" => run_resource(sub, &invocation.args),
+        [group, sub] if group == "resource" => {
+            run_resource(sub, &invocation.global, &invocation.args)
+        }
         [group, sub] if group == "run" => run_run_report(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "report" => run_report(sub, &invocation.global, &invocation.args),
         _ => Err(CliError::usage(format!(
@@ -980,6 +984,7 @@ fn run_monitor(global: &GlobalOptions) -> CliOutcome<Value> {
 fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "run" => lab_run::run_lab_run(global, args),
+        "validate" => lab_run::run_lab_validate(args),
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;
@@ -1040,6 +1045,8 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
                 &["lab_lease", "exclusive_drain"],
             ))
         }
+        "build-task" => package_build::run_build_task(global, &flags),
+        "build-pack" => package_build::run_build_pack(global, &flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }
@@ -1146,16 +1153,12 @@ fn run_scheduler(sub: &str, _global: &GlobalOptions) -> CliOutcome<Value> {
     }
 }
 
-fn run_resource(sub: &str, args: &[String]) -> CliOutcome<Value> {
+fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let repo = flags.required_path("--repo")?;
     match sub {
         "validate" => validate_resource_repo(&repo),
-        "convert" => Ok(json!({
-            "repo": repo.display().to_string(),
-            "status": "reserved",
-            "note": "resource convert is an offline data command; repository-specific converters run outside Runtime"
-        })),
+        "convert" => resource_convert::run_resource_convert(global, &flags, &repo),
         "import-alas" | "drift-alas" => {
             let alas_root = flags.required_path("--alas-root")?;
             Ok(json!({
@@ -2271,12 +2274,14 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("list", ["offline"], "available"),
         command_cap("capabilities", ["offline"], "available"),
         command_cap("resource validate", ["offline"], "available"),
-        command_cap("resource convert", ["offline"], "reserved"),
+        command_cap("resource convert", ["offline"], "available"),
         command_cap("resource import-alas", ["offline"], "reserved"),
         command_cap("resource drift-alas", ["offline"], "reserved"),
         command_cap("resource check-release", ["offline"], "available"),
         command_cap("package validate", ["offline"], "available"),
         command_cap("package inspect", ["offline"], "available"),
+        command_cap("package build-task", ["offline"], "available"),
+        command_cap("package build-pack", ["offline"], "available"),
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
@@ -2294,6 +2299,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab status", ["running_runtime"], "reserved"),
         command_cap("lab lease", ["running_runtime"], "reserved"),
         command_cap("lab release", ["running_runtime"], "reserved"),
+        command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
         command_cap("detect-page", ["device"], "available"),

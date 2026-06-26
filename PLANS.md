@@ -40,6 +40,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Lab-1z Round2 stability close-out: P2.2 device deadlines, Lab-1y cleanup, frame-store accounting/spill fixes, P1g package hardening, and release benchmark non-regression.
 - Round2 regression close-out: segment-write failure keeps per-frame encode failures, Lab run-dir cleanup no longer deletes diagnostics or in-run outputs, Tier3 checkpoints include step context, and Nemu IPC worker shutdown is no longer double-invoked.
 - ActingLab direct touch CLI: main `actinglab` now exposes trusted manual `tap`, `swipe`, and `long-tap` commands through the existing MaaTouch backend, while `capture` remains the screenshot side of the unified CLI.
+- Lab packager foundation and production builder: `resource convert` is now Rust-backed with converter parity, `lab validate` validates Lab-1y input zips offline, and `package build-task` / `package build-pack` can build self-contained Lab packages from local or explicitly cloned resource repositories.
 
 ## Current ActingLab Direct Touch CLI
 
@@ -70,6 +71,47 @@ Validation status:
 - `git diff --check` passed.
 - Touched-file scope scans found no new `adb shell input`, `input tap`, `input swipe`, reconnect, or retry implementation.
 - Live device tap/capture validation is reserved for user/agent-side acceptance because this code change is already covered by compile/unit validation and the task names Claude as the true-device acceptance runner.
+
+## Current Lab Packager
+
+The current Runtime task completes the second item from `C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md`: bring the resource Operation Bundle converter and Lab package producer into Rust-side ActingLab.
+
+Implemented commands:
+
+- `actinglab resource convert --repo <repo> [--game <g>] [--server <s>] [--locale <l>] [--dry-run]`
+- `actinglab lab validate --zip <pkg.zip>`
+- `actinglab package build-task --repo <repo> --task <task-id> --out <pkg.zip> [--game <g>] [--server <s>] [--from-remote <git-url>]`
+- `actinglab package build-pack --repo <repo> --out <pkg.zip> [--entry-task <task-id>] [--split-dir <dir>] [--from-remote <git-url>]`
+
+Package-building direction:
+
+- Production package commands are offline data commands unless `--from-remote` is explicitly provided.
+- `--from-remote` shallow-clones into a temporary directory and removes it after package validation.
+- Packages are built as Lab-1y input zips with root `control.json` and a self-contained `resources/` tree.
+- Package writes go through a temporary zip and `lab validate` before replacing the requested output path.
+- `build-task` defaults to a single-entry-task closure. `--include-recovery` may include `return_home` when present, but it does not change the entry task.
+- `build-pack --split-dir` validates split outputs in a temporary directory before moving them into the requested directory, so a failing task does not silently leave a new partial split set.
+
+Confirmed Lab run route model:
+
+- `lab run` currently executes the selected entry task's own `operation_bundle.operations`.
+- It chooses an operation whose `from` anchor matches the current detected page, then verifies that operation's `to` page or `verify_template`.
+- It does not perform cross-task routing over the generated navigation graph.
+- Therefore the default `build-task` closure is the selected task bundle itself, plus only explicitly requested recovery data.
+
+Validation status:
+
+- Converter parity passed for Arknights and BlueArchive across pack, pages, navigation, index, and primitives after normalizing only `generated_by`.
+- Converter parity passed for AzurLane pages, navigation, index, and primitives after normalizing only `generated_by`; AzurLane pack remains owned by its separate Python template-cropping step.
+- `package build-task` produced and validated a real Arknights `open_terminal` package.
+- `package build-pack` produced and validated a real Arknights full package with `entry-task=open_terminal`.
+- `--from-remote` was smoke-tested with a local Git resource repository path as the clone source; the temporary clone directory was removed.
+- Real `build-pack --split-dir` against current Arknights/BlueArchive resource data fails loudly on unresolved `0,0` coordinates, which is expected under the current no-placeholder execution rule. The split implementation itself is covered by a clean fixture test.
+
+Out of scope:
+
+- No UI, SQLite, OCR, scheduler implementation, capture hot-path rollback, ADB input fallback, reconnect loop, retry loop, game logic, or live emulator operation was added.
+- Resource-repository deletion of Python converters remains a separate resource-lane step after downstream acceptance.
 
 ## Current Round2 Regression Close-Out
 

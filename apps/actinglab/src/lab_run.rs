@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -115,6 +116,63 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
             }
         }
     }
+}
+
+pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let zip_path = flags.required_path("--zip")?;
+    validate_lab_package_zip(&zip_path)
+}
+
+pub(super) fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<Value> {
+    let temp = LabValidateTemp::create()?;
+    let result = validate_lab_package_zip_inner(zip_path, &temp.input_dir);
+    let cleanup = temp.cleanup();
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(err), Ok(())) => Err(err),
+        (Ok(_), Err(cleanup_err)) => Err(cleanup_err),
+        (Err(mut err), Err(cleanup_err)) => {
+            err.message = format!(
+                "{}; additionally failed to clean validation temp directory: {}",
+                err.message, cleanup_err.message
+            );
+            Err(err)
+        }
+    }
+}
+
+fn validate_lab_package_zip_inner(zip_path: &Path, input_dir: &Path) -> CliOutcome<Value> {
+    let unpacked = unpack_lab_input(zip_path, input_dir)?;
+    let control_path = input_dir.join("control.json");
+    let control = read_json_file::<LabControl>(&control_path)?;
+    control.validate()?;
+    let resources = load_lab_resources_from_input(input_dir, &control)?;
+    Ok(json!({
+        "zip": zip_path.display().to_string(),
+        "status": "valid",
+        "entry_count": unpacked.entries.len(),
+        "control": {
+            "package_id": control.package_id,
+            "execution_mode": control.execution_mode,
+            "game": control.game,
+            "server": control.server,
+            "resolution": {
+                "width": control.resolution.width,
+                "height": control.resolution.height
+            },
+            "entry_task_id": control.entry_task_id
+        },
+        "resources": {
+            "resource_root": resources.resource_root.display().to_string(),
+            "manifest": resources.manifest_path.display().to_string(),
+            "operation": resources.operation_path.display().to_string(),
+            "operation_count": resources.operation_bundle.operations.len(),
+            "pack": resources.pack_path.display().to_string(),
+            "pages": resources.pages_path.display().to_string(),
+            "navigation": resources.navigation_path.as_ref().map(|path| path.display().to_string())
+        }
+    }))
 }
 
 fn execute_lab_run(
@@ -732,11 +790,18 @@ fn verify_template(
 }
 
 fn load_lab_resources(ctx: &LabRunContext, control: &LabControl) -> CliOutcome<LabResources> {
+    load_lab_resources_from_input(&ctx.input_dir, control)
+}
+
+fn load_lab_resources_from_input(
+    input_dir: &Path,
+    control: &LabControl,
+) -> CliOutcome<LabResources> {
     let resource_root_name = control.resource_root.as_deref().unwrap_or("resources");
     if resource_root_name != "resources" {
         validate_relative_path(resource_root_name)?;
     }
-    let resource_root = ctx.input_dir.join(resource_root_name);
+    let resource_root = input_dir.join(resource_root_name);
     if !resource_root.is_dir() {
         return Err(CliError::package_invalid(format!(
             "missing resource root {}",
@@ -1406,6 +1471,36 @@ fn validate_frame_resolution(control: &LabControl, width: u32, height: u32) -> C
         )));
     }
     Ok(())
+}
+
+struct LabValidateTemp {
+    root: PathBuf,
+    input_dir: PathBuf,
+}
+
+impl LabValidateTemp {
+    fn create() -> CliOutcome<Self> {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "actinglab-validate-{}-{}",
+            std::process::id(),
+            suffix
+        ));
+        let input_dir = root.join("input");
+        fs::create_dir_all(&input_dir).map_err(|err| {
+            CliError::package_invalid(format!("failed to create {}: {err}", input_dir.display()))
+        })?;
+        Ok(Self { root, input_dir })
+    }
+
+    fn cleanup(self) -> CliOutcome<()> {
+        fs::remove_dir_all(&self.root).map_err(|err| {
+            CliError::package_invalid(format!("failed to remove {}: {err}", self.root.display()))
+        })
+    }
 }
 
 struct LabRunContext {
@@ -2722,6 +2817,42 @@ mod tests {
     }
 
     #[test]
+    fn lab_validate_accepts_minimal_self_contained_package() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+
+        let result = super::super::run_cli(
+            ["--json", "lab", "validate", "--zip", zip.to_str().unwrap()],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data["status"], "valid");
+        assert_eq!(data["control"]["entry_task_id"], "task");
+        assert_eq!(data["resources"]["operation_count"], 1);
+    }
+
+    #[test]
+    fn lab_validate_rejects_missing_control() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_test_zip(&zip, &[("resources/manifest.json", br#"{}"#)]);
+
+        let result = super::super::run_cli(
+            ["--json", "lab", "validate", "--zip", zip.to_str().unwrap()],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "package_invalid"
+        );
+    }
+
+    #[test]
     fn rejects_fullscreen_rect_unless_explicitly_allowed() {
         let control = LabControl {
             schema_version: CONTROL_SCHEMA.to_string(),
@@ -3055,5 +3186,86 @@ mod tests {
             zip.write_all(content).expect("write file");
         }
         zip.finish().expect("finish");
+    }
+
+    fn write_minimal_lab_package(path: &Path) {
+        write_test_zip(
+            path,
+            &[
+                (
+                    "control.json",
+                    br#"{
+                        "schema_version":"Lab-1y.control.v1",
+                        "package_id":"fixture.task",
+                        "execution_mode":"recognize_only",
+                        "game":"arknights",
+                        "server":"cn",
+                        "resolution":{"width":1280,"height":720},
+                        "entry_task_id":"task"
+                    }"#,
+                ),
+                (
+                    "resources/manifest.json",
+                    br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+                ),
+                (
+                    "resources/operations/task/task.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "task_id":"task",
+                        "game":"arknights",
+                        "server_scope":["cn"],
+                        "goal":"fixture",
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
+                        "anchors":[{"id":"home","template":"assets/PAGE_HOME.png"}],
+                        "entry_page":"home",
+                        "target_page":"home",
+                        "operations":[
+                            {
+                                "id":"noop",
+                                "purpose":"fixture",
+                                "from":"home",
+                                "to":null,
+                                "click":{"kind":"point","x":1,"y":1},
+                                "verify_template":null,
+                                "consumes":[],
+                                "produces":[]
+                            }
+                        ]
+                    }"#,
+                ),
+                ("resources/operations/task/assets/PAGE_HOME.png", one_pixel_png()),
+                (
+                    "resources/recognition/arknights.cn.pack.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "game":"arknights",
+                        "server":"cn",
+                        "locale":"zh-CN",
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
+                        "targets":[
+                            {
+                                "type":"template",
+                                "id":"page/home",
+                                "template_path":"operations/task/assets/PAGE_HOME.png",
+                                "region":{"x":0,"y":0,"width":1,"height":1},
+                                "threshold":0.9
+                            }
+                        ]
+                    }"#,
+                ),
+                (
+                    "resources/recognition/arknights.cn.pages.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "pages":[
+                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}
+                        ]
+                    }"#,
+                ),
+            ],
+        );
     }
 }

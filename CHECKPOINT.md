@@ -1,5 +1,141 @@
 # CHECKPOINT.md
 
+## 2026-06-26 Lab packager
+
+### Current status
+
+- Continued the handoff batch after completing the direct touch CLI task.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-packager.md` with UTF-8 output and confirmed the active scope is the Lab packager: Rust `resource convert`, `package build-task`, `package build-pack`, `--from-remote`, and offline `lab validate`.
+- Refreshed the three resource repositories from their remotes before resource-dependent work:
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`
+  - `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`
+- Added `serde_json` `preserve_order` support so generated JSON keeps insertion order for converter parity.
+- Implemented Rust-side `actinglab resource convert`, replacing the reserved CLI stub.
+- Implemented `actinglab lab validate --zip <pkg.zip>` as an offline Lab-1y input package validator. It unpacks into a temporary directory, runs `LabControl::validate`, loads the Operation Bundle, recognition pack, pages, optional navigation, and runs detector validation without device access or LabLease.
+- Implemented `actinglab package build-task` for self-contained single-task Lab input zips.
+- Implemented `actinglab package build-pack` for full packages and `--split-dir` per-task packages.
+- Implemented `--from-remote` shallow clone support for package builds. The default path remains local and offline.
+- Package writes now go through a temporary zip plus `lab validate` before replacing the requested output path.
+- Split-package builds validate into a temporary split directory before moving results, so a failing task does not silently leave a new partial split set.
+- Confirmed the actual `lab run` route model: it executes only the selected entry task's own `operation_bundle.operations` by matching the current page to operation `from`; it does not route across tasks through the generated navigation graph.
+- Final `build-task` closure strategy: include the selected task bundle by default; include `return_home` only when `--include-recovery` is explicitly requested and present.
+- No UI, SQLite, OCR, scheduler implementation, capture hot-path rollback, ADB input fallback, reconnect loop, retry loop, game logic, or live emulator operation was added.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `apps/actinglab/src/package_build.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -LiteralPath 'C:\Users\Alice\.codex\skills\implement\SKILL.md'`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-actinglab-tap-cli.md'`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md'`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-Lab-packager.md' -Encoding UTF8`
+- `git status --short --branch`
+- Resource repository refresh commands for Arknights, AzurLane, and BlueArchive: `git status --short --branch`, `git fetch origin --prune --tags`, and `git pull --ff-only`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab package_build`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo run -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --locale zh-CN --dry-run`
+- `cargo run -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp --locale ja-JP --dry-run`
+- `cargo run -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --locale ja-JP --dry-run`
+- `cargo run -p actingcommand-actinglab -- --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_terminal --game arknights --server cn --out target\lab-packager-smoke\ak-open-terminal.zip`
+- `cargo run -p actingcommand-actinglab -- --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --entry-task open_terminal --out target\lab-packager-smoke\ak-full.zip`
+- `cargo run -p actingcommand-actinglab -- --json package build-task --from-remote C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_terminal --game arknights --server cn --out target\lab-packager-smoke\ak-open-terminal-remote.zip`
+- `Test-Path -LiteralPath 'C:\Users\Alice\AppData\Local\Temp\actinglab-resource-remote-8296-1782454684013043600'`
+- `cargo run -p actingcommand-actinglab -- --json lab validate --zip target\lab-packager-smoke\ak-open-terminal.zip`
+- `cargo run -p actingcommand-actinglab -- --json lab validate --zip target\lab-packager-smoke\ak-full.zip`
+- `cargo run -p actingcommand-actinglab -- --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --split-dir target\lab-packager-smoke\ak-split-failcheck`
+- `Test-Path -LiteralPath 'target\lab-packager-smoke\ak-split-failcheck'`
+- Converter parity script over temporary copies under `target\resource-convert-parity-current`.
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Scope scans over new packager/converter files and existing ActingLab command registration paths.
+
+### New or updated unit coverage
+
+- `resource_convert::tests::derives_target_ids_like_python_converter`
+- `resource_convert::tests::converts_region_and_click_shapes`
+- `resource_convert::tests::resolves_page_required_variants`
+- `resource_convert::tests::color_check_region_is_flattened`
+- `resource_convert::tests::arknights_default_locale_matches_current_resource_pack`
+- `lab_run::tests::lab_validate_accepts_minimal_self_contained_package`
+- `lab_run::tests::lab_validate_rejects_missing_control`
+- `package_build::tests::build_task_package_validates_and_rewrites_template_paths`
+- `package_build::tests::build_pack_package_validates`
+- `package_build::tests::split_pack_writes_one_package_per_task`
+- `package_build::tests::build_task_rejects_dangerous_asset_entry`
+
+### Converter parity
+
+- Arknights parity passed for:
+  - `recognition/arknights.cn.pack.json`
+  - `recognition/arknights.cn.pages.json`
+  - `navigation/arknights.cn.navigation.json`
+  - `operations/operations.index.json`
+  - `operations/operations.primitives.json`
+- BlueArchive parity passed for:
+  - `recognition/bluearchive.jp.pack.json`
+  - `recognition/bluearchive.jp.pages.json`
+  - `navigation/bluearchive.jp.navigation.json`
+  - `operations/operations.index.json`
+  - `operations/operations.primitives.json`
+- AzurLane parity passed for:
+  - `recognition/azurlane.jp.pages.json`
+  - `navigation/azurlane.jp.navigation.json`
+  - `operations/operations.index.json`
+  - `operations/operations.primitives.json`
+- For parity only, `generated_by: "actinglab resource convert"` was normalized to `generated_by: "tools/convert_operations.py"`.
+- AzurLane `pack.json` remains outside this parity scope because it is produced by the separate `generate_azurlane_pack.py` template-cropping step.
+
+### Real resource smoke results
+
+- Arknights `resource convert --dry-run` succeeded with 10 bundles, 14 targets, 11 pages, 13 navigation edges, 7 page operations, 10 index tasks, and 25 primitives.
+- BlueArchive `resource convert --dry-run` succeeded with 20 bundles, 22 targets, 20 pages, 19 navigation edges, 23 page operations, 20 index tasks, and 53 primitives.
+- AzurLane `resource convert --dry-run` succeeded with 41 bundles, 81 targets, 41 pages, 43 navigation edges, 17 page operations, 41 index tasks, and 89 primitives.
+- Arknights `package build-task` for `open_terminal` wrote and validated `target\lab-packager-smoke\ak-open-terminal.zip`.
+- Arknights `package build-pack --entry-task open_terminal` wrote and validated `target\lab-packager-smoke\ak-full.zip`.
+- Arknights `package build-task --from-remote <local git repo path>` wrote and validated `target\lab-packager-smoke\ak-open-terminal-remote.zip`, and the temporary clone directory was removed.
+- Arknights `package build-pack --split-dir` against current real data fails loudly on unresolved `0,0` coordinates and did not create the new fail-check split output directory.
+- BlueArchive split packaging also fails loudly on unresolved `0,0` coordinates in current data. BA and AzurLane live/emulator validation was skipped because another process was using those emulators.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab package_build` passed with 4 tests.
+- `cargo test -p actingcommand-actinglab` passed with 65 tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Scope scan over `apps/actinglab/src/package_build.rs` and `apps/actinglab/src/resource_convert.rs` found no ADB input fallback, `adb shell screencap`, quick screenshot backend, SQLite, OCR, scheduler implementation, reconnect, retry loop, or fallback implementation.
+- Broader scan only matched existing scheduler stubs and existing schema text in `main.rs`, not new packager behavior.
+
+### Current blocker
+
+- No implementation blocker for the Lab packager code.
+- Current real Arknights and BlueArchive resource data still contains unresolved `0,0` coordinates in some tasks, so real `build-pack --split-dir` for every task correctly fails until those resource bundles are resolved or explicitly marked non-executable.
+- BA and AzurLane live/emulator validation was skipped because those emulators were occupied by another process.
+- Resource-repository Python converter deletion remains a separate resource-lane step after downstream acceptance.
+
+### Next step
+
+1. Commit and push Runtime repository changes to `HS7097/ActingCommand-Runtime`.
+2. Downstream resource lane can migrate regeneration commands to `actinglab resource convert` after acceptance.
+3. Resolve or classify placeholder-coordinate tasks before expecting real `build-pack --split-dir` over current resource repositories to succeed.
+4. Keep BA/AzurLane live validation paused while their emulators are occupied.
+
 ## 2026-06-26 ActingLab direct touch CLI
 
 ### Current status
