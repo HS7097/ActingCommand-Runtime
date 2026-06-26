@@ -940,6 +940,15 @@ fn parse_optional_duration_ms(
     Ok(Duration::from_millis(ms))
 }
 
+fn parse_optional_usize(flags: &FlagArgs, name: &str, default_value: usize) -> CliOutcome<usize> {
+    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
+        return Ok(default_value);
+    };
+    value
+        .parse::<usize>()
+        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DirectTouchCommand {
     Tap {
@@ -1433,52 +1442,175 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
     let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
     let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
-    let mut executed = Vec::new();
-    let mut current_page = start.page;
-    for edge in route {
-        if current_page != edge.from_page {
-            return Err(CliError::safety_blocked(
-                "navigation_page_drift",
-                format!(
-                    "navigation expected current page '{}' but last page was '{}'",
-                    edge.from_page, current_page
-                ),
-                &["page_guard"],
-            ));
-        }
-        let device = send_semantic_input(global, &config, &edge.input)?;
-        let arrived = poll_for_page(
-            global,
-            &flags,
-            &evaluator,
-            &detector,
-            &edge.to_page,
-            step_timeout,
-            poll,
-        )?;
-        if !arrived.matched {
-            return Err(CliError::safety_blocked(
-                "navigation_arrival_failed",
-                format!(
-                    "navigation edge '{}' did not arrive at '{}'; last page '{}'",
-                    edge.id, edge.to_page, arrived.page
-                ),
-                &["arrival_page"],
-            ));
-        }
-        current_page = arrived.page.clone();
-        executed.push(json!({
-            "edge": navigation_edge_json(&edge),
-            "device": device,
-            "arrived": page_detection_json(&arrived)
-        }));
-    }
+    let execution = NavigationExecutionContext {
+        global,
+        flags: &flags,
+        config: &config,
+        evaluator: &evaluator,
+        detector: &detector,
+        step_timeout,
+        poll,
+    };
+    let (executed, _) = execute_navigation_route(&execution, start.page, route)?;
     Ok(json!({
         "status": "arrived",
         "executed": true,
         "to": target_page,
         "steps": executed,
         "safety_gate": "navigation_only_default"
+    }))
+}
+
+fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    if !dry_run && !flags.bool("--capture") {
+        return Err(CliError::usage(
+            "session recover real execution requires --capture; use --dry-run with --scene for offline planning",
+        ));
+    }
+
+    let config = read_user_config()?;
+    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+    let graph = load_navigation_graph(global, &config, &flags)?;
+    let scene = load_scene_from_flags(global, &flags)?;
+    let start = detect_current_page(&evaluator, &detector, &scene)?;
+    let target_page = canonical_navigation_page(
+        &graph,
+        &flags
+            .optional("--to")
+            .filter(|value| value != "true")
+            .unwrap_or_else(|| "home".to_string()),
+    );
+    let max_actions = parse_optional_usize(&flags, "--max-actions", 3)?;
+    let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
+    let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
+
+    if start.matched && start.page == target_page {
+        return Ok(json!({
+            "status": "already_at_target",
+            "mode": "maintenance_recovery",
+            "executed": false,
+            "from": start.page,
+            "to": target_page,
+            "steps": []
+        }));
+    }
+
+    if start.standby {
+        let wake = graph.control_points.get("wake").ok_or_else(|| {
+            CliError::safety_blocked(
+                "wake_control_point_missing",
+                "session recover detected standby but navigation resources do not define control_points.wake",
+                &["control_point"],
+            )
+        })?;
+        if max_actions == 0 {
+            return Err(CliError::safety_blocked(
+                "recovery_action_limit_exceeded",
+                "session recover requires one wake action but --max-actions is 0",
+                &["maintenance_recovery"],
+            ));
+        }
+        if dry_run {
+            return Ok(json!({
+                "status": "planned",
+                "mode": "maintenance_recovery",
+                "executed": false,
+                "from": "standby",
+                "to": target_page,
+                "steps": [{
+                    "type": "wake",
+                    "control_point": control_point_json(wake)
+                }],
+                "next": "rerun after wake to detect the current page and route to the target if needed"
+            }));
+        }
+
+        let device = send_semantic_input(global, &config, &wake.input)?;
+        let after_wake =
+            poll_for_matched_page(global, &flags, &evaluator, &detector, step_timeout, poll)?;
+        if !after_wake.matched {
+            return Err(CliError::safety_blocked(
+                "recovery_wake_failed",
+                format!(
+                    "wake control point did not produce a known page; last page '{}'",
+                    after_wake.page
+                ),
+                &["maintenance_recovery"],
+            ));
+        }
+        let mut steps = vec![json!({
+            "type": "wake",
+            "control_point": control_point_json(wake),
+            "device": device,
+            "arrived": page_detection_json(&after_wake)
+        })];
+        if after_wake.page == target_page {
+            return Ok(json!({
+                "status": "recovered",
+                "mode": "maintenance_recovery",
+                "executed": true,
+                "from": "standby",
+                "to": target_page,
+                "steps": steps
+            }));
+        }
+        let route = safe_recovery_route(&graph, &after_wake.page, &target_page)?;
+        ensure_recovery_action_limit(1 + route.len(), max_actions)?;
+        let execution = NavigationExecutionContext {
+            global,
+            flags: &flags,
+            config: &config,
+            evaluator: &evaluator,
+            detector: &detector,
+            step_timeout,
+            poll,
+        };
+        let (mut route_steps, _) = execute_navigation_route(&execution, after_wake.page, route)?;
+        steps.append(&mut route_steps);
+        return Ok(json!({
+            "status": "recovered",
+            "mode": "maintenance_recovery",
+            "executed": true,
+            "from": "standby",
+            "to": target_page,
+            "steps": steps
+        }));
+    }
+
+    let route = safe_recovery_route(&graph, &start.page, &target_page)?;
+    ensure_recovery_action_limit(route.len(), max_actions)?;
+    let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
+    if dry_run {
+        return Ok(json!({
+            "status": "planned",
+            "mode": "maintenance_recovery",
+            "executed": false,
+            "from": start.page,
+            "to": target_page,
+            "route": route_json,
+            "safety_gate": "maintenance_navigation_only"
+        }));
+    }
+
+    let execution = NavigationExecutionContext {
+        global,
+        flags: &flags,
+        config: &config,
+        evaluator: &evaluator,
+        detector: &detector,
+        step_timeout,
+        poll,
+    };
+    let (steps, _) = execute_navigation_route(&execution, start.page, route)?;
+    Ok(json!({
+        "status": "recovered",
+        "mode": "maintenance_recovery",
+        "executed": true,
+        "to": target_page,
+        "steps": steps,
+        "safety_gate": "maintenance_navigation_only"
     }))
 }
 
@@ -1516,6 +1648,7 @@ struct NavigationGraph {
     game: Option<String>,
     edges: Vec<NavigationEdge>,
     destructive_clicks: Vec<DestructiveClick>,
+    control_points: BTreeMap<String, ControlPoint>,
 }
 
 #[derive(Debug, Clone)]
@@ -1531,6 +1664,13 @@ struct NavigationEdge {
 struct DestructiveClick {
     page: Option<String>,
     rect: PackRect,
+}
+
+#[derive(Debug, Clone)]
+struct ControlPoint {
+    name: String,
+    input: SemanticInput,
+    note: Option<String>,
 }
 
 fn load_semantic_detector(
@@ -1670,10 +1810,58 @@ fn load_navigation_graph(
         .flatten()
         .map(parse_destructive_click)
         .collect::<CliOutcome<Vec<_>>>()?;
+    let control_points = value
+        .get("control_points")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(parse_control_point)
+        .map(|result| result.map(|point| (point.name.clone(), point)))
+        .collect::<CliOutcome<BTreeMap<_, _>>>()?;
     Ok(NavigationGraph {
         game,
         edges,
         destructive_clicks,
+        control_points,
+    })
+}
+
+fn parse_control_point(value: &Value) -> CliOutcome<ControlPoint> {
+    let name = required_string_field(value, "name")?.to_string();
+    let input = if let Some(click) = value.get("click") {
+        parse_navigation_input(click)?
+    } else {
+        let rect = parse_control_point_rect(value)?;
+        SemanticInput::Tap {
+            rect,
+            point: rect_center(rect)?,
+        }
+    };
+    Ok(ControlPoint {
+        name,
+        input,
+        note: value
+            .get("note")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn parse_control_point_rect(value: &Value) -> CliOutcome<PackRect> {
+    if let Some(point) = value.get("point") {
+        let (x, y) = parse_point_value(point)?;
+        return Ok(PackRect {
+            x,
+            y,
+            width: 1,
+            height: 1,
+        });
+    }
+    Ok(PackRect {
+        x: required_i32_value(value, "x")?,
+        y: required_i32_value(value, "y")?,
+        width: 1,
+        height: 1,
     })
 }
 
@@ -1764,8 +1952,8 @@ fn parse_navigation_tap_rect(value: &Value) -> CliOutcome<PackRect> {
 }
 
 fn parse_navigation_point(value: &Value) -> CliOutcome<PackRect> {
-    if let Some(point) = value.get("point").and_then(Value::as_str) {
-        let (x, y) = parse_point_pair(point)?;
+    if let Some(point) = value.get("point") {
+        let (x, y) = parse_point_value(point)?;
         return Ok(PackRect {
             x,
             y,
@@ -1788,6 +1976,22 @@ fn parse_navigation_rect(value: &Value) -> CliOutcome<PackRect> {
         width: required_i32_value(value, "width")?,
         height: required_i32_value(value, "height")?,
     })
+}
+
+fn parse_point_value(value: &Value) -> CliOutcome<(i32, i32)> {
+    if let Some(point) = value.as_str() {
+        return parse_point_pair(point);
+    }
+    if let Some(items) = value.as_array() {
+        if items.len() != 2 {
+            return Err(CliError::usage("point array must have exactly two items"));
+        }
+        return Ok((
+            parse_i32_json_value(&items[0], "point[0]")?,
+            parse_i32_json_value(&items[1], "point[1]")?,
+        ));
+    }
+    Err(CliError::usage("point must be a string x,y or [x,y] array"))
 }
 
 fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
@@ -1819,8 +2023,11 @@ fn required_string_field<'a>(value: &'a Value, name: &str) -> CliOutcome<&'a str
 }
 
 fn required_i32_value(value: &Value, name: &str) -> CliOutcome<i32> {
-    let number = required_value_field(value, name)?;
-    if let Some(value) = number.as_i64() {
+    parse_i32_json_value(required_value_field(value, name)?, name)
+}
+
+fn parse_i32_json_value(value: &Value, name: &str) -> CliOutcome<i32> {
+    if let Some(value) = value.as_i64() {
         return i32::try_from(value)
             .map_err(|_| CliError::usage(format!("field '{name}' exceeds i32 range")));
     }
@@ -1886,6 +2093,14 @@ fn navigation_edge_json(edge: &NavigationEdge) -> Value {
     })
 }
 
+fn control_point_json(point: &ControlPoint) -> Value {
+    json!({
+        "name": point.name,
+        "input": semantic_input_json(&point.input),
+        "note": point.note
+    })
+}
+
 fn semantic_input_json(input: &SemanticInput) -> Value {
     match input {
         SemanticInput::Tap { rect, point } => json!({
@@ -1932,6 +2147,36 @@ fn reject_destructive_overlap(
                 &["navigation_only"],
             ));
         }
+    }
+    Ok(())
+}
+
+fn safe_recovery_route(
+    graph: &NavigationGraph,
+    from_page: &str,
+    to_page: &str,
+) -> CliOutcome<Vec<NavigationEdge>> {
+    let route = find_navigation_route(&graph.edges, from_page, to_page).ok_or_else(|| {
+        CliError::safety_blocked(
+            "recovery_route_missing",
+            format!("no maintenance recovery route from '{from_page}' to '{to_page}'"),
+            &["maintenance_recovery"],
+        )
+    })?;
+    for edge in &route {
+        reject_dangerous_semantic_id("recovery navigation edge", &edge.id)?;
+        reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+    }
+    Ok(route)
+}
+
+fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcome<()> {
+    if actions > max_actions {
+        return Err(CliError::safety_blocked(
+            "recovery_action_limit_exceeded",
+            format!("session recover planned {actions} actions but --max-actions is {max_actions}"),
+            &["maintenance_recovery"],
+        ));
     }
     Ok(())
 }
@@ -2061,6 +2306,64 @@ fn send_semantic_input(
     }))
 }
 
+struct NavigationExecutionContext<'a> {
+    global: &'a GlobalOptions,
+    flags: &'a FlagArgs,
+    config: &'a UserConfig,
+    evaluator: &'a RecognitionEvaluator,
+    detector: &'a PageDetector,
+    step_timeout: Duration,
+    poll: Duration,
+}
+
+fn execute_navigation_route(
+    ctx: &NavigationExecutionContext<'_>,
+    start_page: String,
+    route: Vec<NavigationEdge>,
+) -> CliOutcome<(Vec<Value>, String)> {
+    let mut executed = Vec::new();
+    let mut current_page = start_page;
+    for edge in route {
+        if current_page != edge.from_page {
+            return Err(CliError::safety_blocked(
+                "navigation_page_drift",
+                format!(
+                    "navigation expected current page '{}' but last page was '{}'",
+                    edge.from_page, current_page
+                ),
+                &["page_guard"],
+            ));
+        }
+        let device = send_semantic_input(ctx.global, ctx.config, &edge.input)?;
+        let arrived = poll_for_page(
+            ctx.global,
+            ctx.flags,
+            ctx.evaluator,
+            ctx.detector,
+            &edge.to_page,
+            ctx.step_timeout,
+            ctx.poll,
+        )?;
+        if !arrived.matched {
+            return Err(CliError::safety_blocked(
+                "navigation_arrival_failed",
+                format!(
+                    "navigation edge '{}' did not arrive at '{}'; last page '{}'",
+                    edge.id, edge.to_page, arrived.page
+                ),
+                &["arrival_page"],
+            ));
+        }
+        current_page = arrived.page.clone();
+        executed.push(json!({
+            "edge": navigation_edge_json(&edge),
+            "device": device,
+            "arrived": page_detection_json(&arrived)
+        }));
+    }
+    Ok((executed, current_page))
+}
+
 fn poll_for_page(
     global: &GlobalOptions,
     flags: &FlagArgs,
@@ -2077,6 +2380,33 @@ fn poll_for_page(
         let scene = load_scene_from_flags(global, flags)?;
         let outcome = detect_current_page(evaluator, detector, &scene)?;
         if outcome.matched && outcome.page == page_id {
+            return Ok(outcome);
+        }
+        last = Some(outcome);
+    }
+    Ok(last.unwrap_or(PageDetectionOutcome {
+        page: "standby".to_string(),
+        matched: false,
+        standby: true,
+        evaluations: Vec::new(),
+    }))
+}
+
+fn poll_for_matched_page(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    timeout: Duration,
+    poll: Duration,
+) -> CliOutcome<PageDetectionOutcome> {
+    let started = Instant::now();
+    let mut last = None;
+    while started.elapsed() <= timeout {
+        thread::sleep(poll);
+        let scene = load_scene_from_flags(global, flags)?;
+        let outcome = detect_current_page(evaluator, detector, &scene)?;
+        if outcome.matched {
             return Ok(outcome);
         }
         last = Some(outcome);
@@ -2280,6 +2610,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
+        "recover" => run_session_recover(global, args),
         "lease" => run_session_lease(global, args),
         _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
     }
@@ -4002,6 +4333,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
+        command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
@@ -4852,6 +5184,119 @@ mod tests {
     }
 
     #[test]
+    fn session_recover_standby_dry_run_uses_wake_control_point() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let steps = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("steps")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(steps[0].get("type").and_then(Value::as_str), Some("wake"));
+        let point = steps[0]
+            .get("control_point")
+            .and_then(|value| value.get("input"))
+            .and_then(|value| value.get("point"))
+            .unwrap();
+        assert_eq!(point.get("x").and_then(Value::as_i64), Some(3));
+        assert_eq!(point.get("y").and_then(Value::as_i64), Some(4));
+    }
+
+    #[test]
+    fn session_recover_dry_run_plans_route_to_home() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--to",
+                "home",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let route = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("route")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            route[0].get("id").and_then(Value::as_str),
+            Some("target_to_home")
+        );
+    }
+
+    #[test]
+    fn session_recover_real_execution_requires_capture() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("requires --capture")
+        );
+    }
+
+    #[test]
     fn locate_template_returns_coordinates() {
         let temp = TempDir::new().unwrap();
         let scene = temp.path().join("scene.png");
@@ -4936,11 +5381,18 @@ mod tests {
                     "schema_version":"0.3",
                     "game":"arknights",
                     "server":"cn",
+                    "control_points":[{{"name":"wake","point":[3,4],"note":"test wake"}}],
                     "navigation":[{{
                         "id":"home_to_target",
                         "from_page":"arknights/home",
                         "to_page":"arknights/target",
                         "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
+                    }},
+                    {{
+                        "id":"target_to_home",
+                        "from_page":"arknights/target",
+                        "to_page":"arknights/home",
+                        "click":{{"kind":"point","point":"2,3"}}
                     }}],
                     "destructive_actions":{destructive}
                 }}"#

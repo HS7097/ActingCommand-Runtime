@@ -45,6 +45,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Runtime full-frame recognition hang fix: large template searches now use a bounded pyramid/refine path with a fatal deadline, including `full_frame`, explicit whole-frame rectangles, and large bounded regions.
 - ActingLab session layer Phase A: local session daemon lifecycle, instance health/reconnect, app launch/stop/restart, explicit MaaTouch key/text input, and stale-aware `--require-fresh` capture diagnostics.
 - ActingLab session layer Phase B: semantic `current-page`, `is-visible`, `locate`, `tap-target`, and `navigate` CLI entry points with navigation-only safety gates.
+- ActingLab session layer Phase C initial recovery: `session recover` plans or executes maintenance-only recovery toward a known target page, using standby wake control points and safe navigation routes.
+
+## Current ActingLab Session Layer Phase C Initial Recovery
+
+The current Runtime task implements the first bounded part of Phase C from `TASK-Lab-session-layer.md`: recover a session toward a known-good page without adding scheduler, UI, recording, game-task, OCR, or SQLite logic.
+
+Scope:
+
+- Add `session recover --to <page>`, defaulting to `home`.
+- Keep real recovery execution gated by `--capture`; `--scene` is accepted only with `--dry-run`.
+- Treat standby as a maintenance state that may use `control_points.wake` from the navigation resource.
+- Parse navigation `control_points` that use either `point: "x,y"` or `point: [x, y]`.
+- Reuse existing PageDetector, recognition pack, capture, navigation graph, destructive overlap checks, and MaaTouch semantic input path.
+- Bound recovery with `--max-actions`, defaulting to `3`.
+
+Safety direction:
+
+- `session recover` is maintenance-only and must not perform game progress actions.
+- Standby dry-run only reports the wake plan; it does not click.
+- Real execution requires a live capture source so stale-frame handling and current-page checks remain in the command path.
+- Route recovery uses the same destructive-name and destructive-region safety gates as `navigate`.
+- Missing wake control points, missing recovery routes, arrival failures, action-limit excess, and stale/failing captures fail visibly.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan found no ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, scheduler implementation, recording implementation, fallback, reconnect, or retry additions.
+- `detect-page --check-pages` passed for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+- BlueArchive JP `127.0.0.1:16481` dry-run `session recover --capture` returned a standby recovery plan using `control_points.wake` at `(300, 2)` and did not start MaaTouch or click.
+
+Known follow-ups:
+
+- Phase C still needs the background monitor, login resource loop, modal dismissal policy, and scheduler-coordinated self-heal ownership.
+- Arknights page anchors are still broad and should be tightened in the resource lane before trusting live recovery decisions that depend on those pages.
+- `session recover` should only be executed live after the operator accepts the current page-resource quality and the intended maintenance route.
 
 ## Current ActingLab Session Layer Phase B
 
