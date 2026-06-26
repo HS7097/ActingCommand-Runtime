@@ -6,8 +6,16 @@ use imageproc::template_matching::{
 };
 use std::error::Error;
 use std::fmt;
+use std::time::{Duration, Instant};
 
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
+
+const TEMPLATE_MATCH_TIMEOUT: Duration = Duration::from_secs(5);
+const FULL_FRAME_FAST_PATH_WORK_THRESHOLD: u64 = 50_000_000;
+const FULL_FRAME_COARSE_WORK_TARGET: u64 = 5_000_000;
+const FULL_FRAME_MAX_DOWNSAMPLE: u32 = 8;
+const FULL_FRAME_TOP_CANDIDATES: usize = 4;
+const FULL_FRAME_REFINE_RADIUS_MULTIPLIER: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecognitionErrorSeverity {
@@ -194,33 +202,55 @@ impl Scene {
             )));
         }
 
+        let use_fast_path = should_use_fast_path(&search, &template);
+        let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
+
         match metric {
             MatchMetric::CrossCorrelationNormalized => {
-                // Grayscale template matching plus independent color comparison mirrors an area+color primitive; thresholds stay with callers.
-                let response = match_template_map(
-                    &search,
-                    &template,
-                    MatchTemplateMethod::CrossCorrelationNormalized,
-                );
-                let extremes = find_extremes(&response);
-                let raw_score = extremes.max_value;
-                let score = normalize_ncc_score(raw_score);
-                let x = i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
-                    RecognitionError::fatal("template match x coordinate exceeds i32 range")
-                })?;
-                let y = i32::try_from(offset_y + extremes.max_value_location.1).map_err(|_| {
-                    RecognitionError::fatal("template match y coordinate exceeds i32 range")
-                })?;
+                if use_fast_path {
+                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
+                } else {
+                    // The bounded ccorr path preserves the existing imageproc semantics.
+                    let response = match_template_map(
+                        &search,
+                        &template,
+                        MatchTemplateMethod::CrossCorrelationNormalized,
+                    );
+                    deadline.check("ccorr_normed template match")?;
+                    let extremes = find_extremes(&response);
+                    let raw_score = extremes.max_value;
+                    let score = normalize_ncc_score(raw_score);
+                    let x =
+                        i32::try_from(offset_x + extremes.max_value_location.0).map_err(|_| {
+                            RecognitionError::fatal("template match x coordinate exceeds i32 range")
+                        })?;
+                    let y =
+                        i32::try_from(offset_y + extremes.max_value_location.1).map_err(|_| {
+                            RecognitionError::fatal("template match y coordinate exceeds i32 range")
+                        })?;
 
-                Ok(TemplateMatch {
-                    x,
-                    y,
-                    raw_score,
-                    score,
-                })
+                    Ok(TemplateMatch {
+                        x,
+                        y,
+                        raw_score,
+                        score,
+                    })
+                }
             }
             MatchMetric::CorrelationCoefficientNormalized => {
-                ccoeff_normed_match(&search, &template, offset_x, offset_y)
+                if use_fast_path {
+                    full_frame_pyramid_match(&search, &template, metric, offset_x, offset_y)
+                } else {
+                    exact_metric_match(
+                        &search,
+                        &template,
+                        metric,
+                        offset_x,
+                        offset_y,
+                        SearchWindow::full(&search, &template),
+                        &deadline,
+                    )
+                }
             }
         }
     }
@@ -250,81 +280,405 @@ impl Scene {
     }
 }
 
-fn ccoeff_normed_match(
+fn exact_metric_match(
     search: &GrayImage,
     template: &GrayImage,
+    metric: MatchMetric,
+    offset_x: u32,
+    offset_y: u32,
+    window: SearchWindow,
+    deadline: &TemplateMatchDeadline,
+) -> RecognitionResult<TemplateMatch> {
+    let candidate = exact_metric_candidates(search, template, metric, window, 1, deadline)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
+    template_match_from_candidate(candidate, offset_x, offset_y)
+}
+
+fn full_frame_pyramid_match(
+    search: &GrayImage,
+    template: &GrayImage,
+    metric: MatchMetric,
     offset_x: u32,
     offset_y: u32,
 ) -> RecognitionResult<TemplateMatch> {
-    let template_width = template.width();
-    let template_height = template.height();
-    let count = (template_width * template_height) as f32;
-    let template_sum: f32 = template.pixels().map(|pixel| f32::from(pixel[0])).sum();
-    let template_mean = template_sum / count;
-    let template_centered = template
-        .pixels()
-        .map(|pixel| f32::from(pixel[0]) - template_mean)
-        .collect::<Vec<_>>();
-    let template_norm_sq: f32 = template_centered.iter().map(|value| value * value).sum();
-    if template_norm_sq <= f32::EPSILON {
-        return Err(RecognitionError::fatal(
-            "ccoeff_normed template must have non-zero variance",
-        ));
-    }
-    let template_norm = template_norm_sq.sqrt();
-
-    let max_x = search.width() - template_width;
-    let max_y = search.height() - template_height;
-    let mut best_raw = f32::NEG_INFINITY;
-    let mut best_x = 0_u32;
-    let mut best_y = 0_u32;
-
-    for y in 0..=max_y {
-        for x in 0..=max_x {
-            let mut window_sum = 0_f32;
-            for ty in 0..template_height {
-                for tx in 0..template_width {
-                    window_sum += f32::from(search.get_pixel(x + tx, y + ty)[0]);
-                }
-            }
-            let window_mean = window_sum / count;
-            let mut numerator = 0_f32;
-            let mut window_norm_sq = 0_f32;
-            let mut index = 0_usize;
-            for ty in 0..template_height {
-                for tx in 0..template_width {
-                    let window_value = f32::from(search.get_pixel(x + tx, y + ty)[0]) - window_mean;
-                    numerator += window_value * template_centered[index];
-                    window_norm_sq += window_value * window_value;
-                    index += 1;
-                }
-            }
-            if window_norm_sq <= f32::EPSILON {
-                continue;
-            }
-            let raw = numerator / (window_norm_sq.sqrt() * template_norm);
-            if raw > best_raw {
-                best_raw = raw;
-                best_x = x;
-                best_y = y;
-            }
-        }
+    let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
+    let factor = choose_downsample_factor(search, template);
+    if factor <= 1 {
+        return exact_metric_match(
+            search,
+            template,
+            metric,
+            offset_x,
+            offset_y,
+            SearchWindow::full(search, template),
+            &deadline,
+        );
     }
 
-    if !best_raw.is_finite() {
-        best_raw = 0.0;
+    let coarse_search = downsample_gray(search, factor);
+    let coarse_template = downsample_gray(template, factor);
+    if coarse_template.width() > coarse_search.width()
+        || coarse_template.height() > coarse_search.height()
+    {
+        return exact_metric_match(
+            search,
+            template,
+            metric,
+            offset_x,
+            offset_y,
+            SearchWindow::full(search, template),
+            &deadline,
+        );
     }
-    let x = i32::try_from(offset_x + best_x)
+
+    let coarse_candidates = exact_metric_candidates(
+        &coarse_search,
+        &coarse_template,
+        metric,
+        SearchWindow::full(&coarse_search, &coarse_template),
+        FULL_FRAME_TOP_CANDIDATES,
+        &deadline,
+    )?;
+    let full_window = SearchWindow::full(search, template);
+    let radius = factor * FULL_FRAME_REFINE_RADIUS_MULTIPLIER;
+    let mut refined = Vec::new();
+    for candidate in coarse_candidates {
+        let approx_x = candidate.x.saturating_mul(factor);
+        let approx_y = candidate.y.saturating_mul(factor);
+        let window = full_window.around(approx_x, approx_y, radius);
+        let best = exact_metric_candidates(search, template, metric, window, 1, &deadline)?;
+        refined.extend(best);
+    }
+
+    let candidate = refined
+        .into_iter()
+        .max_by(|a, b| a.raw_score.total_cmp(&b.raw_score))
+        .ok_or_else(|| {
+            RecognitionError::fatal("full-frame template match produced no candidates")
+        })?;
+    template_match_from_candidate(candidate, offset_x, offset_y)
+}
+
+fn template_match_from_candidate(
+    candidate: MatchCandidate,
+    offset_x: u32,
+    offset_y: u32,
+) -> RecognitionResult<TemplateMatch> {
+    let x = i32::try_from(offset_x + candidate.x)
         .map_err(|_| RecognitionError::fatal("template match x coordinate exceeds i32 range"))?;
-    let y = i32::try_from(offset_y + best_y)
+    let y = i32::try_from(offset_y + candidate.y)
         .map_err(|_| RecognitionError::fatal("template match y coordinate exceeds i32 range"))?;
 
     Ok(TemplateMatch {
         x,
         y,
-        raw_score: best_raw,
-        score: normalize_ncc_score(best_raw),
+        raw_score: candidate.raw_score,
+        score: normalize_ncc_score(candidate.raw_score),
     })
+}
+
+fn exact_metric_candidates(
+    search: &GrayImage,
+    template: &GrayImage,
+    metric: MatchMetric,
+    window: SearchWindow,
+    limit: usize,
+    deadline: &TemplateMatchDeadline,
+) -> RecognitionResult<Vec<MatchCandidate>> {
+    let limit = limit.max(1);
+    let template_stats = TemplateStats::new(template, metric)?;
+    let integrals = IntegralImages::new(search);
+    let mut candidates = Vec::new();
+
+    for y in window.min_y..=window.max_y {
+        deadline.check("template match")?;
+        for x in window.min_x..=window.max_x {
+            let raw_score = score_window(search, &template_stats, &integrals, metric, x, y);
+            push_candidate(&mut candidates, MatchCandidate { x, y, raw_score }, limit);
+        }
+    }
+
+    if candidates.is_empty() {
+        candidates.push(MatchCandidate {
+            x: window.min_x,
+            y: window.min_y,
+            raw_score: 0.0,
+        });
+    }
+    Ok(candidates)
+}
+
+fn score_window(
+    search: &GrayImage,
+    template: &TemplateStats,
+    integrals: &IntegralImages,
+    metric: MatchMetric,
+    x: u32,
+    y: u32,
+) -> f32 {
+    let image_sum = integrals.sum(x, y, template.width, template.height);
+    let image_sq_sum = integrals.squared_sum(x, y, template.width, template.height);
+    let dot = dot_product(search, template, x, y);
+
+    let raw = match metric {
+        MatchMetric::CrossCorrelationNormalized => {
+            let denominator = (image_sq_sum * template.squared_sum).sqrt();
+            if denominator <= f64::EPSILON {
+                0.0
+            } else {
+                dot / denominator
+            }
+        }
+        MatchMetric::CorrelationCoefficientNormalized => {
+            let count = template.count;
+            let window_norm_sq = image_sq_sum - (image_sum * image_sum / count);
+            if window_norm_sq <= f64::EPSILON {
+                0.0
+            } else {
+                let numerator = dot - template.mean * image_sum;
+                numerator / (window_norm_sq.sqrt() * template.centered_norm_sq.sqrt())
+            }
+        }
+    };
+
+    if raw.is_finite() { raw as f32 } else { 0.0 }
+}
+
+fn dot_product(search: &GrayImage, template: &TemplateStats, x: u32, y: u32) -> f64 {
+    let search_width = search.width() as usize;
+    let x = x as usize;
+    let y = y as usize;
+    let template_width = template.width as usize;
+    let template_height = template.height as usize;
+    let search_pixels = search.as_raw();
+    let mut dot = 0.0;
+
+    for ty in 0..template_height {
+        let search_start = (y + ty) * search_width + x;
+        let template_start = ty * template_width;
+        let search_row = &search_pixels[search_start..search_start + template_width];
+        let template_row = &template.values[template_start..template_start + template_width];
+        for (image, template) in search_row.iter().zip(template_row.iter()) {
+            dot += f64::from(*image) * template;
+        }
+    }
+    dot
+}
+
+fn push_candidate(candidates: &mut Vec<MatchCandidate>, candidate: MatchCandidate, limit: usize) {
+    candidates.push(candidate);
+    candidates.sort_by(|a, b| b.raw_score.total_cmp(&a.raw_score));
+    candidates.truncate(limit);
+}
+
+fn should_use_fast_path(search: &GrayImage, template: &GrayImage) -> bool {
+    estimated_work(
+        search.width(),
+        search.height(),
+        template.width(),
+        template.height(),
+    ) > FULL_FRAME_FAST_PATH_WORK_THRESHOLD
+}
+
+fn choose_downsample_factor(search: &GrayImage, template: &GrayImage) -> u32 {
+    let mut factor = 1;
+    while factor < FULL_FRAME_MAX_DOWNSAMPLE {
+        let next = factor * 2;
+        let work = estimated_work(
+            scaled_dim(search.width(), next),
+            scaled_dim(search.height(), next),
+            scaled_dim(template.width(), next),
+            scaled_dim(template.height(), next),
+        );
+        factor = next;
+        if work <= FULL_FRAME_COARSE_WORK_TARGET {
+            break;
+        }
+    }
+    factor
+}
+
+fn downsample_gray(image: &GrayImage, factor: u32) -> GrayImage {
+    imageops::resize(
+        image,
+        scaled_dim(image.width(), factor),
+        scaled_dim(image.height(), factor),
+        imageops::FilterType::Triangle,
+    )
+}
+
+fn scaled_dim(value: u32, factor: u32) -> u32 {
+    value.div_ceil(factor).max(1)
+}
+
+fn estimated_work(
+    search_width: u32,
+    search_height: u32,
+    template_width: u32,
+    template_height: u32,
+) -> u64 {
+    if template_width > search_width || template_height > search_height {
+        return 0;
+    }
+    let output_width = u64::from(search_width - template_width + 1);
+    let output_height = u64::from(search_height - template_height + 1);
+    output_width * output_height * u64::from(template_width) * u64::from(template_height)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SearchWindow {
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+}
+
+impl SearchWindow {
+    fn full(search: &GrayImage, template: &GrayImage) -> Self {
+        Self {
+            min_x: 0,
+            max_x: search.width() - template.width(),
+            min_y: 0,
+            max_y: search.height() - template.height(),
+        }
+    }
+
+    fn around(self, x: u32, y: u32, radius: u32) -> Self {
+        Self {
+            min_x: x.saturating_sub(radius).max(self.min_x),
+            max_x: x.saturating_add(radius).min(self.max_x),
+            min_y: y.saturating_sub(radius).max(self.min_y),
+            max_y: y.saturating_add(radius).min(self.max_y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MatchCandidate {
+    x: u32,
+    y: u32,
+    raw_score: f32,
+}
+
+struct TemplateStats {
+    width: u32,
+    height: u32,
+    count: f64,
+    values: Vec<f64>,
+    mean: f64,
+    squared_sum: f64,
+    centered_norm_sq: f64,
+}
+
+impl TemplateStats {
+    fn new(template: &GrayImage, metric: MatchMetric) -> RecognitionResult<Self> {
+        let values = template
+            .as_raw()
+            .iter()
+            .map(|value| f64::from(*value))
+            .collect::<Vec<_>>();
+        let count = values.len() as f64;
+        let sum: f64 = values.iter().sum();
+        let squared_sum: f64 = values.iter().map(|value| value * value).sum();
+        let mean = sum / count;
+        let centered_norm_sq = squared_sum - (sum * sum / count);
+        if metric == MatchMetric::CorrelationCoefficientNormalized
+            && centered_norm_sq <= f64::EPSILON
+        {
+            return Err(RecognitionError::fatal(
+                "ccoeff_normed template must have non-zero variance",
+            ));
+        }
+        Ok(Self {
+            width: template.width(),
+            height: template.height(),
+            count,
+            values,
+            mean,
+            squared_sum,
+            centered_norm_sq,
+        })
+    }
+}
+
+struct IntegralImages {
+    stride: usize,
+    sum: Vec<f64>,
+    squared_sum: Vec<f64>,
+}
+
+impl IntegralImages {
+    fn new(image: &GrayImage) -> Self {
+        let width = image.width() as usize;
+        let height = image.height() as usize;
+        let stride = width + 1;
+        let mut sum = vec![0.0; stride * (height + 1)];
+        let mut squared_sum = vec![0.0; stride * (height + 1)];
+        let pixels = image.as_raw();
+
+        for y in 0..height {
+            let mut row_sum = 0.0;
+            let mut row_squared_sum = 0.0;
+            for x in 0..width {
+                let value = f64::from(pixels[y * width + x]);
+                row_sum += value;
+                row_squared_sum += value * value;
+                let current = (y + 1) * stride + x + 1;
+                let above = y * stride + x + 1;
+                sum[current] = sum[above] + row_sum;
+                squared_sum[current] = squared_sum[above] + row_squared_sum;
+            }
+        }
+
+        Self {
+            stride,
+            sum,
+            squared_sum,
+        }
+    }
+
+    fn sum(&self, x: u32, y: u32, width: u32, height: u32) -> f64 {
+        self.rect_sum(&self.sum, x, y, width, height)
+    }
+
+    fn squared_sum(&self, x: u32, y: u32, width: u32, height: u32) -> f64 {
+        self.rect_sum(&self.squared_sum, x, y, width, height)
+    }
+
+    fn rect_sum(&self, data: &[f64], x: u32, y: u32, width: u32, height: u32) -> f64 {
+        let x1 = x as usize;
+        let y1 = y as usize;
+        let x2 = x1 + width as usize;
+        let y2 = y1 + height as usize;
+        data[y2 * self.stride + x2] - data[y1 * self.stride + x2] - data[y2 * self.stride + x1]
+            + data[y1 * self.stride + x1]
+    }
+}
+
+struct TemplateMatchDeadline {
+    started: Instant,
+    timeout: Duration,
+}
+
+impl TemplateMatchDeadline {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            started: Instant::now(),
+            timeout,
+        }
+    }
+
+    fn check(&self, label: &str) -> RecognitionResult<()> {
+        if self.started.elapsed() > self.timeout {
+            return Err(RecognitionError::fatal(format!(
+                "{label} exceeded {} ms deadline",
+                self.timeout.as_millis()
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -540,6 +894,104 @@ mod tests {
     }
 
     #[test]
+    fn full_frame_ccoeff_large_template_returns_exact_match() {
+        let template = patterned_image(180, 28);
+        let scene = scene_with_large_template(270, 190, &template);
+        let started = Instant::now();
+
+        let matched = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                None,
+                MatchMetric::CorrelationCoefficientNormalized,
+            )
+            .expect("template match");
+
+        assert_eq!((matched.x, matched.y), (270, 190));
+        assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "full-frame ccoeff match took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn full_frame_ccorr_large_template_returns_exact_match() {
+        let template = patterned_image(180, 28);
+        let scene = scene_with_large_template(270, 190, &template);
+        let started = Instant::now();
+
+        let matched = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                None,
+                MatchMetric::CrossCorrelationNormalized,
+            )
+            .expect("template match");
+
+        assert_eq!((matched.x, matched.y), (270, 190));
+        assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "full-frame ccorr match took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn bounded_ccoeff_template_match_returns_full_frame_coordinates() {
+        let template = template_image();
+        let scene = scene_with_template(200, 150, &template);
+        let region = Rect {
+            x: 180,
+            y: 130,
+            width: 80,
+            height: 70,
+        };
+
+        let matched = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                Some(region),
+                MatchMetric::CorrelationCoefficientNormalized,
+            )
+            .expect("template match");
+
+        assert_eq!((matched.x, matched.y), (200, 150));
+        assert!(matched.score >= 0.99, "score was {}", matched.score);
+    }
+
+    #[test]
+    fn large_explicit_region_ccoeff_uses_fast_path() {
+        let template = patterned_image(180, 28);
+        let scene = scene_with_large_template(270, 190, &template);
+        let region = Rect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 360,
+        };
+        let started = Instant::now();
+
+        let matched = scene
+            .match_template_with_metric(
+                &encode_png(&template),
+                Some(region),
+                MatchMetric::CorrelationCoefficientNormalized,
+            )
+            .expect("template match");
+
+        assert_eq!((matched.x, matched.y), (270, 190));
+        assert!(matched.score >= 0.99, "score was {}", matched.score);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "large explicit-region ccoeff match took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn ccoeff_rejects_zero_variance_template() {
         let scene =
             Scene::from_png(&encode_png(&blank_image(40, 40, [30, 31, 32]))).expect("scene");
@@ -699,7 +1151,11 @@ mod tests {
     }
 
     fn template_image() -> RgbImage {
-        let mut image = RgbImage::new(24, 18);
+        patterned_image(24, 18)
+    }
+
+    fn patterned_image(width: u32, height: u32) -> RgbImage {
+        let mut image = RgbImage::new(width, height);
         for (x, y, pixel) in image.enumerate_pixels_mut() {
             *pixel = Rgb([
                 ((x * 9 + y * 3) % 251) as u8,
@@ -712,6 +1168,12 @@ mod tests {
 
     fn scene_with_template(x: u32, y: u32, template: &RgbImage) -> Scene {
         let mut frame = blank_image(320, 240, [30, 31, 32]);
+        imageops::replace(&mut frame, template, i64::from(x), i64::from(y));
+        Scene::from_png(&encode_png(&frame)).expect("scene")
+    }
+
+    fn scene_with_large_template(x: u32, y: u32, template: &RgbImage) -> Scene {
+        let mut frame = blank_image(640, 360, [30, 31, 32]);
         imageops::replace(&mut frame, template, i64::from(x), i64::from(y));
         Scene::from_png(&encode_png(&frame)).expect("scene")
     }

@@ -42,6 +42,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab direct touch CLI: main `actinglab` now exposes trusted manual `tap`, `swipe`, and `long-tap` commands through the existing MaaTouch backend, while `capture` remains the screenshot side of the unified CLI.
 - Lab packager foundation and production builder: `resource convert` is now Rust-backed with converter parity, `lab validate` validates Lab-1y input zips offline, and `package build-task` / `package build-pack` can build self-contained Lab packages from local or explicitly cloned resource repositories.
 - Runtime ADB connection hardening: Runtime and CLI device entry points now resolve one matching adb path through the device layer, prefer the reviewed MuMu adb, avoid PATH/venv adb defaults, preserve wall-clock command deadlines, and only perform one bounded `adb connect` when device state is unavailable.
+- Runtime full-frame recognition hang fix: large template searches now use a bounded pyramid/refine path with a fatal deadline, including `full_frame`, explicit whole-frame rectangles, and large bounded regions.
+
+## Current Runtime Full-Frame Recognition Hang Fix
+
+The current Runtime task addresses `TASK-runtime-detect-page-hang.md`, where large template searches could hang when a target used `full_frame` or an equivalent large search region.
+
+Implementation direction:
+
+- `crates/recognition` keeps the existing small bounded matching path for normal regions.
+- Large searches route through a downsampled coarse pass plus exact local refinement.
+- `ccoeff_normed` refinement uses integral-image window statistics and exact row dot-products.
+- `ccorr_normed` large searches use the same bounded coarse/refine search path.
+- Target evaluation has a wall-clock deadline and returns a fatal recognition error instead of hanging forever.
+- `crates/page-detector` has a regression test proving `evaluate_page` evaluates only the requested page, not unrelated pages.
+
+Validation status:
+
+- Resource repositories were mirrored before validation:
+  - Arknights: `6a9d0b5`
+  - AzurLane: `6c9bba41`
+  - BlueArchive: `1b52342`
+- BA fixture `C:\合作工作区\ActingCommand\fixtures\ba-detectpage-hang-repro.png` returned in seconds for single-target and detect-page checks.
+- Full-frame offline sweep returned without failures:
+  - BlueArchive: 21 targets, max about 878 ms
+  - AzurLane: 39 targets, max about 798 ms
+  - Arknights: 2 targets, max about 739 ms
+- Live read-only `detect-page --capture --all` returned without clicking:
+  - AzurLane JP `127.0.0.1:16385`: matched home, about 993 ms
+  - Arknights CN `127.0.0.1:16416`: matched home, about 12.7 s
+  - BlueArchive JP `127.0.0.1:16481`: standby/scene frame did not match home, about 8.2 s, no hang
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Scope scans found no capture hot-path work, ADB input fallback, UI, SQLite, OCR, OpenCV, retry loop, reconnect, or fallback implementation in the touched recognition/page-detector paths.
 
 ## Current Runtime ADB Connection Hardening
 

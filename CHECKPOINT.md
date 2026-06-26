@@ -1,5 +1,106 @@
 # CHECKPOINT.md
 
+## 2026-06-26 Runtime full-frame recognition hang fix
+
+### Current status
+
+- Implemented the `TASK-runtime-detect-page-hang.md` fix for pathological large template searches.
+- `crates/recognition` now routes large search workloads through a bounded pyramid/refine matcher instead of the slow full sliding-window path.
+- The optimized path covers `full_frame`, explicit whole-frame rectangles, and large bounded regions.
+- Small bounded matching keeps the previous path and behavior.
+- Large `ccoeff_normed` refinement uses integral-image window statistics plus exact row dot-products.
+- Large `ccorr_normed` searches use the same bounded coarse/refine strategy.
+- Target matching has a wall-clock deadline and returns a fatal recognition error instead of hanging forever.
+- `crates/page-detector` now has a regression test proving `evaluate_page` does not evaluate unrelated pages.
+- Implementation commit: pending until this checkpoint is committed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `4b274c3`.
+- `ActingCommand-Resources-Arknights`: `6a9d0b5`.
+- `ActingCommand-Resources-AzurLane`: `6c9bba41`.
+- `ActingCommand-Resources-BlueArchive`: `1b52342`.
+
+### Files changed
+
+- `crates/recognition/src/lib.rs`
+- `crates/page-detector/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` and mirror/reset checks for Runtime, Arknights, AzurLane, BlueArchive, and UI repositories.
+- `git reset --hard origin/main` and `git clean -fd` for Runtime and resource repositories before this resource-dependent task.
+- `git status --short --branch`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-runtime-detect-page-hang.md' -Raw`
+- `cargo test -p actingcommand-recognition -p actingcommand-page-detector`
+- `cargo build -p actingcommand-device-test`
+- Offline `recognize` and `detect-page` runs against `C:\合作工作区\ActingCommand\fixtures\ba-detectpage-hang-repro.png`.
+- Offline full-frame sweeps across BlueArchive, AzurLane, and Arknights recognition packs.
+- `adb devices`
+- Read-only `device-test capture` on ports `16385`, `16416`, and `16481`.
+- Read-only live `detect-page --capture --all` on AzurLane JP `127.0.0.1:16385`, Arknights CN `127.0.0.1:16416`, and BlueArchive JP `127.0.0.1:16481`.
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Scope scans over `crates\recognition\src` and `crates\page-detector\src` for capture hot-path work, ADB input fallback, UI, SQLite, OCR, OpenCV, retry loop, reconnect, fallback, sleep, and panic patterns.
+
+### Test results
+
+- `cargo test -p actingcommand-recognition -p actingcommand-page-detector` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+
+### Offline recognition results
+
+- BA single full-frame target `page/task_center` on `ba-detectpage-hang-repro.png` returned in about `860 ms` with `passed=false`, `raw_score=0.653629`, and no hang.
+- BA `detect-page --page bluearchive/home` on the same fixture matched in about `393 ms`.
+- BA `detect-page --page bluearchive/task_center` on the same fixture returned in about `869 ms` with no hang.
+- BA `detect-page --all` on the same fixture returned in about `7804 ms`.
+- AzurLane `template/main_goto_fleet` on the same fixture returned in about `896 ms`; the template score passed but the color check failed, as expected for a non-Azur scene.
+- Arknights `template/infrastpic__infrastoverview` on the same fixture returned in about `695 ms`.
+- Full-frame sweep after the final fix:
+  - BlueArchive: `21` full-frame targets, `0` command failures, max about `878 ms`.
+  - AzurLane: `39` full-frame targets, `0` command failures, max about `798 ms`.
+  - Arknights: `2` full-frame targets, `0` command failures, max about `739 ms`.
+
+### Live read-only smoke results
+
+- `adb devices` showed connected devices including `127.0.0.1:16385`, `127.0.0.1:16416`, and `127.0.0.1:16481`.
+- `device-test capture` wrote `1280x720` screenshots for all three ports under `target\detect-page-hang-smoke`.
+- Visual inspection identified:
+  - `127.0.0.1:16385`: AzurLane JP home.
+  - `127.0.0.1:16416`: Arknights CN home.
+  - `127.0.0.1:16481`: BlueArchive JP standby/scene frame.
+- Read-only live `detect-page --capture --all`:
+  - AzurLane JP `127.0.0.1:16385`: matched `azurlane/home`, about `993 ms`.
+  - Arknights CN `127.0.0.1:16416`: matched `arknights/home`, about `12690 ms`.
+  - BlueArchive JP `127.0.0.1:16481`: returned in about `8187 ms`; home was not matched because the current frame was standby/scene, but it did not hang.
+- No live click, MaaTouch command, task run, purchase, sortie, exercise, gacha, or resource-consuming action was executed.
+
+### Scope scan
+
+- No capture hot-path change was made.
+- No ADB input fallback was added.
+- No UI, SQLite, OCR, OpenCV, retry loop, reconnect, or fallback implementation was added in the touched recognition/page-detector paths.
+- No sleep or panic pattern was added in the touched recognition/page-detector paths.
+
+### Current blocker
+
+- No implementation blocker.
+- BlueArchive live page matching was not expected to match home because the current captured frame was a standby/scene frame; no wake click was performed in this task.
+
+### Next step
+
+1. Commit the source and planning/checkpoint changes.
+2. Update this checkpoint with the implementation commit hash.
+3. Add a checkpoint tag for this stable milestone.
+4. Push Runtime `main` and the checkpoint tag to GitHub.
+
 ## 2026-06-26 Runtime ADB connection hardening
 
 ### Current status

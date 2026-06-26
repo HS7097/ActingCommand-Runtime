@@ -349,8 +349,8 @@ fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> Page
 mod tests {
     use super::*;
     use actingcommand_recognition_pack::{
-        ClickOnlyTarget, ColorTarget, PackCoordinateSpace, PackRect, RecognitionDefaults,
-        RecognitionPack, RecognitionTarget,
+        ClickOnlyTarget, ColorTarget, PackCoordinateSpace, PackRect, PackRegion,
+        RecognitionDefaults, RecognitionPack, RecognitionTarget, TemplateTarget,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -633,6 +633,51 @@ mod tests {
         assert!(evaluations.iter().any(|evaluation| {
             evaluation.page_id == "fixture/settings_page" && evaluation.matched
         }));
+    }
+
+    #[test]
+    fn evaluate_page_does_not_evaluate_unrequested_page_targets() {
+        let root = temp_fixture_dir("single-page-only");
+        fs::write(
+            root.join("too-large.png"),
+            encode_png(32, 32, |_, _| [255, 255, 255]),
+        )
+        .expect("write template");
+        let mut pack = fixture_pack();
+        pack.targets
+            .push(RecognitionTarget::Template(TemplateTarget {
+                id: "fixture/too_large_template".to_string(),
+                template_path: "too-large.png".to_string(),
+                region: PackRegion::Keyword("full_frame".to_string()),
+                threshold: Some(0.9),
+                color_check: None,
+                click: None,
+            }));
+        let evaluator = RecognitionEvaluator::new(root.clone(), pack).expect("evaluator");
+        let detector = PageDetector::new(PageSet {
+            pages: vec![
+                home_page(),
+                PageDefinition {
+                    id: "fixture/unrequested_page".to_string(),
+                    required: vec!["fixture/too_large_template".to_string()],
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+            ..base_page_set()
+        })
+        .expect("detector");
+
+        let evaluation = detector
+            .evaluate_page(
+                &evaluator,
+                &scene_colors(true, false, false),
+                "fixture/home_page",
+            )
+            .expect("evaluate requested page only");
+
+        assert!(evaluation.matched);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
