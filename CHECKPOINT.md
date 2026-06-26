@@ -13,6 +13,8 @@
 - `actinglab capture --out <png> --instance ...` remains the existing screenshot side and was not refactored.
 - Autonomous execution safety gates were not relaxed: `lab run`, `package run`, `operation run`, and `control probe-click` still retain their LabLease/navigation/expect boundaries.
 - No ADB input fallback, reconnect loop, retry loop, UI, scheduler behavior, new backend, OCR, SQLite, or game logic was added.
+- Implementation commit: `4e047ef5caf6912908e201ce2a2f3ef610369580` (`Add actinglab direct touch commands`).
+- Checkpoint tag: `checkpoint/20260626-actinglab-direct-touch-cli`.
 
 ### Files changed
 
@@ -63,9 +65,8 @@
 
 ### Next step
 
-1. Commit the direct touch CLI implementation and this checkpoint.
-2. Push `main` to GitHub.
-3. Await live acceptance or proceed to the next handoff task when explicitly started.
+1. Push `main` and the checkpoint tag to GitHub.
+2. Await live acceptance or proceed to the next handoff task when explicitly started.
 
 ## 2026-06-26 Round2 regression close-out
 
