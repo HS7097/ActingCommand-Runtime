@@ -49,6 +49,48 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Resource repository reorganization compatibility: ActingLab resource, recognition, navigation, and package-build entry points accept both direct resource roots and reorganized repository roots that contain `ours/`.
 - ActingLab session layer Phase C startup-login resource loop: `session recover --startup-login` reads `STARTUP-LOGIN.md` and runs a bounded maintenance-only popup-close/continue loop toward the target page.
 - ActingLab session layer Phase C bounded monitor loop: `monitor` now runs bounded diagnosis iterations and can explicitly delegate non-healthy states to `session recover` when `--recover` is present.
+- ActingLab session layer Phase A/C capture stale diagnostics: `capture diagnose` and `session capture diagnose` run a structured fresh-frame probe, report stale/unavailable capture states, and recommend lighter capture-backend recovery before app restart.
+
+## Current ActingLab Capture Stale Diagnostics
+
+The current Runtime task responds to `FINDING-AK-game-freeze-2026-06-27.md` by adding a read-only capture diagnosis path for stale-frame suspicion.
+
+Scope:
+
+- Add `capture diagnose`.
+- Add `session capture diagnose` through the existing `session capture` route.
+- Diagnose mode does not require `--out` and does not write a screenshot file.
+- Diagnose mode performs the same two-frame fresh probe used by `--require-fresh`.
+- Diagnose output reports `fresh`, `stale_suspected`, or `capture_unavailable`.
+- Diagnose output includes backend attempts, frame hash metadata when fresh, and structured recovery recommendations.
+- Existing `capture --require-fresh` still fails visibly when no backend produces a changing probe frame.
+- Existing capture hot path and selected capture backends are not changed.
+
+Safety direction:
+
+- Diagnose mode is read-only: `click_allowed = false` and `action_executed = false`.
+- Stale suspicion recommends capture-backend changes/configuration before the heavier `session app restart` recovery.
+- Unavailable capture points to `session instance health`.
+- No automatic restart, click, reconnect loop, OCR, SQLite, UI, game task, or new capture backend was added.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test -p actingcommand-actinglab capture_diagnosis` passed.
+- `cargo test -p actingcommand-actinglab fresh_auto_probe_prefers_fast_backends_before_adb` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
+- `cargo test -p actingcommand-actinglab` passed after rerunning a transient temp-config EOF test failure.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- Read-only Arknights B server smoke on `127.0.0.1:16416` with `--capture-backend adb capture diagnose --fresh-delay-ms 200` returned `status = fresh`; two ADB screencap probe hashes differed, so stale capture was not suspected in that run.
+
+Known follow-ups:
+
+- A daemon-resident monitor still needs to consume this diagnosis and decide, under scheduler ownership, when to retry a capture backend, switch backend, or restart the app.
+- `capture diagnose` currently reports recommendations only; it deliberately does not execute recovery.
 
 ## Current ActingLab Session Layer Phase C Bounded Monitor Loop
 

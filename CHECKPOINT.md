@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab capture stale diagnostics
+
+### Current status
+
+- Implemented read-only capture stale diagnostics for the AK stale-frame finding.
+- Added `capture diagnose`.
+- Added `session capture diagnose` through the existing `session capture` route.
+- Diagnose mode does not require `--out` and does not write screenshot files.
+- Diagnose mode runs a two-frame fresh probe and reports `fresh`, `stale_suspected`, or `capture_unavailable`.
+- Diagnose output includes backend attempts, freshness data, optional frame metadata, and structured recovery recommendations.
+- Existing `capture --require-fresh` still fails visibly when no backend produces a changing probe frame.
+- No capture hot-path rewrite, new capture backend, automatic app restart, click, reconnect loop, OCR, SQLite, UI, scheduler body, or game-task logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `d65982f17998e2bf63b75796252ce887847aedc4`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for Runtime and the three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab capture_diagnosis`
+- `cargo test -p actingcommand-actinglab fresh_auto_probe_prefers_fast_backends_before_adb`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb capture diagnose --fresh-delay-ms 200`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab capture_diagnosis` passed with `2` focused tests.
+- `cargo test -p actingcommand-actinglab fresh_auto_probe_prefers_fast_backends_before_adb` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
+- First `cargo test -p actingcommand-actinglab` run had one transient temp-config EOF failure in `detect_page_accepts_reorganized_repo_root_resource_root`; rerunning the specific test and then the package test passed.
+- `cargo test -p actingcommand-actinglab` passed with `91` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- Read-only AK B server smoke on `127.0.0.1:16416` with explicit ADB screencap returned `status = fresh`.
+- The AK smoke recorded different probe hashes:
+  - first: `dfb461c345ffb42235811f22fce12ad09d4827ab916f6b6d464a441634cae693`
+  - second: `12748ed0a477e9df73d67352aed1876093acf4783b802bf2e833b82a012bd927`
+- No click, app restart, or screenshot file write occurred in the AK diagnosis smoke.
+
+### Current blocker
+
+- No blocker for this read-only diagnosis increment.
+- Full Session Layer remains incomplete: daemon-resident capture monitoring, scheduler-owned recovery arbitration, backend switching policy, app restart policy, modal handling, and UI/API streaming are still future work.
+
+### Next step
+
+1. Commit and push the capture stale diagnostics Runtime changes.
+2. Add a checkpoint tag after push if this is accepted as a stable diagnosis rollback point.
+3. Continue toward daemon-resident monitor policy that consumes capture diagnosis results under scheduler ownership.
+
 ## 2026-06-27 ActingLab session layer Phase C bounded monitor loop
 
 ### Current status

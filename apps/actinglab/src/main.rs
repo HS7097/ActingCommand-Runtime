@@ -749,6 +749,14 @@ fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--diagnose")
+        || flags
+            .positionals
+            .first()
+            .is_some_and(|value| value == "diagnose")
+    {
+        return run_capture_diagnose(global, &flags);
+    }
     let out = flags.required_path("--out")?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
@@ -783,10 +791,53 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
+fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let config = read_user_config()?;
+    let device_config = device_config(global, &config)?;
+    let requested = global.capture_backend.unwrap_or_default();
+    let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+    let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+    Ok(json!({
+        "status": report.status.as_str(),
+        "mode": "capture_diagnose",
+        "requested_backend": requested.as_str(),
+        "click_allowed": false,
+        "action_executed": false,
+        "freshness": report.freshness,
+        "capture_backend_attempts": report.attempts,
+        "frame": report.frame.as_ref().map(capture_frame_summary_json),
+        "recovery": capture_diagnosis_recovery_json(report.status, requested)
+    }))
+}
+
 struct CaptureCommandResult {
     frame: Frame,
     attempts: Vec<Value>,
     freshness: Value,
+}
+
+struct CaptureFreshProbeReport {
+    status: CaptureFreshProbeStatus,
+    frame: Option<Frame>,
+    attempts: Vec<Value>,
+    freshness: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureFreshProbeStatus {
+    Fresh,
+    StaleSuspected,
+    Unavailable,
+}
+
+impl CaptureFreshProbeStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::StaleSuspected => "stale_suspected",
+            Self::Unavailable => "capture_unavailable",
+        }
+    }
 }
 
 struct MonitorSceneInput {
@@ -823,7 +874,28 @@ fn capture_require_fresh(
     requested: CaptureBackendChoice,
     fresh_delay: Duration,
 ) -> CliOutcome<CaptureCommandResult> {
+    let report = capture_fresh_probe_report(device_config, requested, fresh_delay)?;
+    if let Some(frame) = report.frame {
+        return Ok(CaptureCommandResult {
+            frame,
+            attempts: report.attempts,
+            freshness: report.freshness,
+        });
+    }
+
+    Err(CliError::device(format!(
+        "fresh capture required but no backend produced a changing probe frame; attempts={}",
+        serde_json::to_string(&report.attempts).unwrap_or_else(|_| "[]".to_string())
+    )))
+}
+
+fn capture_fresh_probe_report(
+    device_config: &DeviceRuntimeConfig,
+    requested: CaptureBackendChoice,
+    fresh_delay: Duration,
+) -> CliOutcome<CaptureFreshProbeReport> {
     let mut attempts = Vec::new();
+    let mut stale_suspected = false;
     for choice in fresh_probe_choices(requested) {
         let selected = match create_capture_backend(device_config.capture_backend_config(choice)) {
             Ok(selected) => selected,
@@ -868,6 +940,7 @@ fn capture_require_fresh(
         let first_hash = frame_digest(&first);
         let second_hash = frame_digest(&second);
         let fresh = first_hash != second_hash;
+        stale_suspected |= !fresh;
         attempts.push(json!({
             "backend": backend_used,
             "ok": fresh,
@@ -878,8 +951,9 @@ fn capture_require_fresh(
             "delay_ms": fresh_delay.as_millis()
         }));
         if fresh {
-            return Ok(CaptureCommandResult {
-                frame: second,
+            return Ok(CaptureFreshProbeReport {
+                status: CaptureFreshProbeStatus::Fresh,
+                frame: Some(second),
                 attempts,
                 freshness: json!({
                     "required": true,
@@ -892,10 +966,21 @@ fn capture_require_fresh(
         }
     }
 
-    Err(CliError::device(format!(
-        "fresh capture required but no backend produced a changing probe frame; attempts={}",
-        serde_json::to_string(&attempts).unwrap_or_else(|_| "[]".to_string())
-    )))
+    let status = if stale_suspected {
+        CaptureFreshProbeStatus::StaleSuspected
+    } else {
+        CaptureFreshProbeStatus::Unavailable
+    };
+    Ok(CaptureFreshProbeReport {
+        status,
+        frame: None,
+        attempts,
+        freshness: json!({
+            "required": true,
+            "fresh": false,
+            "status": status.as_str()
+        }),
+    })
 }
 
 fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt]) -> Vec<Value> {
@@ -929,6 +1014,70 @@ fn frame_digest(frame: &Frame) -> String {
     hasher.update(format!("{:?}", frame.pixel_format).as_bytes());
     hasher.update(&frame.pixels);
     format!("{:x}", hasher.finalize())
+}
+
+fn capture_frame_summary_json(frame: &Frame) -> Value {
+    json!({
+        "width": frame.width,
+        "height": frame.height,
+        "backend": frame.backend_name.as_str(),
+        "digest": frame_digest(frame)
+    })
+}
+
+fn capture_diagnosis_recovery_json(
+    status: CaptureFreshProbeStatus,
+    requested: CaptureBackendChoice,
+) -> Value {
+    match status {
+        CaptureFreshProbeStatus::Fresh => json!({
+            "needed": false,
+            "available": false,
+            "reason": "fresh_frame_observed"
+        }),
+        CaptureFreshProbeStatus::StaleSuspected => {
+            let mut recommendations = Vec::new();
+            if requested == CaptureBackendChoice::Adb {
+                recommendations.push(json!({
+                    "type": "capture_backend",
+                    "command": "capture diagnose --capture-backend auto",
+                    "reason": "adb_screencap returned identical probe frames; prefer fast backends before concluding the game is frozen"
+                }));
+            }
+            recommendations.push(json!({
+                "type": "configure_backend",
+                "backend": "nemu_ipc",
+                "reason": "MuMu IPC can bypass stale adb_screencap surfaces when configured"
+            }));
+            recommendations.push(json!({
+                "type": "configure_backend",
+                "backend": "droidcast_raw",
+                "reason": "DroidCast_raw can provide an alternate capture surface when adb_screencap is stale"
+            }));
+            recommendations.push(json!({
+                "type": "app_restart",
+                "command": "session app restart",
+                "reason": "heavy recovery; rebuilds the game capture surface only after lighter capture-backend checks fail"
+            }));
+            json!({
+                "needed": true,
+                "available": true,
+                "reason": "stale_capture_suspected",
+                "recommendations": recommendations
+            })
+        }
+        CaptureFreshProbeStatus::Unavailable => json!({
+            "needed": true,
+            "available": false,
+            "reason": "capture_backend_unavailable",
+            "blocked_by": ["capture_backend", "device"],
+            "recommendations": [{
+                "type": "device_health",
+                "command": "session instance health",
+                "reason": "capture could not obtain probe frames from any requested backend"
+            }]
+        }),
+    }
 }
 
 fn parse_optional_duration_ms(
@@ -4896,6 +5045,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
+        command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
@@ -4916,6 +5066,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
+        command_cap("capture diagnose", ["device"], "available"),
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),
         command_cap("record", ["running_runtime", "device"], "reserved"),
@@ -5264,6 +5415,48 @@ mod tests {
     }
 
     #[test]
+    fn capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale() {
+        let recovery = capture_diagnosis_recovery_json(
+            CaptureFreshProbeStatus::StaleSuspected,
+            CaptureBackendChoice::Adb,
+        );
+        assert_eq!(recovery.get("needed").and_then(Value::as_bool), Some(true));
+        let recommendations = recovery
+            .get("recommendations")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            recommendations[0].get("type").and_then(Value::as_str),
+            Some("capture_backend")
+        );
+        assert_eq!(
+            recommendations
+                .last()
+                .and_then(|value| value.get("type"))
+                .and_then(Value::as_str),
+            Some("app_restart")
+        );
+    }
+
+    #[test]
+    fn capture_diagnosis_unavailable_points_to_instance_health() {
+        let recovery = capture_diagnosis_recovery_json(
+            CaptureFreshProbeStatus::Unavailable,
+            CaptureBackendChoice::Auto,
+        );
+        assert_eq!(
+            recovery.get("available").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            recovery
+                .pointer("/recommendations/0/command")
+                .and_then(Value::as_str),
+            Some("session instance health")
+        );
+    }
+
+    #[test]
     fn direct_touch_commands_are_capability_registered() {
         let commands = command_capabilities();
         for command in ["tap", "swipe", "long-tap", "key", "text"] {
@@ -5285,7 +5478,9 @@ mod tests {
             "session instance",
             "session app",
             "session capture",
+            "session capture diagnose",
             "session lease",
+            "capture diagnose",
         ] {
             let capability = commands
                 .iter()
