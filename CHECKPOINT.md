@@ -15,6 +15,8 @@
 - `navigate --dry-run` exposes the planned route without touching the device.
 - The shared scene-loading path now honors `--require-fresh` for semantic commands that use `--capture`.
 - No UI, SQLite, OCR implementation, scheduler implementation, self-heal, recording, game task logic, ADB input fallback, or new capture backend was added.
+- Implementation commit: `e60e2da` (`Add ActingLab semantic commands`).
+- Checkpoint tag: `checkpoint/20260627-session-layer-phase-b`.
 
 ### Resource mirrors used
 
@@ -80,10 +82,9 @@
 
 ### Next step
 
-1. Commit and push the Phase B semantic layer Runtime change.
-2. Add a checkpoint tag if accepted as a stable semantic-layer rollback point.
-3. Tighten Arknights page anchors in the resource lane.
-4. Continue Phase C self-heal only after a separate scoped task.
+1. Push Runtime `main` and `checkpoint/20260627-session-layer-phase-b`.
+2. Tighten Arknights page anchors in the resource lane.
+3. Continue Phase C self-heal only after a separate scoped task.
 
 ## 2026-06-27 ActingLab session layer Phase A
 
