@@ -1,5 +1,90 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session layer Phase B
+
+### Current status
+
+- Implemented the Phase B semantic layer from `TASK-Lab-session-layer.md`.
+- Added `current-page`, `is-visible`, `locate`, `tap-target`, and `navigate`.
+- `current-page` now shares the same page-detection helper as `detect-page`.
+- `is-visible` evaluates visual recognition targets and fails visibly for click-only targets.
+- `locate` performs full-frame template localization for calibration.
+- `tap-target` requires visual target recognition to pass before real MaaTouch execution.
+- `tap-target` real execution requires `--capture`; `--scene` is dry-run/offline only.
+- `navigate` loads the navigation graph, detects the current page, plans a route, applies navigation-only safety gates, and polls for arrival after each edge.
+- `navigate --dry-run` exposes the planned route without touching the device.
+- The shared scene-loading path now honors `--require-fresh` for semantic commands that use `--capture`.
+- No UI, SQLite, OCR implementation, scheduler implementation, self-heal, recording, game task logic, ADB input fallback, or new capture backend was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1c52e55`.
+- `ActingCommand-Resources-Arknights`: `7509ed1`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` and status/hash checks for Runtime and the three resource repositories.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this split Runtime repo.
+- Read relevant Phase B lines from `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR implementation, OpenCV, scheduler implementation, and record-step/build-task strings in Runtime source paths.
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb capture --out target\session-phase-b-smoke\ak.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --game ark current-page --scene target\session-phase-b-smoke\ak.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --game ark navigate --to depot --scene target\session-phase-b-smoke\ak.png`
+- `detect-page --check-pages` through `actinglab` for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+- Read-only `current-page --capture` through `actinglab` on AzurLane JP `127.0.0.1:16385`, Arknights CN `127.0.0.1:16416`, and BlueArchive JP `127.0.0.1:16481`.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with `75` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- `detect-page --check-pages` passed for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+
+### Live read-only smoke results
+
+- AK capture on `127.0.0.1:16416` wrote `target\session-phase-b-smoke\ak.png` at `1280x720`.
+- AK `current-page --scene` and `current-page --capture` returned `arknights/home`.
+- AK current-page evidence also matched several unrelated pages on the same home frame; this is a resource discriminator issue, not a CLI execution failure.
+- AK `navigate --dry-run --to depot` planned one route edge: `home_to_depot`, point `(1194,640)`, with no click execution.
+- AzurLane JP `current-page --capture` returned `azurlane/home`.
+- BlueArchive JP `current-page --capture` returned standby and a visible wake-safe-point recovery hint; no wake click was sent.
+
+### Scope scan
+
+- No ADB input fallback was added.
+- No `adb shell screencap` path was added.
+- No SQLite, OpenCV, UI, scheduler implementation, self-heal, recording implementation, or game task logic was added.
+- The only OCR scan hit is the pre-existing `actingcommand-contract` primitive trait declaration.
+
+### Current blocker
+
+- Arknights page anchors are too broad and can produce multiple simultaneous page matches.
+- BlueArchive current live frame was standby or non-home; Phase C self-heal/wake handling is still future work.
+- Live `tap-target` and live `navigate` clicks should wait for a user-selected safe route and current resource discriminator acceptance.
+
+### Next step
+
+1. Commit and push the Phase B semantic layer Runtime change.
+2. Add a checkpoint tag if accepted as a stable semantic-layer rollback point.
+3. Tighten Arknights page anchors in the resource lane.
+4. Continue Phase C self-heal only after a separate scoped task.
+
 ## 2026-06-27 ActingLab session layer Phase A
 
 ### Current status

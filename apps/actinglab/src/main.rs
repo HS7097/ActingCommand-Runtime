@@ -5,13 +5,15 @@ use actingcommand_device::{
     InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat, combine_operation_and_close,
     create_capture_backend, resolve_adb_path,
 };
-use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
+use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
-use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
+use actingcommand_recognition_pack::{
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Write};
@@ -468,6 +470,11 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "capture" => run_capture(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
+        [cmd] if cmd == "current-page" => run_current_page(&invocation.global, &invocation.args),
+        [cmd] if cmd == "is-visible" => run_is_visible(&invocation.global, &invocation.args),
+        [cmd] if cmd == "locate" => run_locate(&invocation.global, &invocation.args),
+        [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
+        [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
         [cmd] if cmd == "monitor" => run_monitor(&invocation.global),
         [cmd] if cmd == "record" => Err(CliError::not_implemented(
             "not_implemented",
@@ -1230,27 +1237,855 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         return Ok(json!({"check_pages": "passed"}));
     }
     let scene = load_scene_from_flags(global, &flags)?;
-    let evaluations = detector
-        .evaluate_all(&evaluator, &scene)
+    let outcome = detect_current_page(&evaluator, &detector, &scene)?;
+    Ok(page_detection_json(&outcome))
+}
+
+fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let config = read_user_config()?;
+    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+    let scene = load_scene_from_flags(global, &flags)?;
+    let outcome = detect_current_page(&evaluator, &detector, &scene)?;
+    Ok(page_detection_json(&outcome))
+}
+
+fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let target = target_argument(&flags, "is-visible")?;
+    let config = read_user_config()?;
+    let resources = recognition_resources(global, &config, &flags, false)?;
+    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+    if evaluator
+        .target_kind(&target)
+        .map_err(|err| CliError::usage(err.to_string()))?
+        == TargetKind::ClickOnly
+    {
+        return Err(CliError::usage(format!(
+            "target '{target}' is click-only and cannot be evaluated for visibility"
+        )));
+    }
+    let scene = load_scene_from_flags(global, &flags)?;
+    let evaluation = evaluator
+        .evaluate_target(&scene, &target)
         .map_err(|err| CliError::usage(err.to_string()))?;
-    if let Some(match_eval) = evaluations.iter().find(|evaluation| evaluation.matched) {
+    Ok(json!({
+        "target": target,
+        "visible": evaluation.passed,
+        "evaluation": target_eval_json(&evaluation),
+        "match_metric": match_metric_name(evaluator.default_match_metric())
+    }))
+}
+
+fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let template = flags
+        .optional_path("--template")
+        .or_else(|| flags.positionals.first().map(PathBuf::from))
+        .ok_or_else(|| CliError::usage("locate requires <template> or --template <path>"))?;
+    let metric = parse_match_metric_flag(&flags)?;
+    let scene = load_scene_from_flags(global, &flags)?;
+    let template_png = fs::read(&template).map_err(|err| {
+        CliError::device(format!(
+            "failed to read template {}: {err}",
+            template.display()
+        ))
+    })?;
+    let matched = scene
+        .match_template_with_metric(&template_png, None, metric)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "template": template.display().to_string(),
+        "x": matched.x,
+        "y": matched.y,
+        "score": matched.score,
+        "raw_score": matched.raw_score,
+        "match_metric": match_metric_name(metric)
+    }))
+}
+
+fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let target = target_argument(&flags, "tap-target")?;
+    let allow_destructive = flags.bool("--allow-destructive");
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    if !allow_destructive {
+        reject_dangerous_semantic_id("target", &target)?;
+    }
+    if !dry_run && !flags.bool("--capture") {
+        return Err(CliError::usage(
+            "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
+        ));
+    }
+
+    let config = read_user_config()?;
+    let resources = recognition_resources(global, &config, &flags, false)?;
+    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+    if evaluator
+        .target_kind(&target)
+        .map_err(|err| CliError::usage(err.to_string()))?
+        == TargetKind::ClickOnly
+    {
+        return Err(CliError::usage(format!(
+            "tap-target requires a visually evaluatable target; '{target}' is click-only"
+        )));
+    }
+    let scene = load_scene_from_flags(global, &flags)?;
+    let evaluation = evaluator
+        .evaluate_target(&scene, &target)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    if !evaluation.passed {
+        return Err(CliError::safety_blocked(
+            "target_not_visible",
+            format!(
+                "target '{target}' did not pass recognition: {}",
+                evaluation.message
+            ),
+            &["visible_target"],
+        ));
+    }
+    let click = evaluator
+        .get_click_target(&target)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    let point = rect_center(click)?;
+    if dry_run {
         return Ok(json!({
-            "page": match_eval.page_id,
-            "matched": true,
-            "standby": false,
-            "evaluations": evaluations.iter().map(page_eval_json).collect::<Vec<_>>()
+            "status": "planned",
+            "executed": false,
+            "target": target,
+            "click": rect_json(click),
+            "point": point_json(point),
+            "evaluation": target_eval_json(&evaluation),
+            "safety_gate": "navigation_only_default"
+        }));
+    }
+
+    let action_result = send_semantic_tap(global, &config, point)?;
+    Ok(json!({
+        "status": "sent",
+        "executed": true,
+        "target": target,
+        "click": rect_json(click),
+        "point": point_json(point),
+        "evaluation": target_eval_json(&evaluation),
+        "safety_gate": "navigation_only_default",
+        "device": action_result
+    }))
+}
+
+fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let to = flags.required("--to")?;
+    let allow_destructive = flags.bool("--allow-destructive");
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    if !dry_run && !flags.bool("--capture") {
+        return Err(CliError::usage(
+            "navigate real execution requires --capture; use --dry-run with --scene for route planning",
+        ));
+    }
+
+    let config = read_user_config()?;
+    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+    let graph = load_navigation_graph(global, &config, &flags)?;
+    let scene = load_scene_from_flags(global, &flags)?;
+    let start = detect_current_page(&evaluator, &detector, &scene)?;
+    if start.standby {
+        return Err(CliError::safety_blocked(
+            "current_page_unknown",
+            "navigate requires a matched current page before clicking",
+            &["current_page"],
+        ));
+    }
+    let target_page = canonical_navigation_page(&graph, &to);
+    if start.page == target_page {
+        return Ok(json!({
+            "status": "already_at_target",
+            "executed": false,
+            "from": start.page,
+            "to": target_page,
+            "route": []
+        }));
+    }
+    let route =
+        find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+            CliError::usage(format!(
+                "no navigation route from '{}' to '{}'",
+                start.page, target_page
+            ))
+        })?;
+    for edge in &route {
+        if !allow_destructive {
+            reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+            reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+        }
+    }
+    let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
+    if dry_run {
+        return Ok(json!({
+            "status": "planned",
+            "executed": false,
+            "from": start.page,
+            "to": target_page,
+            "route": route_json,
+            "safety_gate": "navigation_only_default"
+        }));
+    }
+
+    let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
+    let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
+    let mut executed = Vec::new();
+    let mut current_page = start.page;
+    for edge in route {
+        if current_page != edge.from_page {
+            return Err(CliError::safety_blocked(
+                "navigation_page_drift",
+                format!(
+                    "navigation expected current page '{}' but last page was '{}'",
+                    edge.from_page, current_page
+                ),
+                &["page_guard"],
+            ));
+        }
+        let device = send_semantic_input(global, &config, &edge.input)?;
+        let arrived = poll_for_page(
+            global,
+            &flags,
+            &evaluator,
+            &detector,
+            &edge.to_page,
+            step_timeout,
+            poll,
+        )?;
+        if !arrived.matched {
+            return Err(CliError::safety_blocked(
+                "navigation_arrival_failed",
+                format!(
+                    "navigation edge '{}' did not arrive at '{}'; last page '{}'",
+                    edge.id, edge.to_page, arrived.page
+                ),
+                &["arrival_page"],
+            ));
+        }
+        current_page = arrived.page.clone();
+        executed.push(json!({
+            "edge": navigation_edge_json(&edge),
+            "device": device,
+            "arrived": page_detection_json(&arrived)
         }));
     }
     Ok(json!({
-        "page": "standby",
-        "matched": false,
-        "standby": true,
-        "recovery_hint": {
+        "status": "arrived",
+        "executed": true,
+        "to": target_page,
+        "steps": executed,
+        "safety_gate": "navigation_only_default"
+    }))
+}
+
+#[derive(Debug)]
+struct PageDetectionOutcome {
+    page: String,
+    matched: bool,
+    standby: bool,
+    evaluations: Vec<PageEvaluation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SemanticPoint {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Debug, Clone)]
+enum SemanticInput {
+    Tap {
+        rect: PackRect,
+        point: SemanticPoint,
+    },
+    Drag {
+        from_rect: PackRect,
+        to_rect: PackRect,
+        from: SemanticPoint,
+        to: SemanticPoint,
+        duration_ms: u64,
+    },
+}
+
+#[derive(Debug)]
+struct NavigationGraph {
+    game: Option<String>,
+    edges: Vec<NavigationEdge>,
+    destructive_clicks: Vec<DestructiveClick>,
+}
+
+#[derive(Debug, Clone)]
+struct NavigationEdge {
+    id: String,
+    from_page: String,
+    to_page: String,
+    input: SemanticInput,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DestructiveClick {
+    page: Option<String>,
+    rect: PackRect,
+}
+
+fn load_semantic_detector(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {
+    let resources = recognition_resources(global, config, flags, true)?;
+    let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
+        CliError::usage("semantic page commands require --pages or --resource-root --game")
+    })?;
+    let (evaluator, detector) =
+        load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
+    detector
+        .validate(&evaluator)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    Ok((evaluator, detector))
+}
+
+fn detect_current_page(
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    scene: &Scene,
+) -> CliOutcome<PageDetectionOutcome> {
+    let evaluations = detector
+        .evaluate_all(evaluator, scene)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    if let Some(match_eval) = evaluations.iter().find(|evaluation| evaluation.matched) {
+        return Ok(PageDetectionOutcome {
+            page: match_eval.page_id.clone(),
+            matched: true,
+            standby: false,
+            evaluations,
+        });
+    }
+    Ok(PageDetectionOutcome {
+        page: "standby".to_string(),
+        matched: false,
+        standby: true,
+        evaluations,
+    })
+}
+
+fn page_detection_json(outcome: &PageDetectionOutcome) -> Value {
+    let mut data = json!({
+        "page": outcome.page,
+        "matched": outcome.matched,
+        "standby": outcome.standby,
+        "evaluations": outcome.evaluations.iter().map(page_eval_json).collect::<Vec<_>>()
+    });
+    if outcome.standby {
+        data["recovery_hint"] = json!({
             "action": "wake_safe_point",
             "point": {"x": 300, "y": 2},
             "note": "CLI does not click automatically"
+        });
+    }
+    data
+}
+
+fn target_argument(flags: &FlagArgs, command: &str) -> CliOutcome<String> {
+    if let Some(target) = flags.optional("--target").filter(|value| value != "true") {
+        return Ok(target);
+    }
+    flags
+        .positionals
+        .first()
+        .cloned()
+        .ok_or_else(|| CliError::usage(format!("{command} requires <target> or --target <id>")))
+}
+
+fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
+    json!({
+        "target": evaluation.id,
+        "kind": format!("{:?}", evaluation.kind),
+        "passed": evaluation.passed,
+        "message": evaluation.message,
+        "template": evaluation.template.map(|template| {
+            json!({
+                "x": template.x,
+                "y": template.y,
+                "score": template.score,
+                "raw_score": template.raw_score,
+                "threshold": template.threshold
+            })
+        }),
+        "color": evaluation.color.map(|color| {
+            json!({
+                "distance": color.distance,
+                "max_distance": color.max_distance,
+                "mean": color.mean,
+                "expected": color.expected
+            })
+        })
+    })
+}
+
+fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetric> {
+    match flags
+        .optional("--metric")
+        .unwrap_or_else(|| "ccorr_normed".to_string())
+        .as_str()
+    {
+        "ccorr_normed" => Ok(MatchMetric::CrossCorrelationNormalized),
+        "ccoeff_normed" => Ok(MatchMetric::CorrelationCoefficientNormalized),
+        other => Err(CliError::usage(format!(
+            "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed"
+        ))),
+    }
+}
+
+fn load_navigation_graph(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+) -> CliOutcome<NavigationGraph> {
+    let path = navigation_path(global, config, flags)?;
+    let text = fs::read_to_string(&path)
+        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", path.display())))?;
+    let game = value
+        .get("game")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let edges = value
+        .get("navigation")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CliError::usage("navigation file is missing navigation[]"))?
+        .iter()
+        .map(parse_navigation_edge)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    let destructive_clicks = value
+        .get("destructive_actions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(parse_destructive_click)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    Ok(NavigationGraph {
+        game,
+        edges,
+        destructive_clicks,
+    })
+}
+
+fn parse_destructive_click(value: &Value) -> CliOutcome<DestructiveClick> {
+    let click = value
+        .get("click")
+        .ok_or_else(|| CliError::usage("destructive action is missing click"))?;
+    Ok(DestructiveClick {
+        page: value
+            .get("page")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        rect: parse_navigation_tap_rect(click)?,
+    })
+}
+
+fn navigation_path(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+) -> CliOutcome<PathBuf> {
+    if let Some(path) = flags.optional_path("--navigation") {
+        return Ok(path);
+    }
+    let root = effective_resource_root(global, config).ok_or_else(|| {
+        CliError::usage("navigate requires --navigation or --resource-root with --game")
+    })?;
+    let (game, server) = recognition_selector(global)?;
+    Ok(root
+        .join("navigation")
+        .join(format!("{game}.{server}.navigation.json")))
+}
+
+fn parse_navigation_edge(value: &Value) -> CliOutcome<NavigationEdge> {
+    Ok(NavigationEdge {
+        id: required_string_field(value, "id")?.to_string(),
+        from_page: required_string_field(value, "from_page")?.to_string(),
+        to_page: required_string_field(value, "to_page")?.to_string(),
+        input: parse_navigation_input(required_value_field(value, "click")?)?,
+        source: value
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput> {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("point") | Some("rect") => {
+            let rect = parse_navigation_tap_rect(value)?;
+            Ok(SemanticInput::Tap {
+                rect,
+                point: rect_center(rect)?,
+            })
+        }
+        Some("drag") => {
+            let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
+            let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
+            let duration_ms = value
+                .get("duration_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(500);
+            Ok(SemanticInput::Drag {
+                from_rect,
+                to_rect,
+                from: rect_center(from_rect)?,
+                to: rect_center(to_rect)?,
+                duration_ms,
+            })
+        }
+        other => Err(CliError::usage(format!(
+            "unsupported navigation click kind: {other:?}"
+        ))),
+    }
+}
+
+fn parse_navigation_tap_rect(value: &Value) -> CliOutcome<PackRect> {
+    match value.get("kind").and_then(Value::as_str) {
+        Some("point") => parse_navigation_point(value),
+        Some("rect") | None => parse_navigation_rect(value),
+        Some("drag") => Err(CliError::usage(
+            "drag click cannot be used as a tap rectangle",
+        )),
+        other => Err(CliError::usage(format!(
+            "unsupported navigation click kind for tap rect: {other:?}"
+        ))),
+    }
+}
+
+fn parse_navigation_point(value: &Value) -> CliOutcome<PackRect> {
+    if let Some(point) = value.get("point").and_then(Value::as_str) {
+        let (x, y) = parse_point_pair(point)?;
+        return Ok(PackRect {
+            x,
+            y,
+            width: 1,
+            height: 1,
+        });
+    }
+    Ok(PackRect {
+        x: required_i32_value(value, "x")?,
+        y: required_i32_value(value, "y")?,
+        width: 1,
+        height: 1,
+    })
+}
+
+fn parse_navigation_rect(value: &Value) -> CliOutcome<PackRect> {
+    Ok(PackRect {
+        x: required_i32_value(value, "x")?,
+        y: required_i32_value(value, "y")?,
+        width: required_i32_value(value, "width")?,
+        height: required_i32_value(value, "height")?,
+    })
+}
+
+fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err(CliError::usage(format!(
+            "point must be formatted as x,y: {value}"
+        )));
+    }
+    let x = parts[0]
+        .parse::<i32>()
+        .map_err(|err| CliError::usage(format!("failed to parse point x '{}': {err}", parts[0])))?;
+    let y = parts[1]
+        .parse::<i32>()
+        .map_err(|err| CliError::usage(format!("failed to parse point y '{}': {err}", parts[1])))?;
+    Ok((x, y))
+}
+
+fn required_value_field<'a>(value: &'a Value, name: &str) -> CliOutcome<&'a Value> {
+    value
+        .get(name)
+        .ok_or_else(|| CliError::usage(format!("missing field '{name}'")))
+}
+
+fn required_string_field<'a>(value: &'a Value, name: &str) -> CliOutcome<&'a str> {
+    required_value_field(value, name)?
+        .as_str()
+        .ok_or_else(|| CliError::usage(format!("field '{name}' must be a string")))
+}
+
+fn required_i32_value(value: &Value, name: &str) -> CliOutcome<i32> {
+    let number = required_value_field(value, name)?;
+    if let Some(value) = number.as_i64() {
+        return i32::try_from(value)
+            .map_err(|_| CliError::usage(format!("field '{name}' exceeds i32 range")));
+    }
+    Err(CliError::usage(format!(
+        "field '{name}' must be an integer"
+    )))
+}
+
+fn canonical_navigation_page(graph: &NavigationGraph, page: &str) -> String {
+    if page.contains('/') {
+        return page.to_string();
+    }
+    graph
+        .game
+        .as_ref()
+        .map(|game| format!("{game}/{page}"))
+        .unwrap_or_else(|| page.to_string())
+}
+
+fn find_navigation_route(
+    edges: &[NavigationEdge],
+    from_page: &str,
+    to_page: &str,
+) -> Option<Vec<NavigationEdge>> {
+    let mut queue = VecDeque::from([from_page.to_string()]);
+    let mut previous = BTreeMap::<String, (String, usize)>::new();
+    let mut seen = BTreeSet::from([from_page.to_string()]);
+
+    while let Some(page) = queue.pop_front() {
+        if page == to_page {
+            break;
+        }
+        for (index, edge) in edges.iter().enumerate() {
+            if edge.from_page != page || seen.contains(&edge.to_page) {
+                continue;
+            }
+            seen.insert(edge.to_page.clone());
+            previous.insert(edge.to_page.clone(), (page.clone(), index));
+            queue.push_back(edge.to_page.clone());
+        }
+    }
+    if from_page != to_page && !previous.contains_key(to_page) {
+        return None;
+    }
+    let mut route = Vec::new();
+    let mut cursor = to_page.to_string();
+    while cursor != from_page {
+        let (prev, index) = previous.get(&cursor)?.clone();
+        route.push(edges[index].clone());
+        cursor = prev;
+    }
+    route.reverse();
+    Some(route)
+}
+
+fn navigation_edge_json(edge: &NavigationEdge) -> Value {
+    json!({
+        "id": edge.id,
+        "from_page": edge.from_page,
+        "to_page": edge.to_page,
+        "input": semantic_input_json(&edge.input),
+        "source": edge.source
+    })
+}
+
+fn semantic_input_json(input: &SemanticInput) -> Value {
+    match input {
+        SemanticInput::Tap { rect, point } => json!({
+            "type": "tap",
+            "rect": rect_json(*rect),
+            "point": point_json(*point)
+        }),
+        SemanticInput::Drag {
+            from_rect,
+            to_rect,
+            from,
+            to,
+            duration_ms,
+        } => json!({
+            "type": "drag",
+            "from_rect": rect_json(*from_rect),
+            "to_rect": rect_json(*to_rect),
+            "from": point_json(*from),
+            "to": point_json(*to),
+            "duration_ms": duration_ms
+        }),
+    }
+}
+
+fn reject_destructive_overlap(
+    edge: &NavigationEdge,
+    destructive: &[DestructiveClick],
+) -> CliOutcome<()> {
+    let rects = semantic_input_rects(&edge.input);
+    for rect in rects {
+        if destructive.iter().any(|other| {
+            other
+                .page
+                .as_deref()
+                .is_none_or(|page| page == "any" || page == edge.from_page)
+                && rects_intersect(rect, other.rect)
+        }) {
+            return Err(CliError::safety_blocked(
+                "navigation_destructive_overlap",
+                format!(
+                    "navigation edge '{}' overlaps a destructive action region",
+                    edge.id
+                ),
+                &["navigation_only"],
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
+    match input {
+        SemanticInput::Tap { rect, .. } => vec![*rect],
+        SemanticInput::Drag {
+            from_rect, to_rect, ..
+        } => vec![*from_rect, *to_rect],
+    }
+}
+
+fn rects_intersect(a: PackRect, b: PackRect) -> bool {
+    let ax2 = a.x.saturating_add(a.width);
+    let ay2 = a.y.saturating_add(a.height);
+    let bx2 = b.x.saturating_add(b.width);
+    let by2 = b.y.saturating_add(b.height);
+    a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y
+}
+
+fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
+    let lower = value.to_ascii_lowercase();
+    let dangerous = [
+        "gacha",
+        "shop",
+        "purchase",
+        "buy",
+        "recruit",
+        "construct",
+        "retire",
+        "delete",
+        "decompose",
+        "enhance",
+        "refill",
+        "paid",
+        "premium",
+        "exercise",
+        "pvp",
+    ];
+    if dangerous.iter().any(|word| lower.contains(word)) {
+        return Err(CliError::safety_blocked(
+            "semantic_action_requires_destructive_opt_in",
+            format!("{label} '{value}' looks destructive and requires --allow-destructive"),
+            &["navigation_only"],
+        ));
+    }
+    Ok(())
+}
+
+fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(format!(
+            "click rectangle must have positive dimensions: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    Ok(SemanticPoint {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+    })
+}
+
+fn point_json(point: SemanticPoint) -> Value {
+    json!({
+        "x": point.x,
+        "y": point.y
+    })
+}
+
+fn send_semantic_tap(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    point: SemanticPoint,
+) -> CliOutcome<Value> {
+    send_semantic_input(
+        global,
+        config,
+        &SemanticInput::Tap {
+            rect: PackRect {
+                x: point.x,
+                y: point.y,
+                width: 1,
+                height: 1,
+            },
+            point,
         },
-        "evaluations": evaluations.iter().map(page_eval_json).collect::<Vec<_>>()
+    )
+}
+
+fn send_semantic_input(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    input: &SemanticInput,
+) -> CliOutcome<Value> {
+    let device_config = device_config(global, config)?;
+    let mut backend = MaaTouchBackend::new(
+        device_config.adb,
+        device_config.target,
+        MaaTouchConfig::default(),
+    );
+    let serial = backend.serial().to_string();
+    let device = backend
+        .connect()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let handshake = backend.handshake_info().cloned();
+    let operation = match input {
+        SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
+        SemanticInput::Drag {
+            from,
+            to,
+            duration_ms,
+            ..
+        } => backend.swipe(from.x, from.y, to.x, to.y, *duration_ms),
+    };
+    let close = backend.close();
+    combine_operation_and_close(operation, close)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "backend": "maatouch",
+        "control_mode": "semantic",
+        "serial": serial,
+        "device_state": device.state,
+        "screen_size": device.screen_size,
+        "handshake": handshake.map(handshake_json),
+        "action": semantic_input_json(input)
+    }))
+}
+
+fn poll_for_page(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    page_id: &str,
+    timeout: Duration,
+    poll: Duration,
+) -> CliOutcome<PageDetectionOutcome> {
+    let started = Instant::now();
+    let mut last = None;
+    while started.elapsed() <= timeout {
+        thread::sleep(poll);
+        let scene = load_scene_from_flags(global, flags)?;
+        let outcome = detect_current_page(evaluator, detector, &scene)?;
+        if outcome.matched && outcome.page == page_id {
+            return Ok(outcome);
+        }
+        last = Some(outcome);
+    }
+    Ok(last.unwrap_or(PageDetectionOutcome {
+        page: "standby".to_string(),
+        matched: false,
+        standby: true,
+        evaluations: Vec::new(),
     }))
 }
 
@@ -3027,12 +3862,14 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         let config = read_user_config()?;
         let device_config = device_config(global, &config)?;
         let requested = global.capture_backend.unwrap_or_default();
-        let selected = create_capture_backend(device_config.capture_backend_config(requested))
-            .map_err(|err| CliError::device(err.to_string()))?;
-        let mut backend = selected.backend;
-        let frame = backend
-            .capture()
-            .map_err(|err| CliError::device(err.to_string()))?;
+        let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+        let captured = capture_for_command(
+            &device_config,
+            requested,
+            flags.bool("--require-fresh"),
+            fresh_delay,
+        )?;
+        let frame = captured.frame;
         return scene_from_frame(&frame);
     }
     Err(CliError::usage(
@@ -3166,6 +4003,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
+        command_cap("current-page", ["device"], "available"),
+        command_cap("is-visible", ["device"], "available"),
+        command_cap("locate", ["device"], "available"),
+        command_cap("tap-target", ["device"], "available"),
+        command_cap("navigate", ["device"], "available"),
         command_cap("monitor", ["running_runtime"], "reserved"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
@@ -3879,6 +4721,168 @@ mod tests {
         assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
     }
 
+    #[test]
+    fn current_page_resolves_semantic_page() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "current-page",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("page")
+                .and_then(Value::as_str),
+            Some("arknights/home")
+        );
+    }
+
+    #[test]
+    fn tap_target_dry_run_requires_visible_target_and_returns_point() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "tap-target",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let point = result.envelope.data.as_ref().unwrap().get("point").unwrap();
+        assert_eq!(point.get("x").and_then(Value::as_i64), Some(12));
+        assert_eq!(point.get("y").and_then(Value::as_i64), Some(23));
+    }
+
+    #[test]
+    fn navigate_dry_run_uses_navigation_graph() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "navigate",
+                "--to",
+                "target",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let route = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("route")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(route.len(), 1);
+        assert_eq!(
+            route[0].get("id").and_then(Value::as_str),
+            Some("home_to_target")
+        );
+    }
+
+    #[test]
+    fn navigate_blocks_destructive_overlap_by_default() {
+        let temp = semantic_resource_root(true);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "navigate",
+                "--to",
+                "target",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "navigation_destructive_overlap"
+        );
+    }
+
+    #[test]
+    fn locate_template_returns_coordinates() {
+        let temp = TempDir::new().unwrap();
+        let scene = temp.path().join("scene.png");
+        let template = temp.path().join("template.png");
+        fs::write(&scene, encode_png(1, 1, [7, 8, 9])).unwrap();
+        fs::write(&template, encode_png(1, 1, [7, 8, 9])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "locate",
+                template.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("x")
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+    }
+
     fn write_test_zip(path: &Path, files: &[(&str, &[u8])]) {
         let file = File::create(path).unwrap();
         let mut zip = ZipWriter::new(file);
@@ -3888,6 +4892,62 @@ mod tests {
             zip.write_all(content).unwrap();
         }
         zip.finish().unwrap();
+    }
+
+    fn semantic_resource_root(include_destructive_overlap: bool) -> TempDir {
+        let temp = TempDir::new().unwrap();
+        let recognition = temp.path().join("recognition");
+        let navigation = temp.path().join("navigation");
+        fs::create_dir(&recognition).unwrap();
+        fs::create_dir(&navigation).unwrap();
+        fs::write(
+            recognition.join("arknights.cn.pack.json"),
+            r#"{
+                "schema_version":"0.3",
+                "coordinate_space":{"width":1,"height":1},
+                "targets":[
+                    {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                    {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+                    {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            recognition.join("arknights.cn.pages.json"),
+            r#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"arknights/home","required":["home_anchor"]},
+                    {"id":"arknights/target","required":["target_anchor"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let destructive = if include_destructive_overlap {
+            r#"[{"id":"delete","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
+        } else {
+            "[]"
+        };
+        fs::write(
+            navigation.join("arknights.cn.navigation.json"),
+            format!(
+                r#"{{
+                    "schema_version":"0.3",
+                    "game":"arknights",
+                    "server":"cn",
+                    "navigation":[{{
+                        "id":"home_to_target",
+                        "from_page":"arknights/home",
+                        "to_page":"arknights/target",
+                        "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
+                    }}],
+                    "destructive_actions":{destructive}
+                }}"#
+            ),
+        )
+        .unwrap();
+        temp
     }
 
     fn encode_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {

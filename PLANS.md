@@ -44,6 +44,50 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Runtime ADB connection hardening: Runtime and CLI device entry points now resolve one matching adb path through the device layer, prefer the reviewed MuMu adb, avoid PATH/venv adb defaults, preserve wall-clock command deadlines, and only perform one bounded `adb connect` when device state is unavailable.
 - Runtime full-frame recognition hang fix: large template searches now use a bounded pyramid/refine path with a fatal deadline, including `full_frame`, explicit whole-frame rectangles, and large bounded regions.
 - ActingLab session layer Phase A: local session daemon lifecycle, instance health/reconnect, app launch/stop/restart, explicit MaaTouch key/text input, and stale-aware `--require-fresh` capture diagnostics.
+- ActingLab session layer Phase B: semantic `current-page`, `is-visible`, `locate`, `tap-target`, and `navigate` CLI entry points with navigation-only safety gates.
+
+## Current ActingLab Session Layer Phase B
+
+The current Runtime task implements the Phase B semantic layer from `TASK-Lab-session-layer.md`.
+
+Scope:
+
+- Add `current-page` as the user-facing semantic page-status command, reusing the existing PageDetector path.
+- Add `is-visible <target>` for evaluating a visual recognition target without clicking.
+- Add `locate <template>` / `locate --template <path>` for full-frame template localization used during calibration.
+- Add `tap-target <target>` as a semantic MaaTouch click command that requires the target to pass visual recognition before real execution.
+- Add `navigate --to <page>` using `navigation/<game>.<server>.navigation.json`, current-page detection, route planning, navigation-only safety checks, MaaTouch execution, and post-edge arrival polling.
+- Keep real semantic click execution gated by `--capture`; `--scene` is allowed for dry-run planning and offline validation only.
+- Reuse existing Runtime capture, recognition, page-detector, and MaaTouch modules. No OCR, SQLite, scheduler, UI, recording, self-heal, or game task logic is added.
+
+Safety direction:
+
+- `tap-target` rejects click-only targets because they cannot prove visibility.
+- `tap-target` fails visibly if the target does not pass recognition.
+- `tap-target` and `navigate` block obviously destructive semantic ids by default and require `--allow-destructive` to bypass the name gate.
+- `navigate` only consumes the navigation edge list, not `page_operations` or `destructive_actions`.
+- `navigate` blocks navigation edges whose click area overlaps a destructive action on the same source page, or on `any`.
+- `navigate --dry-run` exposes the planned route without touching the device.
+
+Validation status:
+
+- Runtime and the three resource repositories were mirrored before work.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- `detect-page --check-pages` passed for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+- Read-only `current-page --capture` smoke:
+  - AzurLane JP `127.0.0.1:16385` matched `azurlane/home`.
+  - Arknights CN `127.0.0.1:16416` returned `arknights/home`, but several other AK pages also matched the same frame; treat this as a resource discriminator issue.
+  - BlueArchive JP `127.0.0.1:16481` returned standby with a visible recovery hint; no wake click was sent.
+- AK dry-run navigation from the captured home frame to `arknights/depot` planned `home_to_depot` with no click execution.
+
+Known resource follow-ups:
+
+- Arknights page anchors are currently too broad and can produce multiple simultaneous page matches.
+- BlueArchive standby/home detection still needs the later self-heal/wake phase and stronger page anchors.
+- Live `tap-target` and live `navigate` clicks should be run only after the user chooses a safe navigation route and accepts the current resource discriminator state.
 
 ## Current ActingLab Session Layer Phase A
 
