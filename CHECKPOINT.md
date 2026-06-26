@@ -16,7 +16,7 @@
 - Device-test CLI parsing no longer forces adb discovery for offline parse-only commands; device commands resolve adb before execution.
 - AK-only live validation used `127.0.0.1:16416`.
 - BA `127.0.0.1:16481` and AzurLane `127.0.0.1:16385` validation were skipped because those emulators were occupied by another process.
-- Implementation commit: pending.
+- Implementation commit: `8ae8dd31eb4a56db363c7afad545d12bf47bc4d3` (`Harden Runtime ADB path resolution`).
 
 ### Files changed
 
@@ -93,7 +93,7 @@
 
 ### Next step
 
-1. Commit and push Runtime repository changes.
+1. Commit and push the checkpoint hash update.
 2. Add a checkpoint tag after push.
 3. If BA/AzurLane become available later, repeat live capture validation on those ports with the same MuMu adb.
 
