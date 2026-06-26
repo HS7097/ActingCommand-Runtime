@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session layer Phase C startup-login resource loop
+
+### Current status
+
+- Implemented explicit `session recover --startup-login` for the first Phase C startup-login resource path.
+- The command reads `STARTUP-LOGIN.md` from the resolved resource root, including reorganized `<repo>\ours` roots.
+- Added `--startup-login-file <path>` for explicit startup-login resource validation.
+- Extracts popup-close and continue/center coordinates from the resource file.
+- Missing startup-login files, malformed coordinates, missing popup-close coordinates, and missing continue coordinates fail visibly with safety-blocked errors.
+- Dry-run planning works with `--scene` and reports `safety_gate = maintenance_login_only`.
+- Real execution remains gated by the existing `session recover` requirement for `--capture`.
+- Real execution runs a bounded MaaTouch semantic tap loop, then recaptures and detects the page after each round.
+- Loop bounds are explicit: `--startup-max-rounds`, default `25`, and `--startup-interval-ms`, default `2000`.
+- No ADB input fallback, new capture backend, OCR, SQLite, UI, scheduler body, recording body, or game-task execution was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `28a44377078a`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` for Runtime and the three resource repositories.
+- `git status --short --branch` and hash checks for Runtime and the three resource repositories.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_recover_startup_login`
+- `cargo test -p actingcommand-actinglab session_recover`
+- Generated `target\session-startup-login-smoke\blank-1280x720.png` for offline dry-run validation.
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark session recover --startup-login --to home --scene target\session-startup-login-smoke\blank-1280x720.png`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_recover_startup_login` passed with `3` focused tests.
+- `cargo test -p actingcommand-actinglab session_recover` passed with `6` focused tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- The Arknights dry-run command used the real resource repository root and resolved `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours\STARTUP-LOGIN.md`.
+- The Arknights dry-run plan reported popup-close `(1205, 67)`, continue `(640, 360)`, `max_rounds = 25`, `interval_ms = 2000`, and `safety_gate = maintenance_login_only`.
+- No emulator connection or click was performed in the dry-run validation.
+
+### Current blocker
+
+- No blocker for this explicit startup-login resource-loop task.
+- Full Phase C remains incomplete: the resident monitor does not yet automatically invoke this loop under scheduler lease ownership.
+- AzurLane and BlueArchive do not yet have equivalent startup-login resources wired through this command path.
+
+### Next step
+
+1. Commit and push the startup-login Runtime changes.
+2. Continue Phase C with resident monitor invocation, scheduler lease coordination, modal dismissal policy, or app restart policy in a separately scoped task.
+
 ## 2026-06-27 Resource repository `ours` compatibility
 
 ### Current status

@@ -1490,6 +1490,22 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let max_actions = parse_optional_usize(&flags, "--max-actions", 3)?;
     let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
     let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
+    if flags.bool("--startup-login") {
+        let startup_max_rounds = parse_optional_usize(&flags, "--startup-max-rounds", 25)?;
+        let startup_interval = parse_optional_duration_ms(&flags, "--startup-interval-ms", 2_000)?;
+        return run_session_startup_login_recover(StartupLoginRecovery {
+            global,
+            config: &config,
+            flags: &flags,
+            evaluator: &evaluator,
+            detector: &detector,
+            start,
+            target_page,
+            dry_run,
+            max_rounds: startup_max_rounds,
+            interval: startup_interval,
+        });
+    }
 
     if start.matched && start.page == target_page {
         return Ok(json!({
@@ -2173,6 +2189,270 @@ fn safe_recovery_route(
         reject_destructive_overlap(edge, &graph.destructive_clicks)?;
     }
     Ok(route)
+}
+
+struct StartupLoginPlan {
+    source: PathBuf,
+    target_page: String,
+    max_rounds: usize,
+    interval: Duration,
+    close_popup: SemanticInput,
+    continue_input: SemanticInput,
+}
+
+struct StartupLoginRecovery<'a> {
+    global: &'a GlobalOptions,
+    config: &'a UserConfig,
+    flags: &'a FlagArgs,
+    evaluator: &'a RecognitionEvaluator,
+    detector: &'a PageDetector,
+    start: PageDetectionOutcome,
+    target_page: String,
+    dry_run: bool,
+    max_rounds: usize,
+    interval: Duration,
+}
+
+fn run_session_startup_login_recover(ctx: StartupLoginRecovery<'_>) -> CliOutcome<Value> {
+    let plan = load_startup_login_plan(
+        ctx.global,
+        ctx.config,
+        ctx.flags,
+        ctx.target_page.clone(),
+        ctx.max_rounds,
+        ctx.interval,
+    )?;
+    if ctx.start.matched && ctx.start.page == ctx.target_page {
+        return Ok(json!({
+            "status": "already_at_target",
+            "mode": "startup_login_recovery",
+            "executed": false,
+            "from": ctx.start.page,
+            "to": ctx.target_page,
+            "startup_login": startup_login_plan_json(&plan),
+            "steps": []
+        }));
+    }
+    if ctx.dry_run {
+        return Ok(json!({
+            "status": "planned",
+            "mode": "startup_login_recovery",
+            "executed": false,
+            "from": page_detection_json(&ctx.start),
+            "to": ctx.target_page,
+            "startup_login": startup_login_plan_json(&plan),
+            "round_plan": startup_login_round_json(&plan, 1),
+            "repeat_until": "target_page_or_max_rounds",
+            "safety_gate": "maintenance_login_only"
+        }));
+    }
+
+    let mut steps = Vec::new();
+    let mut last = ctx.start;
+    for round in 1..=plan.max_rounds {
+        let close_device = send_semantic_input(ctx.global, ctx.config, &plan.close_popup)?;
+        let continue_device = send_semantic_input(ctx.global, ctx.config, &plan.continue_input)?;
+        thread::sleep(plan.interval);
+        let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
+        last = detect_current_page(ctx.evaluator, ctx.detector, &scene)?;
+        steps.push(json!({
+            "round": round,
+            "actions": [
+                {
+                    "name": "close_popup",
+                    "input": semantic_input_json(&plan.close_popup),
+                    "device": close_device
+                },
+                {
+                    "name": "continue",
+                    "input": semantic_input_json(&plan.continue_input),
+                    "device": continue_device
+                }
+            ],
+            "arrived": page_detection_json(&last)
+        }));
+        if last.matched && last.page == plan.target_page {
+            return Ok(json!({
+                "status": "recovered",
+                "mode": "startup_login_recovery",
+                "executed": true,
+                "to": plan.target_page,
+                "startup_login": startup_login_plan_json(&plan),
+                "steps": steps,
+                "safety_gate": "maintenance_login_only"
+            }));
+        }
+    }
+
+    Err(CliError::safety_blocked(
+        "startup_login_recovery_failed",
+        format!(
+            "startup-login recovery did not reach '{}' within {} rounds; last page '{}'",
+            plan.target_page, plan.max_rounds, last.page
+        ),
+        &["maintenance_recovery", "startup_login"],
+    ))
+}
+
+fn load_startup_login_plan(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    target_page: String,
+    max_rounds: usize,
+    interval: Duration,
+) -> CliOutcome<StartupLoginPlan> {
+    if max_rounds == 0 {
+        return Err(CliError::safety_blocked(
+            "startup_login_round_limit_zero",
+            "startup-login recovery requires --startup-max-rounds greater than 0",
+            &["maintenance_recovery", "startup_login"],
+        ));
+    }
+    let source = flags.optional_path("--startup-login-file").map(Ok).unwrap_or_else(|| {
+        effective_resource_root(global, config)
+            .map(|root| root.join("STARTUP-LOGIN.md"))
+            .ok_or_else(|| {
+                CliError::usage(
+                    "session recover --startup-login requires --resource-root or --startup-login-file",
+                )
+            })
+    })?;
+    let text = fs::read_to_string(&source).map_err(|err| {
+        CliError::safety_blocked(
+            "startup_login_resource_missing",
+            format!(
+                "failed to read startup-login resource {}: {err}",
+                source.display()
+            ),
+            &["maintenance_recovery", "startup_login_resource"],
+        )
+    })?;
+    Ok(StartupLoginPlan {
+        source,
+        target_page,
+        max_rounds,
+        interval,
+        close_popup: semantic_tap_input(find_coordinate_by_anchors(
+            &text,
+            &["弹窗关闭", "关闭 ×", "关闭", "close"],
+            "popup close",
+        )?),
+        continue_input: semantic_tap_input(find_coordinate_by_anchors(
+            &text,
+            &[
+                "推进/点击继续",
+                "点击继续",
+                "屏幕中心",
+                "tap 中心",
+                "continue",
+            ],
+            "continue",
+        )?),
+    })
+}
+
+fn find_coordinate_by_anchors(
+    text: &str,
+    anchors: &[&str],
+    label: &str,
+) -> CliOutcome<SemanticPoint> {
+    for line in text.lines() {
+        if anchors.iter().any(|anchor| line.contains(anchor))
+            && let Some(point) = parse_parenthesized_point(line)?
+        {
+            return Ok(point);
+        }
+    }
+    Err(CliError::safety_blocked(
+        "startup_login_coordinate_missing",
+        format!("startup-login resource is missing the {label} coordinate"),
+        &["maintenance_recovery", "startup_login_resource"],
+    ))
+}
+
+fn parse_parenthesized_point(line: &str) -> CliOutcome<Option<SemanticPoint>> {
+    let mut rest = line;
+    while let Some(start) = rest.find('(') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find(')') else {
+            return Ok(None);
+        };
+        let candidate = &after_start[..end];
+        if let Some((x, y)) = candidate.split_once(',') {
+            let x = x.trim().parse::<i32>().map_err(|err| {
+                CliError::safety_blocked(
+                    "startup_login_coordinate_invalid",
+                    format!("invalid startup-login coordinate x '{}': {err}", x.trim()),
+                    &["maintenance_recovery", "startup_login_resource"],
+                )
+            })?;
+            let y = y.trim().parse::<i32>().map_err(|err| {
+                CliError::safety_blocked(
+                    "startup_login_coordinate_invalid",
+                    format!("invalid startup-login coordinate y '{}': {err}", y.trim()),
+                    &["maintenance_recovery", "startup_login_resource"],
+                )
+            })?;
+            if x < 0 || y < 0 {
+                return Err(CliError::safety_blocked(
+                    "startup_login_coordinate_invalid",
+                    "startup-login coordinates must be non-negative",
+                    &["maintenance_recovery", "startup_login_resource"],
+                ));
+            }
+            return Ok(Some(SemanticPoint { x, y }));
+        }
+        rest = &after_start[end + 1..];
+    }
+    Ok(None)
+}
+
+fn semantic_tap_input(point: SemanticPoint) -> SemanticInput {
+    SemanticInput::Tap {
+        rect: PackRect {
+            x: point.x,
+            y: point.y,
+            width: 1,
+            height: 1,
+        },
+        point,
+    }
+}
+
+fn startup_login_plan_json(plan: &StartupLoginPlan) -> Value {
+    json!({
+        "source": plan.source.display().to_string(),
+        "target_page": plan.target_page,
+        "max_rounds": plan.max_rounds,
+        "interval_ms": plan.interval.as_millis(),
+        "actions_per_round": [
+            {
+                "name": "close_popup",
+                "input": semantic_input_json(&plan.close_popup)
+            },
+            {
+                "name": "continue",
+                "input": semantic_input_json(&plan.continue_input)
+            }
+        ]
+    })
+}
+
+fn startup_login_round_json(plan: &StartupLoginPlan, round: usize) -> Value {
+    json!({
+        "round": round,
+        "actions": [
+            {
+                "name": "close_popup",
+                "input": semantic_input_json(&plan.close_popup)
+            },
+            {
+                "name": "continue",
+                "input": semantic_input_json(&plan.continue_input)
+            }
+        ]
+    })
 }
 
 fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcome<()> {
@@ -5569,6 +5849,116 @@ mod tests {
     }
 
     #[test]
+    fn session_recover_startup_login_dry_run_reads_resource_file() {
+        let temp = semantic_resource_root(false);
+        write_startup_login_resource(temp.path());
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--startup-login",
+                "--to",
+                "home",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("planned"));
+        assert_eq!(
+            data.pointer("/startup_login/actions_per_round/0/input/point/x")
+                .and_then(Value::as_i64),
+            Some(1205)
+        );
+        assert_eq!(
+            data.pointer("/startup_login/actions_per_round/1/input/point/y")
+                .and_then(Value::as_i64),
+            Some(360)
+        );
+        assert_eq!(
+            data.get("safety_gate").and_then(Value::as_str),
+            Some("maintenance_login_only")
+        );
+    }
+
+    #[test]
+    fn session_recover_startup_login_missing_resource_is_fatal() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--startup-login",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "startup_login_resource_missing"
+        );
+    }
+
+    #[test]
+    fn session_recover_startup_login_missing_coordinate_is_fatal() {
+        let temp = semantic_resource_root(false);
+        fs::write(
+            temp.path().join("STARTUP-LOGIN.md"),
+            "# startup\n| 推进/点击继续 | (640, 360) |\n",
+        )
+        .unwrap();
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "session",
+                "recover",
+                "--startup-login",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "startup_login_coordinate_missing"
+        );
+    }
+
+    #[test]
     fn monitor_once_reports_healthy_expected_page() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
@@ -5786,6 +6176,14 @@ mod tests {
         )
         .unwrap();
         temp
+    }
+
+    fn write_startup_login_resource(root: &Path) {
+        fs::write(
+            root.join("STARTUP-LOGIN.md"),
+            "# startup\n| **弹窗关闭 ×** | **(1205, 67)** |\n| 推进/点击继续 | (640, 360) |\n",
+        )
+        .unwrap();
     }
 
     fn encode_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {

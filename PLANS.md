@@ -47,6 +47,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session layer Phase B: semantic `current-page`, `is-visible`, `locate`, `tap-target`, and `navigate` CLI entry points with navigation-only safety gates.
 - ActingLab session layer Phase C diagnosis and initial recovery: `monitor --once` reports current session health and recovery availability; `session recover` plans or executes maintenance-only recovery toward a known target page, using standby wake control points and safe navigation routes.
 - Resource repository reorganization compatibility: ActingLab resource, recognition, navigation, and package-build entry points accept both direct resource roots and reorganized repository roots that contain `ours/`.
+- ActingLab session layer Phase C startup-login resource loop: `session recover --startup-login` reads `STARTUP-LOGIN.md` and runs a bounded maintenance-only popup-close/continue loop toward the target page.
+
+## Current ActingLab Session Layer Phase C Startup-Login Resource Loop
+
+The current Runtime task connects the first explicit startup-login resource path from `TASK-Lab-session-layer.md`.
+
+Scope:
+
+- Add `session recover --startup-login`.
+- Read `STARTUP-LOGIN.md` from the resolved resource root, including reorganized `<repo>/ours` roots.
+- Support `--startup-login-file <path>` for explicit resource-file validation.
+- Extract the required popup-close coordinate and continue/center coordinate from the resource file.
+- Fail visibly if the startup-login resource file is missing, malformed, or missing either coordinate.
+- Keep dry-run planning available with `--scene`.
+- Keep real execution gated by the existing `session recover` requirement for `--capture`.
+- During real execution, run a bounded loop using MaaTouch semantic taps, then recapture and detect the page after each round.
+- Bound the loop with `--startup-max-rounds`, default `25`, and `--startup-interval-ms`, default `2000`.
+- Reuse the existing PageDetector, capture path, resource-root resolution, and MaaTouch semantic input path.
+
+Safety direction:
+
+- This path is explicit; ordinary `session recover` behavior does not change unless `--startup-login` is present.
+- The loop is maintenance-only and reports `safety_gate = maintenance_login_only`.
+- No ADB input fallback, new capture backend, OCR, SQLite, UI, scheduler body, recording body, or game-task execution was added.
+- Missing or unusable startup-login resources fail as safety-blocked errors instead of silently guessing coordinates.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test -p actingcommand-actinglab session_recover_startup_login` passed.
+- `cargo test -p actingcommand-actinglab session_recover` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- Arknights dry-run `session recover --startup-login` against the real resource repository root read `ours/STARTUP-LOGIN.md` and planned the popup-close `(1205, 67)` and continue `(640, 360)` maintenance taps without connecting to the emulator or clicking.
+
+Known follow-ups:
+
+- The resident/background monitor still needs to invoke startup-login recovery under scheduler lease ownership.
+- Modal dismissal policy, app restart policy, stale-frame escalation policy, and scheduler-coordinated self-heal ownership are still future Phase C work.
+- Startup-login resources for AzurLane and BlueArchive should be added before this path can be used across all games.
 
 ## Current Resource Repository Reorganization Compatibility
 
