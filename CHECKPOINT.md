@@ -12,7 +12,7 @@
 - Recovery routes reuse existing navigation graph, destructive-name checks, destructive action overlap checks, PageDetector, recognition pack, capture path, and MaaTouch semantic input path.
 - Added `--max-actions`, defaulting to `3`, to keep maintenance recovery bounded.
 - No scheduler implementation, UI, OCR, SQLite, recording implementation, game task logic, ADB input fallback, fallback/reconnect/retry loop, or new capture backend was added.
-- Implementation commit: pending.
+- Implementation commit: `e62c23474c14a806af87801ac8e470b04bbc5850` (`Add session recovery command`).
 
 ### Resource mirrors used
 
