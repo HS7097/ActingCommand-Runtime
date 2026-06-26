@@ -12,8 +12,8 @@
 - RR-04: `Tier3PauseCheckpoint` now carries current step index, current step id, current operation id, current phase, expected page, and last matched page. `LabRunContext` fills those fields when a checkpoint is emitted.
 - Out-of-scope items were not implemented: no Nemu helper-process isolation and no live gameplay package rerun.
 - No UI, OCR, SQLite, scheduler behavior, game logic, new capture backend, ADB input fallback, reconnect loop, or retry loop was added.
-- Current implementation commit: pending.
-- Checkpoint tag: pending.
+- Current implementation commit: `dfce50a50eb048bbc0db5459317c3a58bb88f61c` (`Fix Round2 regression issues`).
+- Checkpoint tag: `checkpoint/20260626-round2-regressions`.
 
 ### Files changed
 
@@ -72,9 +72,8 @@
 
 ### Next step
 
-1. Run full workspace validation gates.
-2. Commit the Runtime changes with planning/checkpoint files.
-3. Create a checkpoint tag and push `main` plus the tag to GitHub.
+1. Create checkpoint tag and push `main` plus the tag to GitHub.
+2. Await user-side validation or the next Runtime milestone.
 
 ## 2026-06-25 Lab-1z Round2 stability close-out
 
