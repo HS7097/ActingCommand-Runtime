@@ -14,6 +14,8 @@
 - Added MaaTouch `key` and `text` support through the `InputBackend` trait and `MaaTouchBackend`; no ADB input fallback was added.
 - Added top-level `key` and `text` trusted-manual CLI commands.
 - Added `capture --require-fresh` and `session capture --require-fresh`; fresh capture compares two raw-pixel frame hashes and reports stale-frame diagnostics. `auto` fresh probing tries `nemu_ipc`, `droidcast_raw`, then `adb_screencap`.
+- Implementation commit: `01e2f0f` (`Add ActingLab session layer phase A`).
+- Checkpoint tag: `checkpoint/20260627-session-layer-phase-a`.
 
 ### Resource mirrors used
 
