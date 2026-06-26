@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-26 ActingLab direct touch CLI
+
+### Current status
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-actinglab-tap-cli.md` and `C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md` with UTF-8 output.
+- Confirmed the active first-priority task is the small `actinglab` direct trusted-manual touch CLI entry point, not the larger Lab packager work.
+- Confirmed local `main` was aligned with `origin/main` at `90c2e0029b954ef4449b65df30836bfc4e44fb4b` before this task.
+- Added main CLI commands `actinglab tap`, `actinglab swipe`, and `actinglab long-tap`.
+- The new commands parse positional coordinates/duration in the same user-facing style as `device-test`, use the existing `MaaTouchBackend`, and return the normal JSON envelope/human output path.
+- The new commands are registered in `command_capabilities()` with `needs=["device"]` and `status="available"`.
+- `actinglab capture --out <png> --instance ...` remains the existing screenshot side and was not refactored.
+- Autonomous execution safety gates were not relaxed: `lab run`, `package run`, `operation run`, and `control probe-click` still retain their LabLease/navigation/expect boundaries.
+- No ADB input fallback, reconnect loop, retry loop, UI, scheduler behavior, new backend, OCR, SQLite, or game logic was added.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -LiteralPath 'C:\Users\Alice\.codex\skills\implement\SKILL.md' -Encoding UTF8`
+- `git status --short --branch`
+- `git diff -- apps/actinglab/src/main.rs`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\TASK-actinglab-tap-cli.md' -Encoding UTF8`
+- `Get-Content -LiteralPath 'C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md' -Encoding UTF8`
+- `rg -n "struct FlagArgs|impl FlagArgs|command_capabilities|command_cap\(|mod tests|#\[cfg\(test\)\]" apps\actinglab\src\main.rs`
+- `cargo fmt --all`
+- `rg -n "adb shell input|input tap|input swipe|fallback|reconnect|retry" apps\actinglab\src\main.rs`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `rg -n "adb shell input|input tap|input swipe|LabLease|navigation_only|expect" apps\actinglab\src\main.rs`
+
+### New or updated unit coverage
+
+- `direct_touch_positionals_parse`
+- `direct_touch_missing_args_are_usage_errors`
+- `direct_touch_commands_are_capability_registered`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab` passed with 54 tests.
+- `cargo test --workspace` passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Touched-file prohibited scan found no new `adb shell input`, `input tap`, `input swipe`, reconnect, or retry implementation.
+- Scope scan confirmed the LabLease/navigation/expect terms remain in the existing autonomous-control safety paths, not in the new direct trusted-manual touch commands.
+
+### Current blocker
+
+- No implementation blocker.
+- Live true-device tap/capture acceptance has not been run in this Codex pass. The task document assigns that final true-device acceptance to Claude/user-side validation, and this implementation is verified by compile, unit, clippy, format, and scope checks.
+- The larger `TASK-Lab-packager.md` item from the handoff remains a later task and was not started in this pass.
+
+### Next step
+
+1. Commit the direct touch CLI implementation and this checkpoint.
+2. Push `main` to GitHub.
+3. Await live acceptance or proceed to the next handoff task when explicitly started.
+
 ## 2026-06-26 Round2 regression close-out
 
 ### Current status

@@ -39,6 +39,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Lab-1z fixes: explicit frame recognition lifecycle, admission-before-store memory estimation, sync segment-zip flush, current-frame Tier3 pause/resume checkpointing, conservative resident-byte accounting, temp cleanup, and P2.3 capture hot-path non-regression benchmark.
 - Lab-1z Round2 stability close-out: P2.2 device deadlines, Lab-1y cleanup, frame-store accounting/spill fixes, P1g package hardening, and release benchmark non-regression.
 - Round2 regression close-out: segment-write failure keeps per-frame encode failures, Lab run-dir cleanup no longer deletes diagnostics or in-run outputs, Tier3 checkpoints include step context, and Nemu IPC worker shutdown is no longer double-invoked.
+- ActingLab direct touch CLI: main `actinglab` now exposes trusted manual `tap`, `swipe`, and `long-tap` commands through the existing MaaTouch backend, while `capture` remains the screenshot side of the unified CLI.
+
+## Current ActingLab Direct Touch CLI
+
+The current Runtime task completes the first item from `C:\合作工作区\ActingCommand\HANDOFF-Codex-lab-batch.md`: make the main `actinglab` CLI a unified trusted-manual control entry point for emulator touch and capture.
+
+Scope:
+
+- Add `actinglab tap <x> <y> --instance 127.0.0.1:<port>`.
+- Add `actinglab swipe <x1> <y1> <x2> <y2> <duration_ms> --instance 127.0.0.1:<port>`.
+- Add `actinglab long-tap <x> <y> <duration_ms> --instance 127.0.0.1:<port>`.
+- Keep `actinglab capture --out <png> --instance ...` as the existing screenshot path.
+- Reuse `crates/device` `MaaTouchBackend` and the same input backend path as `device-test`.
+
+Safety boundary:
+
+- These commands are direct trusted-manual controls for coordinating agents.
+- They do not require LabLease, `navigation_only`, or expect page guards.
+- Autonomous execution paths such as `lab run`, `package run`, `operation run`, and `control probe-click` keep their existing safety gates.
+- No ADB input fallback, reconnect loop, retry loop, UI, scheduler behavior, new backend, OCR, SQLite, or game logic is added.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab` passed with 54 tests.
+- `cargo test --workspace` passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Touched-file scope scans found no new `adb shell input`, `input tap`, `input swipe`, reconnect, or retry implementation.
+- Live device tap/capture validation is reserved for user/agent-side acceptance because this code change is already covered by compile/unit validation and the task names Claude as the true-device acceptance runner.
 
 ## Current Round2 Regression Close-Out
 

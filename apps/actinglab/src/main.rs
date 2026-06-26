@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, Frame, PixelFormat,
+    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, Frame, HandshakeInfo,
+    InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat, combine_operation_and_close,
     create_capture_backend,
 };
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
@@ -437,6 +438,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "devices" => run_devices(&invocation.global),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
+        [cmd] if cmd == "tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
+        [cmd] if cmd == "swipe" => run_direct_touch(&invocation.global, cmd, &invocation.args),
+        [cmd] if cmd == "long-tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "capture" => run_capture(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
@@ -728,6 +732,148 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "message": attempt.message
         })).collect::<Vec<_>>(),
         "out": out.display().to_string()
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectTouchCommand {
+    Tap {
+        x: i32,
+        y: i32,
+    },
+    Swipe {
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    },
+    LongTap {
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    },
+}
+
+impl DirectTouchCommand {
+    fn parse(command: &str, flags: &FlagArgs) -> CliOutcome<Self> {
+        flags.reject_flags(command)?;
+        match command {
+            "tap" => {
+                flags.expect_positionals(command, 2)?;
+                Ok(Self::Tap {
+                    x: flags.required_i32(0, "tap x")?,
+                    y: flags.required_i32(1, "tap y")?,
+                })
+            }
+            "swipe" => {
+                flags.expect_positionals(command, 5)?;
+                Ok(Self::Swipe {
+                    x1: flags.required_i32(0, "swipe x1")?,
+                    y1: flags.required_i32(1, "swipe y1")?,
+                    x2: flags.required_i32(2, "swipe x2")?,
+                    y2: flags.required_i32(3, "swipe y2")?,
+                    duration_ms: flags.required_u64(4, "swipe duration_ms")?,
+                })
+            }
+            "long-tap" => {
+                flags.expect_positionals(command, 3)?;
+                Ok(Self::LongTap {
+                    x: flags.required_i32(0, "long-tap x")?,
+                    y: flags.required_i32(1, "long-tap y")?,
+                    duration_ms: flags.required_u64(2, "long-tap duration_ms")?,
+                })
+            }
+            other => Err(CliError::usage(format!(
+                "unknown direct touch command: {other}"
+            ))),
+        }
+    }
+
+    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+        match *self {
+            Self::Tap { x, y } => backend.tap(x, y),
+            Self::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => backend.swipe(x1, y1, x2, y2, duration_ms),
+            Self::LongTap { x, y, duration_ms } => backend.long_tap(x, y, duration_ms),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match *self {
+            Self::Tap { x, y } => json!({
+                "type": "tap",
+                "x": x,
+                "y": y
+            }),
+            Self::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => json!({
+                "type": "swipe",
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "duration_ms": duration_ms
+            }),
+            Self::LongTap { x, y, duration_ms } => json!({
+                "type": "long-tap",
+                "x": x,
+                "y": y,
+                "duration_ms": duration_ms
+            }),
+        }
+    }
+}
+
+fn handshake_json(handshake: HandshakeInfo) -> Value {
+    json!({
+        "max_contacts": handshake.max_contacts,
+        "max_x": handshake.max_x,
+        "max_y": handshake.max_y,
+        "max_pressure": handshake.max_pressure,
+        "pid": handshake.pid
+    })
+}
+
+fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let command = DirectTouchCommand::parse(command, &flags)?;
+    let config = read_user_config()?;
+    let device_config = device_config(global, &config)?;
+    let mut backend = MaaTouchBackend::new(
+        device_config.adb,
+        device_config.target,
+        MaaTouchConfig::default(),
+    );
+    let serial = backend.serial().to_string();
+    let device = backend
+        .connect()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let handshake = backend.handshake_info().cloned();
+    let operation = command.run(&mut backend);
+    let close = backend.close();
+    combine_operation_and_close(operation, close)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "status": "sent",
+        "backend": "maatouch",
+        "control_mode": "direct_trusted_manual",
+        "safety_gate": "not_required_for_manual_control",
+        "serial": serial,
+        "device_state": device.state,
+        "screen_size": device.screen_size,
+        "handshake": handshake.map(handshake_json),
+        "action": command.to_json()
     }))
 }
 
@@ -1149,6 +1295,48 @@ impl FlagArgs {
 
     fn required_path(&self, name: &str) -> CliOutcome<PathBuf> {
         self.required(name).map(PathBuf::from)
+    }
+
+    fn reject_flags(&self, command: &str) -> CliOutcome<()> {
+        if self.flags.is_empty() {
+            return Ok(());
+        }
+        let names = self.flags.keys().cloned().collect::<Vec<_>>();
+        Err(CliError::usage(format!(
+            "{command} takes positional arguments only; unexpected flags: {}",
+            names.join(", ")
+        )))
+    }
+
+    fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()> {
+        if self.positionals.len() == expected {
+            return Ok(());
+        }
+        Err(CliError::usage(format!(
+            "{command} expects {expected} positional argument(s), got {}",
+            self.positionals.len()
+        )))
+    }
+
+    fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str> {
+        self.positionals
+            .get(index)
+            .map(String::as_str)
+            .ok_or_else(|| CliError::usage(format!("missing {name}")))
+    }
+
+    fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32> {
+        let value = self.required_positional(index, name)?;
+        value
+            .parse::<i32>()
+            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
+    }
+
+    fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64> {
+        let value = self.required_positional(index, name)?;
+        value
+            .parse::<u64>()
+            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
     }
 }
 
@@ -2094,6 +2282,9 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("operation explain", ["offline"], "available"),
         command_cap("status", ["running_runtime"], "available"),
         command_cap("devices", ["device"], "available"),
+        command_cap("tap", ["device"], "available"),
+        command_cap("swipe", ["device"], "available"),
+        command_cap("long-tap", ["device"], "available"),
         command_cap("monitor", ["running_runtime"], "reserved"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
@@ -2269,6 +2460,73 @@ mod tests {
                 .get("commands")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn direct_touch_positionals_parse() {
+        let tap = FlagArgs::parse(&["300".to_string(), "2".to_string()]).unwrap();
+        assert_eq!(
+            DirectTouchCommand::parse("tap", &tap).unwrap(),
+            DirectTouchCommand::Tap { x: 300, y: 2 }
+        );
+
+        let swipe = FlagArgs::parse(&[
+            "10".to_string(),
+            "20".to_string(),
+            "300".to_string(),
+            "400".to_string(),
+            "500".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            DirectTouchCommand::parse("swipe", &swipe).unwrap(),
+            DirectTouchCommand::Swipe {
+                x1: 10,
+                y1: 20,
+                x2: 300,
+                y2: 400,
+                duration_ms: 500
+            }
+        );
+
+        let long_tap =
+            FlagArgs::parse(&["100".to_string(), "200".to_string(), "900".to_string()]).unwrap();
+        assert_eq!(
+            DirectTouchCommand::parse("long-tap", &long_tap).unwrap(),
+            DirectTouchCommand::LongTap {
+                x: 100,
+                y: 200,
+                duration_ms: 900
+            }
+        );
+    }
+
+    #[test]
+    fn direct_touch_missing_args_are_usage_errors() {
+        let flags = FlagArgs::parse(&["300".to_string()]).unwrap();
+        let err = DirectTouchCommand::parse("tap", &flags).unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        assert_eq!(err.code, "validation_failed");
+        assert!(err.message.contains("tap expects 2"));
+    }
+
+    #[test]
+    fn direct_touch_commands_are_capability_registered() {
+        let commands = command_capabilities();
+        for command in ["tap", "swipe", "long-tap"] {
+            let capability = commands
+                .iter()
+                .find(|value| value.get("command").and_then(Value::as_str) == Some(command))
+                .unwrap_or_else(|| panic!("{command} capability missing"));
+            assert_eq!(
+                capability.get("status").and_then(Value::as_str),
+                Some("available")
+            );
+            assert_eq!(
+                capability.get("needs").and_then(Value::as_array).unwrap(),
+                &vec![Value::String("device".to_string())]
+            );
+        }
     }
 
     #[test]
