@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session layer Phase C monitor once
+
+### Current status
+
+- Implemented a read-only `monitor --once` entry for the Phase C session-health diagnosis path.
+- `monitor --once` reports `healthy`, `standby`, or `unexpected_page`.
+- `monitor --once` accepts `--expect <page>` or `--to <page>`, defaulting to `home`.
+- When using `--capture`, `monitor --once` returns capture backend attempts and freshness diagnostics in `scene_source`.
+- For standby, `monitor --once` reports whether `control_points.wake` is available and shows the maintenance recovery step.
+- For unexpected pages, `monitor --once` checks the same safe recovery route gates used by `session recover`.
+- Existing `monitor` without `--once` remains reserved for the future resident/background monitor.
+- No scheduler implementation, UI, OCR, SQLite, recording implementation, game task logic, ADB input fallback, fallback/reconnect/retry loop, new capture backend, or MaaTouch startup path was added.
+- Implementation commit: pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `f3de55cf0694`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da925`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` for Runtime and the three resource repositories.
+- `git status --short --branch` and hash checks for Runtime and the three resource repositories.
+- Read relevant Phase C and record sections from `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_once`
+- `cargo test -p actingcommand-actinglab session_recover`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, scheduler implementation, recording implementation, fallback, reconnect, retry, and MaaTouch startup additions.
+- `detect-page --check-pages` through `actinglab` for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+- BlueArchive JP read-only `monitor --once --capture` on `127.0.0.1:16481` with `--capture-backend adb`.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab monitor_once` passed with `3` focused tests.
+- `cargo test -p actingcommand-actinglab session_recover` passed with `3` focused tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- `detect-page --check-pages` passed for Arknights, AzurLane, and BlueArchive resource roots under `ours`.
+
+### Live/read-only dry-run results
+
+- BlueArchive JP `127.0.0.1:16481` `monitor --once --capture --expect home` returned `status=standby`.
+- `monitor --once` reported `click_allowed=false`.
+- `scene_source` recorded `capture_backend_used=adb_screencap`, the backend attempt, `1280x720`, and `freshness.required=false`.
+- Recovery was reported as `available=true`, with recommended command `session recover --to bluearchive/home --capture`.
+- The planned recovery step used `control_points.wake` at `(300, 2)`.
+- No MaaTouch session was started and no click was sent.
+
+### Current blocker
+
+- Phase C is still incomplete: the persistent background monitor loop, automatic recovery invocation, login resource loop, modal dismissal policy, app restart policy, and scheduler-coordinated self-heal ownership are still future work.
+- Arknights page anchors remain broad and can produce multiple simultaneous page matches; resource-lane tightening is needed before trusting live recovery decisions that depend on AK page state.
+- Live recovery execution should wait for operator acceptance of the current resource quality and the intended maintenance route.
+
+### Next step
+
+1. Commit and push the Phase C `monitor --once` Runtime changes.
+2. Add a checkpoint tag after push if this is accepted as a stable monitor-diagnosis rollback point.
+3. Continue Phase C with the persistent monitor loop or login/modal resource policy in a separately scoped task.
+
 ## 2026-06-27 ActingLab session layer Phase C initial recovery
 
 ### Current status

@@ -475,7 +475,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "locate" => run_locate(&invocation.global, &invocation.args),
         [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
         [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
-        [cmd] if cmd == "monitor" => run_monitor(&invocation.global),
+        [cmd] if cmd == "monitor" => run_monitor(&invocation.global, &invocation.args),
         [cmd] if cmd == "record" => Err(CliError::not_implemented(
             "not_implemented",
             "record is reserved for Runtime frame-stream integration",
@@ -787,6 +787,11 @@ struct CaptureCommandResult {
     frame: Frame,
     attempts: Vec<Value>,
     freshness: Value,
+}
+
+struct MonitorSceneInput {
+    scene: Scene,
+    source: Value,
 }
 
 fn capture_for_command(
@@ -2419,7 +2424,11 @@ fn poll_for_matched_page(
     }))
 }
 
-fn run_monitor(global: &GlobalOptions) -> CliOutcome<Value> {
+fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if flags.bool("--once") {
+        return run_monitor_once(global, &flags);
+    }
     require_runtime(global)?;
     Ok(json!({
         "mode": "passive_mirror",
@@ -2427,6 +2436,110 @@ fn run_monitor(global: &GlobalOptions) -> CliOutcome<Value> {
         "scheduler_pause": false,
         "status": "reserved"
     }))
+}
+
+fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let config = read_user_config()?;
+    let (evaluator, detector) = load_semantic_detector(global, &config, flags)?;
+    let graph = load_navigation_graph(global, &config, flags)?;
+    let input = load_monitor_scene_from_flags(global, flags)?;
+    let outcome = detect_current_page(&evaluator, &detector, &input.scene)?;
+    let expected_page = canonical_navigation_page(
+        &graph,
+        &flags
+            .optional("--expect")
+            .or_else(|| flags.optional("--to"))
+            .filter(|value| value != "true")
+            .unwrap_or_else(|| "home".to_string()),
+    );
+    let diagnosis = if outcome.matched && outcome.page == expected_page {
+        MonitorDiagnosis::Healthy
+    } else if outcome.standby {
+        MonitorDiagnosis::Standby
+    } else {
+        MonitorDiagnosis::UnexpectedPage
+    };
+    Ok(json!({
+        "status": diagnosis.status(),
+        "mode": "monitor_once",
+        "click_allowed": false,
+        "expected_page": expected_page,
+        "current_page": page_detection_json(&outcome),
+        "scene_source": input.source,
+        "recovery": monitor_recovery_json(&diagnosis, &graph, &outcome, &expected_page)
+    }))
+}
+
+enum MonitorDiagnosis {
+    Healthy,
+    Standby,
+    UnexpectedPage,
+}
+
+impl MonitorDiagnosis {
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Standby => "standby",
+            Self::UnexpectedPage => "unexpected_page",
+        }
+    }
+}
+
+fn monitor_recovery_json(
+    diagnosis: &MonitorDiagnosis,
+    graph: &NavigationGraph,
+    outcome: &PageDetectionOutcome,
+    expected_page: &str,
+) -> Value {
+    match diagnosis {
+        MonitorDiagnosis::Healthy => json!({
+            "needed": false,
+            "available": false,
+            "reason": "already_at_expected_page"
+        }),
+        MonitorDiagnosis::Standby => {
+            if let Some(wake) = graph.control_points.get("wake") {
+                json!({
+                    "needed": true,
+                    "available": true,
+                    "reason": "standby",
+                    "recommended_command": format!("session recover --to {expected_page} --capture"),
+                    "steps": [{
+                        "type": "wake",
+                        "control_point": control_point_json(wake)
+                    }]
+                })
+            } else {
+                json!({
+                    "needed": true,
+                    "available": false,
+                    "reason": "standby",
+                    "blocked_by": ["control_point"],
+                    "message": "navigation resources do not define control_points.wake"
+                })
+            }
+        }
+        MonitorDiagnosis::UnexpectedPage => {
+            match safe_recovery_route(graph, &outcome.page, expected_page) {
+                Ok(route) => json!({
+                    "needed": true,
+                    "available": true,
+                    "reason": "unexpected_page",
+                    "recommended_command": format!("session recover --to {expected_page} --capture"),
+                    "route": route.iter().map(navigation_edge_json).collect::<Vec<_>>()
+                }),
+                Err(err) => json!({
+                    "needed": true,
+                    "available": false,
+                    "reason": "unexpected_page",
+                    "blocked_by": err.blocked_by,
+                    "error_code": err.code,
+                    "message": err.message
+                }),
+            }
+        }
+    }
 }
 
 fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -4208,6 +4321,51 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
     ))
 }
 
+fn load_monitor_scene_from_flags(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<MonitorSceneInput> {
+    if let Some(scene_path) = flags.optional_path("--scene") {
+        let png = fs::read(&scene_path).map_err(|err| {
+            CliError::device(format!("failed to read {}: {err}", scene_path.display()))
+        })?;
+        let scene = Scene::from_png(&png).map_err(|err| CliError::device(err.to_string()))?;
+        return Ok(MonitorSceneInput {
+            scene,
+            source: json!({
+                "kind": "scene",
+                "path": scene_path.display().to_string()
+            }),
+        });
+    }
+    if flags.bool("--capture") {
+        let config = read_user_config()?;
+        let device_config = device_config(global, &config)?;
+        let requested = global.capture_backend.unwrap_or_default();
+        let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+        let captured = capture_for_command(
+            &device_config,
+            requested,
+            flags.bool("--require-fresh"),
+            fresh_delay,
+        )?;
+        let frame = captured.frame;
+        let source = json!({
+            "kind": "capture",
+            "width": frame.width,
+            "height": frame.height,
+            "capture_backend_used": frame.backend_name.as_str(),
+            "capture_backend_attempts": captured.attempts,
+            "freshness": captured.freshness
+        });
+        let scene = scene_from_frame(&frame)?;
+        return Ok(MonitorSceneInput { scene, source });
+    }
+    Err(CliError::usage(
+        "monitor --once requires --scene <png> or --capture",
+    ))
+}
+
 fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
     let pixel_format = match frame.pixel_format {
         PixelFormat::Rgb8 => ScenePixelFormat::Rgb8,
@@ -4340,6 +4498,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("locate", ["device"], "available"),
         command_cap("tap-target", ["device"], "available"),
         command_cap("navigate", ["device"], "available"),
+        command_cap("monitor --once", ["device"], "available"),
         command_cap("monitor", ["running_runtime"], "reserved"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
@@ -5293,6 +5452,120 @@ mod tests {
                 .unwrap()
                 .message
                 .contains("requires --capture")
+        );
+    }
+
+    #[test]
+    fn monitor_once_reports_healthy_expected_page() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--once",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--expect",
+                "home",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("healthy"));
+        assert_eq!(
+            data.get("recovery")
+                .and_then(|value| value.get("needed"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn monitor_once_reports_standby_wake_recovery() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--once",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("standby"));
+        let recovery = data.get("recovery").unwrap();
+        assert_eq!(
+            recovery.get("available").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            recovery
+                .get("steps")
+                .and_then(Value::as_array)
+                .and_then(|steps| steps.first())
+                .and_then(|step| step.get("type"))
+                .and_then(Value::as_str),
+            Some("wake")
+        );
+    }
+
+    #[test]
+    fn monitor_once_reports_unexpected_page_route() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--once",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--expect",
+                "home",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("unexpected_page")
+        );
+        let route = data
+            .get("recovery")
+            .and_then(|value| value.get("route"))
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            route[0].get("id").and_then(Value::as_str),
+            Some("target_to_home")
         );
     }
 
