@@ -12,7 +12,7 @@
 - For unexpected pages, `monitor --once` checks the same safe recovery route gates used by `session recover`.
 - Existing `monitor` without `--once` remains reserved for the future resident/background monitor.
 - No scheduler implementation, UI, OCR, SQLite, recording implementation, game task logic, ADB input fallback, fallback/reconnect/retry loop, new capture backend, or MaaTouch startup path was added.
-- Implementation commit: pending.
+- Implementation commit: `97bdef0ebf313af03481a2e3121f8cde9648547a` (`Add session monitor once diagnostics`).
 
 ### Resource mirrors used
 
