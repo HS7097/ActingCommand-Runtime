@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session layer Phase C bounded monitor loop
+
+### Current status
+
+- Implemented bounded `monitor` loop behavior for the Phase C session-health path.
+- `monitor --once` remains the one-shot diagnosis command.
+- `monitor` without `--once` now runs a bounded loop controlled by `--max-iterations`, default `1`, and `--interval-ms`, default `1000`.
+- `--max-iterations 0` fails visibly as a validation error.
+- Default `monitor` loop behavior is read-only and does not invoke recovery.
+- `monitor --recover` explicitly delegates non-healthy diagnoses to the existing `session recover` path.
+- Recovery delegation preserves `--to` / `--expect`, `--scene`, `--capture`, freshness flags, startup-login flags, action limits, step timeout, and poll interval.
+- Real `monitor --recover --scene` without `--dry-run` fails visibly because `session recover` still requires `--capture` for real execution.
+- No scheduler body, daemon-resident monitor, UI, SQLite, OCR, game-task logic, ADB input fallback, fallback/reconnect/retry loop, or new capture backend was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `cc07f596bce75c6bffa35098a5bb09c7a3b7d0a0`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_loop`
+- `cargo test -p actingcommand-actinglab monitor_once`
+- `cargo test -p actingcommand-actinglab session_recover`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark monitor --max-iterations 1 --interval-ms 0 --recover --startup-login --to home --scene target\session-startup-login-smoke\blank-1280x720.png`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab monitor_loop` passed with `3` focused tests.
+- `cargo test -p actingcommand-actinglab monitor_once` passed with `3` focused tests.
+- `cargo test -p actingcommand-actinglab session_recover` passed with `7` focused tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- The Arknights dry-run command used the real resource repository root and resolved `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours\STARTUP-LOGIN.md`.
+- The Arknights dry-run diagnosed a standby frame, delegated through `monitor --recover --startup-login`, and planned popup-close `(1205, 67)` plus continue `(640, 360)` without connecting to the emulator or clicking.
+
+### Current blocker
+
+- No blocker for the bounded monitor-loop CLI increment.
+- Full Phase C remains incomplete: the daemon-resident monitor, scheduler lease ownership, modal dismissal policy, app restart policy, stale-frame escalation policy, and resident event streaming are still future work.
+
+### Next step
+
+1. Commit and push the bounded monitor-loop Runtime changes.
+2. Add a checkpoint tag after push if this is accepted as a stable monitor-loop rollback point.
+3. Continue Phase C with scheduler-owned resident monitoring or modal/app-restart policy in a separately scoped task.
+
 ## 2026-06-27 ActingLab session layer Phase C startup-login resource loop
 
 ### Current status

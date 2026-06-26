@@ -48,6 +48,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session layer Phase C diagnosis and initial recovery: `monitor --once` reports current session health and recovery availability; `session recover` plans or executes maintenance-only recovery toward a known target page, using standby wake control points and safe navigation routes.
 - Resource repository reorganization compatibility: ActingLab resource, recognition, navigation, and package-build entry points accept both direct resource roots and reorganized repository roots that contain `ours/`.
 - ActingLab session layer Phase C startup-login resource loop: `session recover --startup-login` reads `STARTUP-LOGIN.md` and runs a bounded maintenance-only popup-close/continue loop toward the target page.
+- ActingLab session layer Phase C bounded monitor loop: `monitor` now runs bounded diagnosis iterations and can explicitly delegate non-healthy states to `session recover` when `--recover` is present.
+
+## Current ActingLab Session Layer Phase C Bounded Monitor Loop
+
+The current Runtime task advances Phase C by turning the previously reserved `monitor` entry point into a bounded loop over the existing one-shot diagnosis and recovery mechanisms.
+
+Scope:
+
+- `monitor` without `--once` now runs a bounded loop.
+- `--max-iterations <n>` controls the loop bound and must be greater than `0`.
+- `--interval-ms <ms>` controls the delay between iterations.
+- Default `monitor` behavior is read-only and does not recover or click.
+- `monitor --recover` explicitly delegates non-healthy diagnoses to `session recover`.
+- Recovery delegation reuses existing `session recover` safety gates instead of duplicating a second recovery path.
+- Recovery arguments preserve target page, scene or capture source, freshness flags, action limits, poll timing, and startup-login options.
+- Real recovery still requires `--capture`; using `--recover --scene` without `--dry-run` fails visibly.
+- No scheduler body, daemon-resident monitor, UI, SQLite, OCR, game-task logic, ADB input fallback, or new capture backend was added.
+
+Safety direction:
+
+- Read-only monitor iterations never invoke `session recover`.
+- `--recover` is an explicit opt-in and reports `read_only = false`.
+- Dry-run recovery reports plans without touching the emulator.
+- Real recovery remains gated by the existing capture requirement and existing maintenance-only recovery safety gates.
+- Failures from diagnosis or delegated recovery propagate as visible CLI failures; no fake success is returned.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test -p actingcommand-actinglab monitor_loop` passed.
+- `cargo test -p actingcommand-actinglab monitor_once` passed.
+- `cargo test -p actingcommand-actinglab session_recover` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- Arknights dry-run `monitor --recover --startup-login` against the real resource repository root diagnosed a standby frame, delegated to startup-login recovery, and planned the popup-close `(1205, 67)` and continue `(640, 360)` maintenance taps without connecting to the emulator or clicking.
+
+Known follow-ups:
+
+- This is still a CLI-bounded loop, not a daemon-resident monitor.
+- Scheduler lease ownership, background self-heal arbitration, modal dismissal policy, app restart policy, stale-frame escalation policy, and resident event streaming remain future Phase C work.
 
 ## Current ActingLab Session Layer Phase C Startup-Login Resource Loop
 

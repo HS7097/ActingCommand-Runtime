@@ -2709,13 +2709,80 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     if flags.bool("--once") {
         return run_monitor_once(global, &flags);
     }
-    require_runtime(global)?;
+    run_monitor_loop(global, &flags)
+}
+
+fn run_monitor_loop(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let max_iterations = parse_optional_usize(flags, "--max-iterations", 1)?;
+    if max_iterations == 0 {
+        return Err(CliError::usage("--max-iterations must be greater than 0"));
+    }
+    let interval = parse_optional_duration_ms(flags, "--interval-ms", 1_000)?;
+    let recover = flags.bool("--recover");
+    let mut iterations = Vec::with_capacity(max_iterations);
+    for index in 0..max_iterations {
+        if index > 0 && !interval.is_zero() {
+            thread::sleep(interval);
+        }
+        let diagnosis = run_monitor_once(global, flags)?;
+        let recovery =
+            if recover && diagnosis.get("status").and_then(Value::as_str) != Some("healthy") {
+                let recover_args = monitor_recover_args(flags);
+                Some(run_session_recover(global, &recover_args)?)
+            } else {
+                None
+            };
+        iterations.push(json!({
+            "iteration": index + 1,
+            "diagnosis": diagnosis,
+            "recovery": recovery
+        }));
+    }
     Ok(json!({
-        "mode": "passive_mirror",
-        "click_allowed": false,
+        "status": "completed",
+        "mode": "monitor_loop",
+        "read_only": !recover,
+        "recover_requested": recover,
+        "click_allowed": recover && !global.dry_run,
         "scheduler_pause": false,
-        "status": "reserved"
+        "max_iterations": max_iterations,
+        "interval_ms": interval.as_millis(),
+        "iterations": iterations
     }))
+}
+
+fn monitor_recover_args(flags: &FlagArgs) -> Vec<String> {
+    let mut args = Vec::new();
+    let target = flags
+        .optional("--to")
+        .or_else(|| flags.optional("--expect"))
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| "home".to_string());
+    args.extend(["--to".to_string(), target]);
+    push_optional_flag_value(&mut args, flags, "--scene");
+    if flags.bool("--capture") {
+        args.push("--capture".to_string());
+    }
+    if flags.bool("--require-fresh") {
+        args.push("--require-fresh".to_string());
+    }
+    if flags.bool("--startup-login") {
+        args.push("--startup-login".to_string());
+    }
+    push_optional_flag_value(&mut args, flags, "--startup-login-file");
+    push_optional_flag_value(&mut args, flags, "--startup-max-rounds");
+    push_optional_flag_value(&mut args, flags, "--startup-interval-ms");
+    push_optional_flag_value(&mut args, flags, "--fresh-delay-ms");
+    push_optional_flag_value(&mut args, flags, "--max-actions");
+    push_optional_flag_value(&mut args, flags, "--step-timeout-ms");
+    push_optional_flag_value(&mut args, flags, "--poll-ms");
+    args
+}
+
+fn push_optional_flag_value(args: &mut Vec<String>, flags: &FlagArgs, name: &str) {
+    if let Some(value) = flags.optional(name).filter(|value| value != "true") {
+        args.extend([name.to_string(), value]);
+    }
 }
 
 fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -4837,7 +4904,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("tap-target", ["device"], "available"),
         command_cap("navigate", ["device"], "available"),
         command_cap("monitor --once", ["device"], "available"),
-        command_cap("monitor", ["running_runtime"], "reserved"),
+        command_cap("monitor", ["device"], "available"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
         command_cap("scheduler resume", ["running_runtime"], "reserved"),
@@ -6070,6 +6137,139 @@ mod tests {
             route[0].get("id").and_then(Value::as_str),
             Some("target_to_home")
         );
+    }
+
+    #[test]
+    fn monitor_loop_reports_bounded_read_only_iterations() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--max-iterations",
+                "2",
+                "--interval-ms",
+                "0",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--expect",
+                "home",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("mode").and_then(Value::as_str),
+            Some("monitor_loop")
+        );
+        assert_eq!(data.get("read_only").and_then(Value::as_bool), Some(true));
+        let iterations = data.get("iterations").and_then(Value::as_array).unwrap();
+        assert_eq!(iterations.len(), 2);
+        assert!(iterations.iter().all(|iteration| {
+            iteration
+                .pointer("/diagnosis/status")
+                .and_then(Value::as_str)
+                == Some("healthy")
+                && iteration.get("recovery").is_some_and(Value::is_null)
+        }));
+    }
+
+    #[test]
+    fn monitor_loop_recover_dry_run_uses_session_recover_path() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--max-iterations",
+                "1",
+                "--interval-ms",
+                "0",
+                "--recover",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--expect",
+                "home",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let iteration = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("iterations")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .unwrap();
+        assert_eq!(
+            iteration
+                .pointer("/diagnosis/status")
+                .and_then(Value::as_str),
+            Some("standby")
+        );
+        assert_eq!(
+            iteration
+                .pointer("/recovery/status")
+                .and_then(Value::as_str),
+            Some("planned")
+        );
+        assert_eq!(
+            iteration
+                .pointer("/recovery/executed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn monitor_loop_recover_without_capture_fails_loud_for_real_execution() {
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("standby.png");
+        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "monitor",
+                "--max-iterations",
+                "1",
+                "--interval-ms",
+                "0",
+                "--recover",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("requires --capture"));
     }
 
     #[test]
