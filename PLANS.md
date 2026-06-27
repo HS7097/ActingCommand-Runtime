@@ -129,6 +129,33 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed instance registry contract advertisement: Session capabilities, access contract, and API contract now explicitly advertise `session request instance registry`, and daemon request tests verify the resident queue can return the registry contract.
 - ActingLab session instance keep-alive surface: `session instance keep-alive` now exposes an explicit no-click instance reachability probe, and Session capabilities, access contract, API contract, and daemon request naming advertise `session request instance keep-alive` for future UI/scheduler consumers.
 - ActingLab session instance health contract surface: Session access and API contracts now expose `session request instance health` and an `instance_health_view` so UI/scheduler clients can discover the existing health and optional capture-diagnosis payload.
+- ActingLab session app lifecycle contract surface: Session access and API contracts now expose `session request app <launch|stop|restart>` as a lease-gated app lifecycle control surface for future UI/scheduler consumers.
+
+## Current ActingLab Session App Lifecycle Contract Surface
+
+The current Runtime task closes a Phase A discoverability gap for app lifecycle controls.
+
+Scope:
+
+- Add `daemon_controls.app_lifecycle = session request app <launch|stop|restart>` to `session contract`.
+- Add `envelopes.app_lifecycle_view` to `session api`.
+- Expand Session Layer control examples from generic `app` to `session app launch`, `session app stop`, and `session app restart`.
+- Ensure strict Session throat coverage includes `session instance keep-alive`.
+- Replace the strict-session env CLI test with a pure throat-decision test so parallel tests do not leak `ACTINGLAB_REQUIRE_SESSION_DAEMON` into unrelated commands.
+- Preserve the existing `session app launch|stop|restart` execution path and daemon lease gate.
+
+Safety direction:
+
+- This is a contract and discoverability change for existing lease-gated control commands.
+- It does not change app launch/stop/restart execution, device backend behavior, daemon queue semantics, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+
+Validation status:
+
+- Focused access contract and API contract tests passed.
+- CLI smoke confirmed `session contract` exposes `daemon_controls.app_lifecycle`.
+- CLI smoke confirmed `session api` exposes `envelopes.app_lifecycle_view` with `requires_lease = true`.
+- Focused strict-throat keep-alive and prior flaky navigation tests passed.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session Instance Health Contract Surface
 

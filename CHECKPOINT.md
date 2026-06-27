@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session app lifecycle contract surface
+
+### Current status
+
+- `session contract` now exposes `daemon_controls.app_lifecycle = session request app <launch|stop|restart>`.
+- `session api` now exposes `envelopes.app_lifecycle_view`.
+- Session Layer control examples now name `session app launch`, `session app stop`, and `session app restart` instead of only generic `app`.
+- Strict Session throat coverage now includes `session instance keep-alive`.
+- The prior strict-session env CLI test was converted to a pure throat-decision test so parallel test runs do not leak `ACTINGLAB_REQUIRE_SESSION_DAEMON` into unrelated command tests.
+- The existing `session app launch|stop|restart` execution path and daemon lease gate are unchanged.
+- No app lifecycle execution logic, device backend behavior, daemon queue behavior, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `b5cb4a5be44983397ba61254038e6b5f035cb86d`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session access/API contracts, app lifecycle implementation, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo run -q -p actingcommand-actinglab -- --json session contract`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- Initial `cargo test --workspace` failed because `navigate_blocks_destructive_overlap_by_default` observed `session_daemon_required`; this exposed test environment leakage from the old strict-session env CLI test.
+- `cargo test -p actingcommand-actinglab require_session_env_flag_enables_session_throat`
+- `cargo test -p actingcommand-actinglab strict_session_throat_covers_instance_keep_alive`
+- `cargo test -p actingcommand-actinglab navigate_blocks_destructive_overlap_by_default`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract` passed with `1` test.
+- CLI smoke confirmed `session contract` exposes `daemon_controls.app_lifecycle`.
+- CLI smoke confirmed `session api` exposes `envelopes.app_lifecycle_view` with `requires_lease = true`.
+- Initial `cargo test --workspace` failed once due strict-session test environment leakage, then the test was corrected.
+- `cargo test -p actingcommand-actinglab require_session_env_flag_enables_session_throat` passed with `1` test.
+- `cargo test -p actingcommand-actinglab strict_session_throat_covers_instance_keep_alive` passed with `1` test.
+- `cargo test -p actingcommand-actinglab navigate_blocks_destructive_overlap_by_default` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `269` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-app-lifecycle-contract`.
+2. Continue Session Layer follow-ups only after this app lifecycle contract milestone is verified.
+
 ## 2026-06-28 ActingLab session instance health contract surface
 
 ### Current status

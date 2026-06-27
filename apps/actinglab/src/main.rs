@@ -1098,7 +1098,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "tap-target", "navigate", "recover"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "session app launch", "session app stop", "session app restart", "tap-target", "navigate", "recover"]
             }
         },
         "safety": {
@@ -1156,6 +1156,10 @@ fn session_access_contract() -> Value {
             "instance_health": "session request instance health",
             "instance_keep_alive": "session request instance keep-alive"
         },
+        "daemon_controls": {
+            "app_lifecycle": "session request app <launch|stop|restart>",
+            "instance_reconnect": "session request instance reconnect"
+        },
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
@@ -1186,7 +1190,9 @@ fn session_access_contract() -> Value {
                     "lease",
                     "record",
                     "instance lifecycle control",
-                    "app",
+                    "session app launch",
+                    "session app stop",
+                    "session app restart",
                     "lab-run",
                     "package-run",
                     "operation-run",
@@ -1391,6 +1397,14 @@ fn session_api_contract() -> Value {
                 "daemon_query": "session request instance keep-alive",
                 "status_field": "status",
                 "action_field": "action"
+            },
+            "app_lifecycle_view": {
+                "query": "session app <launch|stop|restart>",
+                "daemon_query": "session request app <launch|stop|restart>",
+                "requires_lease": true,
+                "actions": ["launch", "stop", "restart"],
+                "action_field": "action",
+                "package_field": "package"
             }
         },
         "command_classes": {
@@ -1425,7 +1439,9 @@ fn session_api_contract() -> Value {
                     "lease",
                     "record",
                     "instance lifecycle control",
-                    "app",
+                    "session app launch",
+                    "session app stop",
+                    "session app restart",
                     "lab-run",
                     "package-run",
                     "operation-run",
@@ -1680,7 +1696,11 @@ fn enforce_session_throat_policy(invocation: &Invocation) -> CliOutcome<()> {
 }
 
 fn session_throat_required(global: &GlobalOptions) -> bool {
-    global.require_session || env_flag_enabled(REQUIRE_SESSION_DAEMON_ENV)
+    session_throat_required_from_env(global, env_flag_enabled(REQUIRE_SESSION_DAEMON_ENV))
+}
+
+fn session_throat_required_from_env(global: &GlobalOptions, env_requires_session: bool) -> bool {
+    global.require_session || env_requires_session
 }
 
 fn env_flag_enabled(name: &str) -> bool {
@@ -1728,7 +1748,7 @@ fn session_subcommand_requires_throat(sub: &str, args: &[String]) -> bool {
         "capture" | "recover" | "app" => true,
         "instance" => matches!(
             args.first().map(String::as_str),
-            Some("health" | "reconnect")
+            Some("health" | "keep-alive" | "reconnect")
         ),
         "record" | "lease" | "request" | "status" | "start" | "stop" | "cleanup" | "daemon"
         | "contract" | "api" | "transport" | "journal" | "events" => false,
@@ -12219,29 +12239,37 @@ mod tests {
     }
 
     #[test]
-    fn require_session_env_blocks_device_command() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let temp = TempDir::new().unwrap();
-        unsafe {
-            env::set_var(REQUIRE_SESSION_DAEMON_ENV, "1");
-        }
+    fn require_session_env_flag_enables_session_throat() {
+        let global = GlobalOptions {
+            json: true,
+            require_session: false,
+            ..Default::default()
+        };
+        assert!(session_throat_required_from_env(&global, true));
+        assert!(!session_throat_required_from_env(&global, false));
 
-        let result = run_cli(
-            [
-                "--json",
-                "devices",
-                "--state-dir",
-                temp.path().to_str().unwrap(),
-            ],
-            true,
-        );
+        let explicit = GlobalOptions {
+            json: true,
+            require_session: true,
+            ..Default::default()
+        };
+        assert!(session_throat_required_from_env(&explicit, false));
+    }
 
-        unsafe {
-            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
-        }
-        assert_eq!(result.exit_code(), 3);
-        let error = result.envelope.error.as_ref().unwrap();
-        assert_eq!(error.code, "session_daemon_required");
+    #[test]
+    fn strict_session_throat_covers_instance_keep_alive() {
+        assert!(session_subcommand_requires_throat(
+            "instance",
+            &["health".to_string()]
+        ));
+        assert!(session_subcommand_requires_throat(
+            "instance",
+            &["keep-alive".to_string()]
+        ));
+        assert!(session_subcommand_requires_throat(
+            "instance",
+            &["reconnect".to_string()]
+        ));
     }
 
     #[test]
@@ -18969,6 +18997,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("session request instance keep-alive")
         );
+        assert_eq!(
+            payload
+                .pointer("/daemon_controls/app_lifecycle")
+                .and_then(Value::as_str),
+            Some("session request app <launch|stop|restart>")
+        );
     }
 
     #[test]
@@ -19073,6 +19107,18 @@ mod tests {
                 .pointer("/envelopes/instance_keep_alive_view/daemon_query")
                 .and_then(Value::as_str),
             Some("session request instance keep-alive")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/app_lifecycle_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request app <launch|stop|restart>")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/app_lifecycle_view/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
