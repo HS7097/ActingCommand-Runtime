@@ -141,8 +141,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session running request state view: resident daemon request processing now writes a `running/` marker while executing a request, and request-state/status diagnostics expose `running` lifecycle state between queued and response-available.
 - ActingLab session request-state wait view: `session request-state wait <request-id>` and `session request request-state wait <request-id>` provide bounded lifecycle waiting over queued/running/response/journal request states for UI/scheduler clients.
 - ActingLab session lease wait view: `session lease wait` and `session request lease wait` provide bounded waiting for free or held lease state, including holder and lease-id filters for scheduler/Lab/UI coordination.
+- ActingLab session lease list view: `session lease list` and `session request lease list` expose all active Session Layer lease records with holder and lease-id filters for scheduler/Lab/UI arbitration diagnostics.
 
-## Current ActingLab Session Lease Wait View
+## Current ActingLab Session Lease List View
+
+This increment closes an arbitration observability gap in the Session Layer: scheduler, Lab, and future UI clients can list all active lease records without inferring global state from single-instance status calls or raw `lease-*.json` files.
+
+- `session lease list` reads the local Session Layer state directory and returns `session.lease_list.v0.1`.
+- `session request lease list` exposes the same view through the resident daemon request queue.
+- The list output includes active lease count, released-during-read count, state directory, filters, and one entry per active lease.
+- `--holder`, `--lease-holder`, and `--lease-id` filters allow scheduler/UI consumers to isolate ownership.
+- `session lease list` does not require a configured default instance, because it is a global lease view.
+- Corrupt lease files fail visibly through the existing JSON parse error path.
+- `session api` and `capabilities` advertise the new local and daemon-routed lease list surfaces.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+## Previous ActingLab Session Lease Wait View
 
 This increment closes a lease-arbitration observability gap in the Session Layer: consumers can wait for an instance lease to become free or to be held by an expected owner without writing custom polling against `lease-*.json`.
 

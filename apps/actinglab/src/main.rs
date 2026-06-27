@@ -1526,8 +1526,12 @@ fn session_api_contract() -> Value {
                 ]
             },
             "lease_view": {
-                "query": "session lease status|wait|acquire|release|preempt",
-                "daemon_query": "session request lease status|wait|acquire|release|preempt",
+                "query": "session lease list|status|wait|acquire|release|preempt",
+                "daemon_query": "session request lease list|status|wait|acquire|release|preempt",
+                "list_schema_version": "session.lease_list.v0.1",
+                "list_query": "session lease list [--holder <id>] [--lease-id <id>]",
+                "daemon_list_query": "session request lease list [--holder <id>] [--lease-id <id>]",
+                "list_filters": ["--holder", "--lease-holder", "--lease-id"],
                 "status_schema_version": "session.lease_status.v0.1",
                 "wait_schema_version": "session.lease_wait.v0.1",
                 "wait_query": "session lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]",
@@ -8633,13 +8637,12 @@ fn run_session_lease_inner(
     forced_state_dir: Option<&Path>,
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session lease requires acquire|release|preempt|status|wait|run")
+        CliError::usage("session lease requires acquire|release|preempt|list|status|wait|run")
     })?;
     if action == "run" {
         return run_session_lease_run(global, &args[1..], forced_state_dir);
     }
     let flags = FlagArgs::parse(&args[1..])?;
-    let config = read_user_config()?;
     let state_dir = forced_state_dir
         .map(Path::to_path_buf)
         .map(Ok)
@@ -8650,6 +8653,10 @@ fn run_session_lease_inner(
             state_dir.display()
         ))
     })?;
+    if action == "list" {
+        return run_session_lease_list(&state_dir, &flags);
+    }
+    let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let holder = flags
         .optional("--holder")
@@ -8727,6 +8734,51 @@ fn session_lease_status_payload(instance_id: &str, lease_path: &Path) -> CliOutc
         "status": if lease.is_some() { "held" } else { "free" },
         "lease": lease,
         "path": lease_path.display().to_string()
+    }))
+}
+
+fn run_session_lease_list(state_dir: &Path, flags: &FlagArgs) -> CliOutcome<Value> {
+    flags.expect_positionals("session lease list", 0)?;
+    let holder_filter = parse_session_lease_wait_holder(flags)?;
+    let lease_id_filter = parse_optional_string_value(flags, "--lease-id")?;
+    let mut paths = session_lease_paths(state_dir)?;
+    paths.sort();
+    let mut released_during_read_count = 0usize;
+    let mut leases = Vec::new();
+    for path in paths {
+        let Some(lease) = read_json_file::<SessionLease>(&path)? else {
+            released_during_read_count += 1;
+            continue;
+        };
+        if !session_lease_matches_filters(
+            &lease,
+            holder_filter.as_deref(),
+            lease_id_filter.as_deref(),
+        ) {
+            continue;
+        }
+        leases.push(json!({
+            "instance": lease.instance,
+            "status": "held",
+            "holder": lease.holder,
+            "lease_id": lease.lease_id,
+            "acquired_at_unix_ms": lease.acquired_at_unix_ms,
+            "updated_at_unix_ms": lease.updated_at_unix_ms,
+            "preempted": lease.preempted,
+            "previous": lease.previous,
+            "path": path.display().to_string()
+        }));
+    }
+    Ok(json!({
+        "schema_version": "session.lease_list.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "active_count": leases.len(),
+        "released_during_read_count": released_during_read_count,
+        "filters": {
+            "holder": holder_filter,
+            "lease_id": lease_id_filter
+        },
+        "leases": leases
     }))
 }
 
@@ -8809,6 +8861,16 @@ fn parse_session_lease_wait_holder(flags: &FlagArgs) -> CliOutcome<Option<String
     } else {
         parse_optional_string_value(flags, "--lease-holder")
     }
+}
+
+fn session_lease_matches_filters(
+    lease: &SessionLease,
+    holder: Option<&str>,
+    lease_id: Option<&str>,
+) -> bool {
+    let holder_matches = holder.is_none_or(|expected| lease.holder == expected);
+    let lease_id_matches = lease_id.is_none_or(|expected| lease.lease_id == expected);
+    holder_matches && lease_id_matches
 }
 
 fn session_lease_wait_matches(
@@ -13873,6 +13935,11 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime"],
             "available",
         ),
+        command_cap(
+            "session request lease list",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request record", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
@@ -14047,6 +14114,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("session lease wait", ["offline"], "available"),
+        command_cap("session lease list", ["offline"], "available"),
         command_cap(
             "session lease run",
             ["running_runtime", "lab_lease"],
@@ -15867,6 +15935,189 @@ mod tests {
             data.pointer("/wait/expected_status")
                 .and_then(Value::as_str),
             Some("free")
+        );
+    }
+
+    #[test]
+    fn session_lease_list_reports_all_active_leases_without_instance_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let ak_lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ak".to_string()),
+            false,
+            None,
+        );
+        let ba_lease = new_session_lease(
+            "ba".to_string(),
+            "lab".to_string(),
+            Some("lease-ba".to_string()),
+            true,
+            Some(SessionLeasePrevious {
+                holder: "scheduler".to_string(),
+                lease_id: "lease-old".to_string(),
+                acquired_at_unix_ms: 1,
+                updated_at_unix_ms: 2,
+            }),
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &ak_lease).unwrap();
+        write_json_file_atomic(&session_lease_path(temp.path(), "ba"), &ba_lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "lease",
+                "list",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_list.v0.1")
+        );
+        assert_eq!(data.get("active_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            data.pointer("/leases/0/instance").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            data.pointer("/leases/1/instance").and_then(Value::as_str),
+            Some("ba")
+        );
+        assert_eq!(
+            data.pointer("/leases/1/previous/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
+    }
+
+    #[test]
+    fn session_lease_list_filters_holder_and_lease_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let ak_lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ak".to_string()),
+            false,
+            None,
+        );
+        let ba_lease = new_session_lease(
+            "ba".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ba".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &ak_lease).unwrap();
+        write_json_file_atomic(&session_lease_path(temp.path(), "ba"), &ba_lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "lease",
+                "list",
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-ba",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("active_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/filters/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            data.pointer("/filters/lease_id").and_then(Value::as_str),
+            Some("lease-ba")
+        );
+        assert_eq!(
+            data.pointer("/leases/0/instance").and_then(Value::as_str),
+            Some("ba")
+        );
+    }
+
+    #[test]
+    fn session_lease_list_rejects_positionals() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "lease",
+                "list",
+                "extra",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("session lease list"));
+    }
+
+    #[test]
+    fn session_lease_list_request_reads_daemon_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ak".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(state_dir, "ak"), &lease).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "lease-list".to_string(),
+            command: "lease".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "list".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_list.v0.1")
+        );
+        assert_eq!(payload.get("active_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload.pointer("/leases/0/holder").and_then(Value::as_str),
+            Some("scheduler")
         );
     }
 
@@ -27458,6 +27709,21 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/envelopes/lease_view/list_schema_version")
+                .and_then(Value::as_str),
+            Some("session.lease_list.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/list_query")
+                .and_then(Value::as_str),
+            Some("session lease list [--holder <id>] [--lease-id <id>]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/daemon_list_query")
+                .and_then(Value::as_str),
+            Some("session request lease list [--holder <id>] [--lease-id <id>]")
+        );
+        assert_eq!(
             data.pointer("/envelopes/lease_view/status_schema_version")
                 .and_then(Value::as_str),
             Some("session.lease_status.v0.1")
@@ -27801,8 +28067,10 @@ mod tests {
         let commands = command_capabilities();
         for command_name in [
             "session lease",
+            "session lease list",
             "session lease wait",
             "session request lease",
+            "session request lease list",
             "session request lease wait",
             "lab status",
             "lab lease",
