@@ -51,6 +51,16 @@ const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
 const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
 const SESSION_DAEMON_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const SESSION_REQUEST_STATE_WAIT_DEFAULT_STATUSES: &[&str] =
+    &["response_available", "completed", "failed"];
+const SESSION_REQUEST_STATE_WAIT_ALLOWED_STATUSES: &[&str] = &[
+    "queued",
+    "running",
+    "response_available",
+    "completed",
+    "failed",
+    "unknown",
+];
 const SESSION_MONITOR_POLICY_MIN_INTERVAL_MS: u64 = 500;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
@@ -1542,12 +1552,18 @@ fn session_api_contract() -> Value {
             "request_state_view": {
                 "query": "session request-state get <request-id>",
                 "daemon_query": "session request request-state get <request-id>",
+                "wait_query": "session request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]",
+                "daemon_wait_query": "session request request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]",
                 "schema_version": "session.request_state.v0.1",
                 "list_query": "session request-state list [--limit N] [--status <state>]",
                 "daemon_list_query": "session request request-state list [--limit N] [--status <state>]",
                 "list_schema_version": "session.request_state_list.v0.1",
                 "statuses": ["queued", "running", "response_available", "completed", "failed", "unknown"],
-                "state_sources": ["requests", "running", "responses", "request-journal"]
+                "state_sources": ["requests", "running", "responses", "request-journal"],
+                "wait_default_statuses": ["response_available", "completed", "failed"],
+                "wait_timeout_default_ms": SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+                "wait_poll_default_ms": 100,
+                "wait_timeout_returns_current_state": true
             },
             "event_view": {
                 "query": "session events",
@@ -5593,10 +5609,13 @@ fn run_session_request_state_in_state_dir(flags: &FlagArgs, state_dir: &Path) ->
         .first()
         .map(String::as_str)
         .ok_or_else(|| {
-            CliError::usage("session request-state requires get <request-id> or list")
+            CliError::usage(
+                "session request-state requires get <request-id>, wait <request-id>, or list",
+            )
         })?;
     match sub {
         "get" => run_session_request_state_get(flags, state_dir),
+        "wait" => run_session_request_state_wait(flags, state_dir),
         "list" => run_session_request_state_list(flags, state_dir),
         other => Err(CliError::usage(format!(
             "unknown session request-state command: {other}"
@@ -5609,6 +5628,57 @@ fn run_session_request_state_get(flags: &FlagArgs, state_dir: &Path) -> CliOutco
     let request_id = flags.required_positional(1, "request-id")?;
     validate_session_request_id(request_id)?;
     session_request_state_payload(state_dir, request_id)
+}
+
+fn run_session_request_state_wait(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    flags.expect_positionals("session request-state wait", 2)?;
+    let request_id = flags.required_positional(1, "request-id")?;
+    validate_session_request_id(request_id)?;
+    let expected_statuses = parse_session_request_state_wait_status_filter(flags)?;
+    let expected_status_set = expected_statuses
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let timeout =
+        parse_optional_duration_ms(flags, "--timeout-ms", SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
+    let poll = parse_optional_duration_ms(flags, "--poll-ms", 100)?;
+    if poll.is_zero() || poll > Duration::from_millis(5_000) {
+        return Err(CliError::usage("--poll-ms must be between 1 and 5000"));
+    }
+    let started = Instant::now();
+    loop {
+        let mut payload = session_request_state_payload(state_dir, request_id)?;
+        let status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        if expected_status_set.contains(status.as_str()) {
+            payload["wait"] = json!({
+                "completed": true,
+                "timed_out": false,
+                "matched_status": status,
+                "expected_statuses": expected_statuses,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        if started.elapsed() >= timeout {
+            payload["wait"] = json!({
+                "completed": false,
+                "timed_out": true,
+                "current_status": status,
+                "expected_statuses": expected_statuses,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
 }
 
 #[derive(Debug)]
@@ -5639,6 +5709,24 @@ fn parse_session_request_state_list_status_filter(flags: &FlagArgs) -> CliOutcom
         ) {
             return Err(CliError::usage(format!(
                 "unsupported session request-state list --status value: {status}; expected queued, running, response_available, completed, or failed"
+            )));
+        }
+    }
+    Ok(statuses)
+}
+
+fn parse_session_request_state_wait_status_filter(flags: &FlagArgs) -> CliOutcome<Vec<String>> {
+    let mut statuses = parse_optional_string_values(flags, "--status")?;
+    if statuses.is_empty() {
+        statuses = SESSION_REQUEST_STATE_WAIT_DEFAULT_STATUSES
+            .iter()
+            .map(|status| (*status).to_string())
+            .collect();
+    }
+    for status in &statuses {
+        if !SESSION_REQUEST_STATE_WAIT_ALLOWED_STATUSES.contains(&status.as_str()) {
+            return Err(CliError::usage(format!(
+                "unsupported session request-state wait --status value: {status}; expected queued, running, response_available, completed, failed, or unknown"
             )));
         }
     }
@@ -13591,6 +13679,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session response wait", ["offline"], "available"),
         command_cap("session request-state", ["offline"], "available"),
         command_cap("session request-state get", ["offline"], "available"),
+        command_cap("session request-state wait", ["offline"], "available"),
         command_cap("session request-state list", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
@@ -13628,6 +13717,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request request-state get",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request request-state wait",
             ["running_runtime"],
             "available",
         ),
@@ -24920,6 +25014,226 @@ mod tests {
     }
 
     #[test]
+    fn session_request_state_wait_returns_available_response() {
+        let temp = TempDir::new().unwrap();
+        let response = SessionCommandResponse {
+            request_id: "state-wait-response".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"schema_version": "session.stream.v0.1", "frame_count": 1})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 30,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(temp.path()).join("state-wait-response.json"),
+            &response,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "wait",
+                "state-wait-response",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("response_available")
+        );
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/matched_status").and_then(Value::as_str),
+            Some("response_available")
+        );
+    }
+
+    #[test]
+    fn session_request_state_wait_accepts_running_status() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "state-wait-running".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec!["--max-frames".to_string(), "1".to_string()],
+            lease: None,
+            created_at_unix_ms: 50,
+        };
+        write_session_running_request(temp.path(), &request, 60).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "wait",
+                "state-wait-running",
+                "--status",
+                "running",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("running"));
+        assert_eq!(
+            data.pointer("/wait/matched_status").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            data.pointer("/wait/expected_statuses/0")
+                .and_then(Value::as_str),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn session_request_state_wait_timeout_returns_current_state() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "state-wait-queued".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("state-wait-queued.json"),
+            &request,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "wait",
+                "state-wait-queued",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/wait/timed_out").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/current_status").and_then(Value::as_str),
+            Some("queued")
+        );
+    }
+
+    #[test]
+    fn session_request_state_wait_rejects_zero_poll_ms() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "wait",
+                "state-wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "0",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("--poll-ms"));
+    }
+
+    #[test]
+    fn session_request_state_wait_rejects_unknown_status() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "wait",
+                "state-wait",
+                "--status",
+                "bogus",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(
+            error
+                .message
+                .contains("unsupported session request-state wait")
+        );
+    }
+
+    #[test]
     fn session_request_state_rejects_unsafe_request_id() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -24939,6 +25253,62 @@ mod tests {
         let error = result.envelope.error.as_ref().unwrap();
         assert_eq!(error.code, "validation_failed");
         assert!(error.message.contains("request-id"));
+    }
+
+    #[test]
+    fn session_request_state_wait_request_reads_daemon_state() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "daemon-wait-running".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        write_session_running_request(temp.path(), &request, 20).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "state-wait-query".to_string(),
+            command: "request_state".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "wait".to_string(),
+                "daemon-wait-running".to_string(),
+                "--status".to_string(),
+                "running".to_string(),
+                "--timeout-ms".to_string(),
+                "1".to_string(),
+                "--poll-ms".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 30,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            payload.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -26785,6 +27155,35 @@ mod tests {
             Some("session.request_state_list.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/request_state_view/wait_query")
+                .and_then(Value::as_str),
+            Some(
+                "session request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]"
+            )
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/daemon_wait_query")
+                .and_then(Value::as_str),
+            Some(
+                "session request request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]"
+            )
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/wait_default_statuses/0")
+                .and_then(Value::as_str),
+            Some("response_available")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/wait_timeout_default_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/wait_timeout_returns_current_state")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/request_state_view/daemon_list_query")
                 .and_then(Value::as_str),
             Some("session request request-state list [--limit N] [--status <state>]")
@@ -26965,9 +27364,11 @@ mod tests {
         for command_name in [
             "session request-state",
             "session request-state get",
+            "session request-state wait",
             "session request-state list",
             "session request request-state",
             "session request request-state get",
+            "session request request-state wait",
             "session request request-state list",
         ] {
             let command = commands

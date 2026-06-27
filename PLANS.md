@@ -139,8 +139,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session events wait view: `session events wait` and `session request events wait` provide bounded long-polling over the request-journal event cursor for UI/scheduler clients without custom event polling loops.
 - ActingLab session request cancel view: `session request cancel <request-id>` removes queued daemon requests that have not produced a response, records a durable `request_cancelled` journal failure, and exposes the result through request-state and event views.
 - ActingLab session running request state view: resident daemon request processing now writes a `running/` marker while executing a request, and request-state/status diagnostics expose `running` lifecycle state between queued and response-available.
+- ActingLab session request-state wait view: `session request-state wait <request-id>` and `session request request-state wait <request-id>` provide bounded lifecycle waiting over queued/running/response/journal request states for UI/scheduler clients.
 
-## Current ActingLab Session Running Request State View
+## Current ActingLab Session Request-State Wait View
+
+This increment closes a UI/scheduler polling gap in the Session Layer request lifecycle: clients can now wait for a specific request id to reach an expected lifecycle state without implementing custom file polling.
+
+- `session request-state wait <request-id>` waits in the local Session Layer state directory.
+- `session request request-state wait <request-id>` exposes the same wait behavior through the resident daemon request queue.
+- The default expected statuses are `response_available`, `completed`, and `failed`.
+- Callers can use repeated `--status <state>` filters to wait for `queued`, `running`, `response_available`, `completed`, `failed`, or `unknown`.
+- Timeout returns the current request-state payload with `wait.timed_out=true`; it does not invent a successful state or hide that the desired transition did not occur.
+- Invalid status filters, invalid request ids, corrupt state files, and invalid poll intervals fail visibly.
+- `session api` and `capabilities` advertise the new local and daemon-routed wait surfaces.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+## Previous ActingLab Session Running Request State View
 
 This increment closes a Session Layer observability gap for future UI and scheduler clients: a daemon request that has been picked up for execution is now distinguishable from merely queued work.
 
