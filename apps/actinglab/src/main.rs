@@ -40,6 +40,8 @@ const SESSION_STOP_FILE: &str = "stop.request";
 const SESSION_REQUESTS_DIR: &str = "requests";
 const SESSION_RESPONSES_DIR: &str = "responses";
 const SESSION_REQUEST_JOURNAL_FILE: &str = "request-journal.jsonl";
+const SESSION_REQUEST_JOURNAL_ARCHIVE_FILE: &str = "request-journal.1.jsonl";
+const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
     "--request-timeout-ms",
@@ -3881,11 +3883,23 @@ fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
         },
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
+            "path": session_request_journal_path(state_dir).display().to_string(),
+            "bytes": file_size_if_exists(&session_request_journal_path(state_dir))?,
             "total_entries": count_session_request_journal_entries(state_dir)?,
             "recent_limit": 5,
             "recent_count": recent_entries.len(),
             "last_entry": last_entry,
-            "last_error": last_error
+            "last_error": last_error,
+            "retention": {
+                "max_bytes": SESSION_REQUEST_JOURNAL_MAX_BYTES,
+                "archive_count": 1,
+                "active_rotation": "size"
+            },
+            "archive": {
+                "path": session_request_journal_archive_path(state_dir).display().to_string(),
+                "exists": session_request_journal_archive_path(state_dir).exists(),
+                "bytes": file_size_if_exists(&session_request_journal_archive_path(state_dir))?
+            }
         }
     }))
 }
@@ -4286,7 +4300,9 @@ fn append_session_request_journal(
         started_at_unix_ms: response.started_at_unix_ms,
         completed_at_unix_ms: response.completed_at_unix_ms,
     };
-    write_json_line(&session_request_journal_path(state_dir), &entry)
+    let journal_path = session_request_journal_path(state_dir);
+    rotate_session_request_journal_if_needed(state_dir, &journal_path)?;
+    write_json_line(&journal_path, &entry)
 }
 
 fn execute_session_command_request(
@@ -7707,6 +7723,32 @@ where
     })
 }
 
+fn rotate_session_request_journal_if_needed(state_dir: &Path, path: &Path) -> CliOutcome<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let bytes = file_size_if_exists(path)?;
+    if bytes <= SESSION_REQUEST_JOURNAL_MAX_BYTES {
+        return Ok(());
+    }
+    let archive_path = session_request_journal_archive_path(state_dir);
+    if archive_path.exists() {
+        fs::remove_file(&archive_path).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to remove old journal archive {}: {err}",
+                archive_path.display()
+            ))
+        })?;
+    }
+    fs::rename(path, &archive_path).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to rotate journal {} to {}: {err}",
+            path.display(),
+            archive_path.display()
+        ))
+    })
+}
+
 fn read_session_request_journal(
     state_dir: &Path,
     limit: usize,
@@ -7762,6 +7804,16 @@ fn count_session_request_journal_entries(state_dir: &Path) -> CliOutcome<usize> 
         count += 1;
     }
     Ok(count)
+}
+
+fn file_size_if_exists(path: &Path) -> CliOutcome<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let metadata = fs::metadata(path).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to stat {}: {err}", path.display()))
+    })?;
+    Ok(metadata.len())
 }
 
 fn count_files_with_extension(dir: &Path, extension: &str) -> CliOutcome<usize> {
@@ -7830,6 +7882,10 @@ fn session_responses_dir(state_dir: &Path) -> PathBuf {
 
 fn session_request_journal_path(state_dir: &Path) -> PathBuf {
     state_dir.join(SESSION_REQUEST_JOURNAL_FILE)
+}
+
+fn session_request_journal_archive_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_REQUEST_JOURNAL_ARCHIVE_FILE)
 }
 
 fn current_unix_ms() -> u64 {
@@ -15005,6 +15061,105 @@ mod tests {
                 .pointer("/journal/last_entry/request_id")
                 .and_then(Value::as_str),
             Some("completed-1")
+        );
+    }
+
+    #[test]
+    fn session_request_journal_rotates_when_active_file_exceeds_retention_limit() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let old_entry = SessionRequestJournalEntry {
+            request_id: "old-entry".to_string(),
+            command: "stream".to_string(),
+            args: vec!["x".repeat(2048)],
+            lease: None,
+            ok: true,
+            error: None,
+            created_at_unix_ms: 1,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        let old_line = format!("{}\n", serde_json::to_string(&old_entry).unwrap());
+        let repetitions = (SESSION_REQUEST_JOURNAL_MAX_BYTES as usize / old_line.len()) + 2;
+        fs::write(
+            session_request_journal_path(state_dir),
+            old_line.repeat(repetitions),
+        )
+        .unwrap();
+
+        let request = SessionCommandRequest {
+            request_id: "new-request".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--max-frames".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+        let response = SessionCommandResponse {
+            request_id: "new-request".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"status": "done"})),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+
+        append_session_request_journal(state_dir, &request, &response).unwrap();
+
+        assert!(session_request_journal_archive_path(state_dir).exists());
+        assert!(file_size_if_exists(&session_request_journal_archive_path(state_dir)).unwrap() > 0);
+        let entries = read_session_request_journal(state_dir, 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].request_id, "new-request");
+
+        let status = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+        assert_eq!(status.exit_code(), 0);
+        let diagnostics = status
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("diagnostics")
+            .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/total_entries")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/retention/max_bytes")
+                .and_then(Value::as_u64),
+            Some(SESSION_REQUEST_JOURNAL_MAX_BYTES)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/archive/exists")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

@@ -86,8 +86,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream scaffold: `stream --max-frames N` now exposes a local bounded frame-sampling contract, `stream --via-daemon` and `session request stream` route through the resident Session Layer request queue, and interactive input relay remains explicitly reserved.
 - ActingLab daemon request journal: processed resident daemon requests now append a durable JSONL journal, and `session journal` exposes recent request outcomes for diagnostics after response files are consumed.
 - ActingLab session status diagnostics: `session status --diagnostics` now reports queue depths, daemon state paths, journal totals, recent request summary, and latest request error for UI/scheduler health inspection.
+- ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
 
-## Current ActingLab Session Status Diagnostics
+## Current ActingLab Request Journal Retention
+
+The current Runtime task adds a bounded retention policy to the resident daemon request journal. This keeps a long-running Session Layer from growing `request-journal.jsonl` without limit while preserving the most recent active entries for `session journal` and diagnostics.
+
+Scope:
+
+- Add a fixed `1 MiB` active journal cap for `request-journal.jsonl`.
+- Rotate an oversized active journal to `request-journal.1.jsonl` before appending the next processed request entry.
+- Keep one local archive file and replace the previous archive on the next rotation.
+- Keep `session journal` reading the active journal only, preserving the recent diagnostics surface.
+- Extend `session status --diagnostics` with active journal path/bytes, retention policy, and archive path/existence/bytes.
+
+Safety direction:
+
+- Journal rotation happens before appending a new entry.
+- Failure to remove an old archive, rename the active journal, stat the journal, encode, write, or flush remains a visible runtime error.
+- The milestone does not change daemon request execution, response publication, request removal, lease enforcement, capture/input paths, command routing, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_request_journal_rotates_when_active_file_exceeds_retention_limit -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Expose the same diagnostics through the future trusted UI/API channel once that channel exists.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Session Status Diagnostics
 
 The current Runtime task surfaces the resident daemon request journal through `session status --diagnostics`. This keeps normal `session status` stable while giving UI, scheduler, and operator tooling a single health surface for queue depth and recent daemon request outcomes.
 
@@ -121,7 +158,6 @@ Validation status:
 
 Known follow-ups:
 
-- Decide retention/rotation policy for long-running daemon journals.
 - Expose the same diagnostics through the future trusted UI/API channel once that channel exists.
 - Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
 - Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
