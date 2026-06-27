@@ -5179,6 +5179,89 @@ fn session_instance_registry_diagnostics(config: Option<&UserConfig>) -> Value {
     })
 }
 
+fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> {
+    let instances = config
+        .instances
+        .iter()
+        .map(|(id, instance)| session_instance_registry_entry(id, instance))
+        .collect::<CliOutcome<Vec<_>>>()?;
+    Ok(json!({
+        "schema_version": "session.instance_registry.v0.1",
+        "source": "user_config",
+        "available": true,
+        "count": instances.len(),
+        "required_fields": ["serial", "game", "server"],
+        "recommended_fields": ["package", "adb_path", "capture_backend"],
+        "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+        "instances": instances
+    }))
+}
+
+fn session_instance_registry_entry(id: &str, instance: &InstanceConfig) -> CliOutcome<Value> {
+    let effective_capture_backend = match instance.capture_backend.as_deref() {
+        Some(value) => CaptureBackendChoice::parse(value)
+            .map_err(|err| {
+                CliError::usage(format!(
+                    "invalid instance.{id}.capture_backend '{value}': {err}"
+                ))
+            })?
+            .as_str()
+            .to_string(),
+        None => CaptureBackendChoice::Auto.as_str().to_string(),
+    };
+    let missing_required_fields = instance_missing_required_fields(instance);
+    let missing_recommended_fields = instance_missing_recommended_fields(instance);
+    Ok(json!({
+        "id": id,
+        "serial": instance.serial,
+        "game": instance.game,
+        "server": instance.server,
+        "package": instance.package,
+        "adb_path": instance.adb_path,
+        "capture_backend": instance.capture_backend,
+        "configured": {
+            "serial": instance.serial.is_some(),
+            "game": instance.game.is_some(),
+            "server": instance.server.is_some(),
+            "package": instance.package.is_some(),
+            "adb_path": instance.adb_path.is_some(),
+            "capture_backend": instance.capture_backend.is_some()
+        },
+        "effective": {
+            "capture_backend": effective_capture_backend,
+            "adb_path": instance.adb_path,
+            "adb_path_source": if instance.adb_path.is_some() { "instance_config" } else { "resolver_default" }
+        },
+        "validation": {
+            "ready_for_device_control": missing_required_fields.is_empty(),
+            "missing_required_fields": missing_required_fields,
+            "missing_recommended_fields": missing_recommended_fields
+        }
+    }))
+}
+
+fn instance_missing_required_fields(instance: &InstanceConfig) -> Vec<&'static str> {
+    [
+        ("serial", instance.serial.is_none()),
+        ("game", instance.game.is_none()),
+        ("server", instance.server.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect()
+}
+
+fn instance_missing_recommended_fields(instance: &InstanceConfig) -> Vec<&'static str> {
+    [
+        ("package", instance.package.is_none()),
+        ("adb_path", instance.adb_path.is_none()),
+        ("capture_backend", instance.capture_backend.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(field, missing)| missing.then_some(field))
+    .collect()
+}
+
 fn session_liveness_recommended_actions(
     state_dir: &Path,
     status: SessionLivenessStatus,
@@ -6218,10 +6301,9 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let action = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session instance requires list|health|reconnect"))?;
+    let action = args.first().map(String::as_str).ok_or_else(|| {
+        CliError::usage("session instance requires list|registry|health|reconnect")
+    })?;
     let flags = FlagArgs::parse(&args[1..])?;
     let should_route = if action == "reconnect" {
         should_route_control_via_session_daemon(global, &flags)?
@@ -6244,6 +6326,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
                 "capture_backend": instance.capture_backend
             })).collect::<Vec<_>>()
         })),
+        "registry" => session_instance_registry_contract(&config),
         "health" | "reconnect" => {
             let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
             let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
@@ -11123,6 +11206,7 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session instance list", ["offline"], "available"),
+        command_cap("session instance registry", ["offline"], "available"),
         command_cap("session instance health", ["device"], "available"),
         command_cap("session instance reconnect", ["device"], "available"),
         command_cap("session app", ["device"], "available"),
@@ -20556,6 +20640,136 @@ mod tests {
     }
 
     #[test]
+    fn session_instance_registry_reports_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: Some("C:\\Tools\\adb.exe".to_string()),
+                capture_backend: Some("nemu_ipc".to_string()),
+            },
+        );
+        config.instances.insert(
+            "ba-jp".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16384".to_string()),
+                game: Some("ba".to_string()),
+                server: None,
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+
+        let result = run_cli(["--json", "session", "instance", "registry"], true);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.instance_registry.v0.1")
+        );
+        assert_eq!(data.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            data.pointer("/capture_backends/2").and_then(Value::as_str),
+            Some("droidcast_raw")
+        );
+        let instances = data.get("instances").and_then(Value::as_array).unwrap();
+        let ak = instances
+            .iter()
+            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ak-b"))
+            .unwrap();
+        assert_eq!(
+            ak.pointer("/effective/capture_backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            ak.pointer("/validation/ready_for_device_control")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let ba = instances
+            .iter()
+            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ba-jp"))
+            .unwrap();
+        assert_eq!(
+            ba.pointer("/effective/capture_backend")
+                .and_then(Value::as_str),
+            Some("auto")
+        );
+        assert_eq!(
+            ba.pointer("/validation/ready_for_device_control")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            ba.pointer("/validation/missing_required_fields")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|field| field.as_str() == Some("server"))
+        );
+    }
+
+    #[test]
+    fn session_instance_registry_rejects_invalid_configured_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: Some("not-a-backend".to_string()),
+            },
+        );
+        write_user_config(&config).unwrap();
+
+        let result = run_cli(["--json", "session", "instance", "registry"], true);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("invalid instance.ak-b.capture_backend")
+        );
+    }
+
+    #[test]
     fn capabilities_are_offline() {
         let result = run_cli(["--json", "capabilities"], true);
         assert_eq!(result.exit_code(), 0);
@@ -20626,6 +20840,14 @@ mod tests {
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request transport"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session instance registry"))
         );
     }
 

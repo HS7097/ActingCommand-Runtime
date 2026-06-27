@@ -125,6 +125,39 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance capture health diagnostics: `session instance health --capture-diagnose` reports fresh-frame status, backend attempts, frame digest, and stale-capture recovery recommendations through the Session Layer health surface.
 - ActingLab session status instance registry diagnostics: `session status --diagnostics` and daemon-routed status diagnostics now expose configured instance summaries for future UI/scheduler health views.
 - ActingLab instance registry backend fields: instance config now stores `adb_path` and `capture_backend`; status/list diagnostics expose them; capture commands use instance default backend unless CLI `--capture-backend` overrides it.
+- ActingLab session instance registry contract: `session instance registry` now exposes a machine-readable `session.instance_registry.v0.1` config contract with required/recommended fields, effective capture backend, configured flags, and validation diagnostics for future UI/scheduler consumers.
+
+## Current ActingLab Session Instance Registry Contract
+
+The current Runtime task adds a dedicated read-only registry contract so future UI and scheduler clients do not need to infer instance readiness from ad-hoc status diagnostics.
+
+Scope:
+
+- Add `session instance registry`.
+- Return `schema_version = session.instance_registry.v0.1`.
+- Expose required registry fields: `serial`, `game`, and `server`.
+- Expose recommended operational fields: `package`, `adb_path`, and `capture_backend`.
+- Expose supported capture backend ids: `auto`, `adb`, `droidcast_raw`, and `nemu_ipc`.
+- For each configured instance, report raw fields, configured flags, effective capture backend, ADB path source, missing required fields, missing recommended fields, and `ready_for_device_control`.
+- Validate manually edited `instance.<id>.capture_backend` values when reading the contract so bad config fails visibly instead of reaching UI/scheduler as fake-valid state.
+
+Safety direction:
+
+- This is a read-only configuration contract.
+- It does not touch devices, start MaaTouch, capture frames, read resource repositories, call the scheduler, or add game logic.
+- `session instance list` remains the simple compatibility list; the new contract is the structured UI/scheduler-facing surface.
+
+Validation status:
+
+- Focused registry contract tests passed.
+- Existing `session instance list` test passed.
+- `capabilities` test confirms the new command is advertised.
+- Temporary-config CLI smoke confirmed `session instance registry` returns the expected schema, effective backend, and missing-field diagnostics.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `267` `actingcommand-actinglab` tests.
 
 ## Current ActingLab Instance Registry Backend Fields
 

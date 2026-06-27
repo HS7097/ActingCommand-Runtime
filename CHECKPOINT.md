@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session instance registry contract
+
+### Current status
+
+- Added `session instance registry` as a read-only configuration contract.
+- The command returns `schema_version = session.instance_registry.v0.1`.
+- The contract reports required fields, recommended fields, supported capture backend ids, configured flags, effective capture backend, ADB path source, and missing-field diagnostics.
+- The contract validates manually edited `instance.<id>.capture_backend` values and fails visibly with `validation_failed` for invalid backend names.
+- `session instance list` remains the simple compatibility list.
+- Capability reporting now advertises `session instance registry`.
+- No device backend, capture backend implementation, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0c51d059f0ceec3b2e05191958eb613fc2e0fedf`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` session instance, diagnostics, capability, and config handling.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_instance_registry`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline`
+- `cargo test -p actingcommand-actinglab session_instance_list_reads_config`
+- Temporary-config CLI smoke using `actinglab config set instance.ak-b.*` followed by `actinglab --json session instance registry`.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_instance_registry` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_instance_list_reads_config` passed with `1` test.
+- Temporary-config CLI smoke returned `schema_version=session.instance_registry.v0.1`, `effective.capture_backend=nemu_ipc`, and recommended missing-field diagnostics for unset optional fields.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `267` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-instance-registry-contract`.
+2. Continue Session Layer follow-ups only after this registry-contract milestone is verified.
+
 ## 2026-06-27 ActingLab instance registry backend fields
 
 ### Current status
