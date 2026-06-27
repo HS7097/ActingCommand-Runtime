@@ -129,6 +129,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab target-scoped event stream: daemon request journal entries now preserve request target selectors, and `session events` / `session request events` can filter by instance/game/server selectors and repeatable lease holder.
 - ActingLab target-scoped journal view: `session journal` and `session request journal` now reuse the Session event filter contract for command, data-summary, status, instance/game/server, and lease-holder diagnostics.
 - ActingLab pending request diagnostics: `session status --diagnostics` now exposes a bounded pending-request preview for future UI/scheduler queue inspection, and corrupt pending request files fail visibly.
+- ActingLab pending response diagnostics: `session status --diagnostics` now exposes a bounded pending-response preview for unconsumed daemon responses, and corrupt response files fail visibly.
+
+## Current ActingLab Pending Response Diagnostics
+
+This increment completes the basic daemon queue observability pair for future UI/scheduler consumers.
+
+- `session status --diagnostics` now includes `diagnostics.queues.pending_response_preview`.
+- The preview uses schema `session.pending_responses.v0.1`.
+- The preview is bounded to the first 10 pending response JSON files sorted by file name.
+- Each preview entry includes request id, command, completion status, error, data summary, and start/completion timestamps.
+- Queue files that disappear during client consumption are counted as `disappeared_during_read`.
+- Corrupt pending response JSON fails visibly with `runtime_not_running`, matching corrupt journal and pending request diagnostics behavior.
+- `session api` advertises `diagnostics.queues.pending_response_preview` as part of the status view contract.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused queue diagnostics test.
+- Focused corrupt pending response diagnostics test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Pending Request Diagnostics
 

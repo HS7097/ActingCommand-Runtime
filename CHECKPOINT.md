@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab pending response diagnostics
+
+### Current status
+
+- `session status --diagnostics` now exposes `diagnostics.queues.pending_response_preview`.
+- Pending response previews are bounded to 10 response JSON files and sorted by file name for stable UI/scheduler reads.
+- Each preview item includes request id, command, ok/error status, compact data summary, and start/completion timestamps.
+- Queue files consumed by clients during diagnostics are counted as `disappeared_during_read`.
+- Corrupt pending response JSON fails visibly with `runtime_not_running`, matching corrupt request-journal and pending request diagnostics behavior.
+- `session api` advertises `diagnostics.queues.pending_response_preview` as part of the status view contract.
+- No trusted remote network transport, long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `6e77db7b57de6d24e95cabd3cdeffcb2e6f233f2`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session transport/API contracts, status diagnostics, request/response queue paths, response structs, and tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_corrupt_pending_response_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused queue diagnostics test passed.
+- Focused corrupt pending response diagnostics test passed.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, live-device, or direct-click additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-pending-response-diagnostics`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab pending request diagnostics
 
 ### Current status

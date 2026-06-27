@@ -1473,6 +1473,7 @@ fn session_api_contract() -> Value {
                 "lease_field": "diagnostics.leases",
                 "queue_field": "diagnostics.queues",
                 "pending_request_preview_field": "diagnostics.queues.pending_request_preview",
+                "pending_response_preview_field": "diagnostics.queues.pending_response_preview",
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
                 "monitor_policy_lease_actions": [
@@ -5952,6 +5953,10 @@ fn session_status_diagnostics(
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?,
             "pending_request_preview": session_pending_request_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?,
+            "pending_response_preview": session_pending_response_preview(
                 state_dir,
                 SESSION_PENDING_REQUEST_PREVIEW_LIMIT
             )?
@@ -11359,6 +11364,67 @@ fn read_pending_session_request(path: &Path) -> CliOutcome<Option<SessionCommand
         ))
     })?;
     Ok(Some(request))
+}
+
+fn session_pending_response_preview(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+    let responses_dir = session_responses_dir(state_dir);
+    let mut paths = file_paths_with_extension(&responses_dir, "json")?;
+    paths.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+
+    let total = paths.len();
+    let mut disappeared_during_read = 0usize;
+    let mut responses = Vec::new();
+    for path in paths.iter().take(limit) {
+        let Some(response) = read_pending_session_response(path)? else {
+            disappeared_during_read += 1;
+            continue;
+        };
+        let data_summary = session_request_data_summary(&response);
+        responses.push(json!({
+            "request_id": response.request_id,
+            "command": response.command,
+            "ok": response.ok,
+            "error": response.error,
+            "data_summary": data_summary,
+            "started_at_unix_ms": response.started_at_unix_ms,
+            "completed_at_unix_ms": response.completed_at_unix_ms
+        }));
+    }
+    let preview_count = responses.len();
+
+    Ok(json!({
+        "schema_version": "session.pending_responses.v0.1",
+        "dir": responses_dir.display().to_string(),
+        "count": total,
+        "preview_limit": limit,
+        "preview_count": preview_count,
+        "disappeared_during_read": disappeared_during_read,
+        "responses": responses
+    }))
+}
+
+fn read_pending_session_response(path: &Path) -> CliOutcome<Option<SessionCommandResponse>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(CliError::runtime_not_running(format!(
+                "failed to read pending session response {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    let response = serde_json::from_str(&text).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to parse pending session response {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(response))
 }
 
 fn app_state_root() -> CliOutcome<PathBuf> {
@@ -21352,6 +21418,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/pending_response_preview_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.queues.pending_response_preview")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/monitor_policy_lease_actions/1")
                 .and_then(Value::as_str),
             Some("monitor_policy_acquire_lease")
@@ -23183,6 +23255,36 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .pointer("/queues/pending_response_preview/schema_version")
+                .and_then(Value::as_str),
+            Some("session.pending_responses.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_response_preview/count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_response_preview/responses/0/request_id")
+                .and_then(Value::as_str),
+            Some("completed-1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_response_preview/responses/0/ok")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_response_preview/responses/1/request_id")
+                .and_then(Value::as_str),
+            Some("response-1")
+        );
+        assert_eq!(
+            diagnostics
                 .pointer("/journal/total_entries")
                 .and_then(Value::as_u64),
             Some(1)
@@ -23425,6 +23527,34 @@ mod tests {
         fs::create_dir_all(session_requests_dir(temp.path())).unwrap();
         fs::write(
             session_requests_dir(temp.path()).join("pending-corrupt.json"),
+            "not-json",
+        )
+        .unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_corrupt_pending_response_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(session_responses_dir(temp.path())).unwrap();
+        fs::write(
+            session_responses_dir(temp.path()).join("response-corrupt.json"),
             "not-json",
         )
         .unwrap();
