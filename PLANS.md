@@ -53,6 +53,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session daemon request channel: the resident daemon now processes a narrow file-IPC request queue for read-only `capture_diagnose` requests, allowing `capture diagnose --via-daemon` and `session request capture-diagnose` to execute through the running daemon.
 - ActingLab session daemon read-only semantic routing: `recognize`, `detect-page`, `current-page`, `is-visible`, and `locate` can now submit read-only requests through the same daemon queue with `--via-daemon` or `session request ...`.
 - ActingLab daemon monitor-once routing: `monitor --once --via-daemon` and `session request monitor-once` now run read-only health diagnosis through the resident daemon while `--recover` remains blocked until lease arbitration exists.
+- ActingLab session lease arbitration interface hardening: `session lease acquire|release|preempt|status` now uses structured lease records with holder checks, optional lease ids, force release, and preempt provenance.
+
+## Current ActingLab Session Lease Arbitration Interface
+
+The current Runtime task hardens the session lease interface required by `TASK-Lab-session-layer.md` before input, navigation, and recovery can safely move behind the resident daemon.
+
+Scope:
+
+- Keep `session lease acquire|release|preempt|status` as the local scheduler/consumer lease interface.
+- Store structured `SessionLease` records instead of loose JSON objects.
+- Include `instance`, `holder`, `lease_id`, `acquired_at_unix_ms`, `updated_at_unix_ms`, `preempted`, and optional previous-lease provenance.
+- Generate a lease id when `--lease-id` is not provided.
+- `acquire` fails visibly with `lease_conflict` if a lease already exists.
+- `release` now verifies `--holder` and optional `--lease-id`.
+- `release --force` can release a mismatched lease for scheduler/manual recovery paths.
+- `preempt` writes a new lease and records the previous holder and lease id.
+- Lease files are published with the atomic write path.
+
+Safety direction:
+
+- This is an arbitration-interface milestone only.
+- No command starts using the lease as an authorization gate yet.
+- No tap, key, text, navigate, recover execution, app restart, scheduler body, UI, SQLite, OCR, capture backend, or recognition change was added.
+- Future task-level input and maintenance recovery should require a matching lease holder before executing through the daemon.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test -p actingcommand-actinglab session_lease` passed.
+- `cargo test -p actingcommand-actinglab` passed.
+- First `cargo test --workspace` exposed a parallel-test environment issue in the new lease tests; the lease tests now take the existing `ENV_LOCK`, and the rerun passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+- A local CLI smoke acquired, inspected, and released a scheduler-held lease with `--lease-id smoke-1`.
+
+Known follow-ups:
+
+- Lease files are not yet enforced by input, navigation, package run, operation run, monitor recovery, or app recovery commands.
+- The resident daemon still needs lease-aware request authorization before accepting task-level input or recovery commands.
+- Scheduler integration remains outside this milestone.
 
 ## Current ActingLab Session Daemon Read-Only Request Routing
 

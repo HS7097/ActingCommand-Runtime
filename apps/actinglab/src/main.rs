@@ -334,6 +334,29 @@ struct SessionCommandResponse {
     completed_at_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionLease {
+    instance: String,
+    holder: String,
+    #[serde(default)]
+    lease_id: String,
+    acquired_at_unix_ms: u128,
+    #[serde(default)]
+    updated_at_unix_ms: u128,
+    #[serde(default)]
+    preempted: bool,
+    #[serde(default)]
+    previous: Option<SessionLeasePrevious>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionLeasePrevious {
+    holder: String,
+    lease_id: String,
+    acquired_at_unix_ms: u128,
+    updated_at_unix_ms: u128,
+}
+
 #[derive(Debug, Clone)]
 struct Invocation {
     global: GlobalOptions,
@@ -3955,7 +3978,7 @@ fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         .optional("--holder")
         .filter(|value| value != "true")
         .unwrap_or_else(|| "manual".to_string());
-    let lease_path = state_dir.join(format!("lease-{}.json", safe_file_stem(&instance_id)));
+    let lease_path = session_lease_path(&state_dir, &instance_id);
     match action {
         "status" => Ok(json!({
             "instance": instance_id,
@@ -3964,48 +3987,72 @@ fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         })),
         "acquire" => {
             if lease_path.exists() {
+                let current = read_json_file::<SessionLease>(&lease_path)?;
                 return Err(CliError::safety_blocked(
                     "lease_conflict",
-                    format!("session lease already exists for {instance_id}"),
-                    &["lab_lease"],
+                    format!(
+                        "session lease already exists for {instance_id}{}",
+                        current
+                            .as_ref()
+                            .map(|lease| format!(" held by {}", lease.holder))
+                            .unwrap_or_default()
+                    ),
+                    &["lab_lease", "lease_holder"],
                 ));
             }
-            let lease = json!({
-                "instance": instance_id,
-                "holder": holder,
-                "acquired_at_unix_ms": current_unix_ms(),
-                "preempted": false
-            });
-            write_json_file(&lease_path, &lease)?;
-            Ok(
-                json!({ "status": "acquired", "lease": lease, "path": lease_path.display().to_string() }),
-            )
+            let lease = new_session_lease(
+                instance_id,
+                holder,
+                flags.optional("--lease-id"),
+                false,
+                None,
+            );
+            write_json_file_atomic(&lease_path, &lease)?;
+            Ok(json!({
+                "status": "acquired",
+                "lease": lease,
+                "path": lease_path.display().to_string()
+            }))
         }
         "preempt" => {
-            let lease = json!({
-                "instance": instance_id,
-                "holder": holder,
-                "acquired_at_unix_ms": current_unix_ms(),
-                "preempted": true
-            });
-            write_json_file(&lease_path, &lease)?;
-            Ok(
-                json!({ "status": "preempted", "lease": lease, "path": lease_path.display().to_string() }),
-            )
+            let previous = read_json_file::<SessionLease>(&lease_path)?;
+            let lease = new_session_lease(
+                instance_id,
+                holder,
+                flags.optional("--lease-id"),
+                true,
+                previous.as_ref().map(SessionLeasePrevious::from),
+            );
+            write_json_file_atomic(&lease_path, &lease)?;
+            Ok(json!({
+                "status": "preempted",
+                "lease": lease,
+                "previous": previous,
+                "path": lease_path.display().to_string()
+            }))
         }
         "release" => {
-            let existed = lease_path.exists();
-            if existed {
-                fs::remove_file(&lease_path).map_err(|err| {
-                    CliError::runtime_not_running(format!(
-                        "failed to remove lease {}: {err}",
-                        lease_path.display()
-                    ))
-                })?;
-            }
+            let Some(lease) = read_json_file::<SessionLease>(&lease_path)? else {
+                return Ok(json!({
+                    "status": "not_held",
+                    "instance": instance_id,
+                    "path": lease_path.display().to_string()
+                }));
+            };
+            let force = flags.bool("--force");
+            validate_lease_release(&lease, &holder, flags.optional("--lease-id"), force)?;
+            fs::remove_file(&lease_path).map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to remove lease {}: {err}",
+                    lease_path.display()
+                ))
+            })?;
             Ok(json!({
-                "status": if existed { "released" } else { "not_held" },
+                "status": "released",
                 "instance": instance_id,
+                "holder": holder,
+                "force": force,
+                "released_lease": lease,
                 "path": lease_path.display().to_string()
             }))
         }
@@ -4013,6 +4060,78 @@ fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "unknown session lease action: {other}"
         ))),
     }
+}
+
+fn session_lease_path(state_dir: &Path, instance_id: &str) -> PathBuf {
+    state_dir.join(format!("lease-{}.json", safe_file_stem(instance_id)))
+}
+
+fn new_session_lease(
+    instance: String,
+    holder: String,
+    lease_id: Option<String>,
+    preempted: bool,
+    previous: Option<SessionLeasePrevious>,
+) -> SessionLease {
+    let now = current_unix_ms();
+    let lease_id = lease_id
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| format!("{now}-{}-{}", std::process::id(), safe_file_stem(&holder)));
+    SessionLease {
+        instance,
+        holder,
+        lease_id,
+        acquired_at_unix_ms: now,
+        updated_at_unix_ms: now,
+        preempted,
+        previous,
+    }
+}
+
+impl From<&SessionLease> for SessionLeasePrevious {
+    fn from(lease: &SessionLease) -> Self {
+        Self {
+            holder: lease.holder.clone(),
+            lease_id: lease.lease_id.clone(),
+            acquired_at_unix_ms: lease.acquired_at_unix_ms,
+            updated_at_unix_ms: lease.updated_at_unix_ms,
+        }
+    }
+}
+
+fn validate_lease_release(
+    lease: &SessionLease,
+    holder: &str,
+    lease_id: Option<String>,
+    force: bool,
+) -> CliOutcome<()> {
+    if force {
+        return Ok(());
+    }
+    if lease.holder != holder {
+        return Err(CliError::safety_blocked(
+            "lease_holder_mismatch",
+            format!(
+                "lease for {} is held by {}, not {}",
+                lease.instance, lease.holder, holder
+            ),
+            &["lab_lease", "lease_holder"],
+        ));
+    }
+    if let Some(expected) = lease_id.filter(|value| value != "true")
+        && !lease.lease_id.is_empty()
+        && lease.lease_id != expected
+    {
+        return Err(CliError::safety_blocked(
+            "lease_id_mismatch",
+            format!(
+                "lease for {} has id {}, not {}",
+                lease.instance, lease.lease_id, expected
+            ),
+            &["lab_lease", "lease_id"],
+        ));
+    }
+    Ok(())
 }
 
 fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -5719,6 +5838,190 @@ mod tests {
                 .get("running")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn session_lease_enforces_holder_and_lease_id_on_release() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let acquire = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "acquire",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        assert_eq!(acquire.exit_code(), 0);
+        assert_eq!(
+            acquire
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/lease/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
+
+        let conflict = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "acquire",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "lab",
+            ],
+            true,
+        );
+        assert_eq!(conflict.exit_code(), 3);
+        assert_eq!(
+            conflict.envelope.error.as_ref().unwrap().code,
+            "lease_conflict"
+        );
+
+        let wrong_holder = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "release",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "lab",
+            ],
+            true,
+        );
+        assert_eq!(wrong_holder.exit_code(), 3);
+        assert_eq!(
+            wrong_holder.envelope.error.as_ref().unwrap().code,
+            "lease_holder_mismatch"
+        );
+
+        let wrong_id = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "release",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "other",
+            ],
+            true,
+        );
+        assert_eq!(wrong_id.exit_code(), 3);
+        assert_eq!(
+            wrong_id.envelope.error.as_ref().unwrap().code,
+            "lease_id_mismatch"
+        );
+
+        let released = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "release",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        assert_eq!(released.exit_code(), 0);
+        assert_eq!(
+            released
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("status")
+                .and_then(Value::as_str),
+            Some("released")
+        );
+    }
+
+    #[test]
+    fn session_lease_preempt_records_previous_holder() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let _ = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "acquire",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "scheduler-lease",
+            ],
+            true,
+        );
+        let preempted = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "preempt",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "lab",
+                "--lease-id",
+                "lab-lease",
+            ],
+            true,
+        );
+
+        assert_eq!(preempted.exit_code(), 0);
+        let data = preempted.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/lease/holder").and_then(Value::as_str),
+            Some("lab")
+        );
+        assert_eq!(
+            data.pointer("/lease/previous/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            data.pointer("/previous/lease_id").and_then(Value::as_str),
+            Some("scheduler-lease")
         );
     }
 

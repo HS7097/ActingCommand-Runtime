@@ -1,5 +1,94 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session lease arbitration interface
+
+### Current status
+
+- Hardened the `session lease acquire|release|preempt|status` interface.
+- Added a structured `SessionLease` model.
+- Lease records now include:
+  - `instance`
+  - `holder`
+  - `lease_id`
+  - `acquired_at_unix_ms`
+  - `updated_at_unix_ms`
+  - `preempted`
+  - optional previous lease provenance
+- `acquire` still fails visibly when the instance already has a lease, and the conflict message includes the current holder when available.
+- `release` now checks the holder unless `--force` is present.
+- `release` checks optional `--lease-id` when provided.
+- `preempt` writes a new lease and records the previous lease holder and id.
+- Lease writes now use the existing atomic JSON publish path.
+- No command has started enforcing leases yet; this task only improves the arbitration interface needed before daemon-routed input/recovery can be safely enabled.
+- No tap, key, text, navigate, recover execution, app restart, scheduler body, game-task action, UI, SQLite, OCR, capture backend, recognition, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `affa33f5c50ffd7030734a3c62536199fe171e10`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for Runtime.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for the three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_lease`
+- `cargo test -p actingcommand-actinglab`
+- First `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab session_lease_enforces_holder_and_lease_id_on_release -- --nocapture`
+- `cargo fmt --all -- --check`
+- Rerun `cargo test --workspace`
+- First `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+- Local smoke:
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease acquire --state-dir target\session-lease-smoke --holder scheduler --lease-id smoke-1`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease status --state-dir target\session-lease-smoke`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease release --state-dir target\session-lease-smoke --holder scheduler --lease-id smoke-1`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_lease` passed with `2` focused tests.
+- `cargo test -p actingcommand-actinglab` passed with `101` tests.
+- First `cargo test --workspace` failed once because the new lease tests did not take the shared `ENV_LOCK` while other tests mutate config-related environment variables.
+- The focused failing lease test passed in isolation, confirming the failure was test isolation rather than lease logic.
+- Added `ENV_LOCK` guards to the two lease tests.
+- Rerun `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` reported a collapsible nested `if` in lease-id validation.
+- After flattening the condition, `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- Local lease smoke passed:
+  - acquired `ak` lease for holder `scheduler` with lease id `smoke-1`;
+  - status returned the structured lease;
+  - release with matching holder and lease id returned `status = released`.
+
+### Current blocker
+
+- No blocker for the lease arbitration interface hardening.
+- Full Session Layer is still incomplete: leases are not yet enforced for input, semantic tap, navigation, recovery execution, app restart, package run, operation run, API/event streaming, UI integration, recording, or scheduler body.
+- The next risky commands must not be routed through the daemon until lease checks are connected.
+
+### Next step
+
+1. Commit and push the lease arbitration interface Runtime changes.
+2. Add a checkpoint tag if this is accepted as a stable lease-interface rollback point.
+3. Continue by adding daemon-side lease-aware request authorization for task-level input/recovery, or by exposing lease status through the daemon request lane.
+
 ## 2026-06-27 ActingLab session daemon monitor-once routing
 
 ### Current status
