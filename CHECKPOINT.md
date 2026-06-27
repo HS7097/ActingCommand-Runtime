@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session lease freshness diagnostics
+
+### Current status
+
+- `session lease status` now reports a `freshness` object for held leases.
+- `session lease list` now reports per-lease freshness metadata and top-level `stale_after_ms`.
+- `session status --diagnostics` now reports lease freshness metadata under `diagnostics.leases`.
+- `session api` now advertises the lease freshness field, freshness status values, and stale threshold.
+- Freshness is diagnostic-only and does not release, preempt, acquire, or mutate leases.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1fcad07164af6c1d8b11459c379b57a78c754428`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand and Azur workspace constraints.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git log -1 --oneline`
+- `git tag --points-at HEAD`
+- Inspected Session Layer lease diagnostics, lease status/list payloads, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_lease -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_active_leases -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session lease tests passed, including fresh/stale metadata coverage for lease status and lease list.
+- Focused Session status diagnostics test passed with stale lease freshness metadata.
+- Focused Session API contract test passed.
+- Initial full validation caught a Clippy `manual_saturating_arithmetic` warning; replaced it with `saturating_sub`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback/reconnect text, app restart/force-stop/monkey additions, or new device backend additions in newly added `apps/actinglab/src/main.rs` lines.
+- `cargo clippy --workspace -- -D warnings` passed after the fix.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-lease-freshness-diagnostics`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session lease touch view
 
 ### Current status

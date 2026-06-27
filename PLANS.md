@@ -144,6 +144,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session lease list view: `session lease list` and `session request lease list` expose all active Session Layer lease records with holder and lease-id filters for scheduler/Lab/UI arbitration diagnostics.
 - ActingLab LabLease list/wait aliases: `lab lease list` and `lab lease wait` now expose the same Session Layer lease-list and lease-wait views from the Lab-facing CLI surface.
 - ActingLab session lease touch view: `session lease touch`, `session request lease touch`, and `lab lease touch` let current lease holders refresh lease freshness metadata without executing device work.
+- ActingLab session lease freshness diagnostics: `session lease status`, `session lease list`, and `session status --diagnostics` now report lease freshness metadata for scheduler/UI visibility without reclaiming leases automatically.
+
+## Current ActingLab Session Lease Freshness Diagnostics
+
+This increment makes the preceding lease touch surface observable: scheduler, Lab, and future UI clients can distinguish recently refreshed leases from stale lease records without scraping timestamps or inventing their own stale threshold.
+
+- `session lease status` now includes a `freshness` object for held leases.
+- `session lease list` includes `freshness` per lease and the diagnostic `stale_after_ms` threshold.
+- `session status --diagnostics` includes the same `freshness` metadata under `diagnostics.leases`.
+- `session api` advertises the lease freshness field, status values, and stale threshold.
+- Freshness is diagnostic-only: it does not release, preempt, acquire, or mutate leases.
+- Stale lease recovery remains a scheduler/UI decision through the existing inspect/acquire/preempt surfaces.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Session Lease Touch View
 

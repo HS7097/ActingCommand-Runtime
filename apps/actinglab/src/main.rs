@@ -50,6 +50,7 @@ const SESSION_MONITOR_STATE_FILE: &str = "monitor-state.json";
 const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
 const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
+const SESSION_LEASE_STALE_MS: u64 = 30_000;
 const SESSION_DAEMON_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const SESSION_REQUEST_STATE_WAIT_DEFAULT_STATUSES: &[&str] =
     &["response_available", "completed", "failed"];
@@ -1532,6 +1533,9 @@ fn session_api_contract() -> Value {
                 "list_query": "session lease list [--holder <id>] [--lease-id <id>]",
                 "daemon_list_query": "session request lease list [--holder <id>] [--lease-id <id>]",
                 "list_filters": ["--holder", "--lease-holder", "--lease-id"],
+                "freshness_field": "freshness",
+                "freshness_statuses": ["fresh", "stale"],
+                "freshness_stale_after_ms": SESSION_LEASE_STALE_MS,
                 "status_schema_version": "session.lease_status.v0.1",
                 "touch_schema_version": "session.lease_touch.v0.1",
                 "touch_query": "session lease touch [--holder <id>] [--lease-id <id>]",
@@ -7090,6 +7094,7 @@ fn session_liveness_snapshot(
 }
 
 fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
+    let now_ms = current_unix_ms();
     let mut paths = session_lease_paths(state_dir)?;
     paths.sort();
     let mut released_during_read_count = 0usize;
@@ -7105,6 +7110,7 @@ fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
             "lease_id": lease.lease_id,
             "acquired_at_unix_ms": lease.acquired_at_unix_ms,
             "updated_at_unix_ms": lease.updated_at_unix_ms,
+            "freshness": session_lease_freshness_json(&lease, now_ms),
             "preempted": lease.preempted,
             "previous": lease.previous,
             "path": path.display().to_string()
@@ -7114,8 +7120,20 @@ fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
         "path": state_dir.display().to_string(),
         "active_count": leases.len(),
         "released_during_read_count": released_during_read_count,
+        "stale_after_ms": SESSION_LEASE_STALE_MS,
         "leases": leases
     }))
+}
+
+fn session_lease_freshness_json(lease: &SessionLease, now_ms: u64) -> Value {
+    let age_ms = now_ms.saturating_sub(lease.updated_at_unix_ms);
+    let clock_skew_ms = lease.updated_at_unix_ms.saturating_sub(now_ms);
+    json!({
+        "status": if age_ms > SESSION_LEASE_STALE_MS { "stale" } else { "fresh" },
+        "age_ms": age_ms,
+        "clock_skew_ms": clock_skew_ms,
+        "stale_after_ms": SESSION_LEASE_STALE_MS
+    })
 }
 
 fn session_lease_paths(state_dir: &Path) -> CliOutcome<Vec<PathBuf>> {
@@ -8778,10 +8796,14 @@ fn touch_session_lease_file(
 
 fn session_lease_status_payload(instance_id: &str, lease_path: &Path) -> CliOutcome<Value> {
     let lease = read_json_file::<SessionLease>(lease_path)?;
+    let freshness = lease
+        .as_ref()
+        .map(|lease| session_lease_freshness_json(lease, current_unix_ms()));
     Ok(json!({
         "schema_version": "session.lease_status.v0.1",
         "instance": instance_id,
         "status": if lease.is_some() { "held" } else { "free" },
+        "freshness": freshness,
         "lease": lease,
         "path": lease_path.display().to_string()
     }))
@@ -8793,6 +8815,7 @@ fn run_session_lease_list(state_dir: &Path, flags: &FlagArgs) -> CliOutcome<Valu
     let lease_id_filter = parse_optional_string_value(flags, "--lease-id")?;
     let mut paths = session_lease_paths(state_dir)?;
     paths.sort();
+    let now_ms = current_unix_ms();
     let mut released_during_read_count = 0usize;
     let mut leases = Vec::new();
     for path in paths {
@@ -8814,6 +8837,7 @@ fn run_session_lease_list(state_dir: &Path, flags: &FlagArgs) -> CliOutcome<Valu
             "lease_id": lease.lease_id,
             "acquired_at_unix_ms": lease.acquired_at_unix_ms,
             "updated_at_unix_ms": lease.updated_at_unix_ms,
+            "freshness": session_lease_freshness_json(&lease, now_ms),
             "preempted": lease.preempted,
             "previous": lease.previous,
             "path": path.display().to_string()
@@ -8824,6 +8848,7 @@ fn run_session_lease_list(state_dir: &Path, flags: &FlagArgs) -> CliOutcome<Valu
         "state_dir": state_dir.display().to_string(),
         "active_count": leases.len(),
         "released_during_read_count": released_during_read_count,
+        "stale_after_ms": SESSION_LEASE_STALE_MS,
         "filters": {
             "holder": holder_filter,
             "lease_id": lease_id_filter
@@ -16258,6 +16283,54 @@ mod tests {
     }
 
     #[test]
+    fn session_lease_status_reports_freshness_metadata() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let mut lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        lease.updated_at_unix_ms = current_unix_ms().saturating_sub(SESSION_LEASE_STALE_MS + 1);
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("held"));
+        assert_eq!(
+            data.pointer("/freshness/status").and_then(Value::as_str),
+            Some("stale")
+        );
+        assert_eq!(
+            data.pointer("/freshness/stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_LEASE_STALE_MS)
+        );
+        assert!(
+            data.pointer("/freshness/age_ms")
+                .and_then(Value::as_u64)
+                .unwrap()
+                > SESSION_LEASE_STALE_MS
+        );
+    }
+
+    #[test]
     fn session_lease_wait_returns_immediately_when_free() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -16408,6 +16481,64 @@ mod tests {
         assert_eq!(
             data.pointer("/leases/0/instance").and_then(Value::as_str),
             Some("ba")
+        );
+    }
+
+    #[test]
+    fn session_lease_list_reports_freshness_metadata() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let fresh = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ak".to_string()),
+            false,
+            None,
+        );
+        let mut stale = new_session_lease(
+            "ba".to_string(),
+            "lab".to_string(),
+            Some("lease-ba".to_string()),
+            false,
+            None,
+        );
+        stale.updated_at_unix_ms = current_unix_ms().saturating_sub(SESSION_LEASE_STALE_MS + 1);
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &fresh).unwrap();
+        write_json_file_atomic(&session_lease_path(temp.path(), "ba"), &stale).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "lease",
+                "list",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("stale_after_ms").and_then(Value::as_u64),
+            Some(SESSION_LEASE_STALE_MS)
+        );
+        assert_eq!(
+            data.pointer("/leases/0/freshness/status")
+                .and_then(Value::as_str),
+            Some("fresh")
+        );
+        assert_eq!(
+            data.pointer("/leases/1/freshness/status")
+                .and_then(Value::as_str),
+            Some("stale")
+        );
+        assert!(
+            data.pointer("/leases/1/freshness/age_ms")
+                .and_then(Value::as_u64)
+                .unwrap()
+                > SESSION_LEASE_STALE_MS
         );
     }
 
@@ -21888,13 +22019,14 @@ mod tests {
     fn session_status_diagnostics_reports_active_leases() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
-        let lease = new_session_lease(
+        let mut lease = new_session_lease(
             "ak".to_string(),
             "scheduler".to_string(),
             Some("lease-1".to_string()),
             false,
             None,
         );
+        lease.updated_at_unix_ms = current_unix_ms().saturating_sub(SESSION_LEASE_STALE_MS + 1);
         write_json_file_atomic(&session_lease_path(state_dir, "ak"), &lease).unwrap();
 
         let status = session_status_payload(state_dir, true).unwrap();
@@ -21922,6 +22054,18 @@ mod tests {
                 .pointer("/diagnostics/leases/leases/0/lease_id")
                 .and_then(Value::as_str),
             Some("lease-1")
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_LEASE_STALE_MS)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/leases/0/freshness/status")
+                .and_then(Value::as_str),
+            Some("stale")
         );
     }
 
@@ -28136,6 +28280,16 @@ mod tests {
             data.pointer("/envelopes/lease_view/daemon_list_query")
                 .and_then(Value::as_str),
             Some("session request lease list [--holder <id>] [--lease-id <id>]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/freshness_field")
+                .and_then(Value::as_str),
+            Some("freshness")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/freshness_stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_LEASE_STALE_MS)
         );
         assert_eq!(
             data.pointer("/envelopes/lease_view/status_schema_version")
