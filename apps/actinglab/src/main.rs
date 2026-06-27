@@ -4752,13 +4752,18 @@ fn session_record_build_draft(
             destructive,
         } = &step.data
         {
+            let click = session_record_bundle_click(click, &step.step_id)?;
+            validate_record_build_page_ref("from", from, &anchor_templates, &step.step_id)?;
+            if let Some(to) = to {
+                validate_record_build_page_ref("to", to, &anchor_templates, &step.step_id)?;
+            }
             let verify_template = to.as_ref().and_then(|to| anchor_templates.get(to)).cloned();
             operations.push(json!({
                 "id": step.step_id,
                 "purpose": format!("recorded operation from {from}"),
                 "from": from,
                 "to": to,
-                "click": session_record_bundle_click(click, &step.step_id)?,
+                "click": click,
                 "verify_template": verify_template,
                 "consumes": [],
                 "produces": [],
@@ -4779,6 +4784,7 @@ fn session_record_build_draft(
     let (width, height) = resolution.ok_or_else(|| {
         CliError::usage("record build-task requires --resolution <width>x<height> when no frame-backed anchor is available")
     })?;
+    validate_record_build_operation_clicks(&operations, width, height)?;
     let entry_page = flags
         .optional("--entry-page")
         .filter(|value| value != "true")
@@ -4799,6 +4805,22 @@ fn session_record_build_draft(
                 .find_map(|operation| operation.get("to").and_then(Value::as_str))
                 .map(str::to_string)
         });
+    if let Some(entry_page) = &entry_page {
+        validate_record_build_page_ref(
+            "entry_page",
+            entry_page,
+            &anchor_templates,
+            &record.task_id,
+        )?;
+    }
+    if let Some(target_page) = &target_page {
+        validate_record_build_page_ref(
+            "target_page",
+            target_page,
+            &anchor_templates,
+            &record.task_id,
+        )?;
+    }
     let bundle = json!({
         "schema_version": "0.3",
         "task_id": record.task_id,
@@ -4811,7 +4833,7 @@ fn session_record_build_draft(
         "coordinate_space": {"width": width, "height": height},
         "defaults": {
             "template_threshold": parse_optional_unit_f64(flags, "--default-threshold")?.unwrap_or(0.95),
-            "color_max_distance": Value::Null,
+            "color_max_distance": 20.0,
             "match_metric": flags
                 .optional("--metric")
                 .filter(|value| value != "true")
@@ -4878,6 +4900,67 @@ fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> Cli
             "record build-task cannot build operation '{step_id}' with unresolved target click '{target}'"
         ))),
     }
+}
+
+fn validate_record_build_operation_clicks(
+    operations: &[Value],
+    width: u32,
+    height: u32,
+) -> CliOutcome<()> {
+    for operation in operations {
+        let operation_id = operation
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let Some(click) = operation.get("click").and_then(Value::as_object) else {
+            return Err(CliError::usage(format!(
+                "record build-task operation '{operation_id}' is missing click object"
+            )));
+        };
+        if click.get("kind").and_then(Value::as_str) != Some("point") {
+            continue;
+        }
+        let x = click.get("x").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::usage(format!(
+                "record build-task operation '{operation_id}' click.x is missing or not an integer"
+            ))
+        })?;
+        let y = click.get("y").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::usage(format!(
+                "record build-task operation '{operation_id}' click.y is missing or not an integer"
+            ))
+        })?;
+        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+            return Err(CliError::usage(format!(
+                "record build-task operation '{operation_id}' click point {x},{y} is outside coordinate_space {width}x{height}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_record_build_page_ref(
+    label: &str,
+    page: &str,
+    anchors: &BTreeMap<String, String>,
+    owner_id: &str,
+) -> CliOutcome<()> {
+    if page == "any" {
+        return Ok(());
+    }
+    if anchors.contains_key(page) {
+        return Ok(());
+    }
+    let prefix = format!("{page}_");
+    if anchors
+        .keys()
+        .any(|anchor_id| anchor_id.starts_with(&prefix))
+    {
+        return Ok(());
+    }
+    Err(CliError::usage(format!(
+        "record build-task {label} page '{page}' in '{owner_id}' has no matching anchor"
+    )))
 }
 
 fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u32)>> {
@@ -8394,6 +8477,29 @@ mod tests {
             ],
             true,
         );
+        let mail_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "mail-anchor",
+                "--id",
+                "page/mail",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
         let operation = run_cli(
             [
                 "--json",
@@ -8413,7 +8519,7 @@ mod tests {
                 "--to",
                 "page/mail",
                 "--click",
-                "100,200",
+                "5,6",
             ],
             true,
         );
@@ -8442,6 +8548,7 @@ mod tests {
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(anchor.exit_code(), 0);
+        assert_eq!(mail_anchor.exit_code(), 0);
         assert_eq!(
             operation.exit_code(),
             0,
@@ -8456,7 +8563,7 @@ mod tests {
         );
         let data = build.envelope.data.as_ref().unwrap();
         assert_eq!(data.get("status").and_then(Value::as_str), Some("built"));
-        assert_eq!(data.get("anchor_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(data.get("anchor_count").and_then(Value::as_u64), Some(2));
         assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(1));
         assert_eq!(
             data.pointer("/bundle/schema_version")
@@ -8494,12 +8601,16 @@ mod tests {
         assert_eq!(
             data.pointer("/bundle/operations/0/click/x")
                 .and_then(Value::as_i64),
-            Some(100)
+            Some(5)
         );
         assert!(out.join("operations/resources.json").is_file());
         assert!(out.join("operations/daily-check/task.json").is_file());
         assert!(
             out.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
+                .is_file()
+        );
+        assert!(
+            out.join("operations/daily-check/assets/anchor-mail-anchor-page_mail.png")
                 .is_file()
         );
         let written: Value = serde_json::from_str(
@@ -8509,6 +8620,37 @@ mod tests {
         assert_eq!(
             written.pointer("/operations/0/id").and_then(Value::as_str),
             Some("home-to-mail")
+        );
+
+        let packaged = run_cli(
+            [
+                "--json",
+                "package",
+                "build-task",
+                "--repo",
+                out.to_str().unwrap(),
+                "--task",
+                "daily-check",
+                "--out",
+                temp.path().join("daily-check.zip").to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+        assert_eq!(
+            packaged.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&packaged.envelope).unwrap()
+        );
+        let packaged_data = packaged.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            packaged_data.get("status").and_then(Value::as_str),
+            Some("validated")
+        );
+        assert_eq!(
+            packaged_data.get("task_id").and_then(Value::as_str),
+            Some("daily-check")
         );
     }
 
@@ -8600,6 +8742,238 @@ mod tests {
                 .unwrap()
                 .message
                 .contains("unresolved target click")
+        );
+    }
+
+    #[test]
+    fn session_record_build_task_rejects_missing_page_anchor() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let out = temp.path().join("draft");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "missing-mail-anchor",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "5,6",
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(anchor.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_eq!(build.exit_code(), 2);
+        assert_eq!(
+            build.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            build
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("has no matching anchor")
+        );
+    }
+
+    #[test]
+    fn session_record_build_task_rejects_out_of_bounds_click() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let out = temp.path().join("draft");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "bad-click",
+                "--from",
+                "page/home",
+                "--to",
+                "page/home",
+                "--click",
+                "100,200",
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(anchor.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_eq!(build.exit_code(), 2);
+        assert_eq!(
+            build.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            build
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("outside coordinate_space"),
+            "{}",
+            serde_json::to_string_pretty(&build.envelope).unwrap()
         );
     }
 
@@ -9914,6 +10288,7 @@ mod tests {
 
     #[test]
     fn detect_page_accepts_reorganized_repo_root_resource_root() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
         let ours = repo.join("ours");

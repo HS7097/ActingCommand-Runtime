@@ -63,6 +63,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording anchor self-backtest: frame-backed anchor crops now run an offline source-frame template self-test and persist score, threshold, metric, match point, and pass/fail evaluation metadata.
 - ActingLab session recording build-task draft: authorized, backtested recording steps can now assemble a local draft operation bundle and asset directory without device I/O, resource writes, UI, SQLite, or game logic.
 - ActingLab session recording anchor contrast validation: frame-backed anchor crops can now be checked against an explicit contrast frame so ambiguous anchors fail before draft bundle generation.
+- ActingLab session recording package handoff: generated draft bundles now satisfy the existing `package build-task` dry-run validation path, with early page-anchor and click-bound checks in `record build-task`.
+
+## Current ActingLab Session Recording Package Handoff
+
+The current Runtime task advances Phase D by closing the offline handoff between the recording authoring path and the existing Lab package builder. A `session record build-task` draft now has to be structurally acceptable to `package build-task --dry-run`, rather than merely writing a local `task.json`.
+
+Scope:
+
+- Keep `session record build-task` as an offline draft-output command.
+- Preserve the Operation Bundle 0.3-style output under `<out>/operations/<task_id>/task.json`.
+- Add package compatibility coverage by running `package build-task --dry-run` against a generated recording draft in tests.
+- Use a numeric `defaults.color_max_distance` value in generated drafts so the resulting recognition pack validates.
+- Require operation `from`, `to`, `entry_page`, and `target_page` page references to have matching anchors, with `any` and `<page>_variant` anchors following the existing converter semantics.
+- Validate point-click coordinates against the bundle coordinate space before writing a draft.
+- Keep unresolved target-click operations rejected before page-reference validation.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not live-capture frames, write resource repositories, touch SQLite, implement UI, add OCR/OpenCV, or add game logic.
+- Missing page anchors, out-of-bounds clicks, unresolved target clicks, malformed clicks, and package-incompatible defaults fail visibly during `record build-task` or the package dry-run test path.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_build_task -- --nocapture` passed with `5` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `20` tests.
+- `cargo test -p actingcommand-actinglab` passed with `128` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add current-frame integration only after stale-frame policy and daemon routing are fully aligned with recording.
+- Add resource-promotion/write flow after the offline package handoff remains stable.
+- Add additional recording step kinds such as color-probe or verify-template in later milestones.
 
 ## Current ActingLab Session Recording Anchor Contrast Validation
 

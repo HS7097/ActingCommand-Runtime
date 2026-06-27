@@ -1,5 +1,87 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording package handoff
+
+### Current status
+
+- Closed an offline handoff gap between `session record build-task` and the existing `package build-task` pipeline.
+- The successful recording build-task test now immediately runs `package build-task --dry-run` against the generated draft repo.
+- Generated drafts now use numeric `defaults.color_max_distance` so the generated recognition pack validates.
+- `record build-task` now validates operation point-click coordinates against the inferred or supplied `coordinate_space`.
+- `record build-task` now validates that operation `from`, `to`, `entry_page`, and `target_page` references have matching anchors.
+- Page-reference validation accepts the same `any` and `<page>_variant` style that the existing converter recognizes.
+- Unresolved target-click operations still fail before page-reference validation.
+- The reorganized resource-root detect-page test is now isolated with the existing test environment lock to avoid reading another test's temporary `ACTINGLAB_CONFIG_PATH`.
+- No device I/O, MaaTouch startup, live screenshot capture, resource repository write, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `7537c67ca2d98f91138bd6d1942fa64527587eb3`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- First `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- Rerun `cargo fmt --all`
+- First `cargo test -p actingcommand-actinglab session_record_build_task -- --nocapture`
+- Rerun `cargo fmt --all`
+- Rerun `cargo test -p actingcommand-actinglab session_record_build_task -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace`
+- Rerun `cargo fmt --all`
+- Rerun `cargo test --workspace`
+- Rerun `cargo fmt --all -- --check`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- First package handoff test failed because the fixture used a 12x10 coordinate space but clicked 100,200; the success fixture now uses an in-bounds click.
+- `record build-task` now rejects out-of-bounds point clicks before a package dry-run.
+- First package dry-run then failed because generated defaults used `color_max_distance: null`; generated drafts now use numeric `20.0`.
+- Package dry-run then failed because operation `to` referenced `page/mail` without a matching anchor; the success fixture now includes a mail anchor and `record build-task` rejects missing page anchors explicitly.
+- `cargo test -p actingcommand-actinglab session_record_build_task -- --nocapture` passed with `5` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `20` tests.
+- `cargo test -p actingcommand-actinglab` passed with `128` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace` failed in `detect_page_accepts_reorganized_repo_root_resource_root` because that existing test could observe another test's temporary empty `ACTINGLAB_CONFIG_PATH` during parallel execution.
+- `detect_page_accepts_reorganized_repo_root_resource_root` now uses the existing `ENV_LOCK` test guard.
+- Rerun `cargo test --workspace` passed.
+- Rerun `cargo fmt --all -- --check` passed.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for offline package handoff.
+- Full recording remains incomplete: live current-frame integration, resource promotion, UI/API wiring, and SQLite metadata are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-package-handoff`.
+3. Continue Phase D current-frame/resource-promotion work only after this offline handoff is accepted.
+
 ## 2026-06-27 ActingLab session recording anchor contrast validation
 
 ### Current status
