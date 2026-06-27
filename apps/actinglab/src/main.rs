@@ -603,6 +603,23 @@ struct SessionRecordAnchorAmendTarget<'a> {
     evaluation: &'a mut SessionRecordStepEvaluation,
 }
 
+struct SessionRecordColorProbeAmendTarget<'a> {
+    id: &'a mut String,
+    region: &'a mut SessionRecordRegion,
+    expected: &'a mut Option<[u8; 3]>,
+    frame_provenance: &'a mut Option<Box<SessionRecordFrameProvenance>>,
+    evaluation: &'a mut SessionRecordStepEvaluation,
+}
+
+struct SessionRecordVerifyTemplateAmendTarget<'a> {
+    id: &'a mut String,
+    region: &'a mut SessionRecordRegion,
+    threshold: &'a mut Option<f64>,
+    frame_provenance: &'a mut Option<Box<SessionRecordFrameProvenance>>,
+    artifact: &'a mut Option<Box<SessionRecordAnchorArtifact>>,
+    evaluation: &'a mut SessionRecordStepEvaluation,
+}
+
 struct SessionRecordBuildDraft {
     bundle: Value,
     task_dir: PathBuf,
@@ -6426,16 +6443,30 @@ fn session_record_candidate_report(
     step: &SessionRecordStep,
     record_path: &Path,
 ) -> CliOutcome<Value> {
-    let SessionRecordStepData::Anchor {
-        id,
-        region,
-        evaluation,
-        ..
-    } = &step.data
-    else {
-        return Err(CliError::usage(
-            "session record candidates requires an anchor step with an auto-region candidate report",
-        ));
+    let (resource_kind, resource_id, region, evaluation) = match &step.data {
+        SessionRecordStepData::Anchor {
+            id,
+            region,
+            evaluation,
+            ..
+        } => ("anchor", id, region, evaluation),
+        SessionRecordStepData::ColorProbe {
+            id,
+            region,
+            evaluation,
+            ..
+        } => ("color_probe", id, region, evaluation),
+        SessionRecordStepData::VerifyTemplate {
+            id,
+            region,
+            evaluation,
+            ..
+        } => ("verify_template", id, region, evaluation),
+        SessionRecordStepData::Operation { .. } => {
+            return Err(CliError::usage(
+                "session record candidates requires a resource step with an auto-region candidate report",
+            ));
+        }
     };
     let Some(auto_region) = &evaluation.auto_region else {
         return Err(CliError::usage(
@@ -6453,7 +6484,9 @@ fn session_record_candidate_report(
         "instance": record.instance.as_str(),
         "record_status": record.status.as_str(),
         "step_id": step.step_id.as_str(),
-        "anchor_id": id,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "anchor_id": resource_id,
         "region": region,
         "evaluation_status": evaluation.status.as_str(),
         "auto_region": auto_region,
@@ -6490,15 +6523,39 @@ fn amend_session_record_step(
             };
             amend_anchor_record_step(context, &step_id, &mut target, flags)?
         }
-        SessionRecordStepData::ColorProbe { .. } => {
-            return Err(CliError::usage(
-                "record amend does not support color-probe steps in this milestone",
-            ));
+        SessionRecordStepData::ColorProbe {
+            id,
+            region,
+            expected,
+            frame_provenance,
+            evaluation,
+        } => {
+            let mut target = SessionRecordColorProbeAmendTarget {
+                id,
+                region,
+                expected,
+                frame_provenance,
+                evaluation,
+            };
+            amend_color_probe_record_step(&step_id, &mut target, flags)?
         }
-        SessionRecordStepData::VerifyTemplate { .. } => {
-            return Err(CliError::usage(
-                "record amend does not support verify-template steps in this milestone",
-            ));
+        SessionRecordStepData::VerifyTemplate {
+            id,
+            region,
+            threshold,
+            frame_provenance,
+            artifact,
+            evaluation,
+        } => {
+            let mut target = SessionRecordVerifyTemplateAmendTarget {
+                id,
+                region,
+                threshold,
+                frame_provenance,
+                artifact,
+                evaluation,
+            };
+            amend_verify_template_record_step(context, &step_id, &mut target, flags)?
         }
         SessionRecordStepData::Operation {
             from,
@@ -6566,6 +6623,81 @@ fn amend_anchor_record_step(
     Ok(changed)
 }
 
+fn amend_color_probe_record_step(
+    step_id: &str,
+    target: &mut SessionRecordColorProbeAmendTarget<'_>,
+    flags: &FlagArgs,
+) -> CliOutcome<bool> {
+    let mut changed = false;
+    let mut auto_region_override = None;
+    if let Some(value) = flags.optional("--id").filter(|value| value != "true") {
+        if value.trim().is_empty() {
+            return Err(CliError::usage("--id must not be empty"));
+        }
+        *target.id = value;
+        changed = true;
+    }
+    if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {
+        let selection = select_recorded_auto_region_candidate(target.evaluation, candidate_index)?;
+        *target.region = SessionRecordRegion::Rect {
+            rect: selection.selected.clone(),
+        };
+        auto_region_override = Some(selection);
+        changed = true;
+    }
+    if let Some(value) = flags.optional("--region").filter(|value| value != "true") {
+        *target.region = parse_session_record_region(&value)?;
+        auto_region_override = None;
+        changed = true;
+    }
+    if changed {
+        refresh_amended_color_probe(step_id, target, flags, auto_region_override)?;
+    }
+    Ok(changed)
+}
+
+fn amend_verify_template_record_step(
+    context: &SessionRecordAmendContext,
+    step_id: &str,
+    target: &mut SessionRecordVerifyTemplateAmendTarget<'_>,
+    flags: &FlagArgs,
+) -> CliOutcome<bool> {
+    let mut changed = false;
+    let mut auto_region_override = None;
+    if let Some(value) = flags.optional("--id").filter(|value| value != "true") {
+        if value.trim().is_empty() {
+            return Err(CliError::usage("--id must not be empty"));
+        }
+        *target.id = value;
+        changed = true;
+    }
+    if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {
+        let selection = select_recorded_auto_region_candidate(target.evaluation, candidate_index)?;
+        *target.region = SessionRecordRegion::Rect {
+            rect: selection.selected.clone(),
+        };
+        auto_region_override = Some(selection);
+        changed = true;
+    }
+    if let Some(value) = flags.optional("--region").filter(|value| value != "true") {
+        *target.region = parse_session_record_region(&value)?;
+        auto_region_override = None;
+        changed = true;
+    }
+    if flags.flags.contains_key("--threshold") {
+        *target.threshold = parse_optional_unit_f64(flags, "--threshold")?;
+        changed = true;
+    }
+    if flags.bool("--clear-threshold") {
+        *target.threshold = None;
+        changed = true;
+    }
+    if changed {
+        refresh_amended_verify_template(context, step_id, target, flags, auto_region_override)?;
+    }
+    Ok(changed)
+}
+
 fn parse_session_record_candidate_index(flags: &FlagArgs) -> CliOutcome<Option<usize>> {
     let candidate_index = flags.optional("--candidate-index");
     let auto_candidate = flags.optional("--auto-candidate");
@@ -6621,6 +6753,102 @@ fn refresh_amended_anchor_artifact(
     auto_region_override: Option<SessionRecordAutoRegionSelection>,
 ) -> CliOutcome<()> {
     let Some(provenance) = target.frame_provenance.as_deref() else {
+        *target.evaluation = SessionRecordStepEvaluation {
+            status: "deferred".to_string(),
+            reason: "amended_without_frame_provenance".to_string(),
+            auto_region: None,
+            backtest: None,
+            contrast_backtest: None,
+        };
+        return Ok(());
+    };
+    let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
+    let resolution = if let Some(auto_region) = auto_region_override {
+        SessionRecordAnchorRegionResolution {
+            rect: auto_region.selected.clone(),
+            auto_region: Some(auto_region),
+        }
+    } else {
+        resolve_session_record_anchor_rect(
+            &source_frame.frame,
+            target.region,
+            *target.threshold,
+            flags,
+        )?
+    };
+    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
+    let materialized = materialize_anchor_artifact_from_source(
+        source_frame,
+        resolution,
+        &artifact_dir,
+        step_id,
+        target.id,
+        *target.threshold,
+        flags,
+    )?;
+    *target.region = materialized.region.clone();
+    *target.frame_provenance = Some(Box::new(materialized.frame_provenance));
+    *target.artifact = Some(Box::new(materialized.artifact));
+    *target.evaluation = materialized.evaluation;
+    Ok(())
+}
+
+fn refresh_amended_color_probe(
+    step_id: &str,
+    target: &mut SessionRecordColorProbeAmendTarget<'_>,
+    flags: &FlagArgs,
+    auto_region_override: Option<SessionRecordAutoRegionSelection>,
+) -> CliOutcome<()> {
+    let Some(provenance) = target.frame_provenance.as_deref() else {
+        *target.expected = None;
+        *target.evaluation = SessionRecordStepEvaluation {
+            status: "deferred".to_string(),
+            reason: "amended_without_frame_provenance".to_string(),
+            auto_region: None,
+            backtest: None,
+            contrast_backtest: None,
+        };
+        return Ok(());
+    };
+    let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
+    let resolution = if let Some(auto_region) = auto_region_override {
+        SessionRecordAnchorRegionResolution {
+            rect: auto_region.selected.clone(),
+            auto_region: Some(auto_region),
+        }
+    } else {
+        resolve_session_record_anchor_rect(&source_frame.frame, target.region, None, flags)?
+    };
+    let expected = mean_session_record_rect_rgb(&source_frame.frame, &resolution.rect)?;
+    *target.region = SessionRecordRegion::Rect {
+        rect: resolution.rect.clone(),
+    };
+    *target.expected = Some(expected);
+    *target.frame_provenance = Some(Box::new(session_record_frame_provenance(source_frame)));
+    *target.evaluation = SessionRecordStepEvaluation {
+        status: "passed".to_string(),
+        reason: "color_probe_sampled".to_string(),
+        auto_region: resolution.auto_region,
+        backtest: None,
+        contrast_backtest: None,
+    };
+    if target.id.trim().is_empty() {
+        return Err(CliError::usage(format!(
+            "record amend color-probe '{step_id}' id must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn refresh_amended_verify_template(
+    context: &SessionRecordAmendContext,
+    step_id: &str,
+    target: &mut SessionRecordVerifyTemplateAmendTarget<'_>,
+    flags: &FlagArgs,
+    auto_region_override: Option<SessionRecordAutoRegionSelection>,
+) -> CliOutcome<()> {
+    let Some(provenance) = target.frame_provenance.as_deref() else {
+        *target.artifact = None;
         *target.evaluation = SessionRecordStepEvaluation {
             status: "deferred".to_string(),
             reason: "amended_without_frame_provenance".to_string(),
@@ -9445,6 +9673,331 @@ mod tests {
     }
 
     #[test]
+    fn session_record_amend_recomputes_frame_backed_color_probe() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "color-probe",
+                "--step-id",
+                "home-color",
+                "--id",
+                "color/home-status",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "home-color",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--region",
+                "4,1,2,3",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(
+            amend.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&amend.envelope).unwrap()
+        );
+        let data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("color_probe")
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/x").and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/y").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/step/expected/0").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/expected/1").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/step/expected/2").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("color_probe_sampled")
+        );
+    }
+
+    #[test]
+    fn session_record_amend_deferred_color_probe_does_not_fake_expected_color() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "color-probe",
+                "--step-id",
+                "home-color",
+                "--id",
+                "color/home-status",
+                "--region",
+                "2,3,4,5",
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "home-color",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--region",
+                "4,1,2,3",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(amend.exit_code(), 0);
+        let data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("color_probe")
+        );
+        assert!(data.pointer("/step/expected").is_none());
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("amended_without_frame_provenance")
+        );
+    }
+
+    #[test]
+    fn session_record_amend_rebacktests_frame_backed_verify_template() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "verify-template",
+                "--step-id",
+                "mail-ready",
+                "--id",
+                "template/mail-ready",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "mail-ready",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--region",
+                "1,2,3,4",
+                "--threshold",
+                "0.90",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(
+            amend.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&amend.envelope).unwrap()
+        );
+        let data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("verify_template")
+        );
+        assert_eq!(
+            data.pointer("/step/threshold").and_then(Value::as_f64),
+            Some(0.90)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/width").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/height")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/x")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/y")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert!(
+            data.pointer("/step/evaluation/backtest/threshold")
+                .and_then(Value::as_f64)
+                .is_some_and(|threshold| (threshold - 0.90).abs() < 0.00001)
+        );
+        let artifact_path = data
+            .pointer("/step/artifact/path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .expect("artifact path");
+        assert!(artifact_path.is_file());
+    }
+
+    #[test]
     fn session_record_step_anchor_materializes_frame_crop() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -10231,6 +10784,105 @@ mod tests {
             data.pointer("/auto_region/selected/y")
                 .and_then(Value::as_i64),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn session_record_candidates_lists_color_probe_auto_region_report() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(
+            &frame_path,
+            test_auto_region_discrimination_frame_png(false),
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "color-probe",
+                "--step-id",
+                "home-color",
+                "--id",
+                "color/home-status",
+                "--region",
+                "auto",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let candidates = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "candidates",
+                "home-color",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(
+            candidates.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&candidates.envelope).unwrap()
+        );
+        let data = candidates.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/resource_kind").and_then(Value::as_str),
+            Some("color_probe")
+        );
+        assert_eq!(
+            data.pointer("/resource_id").and_then(Value::as_str),
+            Some("color/home-status")
+        );
+        assert_eq!(
+            data.pointer("/anchor_id").and_then(Value::as_str),
+            Some("color/home-status")
+        );
+        assert!(
+            data.pointer("/candidate_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count > 0)
         );
     }
 

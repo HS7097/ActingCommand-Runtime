@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording standalone resource amend loop
+
+### Current status
+
+- Advanced Phase D recording by extending `session record amend` to standalone `color-probe` and `verify-template` steps.
+- `color-probe` amendments can update ids, regions, and auto-region candidate selections.
+- Frame-backed color-probe amendments recompute `expected` RGB from the recorded source frame.
+- Metadata-only color-probe amendments remain explicit and deferred with reason `amended_without_frame_provenance`.
+- `verify-template` amendments can update ids, regions, thresholds, clear-threshold requests, and auto-region candidate selections.
+- Frame-backed verify-template amendments re-materialize the template artifact and rerun offline self-backtests from the recorded source frame.
+- Metadata-only verify-template amendments remain explicit and deferred with reason `amended_without_frame_provenance`.
+- `session record candidates` now reports auto-region candidate previews for standalone resource steps, with `resource_kind` / `resource_id` and the existing `anchor_id` compatibility alias.
+- No UI, SQLite, OCR/OpenCV, game logic, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `c3da2aad024d7429677a3b3b3f421026636e90ef`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- First targeted `cargo test` command failed because Cargo accepts only one test filter.
+- First `cargo test -p actingcommand-lab ...` command failed because the actual package name is `actingcommand-actinglab`.
+- `cargo test -p actingcommand-actinglab session_record_amend_`
+- `cargo test -p actingcommand-actinglab session_record_candidates_`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_amend_` passed with `9` tests.
+- `cargo test -p actingcommand-actinglab session_record_candidates_` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `40` tests.
+- `cargo test -p actingcommand-actinglab` passed with `150` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the standalone resource amend-loop implementation.
+- Full Phase D still has future work: live prepared-emulator validation and UI/API surfaces for candidate review, color-check review, standalone resource review, promotion, and amend flows.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-resource-amend-loop`.
+3. Continue Phase D with live prepared-emulator validation or UI/API review surfaces after this amend loop is accepted.
+
 ## 2026-06-27 ActingLab session recording standalone verify-template output
 
 ### Current status

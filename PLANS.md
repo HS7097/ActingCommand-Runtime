@@ -74,8 +74,46 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording anchor color-check output: frame-backed anchors recorded with `--color-check` now emit bundle `color_check` data derived from the authorized source-frame region instead of only storing the request as provenance.
 - ActingLab session recording standalone color-probe output: `session record step --kind color-probe` can now sample an authorized frame region into `color_probes[]`, and `resource convert` emits those probes as recognition-pack `type=color` targets.
 - ActingLab session recording standalone verify-template output: `session record step --kind verify-template` can now materialize an authorized template crop into `verify_templates[]`, and `resource convert` emits those templates as recognition-pack template targets.
+- ActingLab session recording color-probe/verify-template amend loop: `session record amend` can now correct standalone color-probe and verify-template steps, recompute authorized frame-backed data, and keep metadata-only steps visibly deferred.
 
-## Current ActingLab Session Recording Standalone Verify-Template Output
+## Current ActingLab Session Recording Amend Loop For Standalone Resources
+
+The current Runtime task advances Phase D's "record, correct, and generate resources" path by extending the existing `session record amend` correction loop from anchors and operations to standalone `color-probe` and `verify-template` steps.
+
+Scope:
+
+- Allow `session record amend` to update `color-probe` ids and regions.
+- Recompute frame-backed color-probe `expected` RGB values from the recorded source frame after amendments.
+- Keep metadata-only color-probe amendments visibly `deferred` with reason `amended_without_frame_provenance` instead of producing fake colors.
+- Allow `session record amend` to update `verify-template` ids, regions, thresholds, and clear-threshold requests.
+- Re-materialize frame-backed verify-template artifacts and rerun offline self-backtests after amendments.
+- Keep metadata-only verify-template amendments visibly `deferred` with reason `amended_without_frame_provenance` instead of producing fake artifacts.
+- Extend `session record candidates` to report recorded auto-region candidates for standalone resource steps, while preserving `anchor_id` as a compatibility alias.
+
+Safety direction:
+
+- This milestone remains limited to offline recording metadata and artifact correction.
+- This milestone adds no UI, SQLite, OCR/OpenCV, game logic, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+- Device capture remains available only through the existing explicit recording inlet; the new tests use synthetic local PNG frames only.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_amend_` passed with `9` tests.
+- `cargo test -p actingcommand-actinglab session_record_candidates_` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `40` tests.
+- `cargo test -p actingcommand-actinglab` passed with `150` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add UI/API surfaces for candidate review, color-check review, color-probe review, verify-template review, promotion, and amend flows after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Standalone Verify-Template Output
 
 The current Runtime task advances Phase D's "authorized resource generation" path by adding a standalone verify-template step kind. This records a reusable visual template target from an operator-authorized region and passes it through the same draft bundle and recognition-pack conversion pipeline as other generated resources.
 
@@ -114,7 +152,6 @@ Validation status:
 Known follow-ups:
 
 - Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
-- Define amend semantics for color-probe and verify-template steps before enabling `record amend` on those step kinds.
 - Add a UI/API surface for candidate review, color-check review, color-probe review, verify-template review, and promotion after the CLI shape is accepted.
 
 ## Previous ActingLab Session Recording Standalone Color-Probe Output
