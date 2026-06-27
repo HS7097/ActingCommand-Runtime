@@ -79,8 +79,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording build-task capability close-out: top-level and session-scoped record capabilities now advertise `build-task`, and top-level `record build-task` is covered by route tests.
 - ActingLab session interface surface alignment: record lifecycle capabilities now advertise start/status/stop, and the future interactive `stream` command is explicitly reserved instead of being an unknown command.
 - ActingLab daemon app lifecycle routing: `session app launch|stop|restart` can now be submitted through the resident daemon request queue with lease metadata, and daemon-side app requests are lease-gated before device I/O.
+- ActingLab daemon instance lifecycle routing: `session instance list|health|reconnect` can now be submitted through the resident daemon request queue, with `reconnect` lease-gated before device I/O.
 
-## Current ActingLab Daemon App Lifecycle Routing
+## Current ActingLab Daemon Instance Lifecycle Routing
+
+The current Runtime task moves the remaining Phase A instance lifecycle surface behind the resident Session Layer request boundary. `session instance list|health|reconnect` remains available as direct local Session Layer commands, and each can now also be submitted to the running daemon with `--via-daemon` or `session request instance ...`.
+
+Scope:
+
+- Add `session instance <list|health|reconnect> --via-daemon` routing.
+- Add `session request instance <list|health|reconnect>` routing.
+- Keep `list` and `health` read-only daemon requests.
+- Require matching session lease metadata before daemon-side `reconnect` can reach device I/O.
+- Advertise concrete `session instance ...` and `session request instance ...` capabilities.
+
+Safety direction:
+
+- Daemon-routed `list` and `health` are diagnostic/read-only.
+- Daemon-routed `reconnect` is a device-affecting lifecycle request and requires `--lease-holder` metadata plus an active matching lease.
+- This milestone does not change direct local `session instance` execution behavior.
+- This milestone adds no scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, direct MaaTouch startup, capture algorithm changes, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_instance_ -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_request_instance_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for fallback, reconnect/retry loops, direct capture/input execution in the new daemon instance routing, SQLite, OCR/OpenCV, or ADB shell input/screencap.
+
+Known follow-ups:
+
+- Continue moving package/operation execution workflows through the resident daemon request boundary.
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+
+## Previous ActingLab Daemon App Lifecycle Routing
 
 The current Runtime task moves one more Phase A lifecycle operation behind the resident Session Layer request boundary. `session app launch|stop|restart` remains available as a direct local Session Layer command, and it can now also be submitted to the running daemon with `--via-daemon` or `session request app ...`.
 
