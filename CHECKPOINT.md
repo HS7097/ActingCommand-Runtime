@@ -1,5 +1,83 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording amend schema
+
+### Current status
+
+- Added `session record amend <step-id>` and `session record amend --step-id <id>`.
+- Anchor steps can now amend:
+  - `--id <page>`
+  - `--region <auto|x,y,width,height>`
+  - `--color-check`
+  - `--no-color-check`
+  - `--threshold <0..1>`
+  - `--clear-threshold`
+- Anchor amendment resets evaluation to `deferred` with reason `amended_needs_backtest`.
+- Operation steps can now amend:
+  - `--from <page>`
+  - `--to <page|null>`
+  - `--click <x,y|target>`
+  - `--destructive`
+  - `--non-destructive`
+- `SessionRecordStep` now records `updated_at_unix_ms`.
+- Missing/inactive recording contexts fail with `record_session_not_active`.
+- Missing step ids fail validation.
+- Unknown step ids fail with `record_step_not_found`.
+- Amend commands that do not include a supported field for the target step kind fail validation instead of silently succeeding.
+- `session record build-task` remains explicit `record_authoring_not_implemented`.
+- `capabilities` now advertises `session record amend` as offline available.
+- No device I/O, MaaTouch startup, screenshot capture, frame crop, resource write, task bundle generation, OCR, recognition change, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0559e16d92445c2566289a9d75428e2f960f61de`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Added-code prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, screenshot backend additions, and MaaTouch startup additions.
+- `git status --short --branch`
+- `git diff --stat`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `11` tests.
+- `cargo test -p actingcommand-actinglab` passed with `119` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Added-code prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for the recording amend schema.
+- Full recording remains incomplete: anchor capture/crop/backtest, build-task/package output, resource writes, and screenshot provenance are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-amend rollback point.
+3. Next implementation milestone should define frame provenance for anchor capture/crop/backtest before any resource writes.
+
 ## 2026-06-27 ActingLab session recording step schema
 
 ### Current status
