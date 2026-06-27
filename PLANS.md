@@ -76,8 +76,40 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording standalone verify-template output: `session record step --kind verify-template` can now materialize an authorized template crop into `verify_templates[]`, and `resource convert` emits those templates as recognition-pack template targets.
 - ActingLab session recording color-probe/verify-template amend loop: `session record amend` can now correct standalone color-probe and verify-template steps, recompute authorized frame-backed data, and keep metadata-only steps visibly deferred.
 - ActingLab session recording top-level CLI contract alias: `record ...` now routes to the same implementation as `session record ...`, matching the Session Layer interface draft while preserving existing behavior.
+- ActingLab session recording build-task capability close-out: top-level and session-scoped record capabilities now advertise `build-task`, and top-level `record build-task` is covered by route tests.
 
-## Current ActingLab Session Recording Top-Level CLI Contract Alias
+## Current ActingLab Session Recording Build-Task Capability Close-Out
+
+The current Runtime task closes the small interface gap left after enabling top-level `record ...`: the Session Layer interface draft names `record build-task`, and the implementation already routed it, but the capabilities surface did not advertise `record build-task` or `session record build-task`.
+
+Scope:
+
+- Advertise `session record build-task` as an available offline capability.
+- Advertise top-level `record build-task` as an available offline capability.
+- Add a top-level `record build-task` route test that proves the command reaches the existing recording implementation and fails with the same explicit `record_session_not_active` error when no recording context exists.
+- Keep generated bundle behavior, resource promotion behavior, and existing `session record build-task` semantics unchanged.
+
+Safety direction:
+
+- This milestone is a CLI capability and routing close-out only.
+- This milestone adds no device I/O, UI, SQLite, OCR/OpenCV, game logic, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record_build_task_requires_record -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add UI/API surfaces for candidate review, color-check review, color-probe review, verify-template review, promotion, and amend flows after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Top-Level CLI Contract Alias
 
 The current Runtime task aligns the Phase D recording CLI with the Session Layer interface draft by enabling the documented top-level `record ...` entry point. The existing `session record ...` command remains available and unchanged; both surfaces now share the same implementation and state files.
 

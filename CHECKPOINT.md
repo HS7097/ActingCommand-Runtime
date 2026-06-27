@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording build-task capability close-out
+
+### Current status
+
+- Closed the top-level recording CLI contract gap for `record build-task`.
+- `session record build-task` is now advertised as an available offline capability.
+- Top-level `record build-task` is now advertised as an available offline capability.
+- Added a route test proving top-level `record build-task` reaches the existing recording implementation and fails explicitly with `record_session_not_active` when no recording context exists.
+- Existing `session record build-task` behavior, generated bundle logic, resource promotion behavior, state files, JSON envelope shape, validation, and exit-code mapping remain unchanged.
+- No device I/O, UI, SQLite, OCR/OpenCV, game logic, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `9d2b7546ccbfe42745224bab70b008e9e9374b99`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_build_task_requires_record -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record_build_task_requires_record -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the build-task capability close-out.
+- Full Session Layer remains incomplete: live prepared-emulator recording validation, UI/API review surfaces, resident streaming, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-record-build-task-capability`.
+2. Continue full Session Layer follow-ups: live prepared-emulator recording validation, UI/API review surfaces, resident streaming, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session recording top-level CLI contract alias
 
 ### Current status

@@ -8533,11 +8533,13 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
+        command_cap("session record build-task", ["offline"], "available"),
         command_cap("session record promote", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
+        command_cap("record build-task", ["offline"], "available"),
         command_cap("record promote", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
@@ -9230,6 +9232,40 @@ mod tests {
                 .pointer("/record/status")
                 .and_then(Value::as_str),
             Some("stopped")
+        );
+    }
+
+    #[test]
+    fn top_level_record_build_task_routes_to_session_record() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                temp.path().join("draft").to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(build.exit_code(), 3);
+        assert_eq!(
+            build.envelope.error.as_ref().unwrap().code,
+            "record_session_not_active"
         );
     }
 
@@ -13780,6 +13816,18 @@ mod tests {
                 }),
             Some("offline")
         );
+        for command_name in ["record build-task", "session record build-task"] {
+            let command = commands
+                .iter()
+                .find(|command| {
+                    command.get("command").and_then(Value::as_str) == Some(command_name)
+                })
+                .unwrap_or_else(|| panic!("{command_name} capability"));
+            assert_eq!(
+                command.get("status").and_then(Value::as_str),
+                Some("available")
+            );
+        }
     }
 
     #[test]
