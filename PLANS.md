@@ -56,6 +56,46 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session lease arbitration interface hardening: `session lease acquire|release|preempt|status` now uses structured lease records with holder checks, optional lease ids, force release, and preempt provenance.
 - ActingLab daemon lease-gated control request routing: `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover` can now be submitted to the resident daemon only with matching session lease metadata.
 - ActingLab daemon monitor recovery routing: bounded `monitor --via-daemon --recover` and `session request monitor --recover` can now run through the resident daemon only after a matching session lease is validated.
+- ActingLab session recording context skeleton: `session record start|status|stop` can create and inspect a local JSON recording context with `auto_recording=false`, while step authoring and task bundle generation remain explicitly reserved.
+
+## Current ActingLab Session Recording Context Skeleton
+
+The current Runtime task advances Phase D of the session layer by adding the smallest useful recording-session context. It opens a local record context for a task and instance, but it does not capture screenshots, authorize steps, write resources, or build task bundles.
+
+Scope:
+
+- Add `session record start --task-id <id>` as an offline command.
+- Add `session record status` and `session record stop`.
+- Store one structured JSON context per instance under the selected session state directory.
+- Include schema version, record id, task id, instance, status, optional holder, optional lease id, timestamps, and an empty `steps` array.
+- Return `auto_recording=false` so callers cannot mistake the context for automatic capture.
+- Block a second active `start` unless `--force` is provided.
+- Keep `session record step`, `session record amend`, and `session record build-task` explicit `not_implemented` responses for the next authoring milestone.
+- Advertise `session record` as an offline available capability.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not capture screenshots, read/write resource packs, generate bundles, run OCR, run recognition, touch SQLite, implement UI, or add game logic.
+- Reserved authoring actions return before creating state files.
+- The top-level `record` capability remains reserved because full resource recording is not implemented.
+
+Validation status:
+
+- Runtime was fetched and confirmed aligned with `origin/main` before the task.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab` passed with `112` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed after collapsing one clippy-reported nested `if`.
+- `git diff --check` passed.
+- Added-code prohibited-feature scan returned no matches for device input fallback, screenshot/capture backends, SQLite, OCR/OpenCV, reconnect, retry, or MaaTouch startup.
+
+Known follow-ups:
+
+- Implement explicit `session record step` authoring only after step schemas are finalized.
+- Implement record amend and build-task/package output in a later milestone.
+- Add resource-write integration only after the recording authorization model is complete.
 
 ## Current ActingLab Daemon Monitor Recovery Routing
 

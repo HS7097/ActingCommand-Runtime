@@ -372,6 +372,23 @@ struct SessionLeasePrevious {
     updated_at_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordContext {
+    schema_version: String,
+    record_id: String,
+    task_id: String,
+    instance: String,
+    status: String,
+    #[serde(default)]
+    holder: Option<String>,
+    #[serde(default)]
+    lease_id: Option<String>,
+    started_at_unix_ms: u128,
+    updated_at_unix_ms: u128,
+    #[serde(default)]
+    steps: Vec<Value>,
+}
+
 #[derive(Debug, Clone)]
 struct Invocation {
     global: GlobalOptions,
@@ -3417,6 +3434,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "capture" => run_capture(global, args),
         "recover" => run_session_recover(global, args),
         "lease" => run_session_lease(global, args),
+        "record" => run_session_record(global, args),
         _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
     }
 }
@@ -4288,6 +4306,120 @@ fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease)
         ));
     }
     Ok(())
+}
+
+fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let action = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session record requires start|status|stop"))?;
+    let flags = FlagArgs::parse(&args[1..])?;
+    if matches!(action, "step" | "amend" | "build-task") {
+        return Err(CliError::not_implemented(
+            "record_authoring_not_implemented",
+            "session record step/amend/build-task are reserved for the next recording authoring milestone",
+        ));
+    }
+    let config = read_user_config()?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+    let record_path = session_record_path(&state_dir, &instance_id);
+    match action {
+        "start" => {
+            let task_id = flags.required("--task-id")?;
+            if task_id.trim().is_empty() {
+                return Err(CliError::usage("--task-id must not be empty"));
+            }
+            if record_path.exists()
+                && !flags.bool("--force")
+                && let Some(existing) = read_json_file::<SessionRecordContext>(&record_path)?
+                && existing.status == "active"
+            {
+                return Err(CliError::safety_blocked(
+                    "record_session_active",
+                    format!(
+                        "recording session already active for {} with task {}",
+                        existing.instance, existing.task_id
+                    ),
+                    &["session_record"],
+                ));
+            }
+            let record = new_session_record(&instance_id, &task_id, &flags);
+            write_json_file_atomic(&record_path, &record)?;
+            Ok(json!({
+                "status": "started",
+                "record": record,
+                "path": record_path.display().to_string(),
+                "auto_recording": false
+            }))
+        }
+        "status" => Ok(json!({
+            "status": if record_path.exists() { "available" } else { "not_started" },
+            "instance": instance_id,
+            "record": read_json_file::<SessionRecordContext>(&record_path)?,
+            "path": record_path.display().to_string()
+        })),
+        "stop" => {
+            let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
+                return Ok(json!({
+                    "status": "not_started",
+                    "instance": instance_id,
+                    "path": record_path.display().to_string()
+                }));
+            };
+            record.status = "stopped".to_string();
+            record.updated_at_unix_ms = current_unix_ms();
+            write_json_file_atomic(&record_path, &record)?;
+            Ok(json!({
+                "status": "stopped",
+                "record": record,
+                "path": record_path.display().to_string()
+            }))
+        }
+        other => Err(CliError::usage(format!(
+            "unknown session record action: {other}"
+        ))),
+    }
+}
+
+fn session_record_path(state_dir: &Path, instance_id: &str) -> PathBuf {
+    state_dir.join(format!("record-{}.json", safe_file_stem(instance_id)))
+}
+
+fn new_session_record(instance: &str, task_id: &str, flags: &FlagArgs) -> SessionRecordContext {
+    let now = current_unix_ms();
+    let holder = flags
+        .optional("--holder")
+        .or_else(|| flags.optional("--lease-holder"))
+        .filter(|value| value != "true");
+    let record_id = flags
+        .optional("--record-id")
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| {
+            format!(
+                "{now}-{}-{}",
+                std::process::id(),
+                safe_file_stem(task_id.trim())
+            )
+        });
+    SessionRecordContext {
+        schema_version: "session-record-v0".to_string(),
+        record_id,
+        task_id: task_id.trim().to_string(),
+        instance: instance.to_string(),
+        status: "active".to_string(),
+        holder,
+        lease_id: flags.optional("--lease-id").filter(|value| value != "true"),
+        started_at_unix_ms: now,
+        updated_at_unix_ms: now,
+        steps: Vec::new(),
+    }
 }
 
 fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -5813,6 +5945,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
+        command_cap("session record", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
@@ -6223,6 +6356,237 @@ mod tests {
         assert_eq!(
             data.pointer("/previous/lease_id").and_then(Value::as_str),
             Some("scheduler-lease")
+        );
+    }
+
+    #[test]
+    fn session_record_start_status_and_stop_write_context() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        let status = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        let stop = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "stop",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        let start_data = start.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            start_data.get("auto_recording").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            start_data.pointer("/record/status").and_then(Value::as_str),
+            Some("active")
+        );
+        assert_eq!(
+            start_data
+                .pointer("/record/task_id")
+                .and_then(Value::as_str),
+            Some("daily-check")
+        );
+        assert_eq!(
+            start_data
+                .pointer("/record/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            start_data.pointer("/record/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            start_data
+                .pointer("/record/lease_id")
+                .and_then(Value::as_str),
+            Some("lease-1")
+        );
+        assert!(
+            start_data
+                .pointer("/record/steps")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
+
+        assert_eq!(status.exit_code(), 0);
+        assert_eq!(
+            status
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+
+        assert_eq!(stop.exit_code(), 0);
+        assert_eq!(
+            stop.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/record/status")
+                .and_then(Value::as_str),
+            Some("stopped")
+        );
+    }
+
+    #[test]
+    fn session_record_active_start_requires_force() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let first = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let conflict = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check-2",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(first.exit_code(), 0);
+        assert_eq!(conflict.exit_code(), 3);
+        assert_eq!(
+            conflict.envelope.error.as_ref().unwrap().code,
+            "record_session_active"
+        );
+    }
+
+    #[test]
+    fn session_record_authoring_actions_are_reserved() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 6);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "record_authoring_not_implemented"
+        );
+    }
+
+    #[test]
+    fn session_record_start_requires_task_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
         );
     }
 

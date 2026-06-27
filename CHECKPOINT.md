@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording context skeleton
+
+### Current status
+
+- Added `session record start|status|stop` as a local offline recording context skeleton.
+- `session record start --task-id <id>` writes one structured JSON record context per instance in the selected session state directory.
+- Record contexts include schema version, record id, task id, instance, status, optional holder, optional lease id, timestamps, and an empty `steps` array.
+- `session record start` returns `auto_recording=false` to make clear that opening a context does not authorize capture or resource writes.
+- A second active record start is blocked with `record_session_active` unless `--force` is supplied.
+- `session record step|amend|build-task` return explicit `record_authoring_not_implemented` before creating state files.
+- `capabilities` now advertises `session record` as offline available while the top-level `record` capability remains reserved.
+- No device I/O, MaaTouch startup, screenshot capture, resource write, task bundle generation, OCR, recognition change, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `5357013eaab48501ed17efb08a3f09a6aa2c7bc3`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- First `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- `cargo test -p actingcommand-actinglab session_record`
+- `git diff --check`
+- First prohibited-feature scan over code diff, which matched only an existing context line.
+- Added-code prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, screenshot backend additions, and MaaTouch startup additions.
+- Rerun `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab` passed with `112` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- The first `cargo clippy --workspace -- -D warnings` found one collapsible nested `if`; it was fixed without changing the milestone scope.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test -p actingcommand-actinglab session_record` passed with `4` tests after the clippy fix.
+- `git diff --check` passed.
+- The first prohibited-feature scan matched only the existing diff context line `"capture" => run_capture(global, args)`.
+- Added-code prohibited-feature scan returned no matches.
+- Final `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the recording context skeleton.
+- Full recording authoring remains incomplete: explicit step authorization, amend, build-task/package output, resource writes, and any screenshot integration are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-context rollback point.
+3. Next implementation milestone should define explicit `session record step` schemas before any capture/resource write integration.
+
 ## 2026-06-27 ActingLab daemon monitor recovery routing
 
 ### Current status
