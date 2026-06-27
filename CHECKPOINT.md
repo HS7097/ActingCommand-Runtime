@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-preferred read-only routing
+
+### Current status
+
+- Added shared daemon-preferred routing for read-only/diagnostic ActingLab CLI entries.
+- `--via-daemon` still forces resident daemon routing.
+- New `--local` flag forces local handling for diagnostic/read-only entries.
+- When session info exists, `status`, `devices`, `capture`, `capture diagnose`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`, `stream`, `session status`, and `session journal` now prefer the resident daemon request queue by default.
+- When session info is absent, existing local/offline behavior remains available.
+- Control commands such as `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and recovery remain lease/control-request gated only when explicitly routed through the daemon.
+- Client-only `--local` is stripped from daemon request payload args.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `c61755c06a1bf49f357ee24eae78eaa033e4f376`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture`
+- `cargo test -p actingcommand-actinglab devices_prefers_daemon_when_session_info_exists -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_local_bypasses_daemon_preference -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_payload_strips_client_only_flags -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_via_daemon_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_journal_via_daemon_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab devices_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_local_bypasses_daemon_preference -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_payload_strips_client_only_flags -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_journal_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: default daemon-preferred control routing with operator lease UX, trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, recording ownership review, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-preferred-readonly`.
+2. Continue Session Layer follow-ups: default daemon-preferred control routing with operator lease UX, trusted UI/API diagnostics, scheduler lease arbitration integration, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, recording ownership review, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session diagnostics daemon routing
 
 ### Current status

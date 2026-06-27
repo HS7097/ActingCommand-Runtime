@@ -90,12 +90,53 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
 - ActingLab top-level daemon-routed status entry: `status --via-daemon` now submits the top-level status diagnostic through the resident daemon request queue while bare `status` keeps its existing local runtime probe behavior.
 - ActingLab session diagnostics daemon routing: `session status --via-daemon` and `session journal --via-daemon` now route local session diagnostics through the resident daemon request queue while preserving their offline local forms.
+- ActingLab daemon-preferred read-only routing: when session info indicates a resident daemon is running, read-only/diagnostic CLI entries now prefer the daemon request queue by default and use `--local` as the explicit local override.
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 
-## Current ActingLab Session Diagnostics Daemon Routing
+## Current ActingLab Daemon-Preferred Read-Only Routing
+
+The current Runtime task moves from opt-in daemon routing toward the Session Layer default: when a resident session daemon is visible through the session state info file, read-only and diagnostic CLI entries prefer the daemon request queue without requiring `--via-daemon`. If the daemon is absent, existing local/offline behavior remains available. `--local` is the explicit diagnostic override for local state reads or direct one-shot read-only commands.
+
+Scope:
+
+- Add a shared read-only routing helper that treats `--via-daemon` as forced daemon routing, `--local` as forced local routing, and existing session info as daemon-preferred routing.
+- Apply daemon-preferred routing to `status`, `devices`, `capture`, `capture diagnose`, `recognize`, `detect-page`, `current-page`, `is-visible`, `locate`, `stream`, `session status`, and `session journal`.
+- Keep control commands such as `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and recovery lease-gated behind explicit daemon/control request paths for now.
+- Strip `--local` from daemon payload args just like other client-side routing flags.
+- Add regression tests for daemon preference, local override, and client-only payload stripping.
+
+Safety direction:
+
+- Daemon-preferred routing is limited to read-only or diagnostic commands in this milestone.
+- Missing daemon state still preserves existing local behavior unless `--via-daemon` is explicitly requested.
+- Stale or unprocessed daemon request files fail visibly with `runtime_not_running` timeout instead of silently falling back to direct device access.
+- The milestone does not change control command lease requirements, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab devices_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_local_bypasses_daemon_preference -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_payload_strips_client_only_flags -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_journal_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Decide when control commands should become daemon-preferred by default and how to surface lease acquisition UX for manual operators.
+- Expose daemon-preferred read-only routing through the future trusted UI/API channel once that channel exists.
+- Continue moving user-facing diagnostic and control surfaces behind the resident Session Layer request/API boundary.
+
+## Previous ActingLab Session Diagnostics Daemon Routing
 
 The current Runtime task routes `session status` and `session journal` diagnostics through the resident daemon request queue when `--via-daemon` is present. Their bare forms remain local/offline state readers, while the routed forms reuse the existing daemon-side `status` and `journal` request handlers.
 

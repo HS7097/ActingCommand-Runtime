@@ -1011,7 +1011,7 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
 
 fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "status", args);
     }
     require_runtime(global).map(|data| {
@@ -1024,7 +1024,7 @@ fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "devices", args);
     }
     flags.expect_positionals("devices", 0)?;
@@ -1118,7 +1118,7 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     {
         return run_capture_diagnose(global, &flags);
     }
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "capture", args);
     }
     let out = flags.required_path("--out")?;
@@ -1156,7 +1156,7 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(flags)? {
         return submit_capture_diagnose_request(global, flags);
     }
     let config = read_user_config()?;
@@ -1181,6 +1181,23 @@ fn submit_capture_diagnose_request(global: &GlobalOptions, flags: &FlagArgs) -> 
     let mut args = vec!["diagnose".to_string()];
     push_optional_flag_value(&mut args, flags, "--fresh-delay-ms");
     submit_session_command_request(global, flags, "capture_diagnose", args)
+}
+
+fn should_route_readonly_via_session_daemon(flags: &FlagArgs) -> CliOutcome<bool> {
+    if flags.bool("--local") {
+        return Ok(false);
+    }
+    if flags.bool("--via-daemon") {
+        return Ok(true);
+    }
+    let Ok(state_dir) = session_state_dir_from_flags(flags) else {
+        return Ok(false);
+    };
+    let info_path = session_info_path(&state_dir);
+    if !info_path.exists() {
+        return Ok(false);
+    }
+    read_json_file::<SessionInfo>(&info_path).map(|info| info.is_some())
 }
 
 fn submit_readonly_session_request(
@@ -1232,7 +1249,7 @@ fn session_request_payload_args(args: &[String]) -> Vec<String> {
     let mut index = 0usize;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--via-daemon" {
+        if arg == "--via-daemon" || arg == "--local" {
             index += 1;
             continue;
         }
@@ -1255,7 +1272,7 @@ fn session_state_request_payload_args(args: &[String]) -> Vec<String> {
     let mut index = 0usize;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--via-daemon" {
+        if arg == "--via-daemon" || arg == "--local" {
             index += 1;
             continue;
         }
@@ -1820,7 +1837,7 @@ fn canonical_key(key: &str) -> String {
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "recognize", args);
     }
     let target = flags.required("--target")?;
@@ -1872,7 +1889,7 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "detect_page", args);
     }
     let config = read_user_config()?;
@@ -1896,7 +1913,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 
 fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "current_page", args);
     }
     let config = read_user_config()?;
@@ -1908,7 +1925,7 @@ fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value
 
 fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "is_visible", args);
     }
     let target = target_argument(&flags, "is-visible")?;
@@ -1938,7 +1955,7 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
 fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "locate", args);
     }
     let template = flags
@@ -3380,7 +3397,7 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "stream", args);
     }
     if flags.bool("--input-relay") || flags.bool("--interactive-input") {
@@ -3893,7 +3910,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
 
 fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "journal", args);
     }
     flags.expect_positionals("session journal", 0)?;
@@ -3917,7 +3934,7 @@ fn session_journal_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> 
 
 fn run_session_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_readonly_via_session_daemon(&flags)? {
         return submit_readonly_session_request(global, &flags, "status", args);
     }
     flags.expect_positionals("session status", 0)?;
@@ -9467,6 +9484,22 @@ mod tests {
         );
     }
 
+    fn write_test_session_files(state_dir: &Path) {
+        let info = SessionInfo {
+            pid: 321,
+            started_at_unix_ms: 10,
+            state_dir: state_dir.display().to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: 321,
+            updated_at_unix_ms: 20,
+            state: "idle".to_string(),
+        };
+        write_json_file_atomic(&session_info_path(state_dir), &info).unwrap();
+        write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
+    }
+
     #[test]
     fn session_status_without_daemon_is_offline_ok() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -9489,6 +9522,92 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn status_prefers_daemon_when_session_info_exists() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let result = run_cli(
+            [
+                "--json",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("timed out")
+        );
+    }
+
+    #[test]
+    fn devices_prefers_daemon_when_session_info_exists() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let result = run_cli(
+            [
+                "--json",
+                "devices",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("timed out")
+        );
+    }
+
+    #[test]
+    fn session_status_local_bypasses_daemon_preference() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--local",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("running").and_then(Value::as_bool), Some(true));
+        assert_eq!(data.pointer("/info/pid").and_then(Value::as_u64), Some(321));
     }
 
     #[test]
@@ -15465,6 +15584,7 @@ mod tests {
             "--target".to_string(),
             "arknights/home".to_string(),
             "--via-daemon".to_string(),
+            "--local".to_string(),
             "--state-dir".to_string(),
             "target/session".to_string(),
             "--request-timeout-ms".to_string(),
