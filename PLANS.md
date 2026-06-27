@@ -54,6 +54,65 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session daemon read-only semantic routing: `recognize`, `detect-page`, `current-page`, `is-visible`, and `locate` can now submit read-only requests through the same daemon queue with `--via-daemon` or `session request ...`.
 - ActingLab daemon monitor-once routing: `monitor --once --via-daemon` and `session request monitor-once` now run read-only health diagnosis through the resident daemon while `--recover` remains blocked until lease arbitration exists.
 - ActingLab session lease arbitration interface hardening: `session lease acquire|release|preempt|status` now uses structured lease records with holder checks, optional lease ids, force release, and preempt provenance.
+- ActingLab daemon lease-gated control request routing: `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover` can now be submitted to the resident daemon only with matching session lease metadata.
+
+## Current ActingLab Session Daemon Lease-Gated Control Requests
+
+The current Runtime task connects the structured session lease interface to the resident daemon request channel for task-level control commands.
+
+Scope:
+
+- Keep read-only daemon requests unchanged.
+- Add lease metadata to `SessionCommandRequest`.
+- Strip `--lease-holder`, `--holder`, and `--lease-id` from inner command arguments before daemon execution.
+- Allow top-level control commands to use `--via-daemon`:
+  - `tap`
+  - `swipe`
+  - `long-tap`
+  - `key`
+  - `text`
+  - `tap-target`
+  - `navigate`
+  - `session recover`
+- Allow equivalent `session request` control commands:
+  - `session request tap`
+  - `session request swipe`
+  - `session request long-tap`
+  - `session request key`
+  - `session request text`
+  - `session request tap-target`
+  - `session request navigate`
+  - `session request recover`
+- Require `--lease-holder <id>` or `--holder <id>` for daemon control requests.
+- Validate optional `--lease-id <id>` before any device I/O.
+- Reject missing leases, wrong holders, and wrong lease ids as visible safety-blocked failures.
+- Map daemon lease errors back to client-side safety-blocked errors instead of reporting fake runtime success or a misleading runtime-not-running failure.
+- Advertise lease-gated daemon control requests in `capabilities`.
+
+Safety direction:
+
+- Only daemon-routed control requests are gated in this milestone.
+- Existing direct local manual commands remain available for trusted manual use.
+- The failure tests validate that lease errors happen before MaaTouch/device input is opened.
+- The local daemon smoke used a mismatched holder and confirmed no tap was sent.
+- No ADB input fallback, reconnect, retry loop, OCR, SQLite, UI, scheduler body, recording, capture backend, or recognition algorithm change was added.
+
+Validation status:
+
+- Runtime was fetched and confirmed aligned with `origin/main` before the task.
+- `cargo test -p actingcommand-actinglab session_control_request_requires_lease_metadata` passed.
+- `cargo test -p actingcommand-actinglab session_control_request_rejects_wrong_holder_before_device_io` passed.
+- `cargo test -p actingcommand-actinglab session_control_request_rejects_wrong_lease_id_before_device_io` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup` passed.
+- `cargo test -p actingcommand-actinglab` passed.
+- A local daemon smoke acquired an `ak` lease for `scheduler`, submitted `tap --via-daemon` with holder `lab`, and received a lease-holder safety block with exit code `3` before device input.
+
+Known follow-ups:
+
+- Matching-lease daemon control execution still needs live validation on a safe simulator state.
+- `monitor --once --via-daemon --recover` remains blocked; recovery can be submitted through `session request recover` or `session recover --via-daemon` with a lease.
+- Direct local manual commands still bypass daemon ownership by design for this milestone; future policy may make daemon routing mandatory for non-manual callers.
+- Package run, operation run, scheduler body, API/event streaming, UI integration, and recording are still outside this milestone.
 
 ## Current ActingLab Session Lease Arbitration Interface
 

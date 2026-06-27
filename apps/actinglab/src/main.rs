@@ -39,7 +39,13 @@ const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
 const SESSION_REQUESTS_DIR: &str = "requests";
 const SESSION_RESPONSES_DIR: &str = "responses";
-const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &["--state-dir", "--request-timeout-ms"];
+const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
+    "--state-dir",
+    "--request-timeout-ms",
+    "--lease-holder",
+    "--holder",
+    "--lease-id",
+];
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
@@ -310,6 +316,8 @@ struct SessionCommandRequest {
     command: String,
     global: SessionCommandGlobal,
     args: Vec<String>,
+    #[serde(default)]
+    lease: Option<SessionCommandLease>,
     created_at_unix_ms: u128,
 }
 
@@ -332,6 +340,13 @@ struct SessionCommandResponse {
     error: Option<EnvelopeError>,
     started_at_unix_ms: u128,
     completed_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionCommandLease {
+    holder: String,
+    #[serde(default)]
+    lease_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -884,6 +899,15 @@ fn submit_readonly_session_request(
     submit_session_command_request(global, flags, command, session_request_payload_args(args))
 }
 
+fn submit_control_session_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command: &str,
+    args: &[String],
+) -> CliOutcome<Value> {
+    submit_session_command_request(global, flags, command, session_request_payload_args(args))
+}
+
 fn session_request_payload_args(args: &[String]) -> Vec<String> {
     let mut payload = Vec::new();
     let mut index = 0usize;
@@ -905,6 +929,21 @@ fn session_request_payload_args(args: &[String]) -> Vec<String> {
         index += 1;
     }
     payload
+}
+
+fn session_command_lease_from_flags(flags: &FlagArgs) -> Option<SessionCommandLease> {
+    let holder = flags
+        .optional("--lease-holder")
+        .or_else(|| flags.optional("--holder"))
+        .filter(|value| value != "true");
+    let lease_id = flags.optional("--lease-id").filter(|value| value != "true");
+    if holder.is_none() && lease_id.is_none() {
+        return None;
+    }
+    Some(SessionCommandLease {
+        holder: holder.unwrap_or_default(),
+        lease_id,
+    })
 }
 
 struct CaptureCommandResult {
@@ -1312,6 +1351,9 @@ fn handshake_json(handshake: HandshakeInfo) -> Value {
 
 fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, command, args);
+    }
     let command = DirectTouchCommand::parse(command, &flags)?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
@@ -1344,6 +1386,9 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
 
 fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, command, args);
+    }
     let command = DirectInputCommand::parse(command, &flags)?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
@@ -1581,6 +1626,9 @@ fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, "tap_target", args);
+    }
     let target = target_argument(&flags, "tap-target")?;
     let allow_destructive = flags.bool("--allow-destructive");
     let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -1650,6 +1698,9 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
 fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, "navigate", args);
+    }
     let to = flags.required("--to")?;
     let allow_destructive = flags.bool("--allow-destructive");
     let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -1729,6 +1780,9 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, "recover", args);
+    }
     let dry_run = global.dry_run || flags.bool("--dry-run");
     if !dry_run && !flags.bool("--capture") {
         return Err(CliError::usage(
@@ -3386,7 +3440,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, or monitor-once",
+                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor-once, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3404,6 +3458,13 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "is-visible" => submit_readonly_session_request(global, &flags, "is_visible", &args[1..]),
         "locate" => submit_readonly_session_request(global, &flags, "locate", &args[1..]),
         "monitor-once" => submit_monitor_once_session_request(global, &flags, &args[1..]),
+        "tap" | "swipe" | "long-tap" | "key" | "text" => {
+            submit_control_session_request(global, &flags, command, &args[1..])
+        }
+        "tap-target" => submit_control_session_request(global, &flags, "tap_target", &args[1..]),
+        "navigate" | "recover" => {
+            submit_control_session_request(global, &flags, command, &args[1..])
+        }
         other => Err(CliError::usage(format!(
             "unknown session request command: {other}"
         ))),
@@ -3430,6 +3491,7 @@ fn submit_session_command_request(
         command: command.to_string(),
         global: SessionCommandGlobal::from_global(global),
         args,
+        lease: session_command_lease_from_flags(flags),
         created_at_unix_ms: current_unix_ms(),
     };
     let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
@@ -3508,7 +3570,11 @@ fn cli_error_from_envelope(error: EnvelopeError) -> CliError {
         "instance_not_found" => CliError::instance(error.message),
         "device_error" => CliError::device(error.message),
         "not_implemented" => CliError::not_implemented("not_implemented", error.message),
-        code if code.starts_with("navigation_") || code.contains("blocked") => {
+        code if code.starts_with("navigation_")
+            || code.starts_with("lab_lease")
+            || code.starts_with("lease_")
+            || code.contains("blocked") =>
+        {
             let blocked = error
                 .blocked_by
                 .iter()
@@ -3722,7 +3788,7 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
                 path.display()
             ))
         })?;
-        let response = execute_session_command_request(request);
+        let response = execute_session_command_request(request, state_dir);
         let response_path =
             session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
         write_json_file_atomic(&response_path, &response)?;
@@ -3737,9 +3803,12 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
     Ok(processed)
 }
 
-fn execute_session_command_request(request: SessionCommandRequest) -> SessionCommandResponse {
+fn execute_session_command_request(
+    request: SessionCommandRequest,
+    state_dir: &Path,
+) -> SessionCommandResponse {
     let started_at_unix_ms = current_unix_ms();
-    let result = execute_session_command_request_inner(&request);
+    let result = execute_session_command_request_inner(&request, state_dir);
     let completed_at_unix_ms = current_unix_ms();
     match result {
         Ok(data) => SessionCommandResponse {
@@ -3767,7 +3836,10 @@ fn execute_session_command_request(request: SessionCommandRequest) -> SessionCom
     }
 }
 
-fn execute_session_command_request_inner(request: &SessionCommandRequest) -> CliOutcome<Value> {
+fn execute_session_command_request_inner(
+    request: &SessionCommandRequest,
+    state_dir: &Path,
+) -> CliOutcome<Value> {
     match request.command.as_str() {
         "capture_diagnose" => {
             let global = request.global.to_global()?;
@@ -3806,10 +3878,66 @@ fn execute_session_command_request_inner(request: &SessionCommandRequest) -> Cli
             }
             run_monitor_once(&global, &flags)
         }
+        "tap" | "swipe" | "long-tap" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_direct_touch(&global, &request.command, &request.args)
+        }
+        "key" | "text" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_direct_input(&global, &request.command, &request.args)
+        }
+        "tap_target" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_tap_target(&global, &request.args)
+        }
+        "navigate" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_navigate(&global, &request.args)
+        }
+        "recover" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_session_recover(&global, &request.args)
+        }
         other => Err(CliError::usage(format!(
             "unsupported daemon request command: {other}"
         ))),
     }
+}
+
+fn ensure_session_request_lease(
+    state_dir: &Path,
+    request: &SessionCommandRequest,
+) -> CliOutcome<SessionLease> {
+    let requested = request
+        .lease
+        .as_ref()
+        .filter(|lease| !lease.holder.is_empty())
+        .ok_or_else(|| {
+            CliError::safety_blocked(
+                "lab_lease_required",
+                format!(
+                    "daemon control request '{}' requires --lease-holder <id>",
+                    request.command
+                ),
+                &["lab_lease", "lease_holder"],
+            )
+        })?;
+    let instance_id = session_command_instance_id(&request.global);
+    let lease_path = session_lease_path(state_dir, &instance_id);
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Err(CliError::safety_blocked(
+            "lab_lease_missing",
+            format!("daemon control request requires an active lease for {instance_id}"),
+            &["lab_lease"],
+        ));
+    };
+    validate_lease_request(&current, requested)?;
+    Ok(current)
 }
 
 fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
@@ -4066,6 +4194,13 @@ fn session_lease_path(state_dir: &Path, instance_id: &str) -> PathBuf {
     state_dir.join(format!("lease-{}.json", safe_file_stem(instance_id)))
 }
 
+fn session_command_instance_id(global: &SessionCommandGlobal) -> String {
+    global
+        .instance
+        .clone()
+        .unwrap_or_else(|| "default".to_string())
+}
+
 fn new_session_lease(
     instance: String,
     holder: String,
@@ -4108,19 +4243,29 @@ fn validate_lease_release(
     if force {
         return Ok(());
     }
-    if lease.holder != holder {
+    validate_lease_request(
+        lease,
+        &SessionCommandLease {
+            holder: holder.to_string(),
+            lease_id,
+        },
+    )
+}
+
+fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease) -> CliOutcome<()> {
+    if lease.holder != requested.holder {
         return Err(CliError::safety_blocked(
             "lease_holder_mismatch",
             format!(
                 "lease for {} is held by {}, not {}",
-                lease.instance, lease.holder, holder
+                lease.instance, lease.holder, requested.holder
             ),
             &["lab_lease", "lease_holder"],
         ));
     }
-    if let Some(expected) = lease_id.filter(|value| value != "true")
+    if let Some(expected) = requested.lease_id.as_ref().filter(|value| *value != "true")
         && !lease.lease_id.is_empty()
-        && lease.lease_id != expected
+        && lease.lease_id.as_str() != expected.as_str()
     {
         return Err(CliError::safety_blocked(
             "lease_id_mismatch",
@@ -5606,6 +5751,46 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device"],
             "available",
         ),
+        command_cap(
+            "session request tap",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request swipe",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request long-tap",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request key",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request text",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request tap-target",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request navigate",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request recover",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
@@ -6026,6 +6211,100 @@ mod tests {
     }
 
     #[test]
+    fn session_control_request_requires_lease_metadata() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn session_control_request_rejects_wrong_holder_before_device_io() {
+        let temp = TempDir::new().unwrap();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "lab".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lease_holder_mismatch");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn session_control_request_rejects_wrong_lease_id_before_device_io() {
+        let temp = TempDir::new().unwrap();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "key".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["back".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-2".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lease_id_mismatch");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -6079,6 +6358,33 @@ mod tests {
                 "--via-daemon",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "tap",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "100",
+                "200",
             ],
             true,
         );
@@ -6171,6 +6477,10 @@ mod tests {
             "target/session".to_string(),
             "--request-timeout-ms".to_string(),
             "15000".to_string(),
+            "--lease-holder".to_string(),
+            "scheduler".to_string(),
+            "--lease-id".to_string(),
+            "lease-1".to_string(),
             "--capture".to_string(),
         ];
 

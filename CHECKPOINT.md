@@ -1,5 +1,106 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon lease-gated control request routing
+
+### Current status
+
+- Connected structured session lease metadata to daemon control requests.
+- `SessionCommandRequest` now carries optional lease metadata outside inner command arguments.
+- Client-only request flags now strip:
+  - `--state-dir`
+  - `--request-timeout-ms`
+  - `--lease-holder`
+  - `--holder`
+  - `--lease-id`
+- Added lease-gated daemon request support for:
+  - `tap`
+  - `swipe`
+  - `long-tap`
+  - `key`
+  - `text`
+  - `tap-target`
+  - `navigate`
+  - `recover`
+- Top-level control commands now accept `--via-daemon` and submit to the resident daemon request queue.
+- `session request` now accepts equivalent lease-gated control commands.
+- Daemon execution checks the active instance lease before any task-level input, semantic tap, navigation, or recovery command.
+- Missing lease metadata, missing active lease, wrong holder, and wrong lease id fail visibly with safety-blocked errors.
+- Daemon lease errors are mapped back to client-side safety-blocked failures instead of fake success or misleading runtime-not-running output.
+- `capabilities` now advertises the new lease-gated daemon control requests.
+- Existing direct trusted manual commands remain available for local use; this milestone only gates daemon-routed control requests.
+- No ADB input fallback, reconnect, retry loop, OCR, SQLite, UI, scheduler body, recording, capture backend, recognition algorithm, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `cbe19b806ac169559e0b2b3e66b12d2489724350`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- Attempted `cargo test -p actingcommand-actinglab session_control_request direct_touch_via_daemon session_request_payload session_lease`; Cargo rejected multiple test filters in one command.
+- `cargo test -p actingcommand-actinglab session_`
+- `cargo test -p actingcommand-actinglab session_control_request_requires_lease_metadata`
+- `cargo test -p actingcommand-actinglab session_control_request_rejects_wrong_holder_before_device_io`
+- `cargo test -p actingcommand-actinglab session_control_request_rejects_wrong_lease_id_before_device_io`
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Code diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+- Local daemon smoke without an acquired lease:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <target session-control-smoke dir>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session lease acquire --state-dir <target session-control-smoke dir> --holder scheduler --lease-id smoke-lease`
+  - `cargo run -q -p actingcommand-actinglab -- --json tap --via-daemon --state-dir <target session-control-smoke dir> --lease-holder lab --lease-id smoke-lease 100 200`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <target session-control-smoke dir>`
+- Local daemon smoke with an `ak` lease and mismatched holder:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <target session-control-smoke dir>`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease acquire --state-dir <target session-control-smoke dir> --holder scheduler --lease-id smoke-lease`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak tap --via-daemon --state-dir <target session-control-smoke dir> --lease-holder lab --lease-id smoke-lease 100 200`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <target session-control-smoke dir>`
+
+### Test results
+
+- New focused tests passed:
+  - `session_control_request_requires_lease_metadata`
+  - `session_control_request_rejects_wrong_holder_before_device_io`
+  - `session_control_request_rejects_wrong_lease_id_before_device_io`
+  - `direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup`
+- `cargo test -p actingcommand-actinglab` passed with `105` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Code diff prohibited-feature scan returned no matches.
+- `cargo test -p actingcommand-actinglab session_` failed once because the broad filter ran existing environment-mutating tests in parallel and exposed a transient config EOF race. The full package test passed afterward.
+- Local daemon smoke without an acquired lease returned exit code `3` and safety-blocked `daemon_request_blocked` with message `daemon control request requires an active lease for default`; no device input was sent.
+- Local daemon smoke with an `ak` scheduler lease returned exit code `3` and safety-blocked `daemon_request_blocked` with message `lease for ak is held by scheduler, not lab`; no device input was sent.
+
+### Current blocker
+
+- No blocker for lease-gated daemon control request rejection and routing.
+- Matching-lease live execution still needs a safe simulator state before claiming end-to-end task-level control through the daemon.
+- Full Session Layer is still incomplete: scheduler body, package run, operation run, API/event streaming, UI integration, recording, mandatory daemon-only policy for non-manual callers, and live matching-lease control validation remain open.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable daemon-control authorization rollback point.
+3. Next implementation milestone should live-validate matching-lease daemon control on a safe emulator state, then continue toward making daemon ownership mandatory for scheduler/Lab task paths.
+
 ## 2026-06-27 ActingLab session lease arbitration interface
 
 ### Current status
