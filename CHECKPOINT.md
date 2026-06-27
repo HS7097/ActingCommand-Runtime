@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session instance health contract surface
+
+### Current status
+
+- `session contract` now exposes `daemon_queries.instance_health = session request instance health`.
+- `session api` now exposes `envelopes.instance_health_view`.
+- Session Layer read-only command examples now include `session instance health`.
+- The existing `session instance health --capture-diagnose` command behavior is unchanged.
+- No device health execution path, capture diagnosis behavior, daemon queue behavior, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `c756d140bb8b33cd50366fc29ec899fbd95cec26`.
+- Runtime was confirmed clean and up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Inspected `apps/actinglab/src/main.rs` Session access/API contracts and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo run -q -p actingcommand-actinglab -- --json session contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract` passed with `1` test.
+- CLI smoke confirmed `session api` exposes `envelopes.instance_health_view`.
+- CLI smoke confirmed `session contract` exposes `daemon_queries.instance_health`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `268` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-instance-health-contract`.
+2. Continue Session Layer follow-ups only after this health contract milestone is verified.
+
 ## 2026-06-28 ActingLab session instance keep-alive surface
 
 ### Current status

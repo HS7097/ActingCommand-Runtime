@@ -1094,7 +1094,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance keep-alive", "capture", "stream"]
+                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream"]
             },
             "control": {
                 "requires_lease": true,
@@ -1153,6 +1153,7 @@ fn session_access_contract() -> Value {
             "journal": "session request journal",
             "events": "session request events",
             "instance_registry": "session request instance registry",
+            "instance_health": "session request instance health",
             "instance_keep_alive": "session request instance keep-alive"
         },
         "request_classes": {
@@ -1173,6 +1174,7 @@ fn session_access_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session instance registry",
+                    "session instance health",
                     "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
@@ -1378,6 +1380,12 @@ fn session_api_contract() -> Value {
                 "schema_version": "session.instance_registry.v0.1",
                 "ready_field": "instances[].validation.ready_for_device_control"
             },
+            "instance_health_view": {
+                "query": "session instance health [--capture-diagnose]",
+                "daemon_query": "session request instance health [--capture-diagnose]",
+                "status_field": "status",
+                "capture_field": "capture"
+            },
             "instance_keep_alive_view": {
                 "query": "session instance keep-alive",
                 "daemon_query": "session request instance keep-alive",
@@ -1405,6 +1413,7 @@ fn session_api_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session instance registry",
+                    "session instance health",
                     "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
@@ -18950,6 +18959,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/daemon_queries/instance_health")
+                .and_then(Value::as_str),
+            Some("session request instance health")
+        );
+        assert_eq!(
+            payload
                 .pointer("/daemon_queries/instance_keep_alive")
                 .and_then(Value::as_str),
             Some("session request instance keep-alive")
@@ -19046,6 +19061,12 @@ mod tests {
                 .pointer("/envelopes/instance_registry_view/daemon_query")
                 .and_then(Value::as_str),
             Some("session request instance registry")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/instance_health_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request instance health [--capture-diagnose]")
         );
         assert_eq!(
             payload

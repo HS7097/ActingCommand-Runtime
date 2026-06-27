@@ -128,6 +128,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance registry contract: `session instance registry` now exposes a machine-readable `session.instance_registry.v0.1` config contract with required/recommended fields, effective capture backend, configured flags, and validation diagnostics for future UI/scheduler consumers.
 - ActingLab daemon-routed instance registry contract advertisement: Session capabilities, access contract, and API contract now explicitly advertise `session request instance registry`, and daemon request tests verify the resident queue can return the registry contract.
 - ActingLab session instance keep-alive surface: `session instance keep-alive` now exposes an explicit no-click instance reachability probe, and Session capabilities, access contract, API contract, and daemon request naming advertise `session request instance keep-alive` for future UI/scheduler consumers.
+- ActingLab session instance health contract surface: Session access and API contracts now expose `session request instance health` and an `instance_health_view` so UI/scheduler clients can discover the existing health and optional capture-diagnosis payload.
+
+## Current ActingLab Session Instance Health Contract Surface
+
+The current Runtime task closes a discoverability gap for the existing instance health command.
+
+Scope:
+
+- Add `daemon_queries.instance_health = session request instance health` to `session contract`.
+- Add `envelopes.instance_health_view` to `session api`.
+- Include `session instance health` in read-only Session Layer examples.
+- Preserve `session instance health --capture-diagnose` as the capture-diagnosis form.
+
+Safety direction:
+
+- This is a contract and discoverability change for an existing read-only diagnostic command.
+- It does not change device health execution, capture diagnosis behavior, daemon queue semantics, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+
+Validation status:
+
+- Focused access contract and API contract tests passed.
+- CLI smoke confirmed `session api` exposes `instance_health_view`.
+- CLI smoke confirmed `session contract` exposes `daemon_queries.instance_health`.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session Instance Keep-Alive Surface
 
