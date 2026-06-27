@@ -110,6 +110,38 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session start liveness gate: `session start` now treats stale or heartbeat-missing session state as a visible runtime error instead of reporting false `already_running`, and new daemon startup waits for an alive heartbeat before reporting `started`.
 - ActingLab session stop liveness gate: `session stop` now refuses stale, missing-heartbeat, or pid-mismatched daemon state before writing a stop request, while alive daemon state keeps the existing stop path.
 - ActingLab stale session cleanup: `session cleanup --stale` now provides an explicit local cleanup path for stale daemon state without touching devices, apps, journals, resources, or game logic.
+- ActingLab session diagnostics recommended actions: `session status --diagnostics` now emits machine-readable next actions for stopped or stale daemon state so UI/scheduler consumers do not need to infer recovery commands from free text.
+
+## Current ActingLab Session Diagnostics Recommended Actions
+
+The current Runtime task makes Session Layer diagnostics directly actionable for future UI and scheduler consumers. `session status --diagnostics` now includes `recommended_actions` derived from the same liveness state used by daemon routing and lifecycle gates.
+
+Scope:
+
+- Add `diagnostics.recommended_actions` to `session status --diagnostics`.
+- Emit no action when the resident daemon is alive and can accept requests.
+- Recommend `session start` when the session is stopped.
+- Recommend `session cleanup --stale --dry-run`, `session cleanup --stale`, then `session start` when the session state is stale, heartbeat-missing, or pid-mismatched.
+- Include both machine-readable `args` and a human-readable `command` string for each action.
+- Keep daemon loop behavior, cleanup behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, resource access, and game logic unchanged.
+
+Safety direction:
+
+- Recommendations do not execute anything.
+- Stale cleanup remains explicit and operator-driven.
+- The action list is structured so UI/API/scheduler consumers can display or run approved commands without parsing diagnostic prose.
+
+Validation status:
+
+- Focused `cargo test -p actingcommand-actinglab session_status_diagnostics_ -- --nocapture` passed after adding stopped/alive/stale recommendation coverage.
+- `cargo run -q -p actingcommand-actinglab -- --json session status --diagnostics --state-dir <temp>` returned a stopped-state `start_session` recommendation.
+- `cargo fmt --all -- --check`, `git diff --check`, source diff prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+
+Out of scope:
+
+- No automatic recovery execution was added.
+- No new daemon request type was added.
+- No trusted network API, UI, scheduler implementation, device I/O, capture backend change, resource repository access, or game-specific logic was added.
 
 ## Current ActingLab Stale Session Cleanup
 

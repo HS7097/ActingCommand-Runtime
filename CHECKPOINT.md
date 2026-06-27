@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session diagnostics recommended actions
+
+### Current status
+
+- Added machine-readable `diagnostics.recommended_actions` to `session status --diagnostics`.
+- Alive daemon state now reports an empty recommended action list.
+- Stopped session state recommends `session start`.
+- Stale, heartbeat-missing, or pid-mismatched session state recommends `session cleanup --stale --dry-run`, `session cleanup --stale`, then `session start`.
+- Each recommendation includes priority, action id, reason, machine-readable `args`, and a human-readable command string.
+- No automatic recovery execution, cleanup behavior change, daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, app lifecycle behavior, or live device behavior was changed.
+- No live daemon or emulator operation was run for this diagnostics-contract milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `44b0fc788a345188f2811efa4e0205cd7bcc3315`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session status diagnostics, liveness diagnostics, cleanup paths, capability list, and related tests.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_ -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session status --diagnostics --state-dir <temp>`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_ -- --nocapture` passed with `7` tests.
+- `cargo run -q -p actingcommand-actinglab -- --json session status --diagnostics --state-dir <temp>` returned a stopped-state `start_session` recommendation.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `230` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-diagnostics-actions`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab stale session cleanup
 
 ### Current status

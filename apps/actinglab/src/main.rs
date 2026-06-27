@@ -4300,8 +4300,10 @@ fn session_status_diagnostics(
     let recent_entries = read_session_request_journal(state_dir, 5)?;
     let last_entry = recent_entries.last();
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
+    let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
     Ok(json!({
         "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
+        "recommended_actions": session_liveness_recommended_actions(state_dir, liveness.status),
         "paths": {
             "info": session_info_path(state_dir).display().to_string(),
             "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
@@ -4335,6 +4337,61 @@ fn session_status_diagnostics(
             }
         }
     }))
+}
+
+fn session_liveness_recommended_actions(
+    state_dir: &Path,
+    status: SessionLivenessStatus,
+) -> Vec<Value> {
+    let state_dir = state_dir.display().to_string();
+    match status {
+        SessionLivenessStatus::Alive => Vec::new(),
+        SessionLivenessStatus::Stopped => vec![session_recommended_action(
+            1,
+            "start_session",
+            "Start the resident session daemon.",
+            vec!["session", "start", "--state-dir", &state_dir],
+        )],
+        SessionLivenessStatus::HeartbeatMissing
+        | SessionLivenessStatus::PidMismatch
+        | SessionLivenessStatus::Stale => vec![
+            session_recommended_action(
+                1,
+                "inspect_stale_cleanup",
+                "Inspect stale local session cleanup before deleting files.",
+                vec![
+                    "session",
+                    "cleanup",
+                    "--stale",
+                    "--dry-run",
+                    "--state-dir",
+                    &state_dir,
+                ],
+            ),
+            session_recommended_action(
+                2,
+                "cleanup_stale_session",
+                "Remove stale local session files while preserving request journals.",
+                vec!["session", "cleanup", "--stale", "--state-dir", &state_dir],
+            ),
+            session_recommended_action(
+                3,
+                "start_session",
+                "Start a fresh resident session daemon after stale cleanup.",
+                vec!["session", "start", "--state-dir", &state_dir],
+            ),
+        ],
+    }
+}
+
+fn session_recommended_action(priority: u8, action: &str, reason: &str, args: Vec<&str>) -> Value {
+    json!({
+        "priority": priority,
+        "action": action,
+        "reason": reason,
+        "args": args,
+        "command": args.join(" ")
+    })
 }
 
 fn session_liveness_diagnostics(
@@ -16445,6 +16502,84 @@ mod tests {
                 .pointer("/diagnostics/leases/leases/0/lease_id")
                 .and_then(Value::as_str),
             Some("lease-1")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_recommends_start_when_stopped() {
+        let temp = TempDir::new().unwrap();
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("start_session")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/0").and_then(Value::as_str),
+            Some("session")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("start")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_has_no_recommendations_when_alive() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn session_status_diagnostics_recommends_stale_cleanup_sequence() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 3);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("inspect_stale_cleanup")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("cleanup")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/3").and_then(Value::as_str),
+            Some("--dry-run")
+        );
+        assert_eq!(
+            actions[1].get("action").and_then(Value::as_str),
+            Some("cleanup_stale_session")
+        );
+        assert_eq!(
+            actions[2].get("action").and_then(Value::as_str),
+            Some("start_session")
         );
     }
 
