@@ -298,7 +298,7 @@ struct InstanceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionInfo {
     pid: u32,
-    started_at_unix_ms: u128,
+    started_at_unix_ms: u64,
     state_dir: String,
     runtime_version: String,
 }
@@ -306,7 +306,7 @@ struct SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionHeartbeat {
     pid: u32,
-    updated_at_unix_ms: u128,
+    updated_at_unix_ms: u64,
     state: String,
 }
 
@@ -318,7 +318,7 @@ struct SessionCommandRequest {
     args: Vec<String>,
     #[serde(default)]
     lease: Option<SessionCommandLease>,
-    created_at_unix_ms: u128,
+    created_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,8 +338,8 @@ struct SessionCommandResponse {
     ok: bool,
     data: Option<Value>,
     error: Option<EnvelopeError>,
-    started_at_unix_ms: u128,
-    completed_at_unix_ms: u128,
+    started_at_unix_ms: u64,
+    completed_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,9 +355,9 @@ struct SessionLease {
     holder: String,
     #[serde(default)]
     lease_id: String,
-    acquired_at_unix_ms: u128,
+    acquired_at_unix_ms: u64,
     #[serde(default)]
-    updated_at_unix_ms: u128,
+    updated_at_unix_ms: u64,
     #[serde(default)]
     preempted: bool,
     #[serde(default)]
@@ -368,8 +368,8 @@ struct SessionLease {
 struct SessionLeasePrevious {
     holder: String,
     lease_id: String,
-    acquired_at_unix_ms: u128,
-    updated_at_unix_ms: u128,
+    acquired_at_unix_ms: u64,
+    updated_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,8 +383,8 @@ struct SessionRecordContext {
     holder: Option<String>,
     #[serde(default)]
     lease_id: Option<String>,
-    started_at_unix_ms: u128,
-    updated_at_unix_ms: u128,
+    started_at_unix_ms: u64,
+    updated_at_unix_ms: u64,
     #[serde(default)]
     steps: Vec<SessionRecordStep>,
 }
@@ -393,8 +393,8 @@ struct SessionRecordContext {
 struct SessionRecordStep {
     schema_version: String,
     step_id: String,
-    created_at_unix_ms: u128,
-    updated_at_unix_ms: u128,
+    created_at_unix_ms: u64,
+    updated_at_unix_ms: u64,
     #[serde(flatten)]
     data: SessionRecordStepData,
 }
@@ -473,7 +473,7 @@ struct SessionRecordFrameProvenance {
     sha256: String,
     width: u32,
     height: u32,
-    recorded_at_unix_ms: u128,
+    recorded_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +490,20 @@ struct MaterializedAnchorArtifact {
     frame_provenance: SessionRecordFrameProvenance,
     artifact: SessionRecordAnchorArtifact,
     evaluation: SessionRecordStepEvaluation,
+}
+
+struct SessionRecordBuildDraft {
+    bundle: Value,
+    task_dir: PathBuf,
+    task_path: PathBuf,
+    resources_path: PathBuf,
+    assets: Vec<SessionRecordBuildAsset>,
+}
+
+struct SessionRecordBuildAsset {
+    source: PathBuf,
+    destination: PathBuf,
+    template: String,
 }
 
 #[derive(Debug, Clone)]
@@ -4412,17 +4426,10 @@ fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease)
 }
 
 fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let action = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session record requires start|status|stop|step"))?;
+    let action = args.first().map(String::as_str).ok_or_else(|| {
+        CliError::usage("session record requires start|status|stop|step|amend|build-task")
+    })?;
     let flags = FlagArgs::parse(&args[1..])?;
-    if action == "build-task" {
-        return Err(CliError::not_implemented(
-            "record_authoring_not_implemented",
-            "session record build-task is reserved for the next recording authoring milestone",
-        ));
-    }
     let config = read_user_config()?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     fs::create_dir_all(&state_dir).map_err(|err| {
@@ -4559,10 +4566,365 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                 "step_count": record.steps.len()
             }))
         }
+        "build-task" => {
+            build_session_record_task(global, &config, &flags, &record_path, &instance_id)
+        }
         other => Err(CliError::usage(format!(
             "unknown session record action: {other}"
         ))),
     }
+}
+
+fn build_session_record_task(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    record_path: &Path,
+    instance_id: &str,
+) -> CliOutcome<Value> {
+    let Some(record) = read_json_file::<SessionRecordContext>(record_path)? else {
+        return Err(CliError::safety_blocked(
+            "record_session_not_active",
+            format!(
+                "no recording session exists for {instance_id}; run session record start first"
+            ),
+            &["session_record"],
+        ));
+    };
+    if !matches!(record.status.as_str(), "active" | "stopped") {
+        return Err(CliError::safety_blocked(
+            "record_session_not_active",
+            format!(
+                "recording session for {} is {}, not active or stopped",
+                record.instance, record.status
+            ),
+            &["session_record"],
+        ));
+    }
+    let out = flags.required_path("--out")?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
+    let draft = session_record_build_draft(&record, flags, &out, &game, &server)?;
+    if !dry_run {
+        write_session_record_build_draft(&draft)?;
+    }
+    Ok(json!({
+        "status": if dry_run { "validated" } else { "built" },
+        "mode": "session-record-build-task",
+        "dry_run": dry_run,
+        "instance": instance_id,
+        "record_id": record.record_id,
+        "task_id": record.task_id,
+        "game": game,
+        "server": server,
+        "out": out.display().to_string(),
+        "task_dir": draft.task_dir.display().to_string(),
+        "task_path": draft.task_path.display().to_string(),
+        "resources_path": draft.resources_path.display().to_string(),
+        "anchor_count": draft.bundle.get("anchors").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "operation_count": draft.bundle.get("operations").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "asset_count": draft.assets.len(),
+        "assets": draft.assets.iter().map(|asset| {
+            json!({
+                "template": &asset.template,
+                "source": asset.source.display().to_string(),
+                "destination": asset.destination.display().to_string()
+            })
+        }).collect::<Vec<_>>(),
+        "bundle": draft.bundle
+    }))
+}
+
+fn session_record_build_draft(
+    record: &SessionRecordContext,
+    flags: &FlagArgs,
+    out: &Path,
+    game: &str,
+    server: &str,
+) -> CliOutcome<SessionRecordBuildDraft> {
+    let task_dir_name = safe_task_dir_name(&record.task_id)?;
+    let task_dir = out.join("operations").join(task_dir_name);
+    let resources_path = out.join("operations").join("resources.json");
+    let task_path = task_dir.join("task.json");
+    let assets_dir = task_dir.join("assets");
+    let mut assets = Vec::new();
+    let mut anchors = Vec::new();
+    let mut anchor_templates = BTreeMap::new();
+    let mut resolution = parse_record_build_resolution(flags)?;
+
+    for step in &record.steps {
+        if let SessionRecordStepData::Anchor {
+            id,
+            region,
+            color_check,
+            threshold,
+            frame_provenance,
+            artifact,
+            evaluation,
+        } = &step.data
+        {
+            let artifact = artifact.as_deref().ok_or_else(|| {
+                CliError::usage(format!(
+                    "record build-task cannot build anchor '{}' without a frame artifact",
+                    step.step_id
+                ))
+            })?;
+            if evaluation.status != "passed" {
+                return Err(CliError::usage(format!(
+                    "record build-task requires anchor '{}' to pass backtest; status is {}",
+                    step.step_id, evaluation.status
+                )));
+            }
+            if resolution.is_none()
+                && let Some(provenance) = frame_provenance.as_deref()
+            {
+                resolution = Some((provenance.width, provenance.height));
+            }
+            let source = PathBuf::from(&artifact.path);
+            if !source.is_file() {
+                return Err(CliError::usage(format!(
+                    "record build-task anchor '{}' artifact is missing: {}",
+                    step.step_id,
+                    source.display()
+                )));
+            }
+            let asset_name = format!(
+                "anchor-{}-{}.png",
+                safe_file_stem(&step.step_id),
+                safe_file_stem(id)
+            );
+            let destination = assets_dir.join(&asset_name);
+            let template = format!("assets/{asset_name}");
+            assets.push(SessionRecordBuildAsset {
+                source,
+                destination,
+                template: template.clone(),
+            });
+            anchor_templates.insert(id.clone(), template.clone());
+            anchors.push(json!({
+                "id": id,
+                "template": template,
+                "region": region,
+                "threshold": threshold.unwrap_or_else(|| {
+                    evaluation
+                        .backtest
+                        .as_ref()
+                        .map(|backtest| f64::from(backtest.threshold))
+                        .unwrap_or(0.95)
+                }),
+                "color_check": Value::Null,
+                "provenance": {
+                    "record_step_id": step.step_id,
+                    "record_color_check_requested": color_check,
+                    "frame_provenance": frame_provenance,
+                    "artifact": artifact,
+                    "evaluation": evaluation
+                }
+            }));
+        }
+    }
+
+    let mut operations = Vec::new();
+    for step in &record.steps {
+        if let SessionRecordStepData::Operation {
+            from,
+            to,
+            click,
+            destructive,
+        } = &step.data
+        {
+            let verify_template = to.as_ref().and_then(|to| anchor_templates.get(to)).cloned();
+            operations.push(json!({
+                "id": step.step_id,
+                "purpose": format!("recorded operation from {from}"),
+                "from": from,
+                "to": to,
+                "click": session_record_bundle_click(click, &step.step_id)?,
+                "verify_template": verify_template,
+                "consumes": [],
+                "produces": [],
+                "destructive": destructive,
+                "provenance": {
+                    "record_step_id": step.step_id,
+                    "created_at_unix_ms": step.created_at_unix_ms,
+                    "updated_at_unix_ms": step.updated_at_unix_ms
+                }
+            }));
+        }
+    }
+    if operations.is_empty() {
+        return Err(CliError::usage(
+            "record build-task requires at least one operation step",
+        ));
+    }
+    let (width, height) = resolution.ok_or_else(|| {
+        CliError::usage("record build-task requires --resolution <width>x<height> when no frame-backed anchor is available")
+    })?;
+    let entry_page = flags
+        .optional("--entry-page")
+        .filter(|value| value != "true")
+        .or_else(|| {
+            operations
+                .first()
+                .and_then(|operation| operation.get("from"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let target_page = flags
+        .optional("--target-page")
+        .filter(|value| value != "true")
+        .or_else(|| {
+            operations
+                .iter()
+                .rev()
+                .find_map(|operation| operation.get("to").and_then(Value::as_str))
+                .map(str::to_string)
+        });
+    let bundle = json!({
+        "schema_version": "0.3",
+        "task_id": record.task_id,
+        "game": game,
+        "server_scope": [server],
+        "goal": flags
+            .optional("--goal")
+            .filter(|value| value != "true")
+            .unwrap_or_else(|| format!("recorded from {}", record.record_id)),
+        "coordinate_space": {"width": width, "height": height},
+        "defaults": {
+            "template_threshold": parse_optional_unit_f64(flags, "--default-threshold")?.unwrap_or(0.95),
+            "color_max_distance": Value::Null,
+            "match_metric": flags
+                .optional("--metric")
+                .filter(|value| value != "true")
+                .unwrap_or_else(|| "ccorr_normed".to_string())
+        },
+        "anchors": anchors,
+        "entry_page": entry_page,
+        "target_page": target_page,
+        "operations": operations,
+        "provenance": {
+            "source": "session_record",
+            "record_id": record.record_id,
+            "record_status": record.status,
+            "instance": record.instance,
+            "holder": record.holder,
+            "lease_id": record.lease_id,
+            "started_at_unix_ms": record.started_at_unix_ms,
+            "updated_at_unix_ms": record.updated_at_unix_ms
+        }
+    });
+    Ok(SessionRecordBuildDraft {
+        bundle,
+        task_dir,
+        task_path,
+        resources_path,
+        assets,
+    })
+}
+
+fn write_session_record_build_draft(draft: &SessionRecordBuildDraft) -> CliOutcome<()> {
+    for asset in &draft.assets {
+        if let Some(parent) = asset.destination.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                CliError::usage(format!("failed to create {}: {err}", parent.display()))
+            })?;
+        }
+        fs::copy(&asset.source, &asset.destination).map_err(|err| {
+            CliError::usage(format!(
+                "failed to copy record asset {} to {}: {err}",
+                asset.source.display(),
+                asset.destination.display()
+            ))
+        })?;
+    }
+    write_json_file(
+        &draft.resources_path,
+        &json!({
+            "schema_version": "1.0",
+            "resources": [],
+            "resource_count": 0
+        }),
+    )?;
+    write_json_file(&draft.task_path, &draft.bundle)
+}
+
+fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> CliOutcome<Value> {
+    match click {
+        SessionRecordClick::Coord { x, y } => Ok(json!({
+            "kind": "point",
+            "x": x,
+            "y": y
+        })),
+        SessionRecordClick::Target { target } => Err(CliError::usage(format!(
+            "record build-task cannot build operation '{step_id}' with unresolved target click '{target}'"
+        ))),
+    }
+}
+
+fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u32)>> {
+    let Some(value) = flags
+        .optional("--resolution")
+        .filter(|value| value != "true")
+    else {
+        return Ok(None);
+    };
+    let normalized = value.replace(['X', '*'], "x");
+    let Some((width, height)) = normalized.split_once('x') else {
+        return Err(CliError::usage(format!(
+            "--resolution must use <width>x<height>, got {value}"
+        )));
+    };
+    let width = width.trim().parse::<u32>().map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse --resolution width '{width}': {err}"
+        ))
+    })?;
+    let height = height.trim().parse::<u32>().map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse --resolution height '{height}': {err}"
+        ))
+    })?;
+    if width == 0 || height == 0 {
+        return Err(CliError::usage(
+            "--resolution width and height must be non-zero",
+        ));
+    }
+    Ok(Some((width, height)))
+}
+
+fn session_record_game_server(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    instance_id: &str,
+) -> CliOutcome<(String, String)> {
+    let instance = config.instances.get(instance_id);
+    let game = flags
+        .optional("--game")
+        .filter(|value| value != "true")
+        .or_else(|| global.game.clone())
+        .or_else(|| instance.and_then(|instance| instance.game.clone()))
+        .ok_or_else(|| {
+            CliError::usage("record build-task requires --game or configured instance.<id>.game")
+        })?;
+    let game = canonical_game(&game)?;
+    let server = flags
+        .optional("--server")
+        .filter(|value| value != "true")
+        .or_else(|| global.server.clone())
+        .or_else(|| instance.and_then(|instance| instance.server.clone()))
+        .unwrap_or_else(|| default_server_for_game(&game).to_string());
+    Ok((game, server))
+}
+
+fn safe_task_dir_name(task_id: &str) -> CliOutcome<String> {
+    let safe = safe_file_stem(task_id);
+    if safe != task_id || safe.is_empty() {
+        return Err(CliError::usage(format!(
+            "record build-task task id must be a safe path segment: {task_id}"
+        )));
+    }
+    Ok(safe)
 }
 
 fn new_session_record_step(
@@ -5503,11 +5865,13 @@ fn session_responses_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SESSION_RESPONSES_DIR)
 }
 
-fn current_unix_ms() -> u128 {
+fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn read_json_file<T>(path: &Path) -> CliOutcome<Option<T>>
@@ -7190,7 +7554,7 @@ mod tests {
     }
 
     #[test]
-    fn session_record_authoring_actions_are_reserved() {
+    fn session_record_build_task_requires_record() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -7206,10 +7570,10 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 6);
+        assert_eq!(result.exit_code(), 3);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "record_authoring_not_implemented"
+            "record_session_not_active"
         );
     }
 
@@ -7674,6 +8038,265 @@ mod tests {
         assert_eq!(
             data.pointer("/step/destructive").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn session_record_build_task_writes_draft_bundle() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let out = temp.path().join("draft");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-to-mail",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "100,200",
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(anchor.exit_code(), 0);
+        assert_eq!(
+            operation.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&operation.envelope).unwrap()
+        );
+        assert_eq!(
+            build.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&build.envelope).unwrap()
+        );
+        let data = build.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("built"));
+        assert_eq!(data.get("anchor_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/bundle/schema_version")
+                .and_then(Value::as_str),
+            Some("0.3")
+        );
+        assert_eq!(
+            data.pointer("/bundle/task_id").and_then(Value::as_str),
+            Some("daily-check")
+        );
+        assert_eq!(
+            data.pointer("/bundle/game").and_then(Value::as_str),
+            Some("arknights")
+        );
+        assert_eq!(
+            data.pointer("/bundle/server_scope/0")
+                .and_then(Value::as_str),
+            Some("cn")
+        );
+        assert_eq!(
+            data.pointer("/bundle/coordinate_space/width")
+                .and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            data.pointer("/bundle/anchors/0/template")
+                .and_then(Value::as_str),
+            Some("assets/anchor-home-anchor-page_home.png")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/0/click/kind")
+                .and_then(Value::as_str),
+            Some("point")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/0/click/x")
+                .and_then(Value::as_i64),
+            Some(100)
+        );
+        assert!(out.join("operations/resources.json").is_file());
+        assert!(out.join("operations/daily-check/task.json").is_file());
+        assert!(
+            out.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
+                .is_file()
+        );
+        let written: Value = serde_json::from_str(
+            &fs::read_to_string(out.join("operations/daily-check/task.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            written.pointer("/operations/0/id").and_then(Value::as_str),
+            Some("home-to-mail")
+        );
+    }
+
+    #[test]
+    fn session_record_build_task_rejects_unresolved_target_click() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let out = temp.path().join("draft");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "open-mail",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "mail_button",
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+                "--resolution",
+                "1280x720",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_eq!(build.exit_code(), 2);
+        assert_eq!(
+            build.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            build
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("unresolved target click")
         );
     }
 

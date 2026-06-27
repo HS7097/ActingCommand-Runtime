@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording build-task draft
+
+### Current status
+
+- Added offline `session record build-task --out <dir>` draft bundle generation.
+- Build-task consumes an existing local recording context and allows active or stopped records.
+- Backtested anchor artifacts are copied into `<out>/operations/<task_id>/assets/`.
+- The command writes `<out>/operations/<task_id>/task.json` and `<out>/operations/resources.json`.
+- The returned JSON includes the assembled Operation Bundle 0.3-style draft, output paths, anchor count, operation count, and copied assets.
+- Build-task rejects unresolved target-click operations; this milestone only exports explicit coordinate clicks.
+- Build-task requires anchor artifacts to exist and anchor self-backtests to have passed.
+- Build-task infers coordinate space from frame-backed anchor provenance, or requires `--resolution <width>x<height>` when no frame provenance exists.
+- Added `--dry-run` validation mode that assembles and returns the bundle without writing files.
+- Changed session/lease/record JSON timestamp fields from `u128` to `u64` so persisted JSON records can be read back reliably by `serde_json`.
+- No device I/O, MaaTouch startup, live screenshot capture, contrast-frame validation, resource repository write, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `64226654a1dd2b1d5bb67eae1f5bc89e32213b12`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Continued from the already-read cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Continued from the already-read cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- Rerun `cargo fmt --all`
+- Rerun `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- First targeted `session_record` run failed because persisted record JSON used `u128` Unix ms fields that `serde_json` could write but could not read back into the typed session record.
+- Session/lease/record JSON timestamp fields were changed to `u64`.
+- Rerun `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `16` tests.
+- `cargo test -p actingcommand-actinglab` passed with `124` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for local build-task draft generation.
+- Full recording remains incomplete: live frame capture/current-frame integration, contrast-frame validation, resource promotion, UI/API wiring, and SQLite metadata are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-build-task rollback point.
+3. Next implementation milestone should add current-frame/contrast validation or resource-promotion flow after the draft bundle shape is accepted.
+
 ## 2026-06-27 ActingLab session recording anchor self-backtest
 
 ### Current status

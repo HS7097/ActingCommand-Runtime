@@ -61,6 +61,47 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording amend schema: `session record amend` can update existing authorized anchor/operation step metadata without capturing frames, backtesting, or writing resources.
 - ActingLab session recording anchor frame materialization: authorized anchor steps can optionally attach a local PNG source frame, crop a rect-only template draft artifact, and record frame/artifact hashes without device I/O or resource writes.
 - ActingLab session recording anchor self-backtest: frame-backed anchor crops now run an offline source-frame template self-test and persist score, threshold, metric, match point, and pass/fail evaluation metadata.
+- ActingLab session recording build-task draft: authorized, backtested recording steps can now assemble a local draft operation bundle and asset directory without device I/O, resource writes, UI, SQLite, or game logic.
+
+## Current ActingLab Session Recording Build-Task Draft
+
+The current Runtime task advances Phase D by adding `session record build-task` as an offline draft bundle generator. It consumes an existing local recording context, requires frame-backed anchors to have passed their self-backtest, copies draft anchor artifacts into an operation-task directory, and emits an Operation Bundle 0.3-style `task.json` plus a placeholder `operations/resources.json`.
+
+Scope:
+
+- Add `session record build-task --out <dir>`.
+- Allow active or stopped recording contexts.
+- Resolve game/server from flags, global options, configured instance metadata, or game defaults.
+- Infer coordinate space from the first frame-backed anchor, or require `--resolution <width>x<height>` when no frame provenance exists.
+- Require at least one operation step.
+- Reject unresolved target-click operations; only explicit coordinate clicks are bundle-ready in this milestone.
+- Require every exported anchor to have a local artifact and a `passed` self-backtest.
+- Copy draft anchor PNG artifacts into `<out>/operations/<task_id>/assets/`.
+- Write `<out>/operations/<task_id>/task.json` and `<out>/operations/resources.json`.
+- Add `--dry-run` validation mode that returns the assembled bundle without writing files.
+- Use `u64` Unix millisecond timestamps for session/lease/record JSON persistence so records can be written and read back reliably through `serde_json`.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not live-capture frames, run contrast-frame validation, write resource repositories, touch SQLite, implement UI, or add game logic.
+- Missing records, unsafe task ids, missing anchor artifacts, failed/deferred anchor backtests, missing resolution, unresolved target clicks, and file-copy/write failures fail visibly.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `16` tests after fixing JSON timestamp persistence from `u128` to `u64`.
+- `cargo test -p actingcommand-actinglab` passed with `124` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for device input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add capture/current-frame integration only after stale-frame policy and daemon routing are fully aligned with recording.
+- Add contrast-frame or cross-frame validation before promoting draft artifacts into resource repositories.
+- Add explicit resource-write/promotion flow later; this milestone writes only a local draft output tree.
 
 ## Current ActingLab Session Recording Anchor Self-Backtest
 
