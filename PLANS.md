@@ -72,8 +72,51 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording candidate preview: `session record candidates` can now list an anchor step's recorded auto-region candidates for operator review before amend/build.
 - ActingLab session recording resource promotion: `session record promote` can now publish a validated recording draft into an existing resource repository/root with overwrite protection and package dry-run compatibility.
 - ActingLab session recording anchor color-check output: frame-backed anchors recorded with `--color-check` now emit bundle `color_check` data derived from the authorized source-frame region instead of only storing the request as provenance.
+- ActingLab session recording standalone color-probe output: `session record step --kind color-probe` can now sample an authorized frame region into `color_probes[]`, and `resource convert` emits those probes as recognition-pack `type=color` targets.
 
-## Current ActingLab Session Recording Anchor Color-Check Output
+## Current ActingLab Session Recording Standalone Color-Probe Output
+
+The current Runtime task advances Phase D's "authorized resource generation" path by adding a standalone color-probe step kind. This is separate from anchor `--color-check`: color-probe records an explicit color target resource from an authorized region and sends it through the operation-bundle and recognition-pack conversion path.
+
+Scope:
+
+- Add `session record step --kind color-probe` and alias `--kind color_probe`.
+- Support metadata-only color-probe steps as visibly `deferred` when no source frame is provided.
+- Support frame-backed color-probe sampling through the existing local `--frame` / `--source-frame` path and explicit `--capture` / `--current-frame` inlet.
+- Derive `expected` as the average RGB value over the authorized region in the recorded source frame.
+- Preserve source-frame provenance and auto-region metadata when a frame-backed color-probe is materialized.
+- Make `session record build-task` emit `color_probes[]` in generated Operation Bundle 0.3 drafts.
+- Make build-task fail visibly when a color-probe is deferred and therefore has no expected color.
+- Make `resource convert` translate `color_probes[]` into recognition-pack `type=color` targets.
+
+Safety direction:
+
+- This milestone is still limited to authoring and packaging data paths.
+- This milestone adds no UI, SQLite, OCR/OpenCV, game logic, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+- Real device capture remains available only through the already explicit `--capture` / `--current-frame` recording inlet.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_step_color_probe -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab build_pack_includes_color_probe_targets -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test and verified package dry-run compatibility.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `33` tests.
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture` passed with `6` tests.
+- `cargo test -p actingcommand-actinglab` passed with `142` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add `verify-template` as a later explicit recording resource kind after color-probe output is accepted.
+- Add amend support for color-probe steps only after the desired correction semantics are defined.
+- Add a UI/API surface for candidate review, color-check review, color-probe review, and promotion after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Anchor Color-Check Output
 
 The current Runtime task advances Phase D's "authorized resource generation" path by making `record step --kind anchor --color-check` produce an actual bundle color check. Previously the flag was preserved only as provenance while the generated anchor still had `color_check: null`.
 

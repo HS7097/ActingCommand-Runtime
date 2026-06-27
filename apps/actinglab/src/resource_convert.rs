@@ -311,6 +311,16 @@ impl OperationConverter {
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
+            for color_probe in array_field(&bundle.data, "color_probes") {
+                let target_id = required_string(color_probe, "id")?;
+                let target = color_target(
+                    &target_id,
+                    region_to_pack(required_field(color_probe, "region")?)?,
+                    required_field(color_probe, "expected")?.clone(),
+                    None,
+                );
+                add_first_target(&mut targets, &mut order, target_id, target);
+            }
             for operation in array_field(&bundle.data, "operations") {
                 let Some(template) = operation.get("verify_template").and_then(Value::as_str)
                 else {
@@ -768,6 +778,19 @@ fn pack_target(
     Value::Object(target)
 }
 
+fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) -> Value {
+    let mut target = ordered_map([
+        ("type", Value::String("color".to_string())),
+        ("id", Value::String(id.to_string())),
+        ("region", region),
+        ("expected", expected),
+    ]);
+    if let Some(click) = click {
+        target.insert("click".to_string(), click);
+    }
+    Value::Object(target)
+}
+
 fn add_first_target(
     targets: &mut HashMap<String, Value>,
     order: &mut Vec<String>,
@@ -1185,6 +1208,52 @@ mod tests {
         assert_eq!(
             color_check_to_pack(Some(&input)).unwrap().unwrap(),
             json!({"region":{"x":1,"y":2,"width":3,"height":4},"expected":[10,20,30]})
+        );
+    }
+
+    #[test]
+    fn build_pack_includes_color_probe_targets() {
+        let converter = OperationConverter {
+            root: PathBuf::from("."),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "daily-check".to_string(),
+                dir: PathBuf::from("operations/daily-check"),
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "anchors": [],
+                    "color_probes": [{
+                        "id": "color/home-status",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "expected": [10, 20, 30]
+                    }],
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let pack = converter.build_pack().unwrap();
+        let target_value = pack.pointer("/targets/0").expect("color target value");
+        let target = target_value.as_object().expect("color target");
+        assert_eq!(target.get("type").and_then(Value::as_str), Some("color"));
+        assert_eq!(
+            target.get("id").and_then(Value::as_str),
+            Some("color/home-status")
+        );
+        assert_eq!(
+            target_value.pointer("/region/x").and_then(Value::as_i64),
+            Some(10)
+        );
+        assert_eq!(
+            target_value.pointer("/expected/2").and_then(Value::as_u64),
+            Some(30)
         );
     }
 

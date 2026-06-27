@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording standalone color-probe output
+
+### Current status
+
+- Advanced Phase D recording by adding a standalone `color-probe` step kind.
+- `session record step --kind color-probe` and `--kind color_probe` now append an authorized color probe to an active recording context.
+- Metadata-only color-probe steps remain explicit and deferred with reason `frame_not_provided`.
+- Frame-backed color-probe steps sample the average RGB value over the authorized region and store `expected`, frame provenance, and evaluation metadata.
+- `session record build-task` now emits `color_probes[]` in generated Operation Bundle 0.3 drafts.
+- Deferred color-probes without `expected` fail visibly during build-task instead of producing fake defaults.
+- `resource convert` now emits bundle `color_probes[]` as recognition-pack `type=color` targets.
+- No UI, SQLite, OCR/OpenCV, game logic, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `31a2481564eee29cac186327f8bbe890500356ef`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `cargo test -p actingcommand-actinglab session_record_step_color_probe -- --nocapture`
+- `cargo test -p actingcommand-actinglab build_pack_includes_color_probe_targets -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` and `apps/actinglab/src/resource_convert.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- First targeted test compile failed because the new converter test called `Value::pointer` on a `serde_json::Map`; the test assertion was corrected to keep the target as `Value`.
+- `cargo test -p actingcommand-actinglab session_record_step_color_probe -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab build_pack_includes_color_probe_targets -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `33` tests.
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture` passed with `6` tests.
+- `cargo test -p actingcommand-actinglab` passed with `142` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the standalone color-probe implementation.
+- Full Phase D remains incomplete: live prepared-emulator validation, `verify-template` resource kind, color-probe amend semantics, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-color-probe`.
+3. Continue Phase D with live prepared-emulator validation or `verify-template` after this color-probe path is accepted.
+
 ## 2026-06-27 ActingLab session recording anchor color-check output
 
 ### Current status
