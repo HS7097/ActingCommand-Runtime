@@ -81,8 +81,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon app lifecycle routing: `session app launch|stop|restart` can now be submitted through the resident daemon request queue with lease metadata, and daemon-side app requests are lease-gated before device I/O.
 - ActingLab daemon instance lifecycle routing: `session instance list|health|reconnect` can now be submitted through the resident daemon request queue, with `reconnect` lease-gated before device I/O.
 - ActingLab daemon capture routing: `capture --via-daemon` and `session request capture` can now submit normal one-shot capture through the resident daemon request queue while preserving `--out` and freshness flags.
+- ActingLab daemon Lab run routing: `lab run --via-daemon` and `session request lab-run` can now submit trusted Lab package execution through the resident daemon request queue, with daemon-side lease validation before zip or device I/O.
 
-## Current ActingLab Daemon Capture Routing
+## Current ActingLab Daemon Lab Run Routing
+
+The current Runtime task moves the trusted Lab package execution entry point behind the resident Session Layer request boundary. `lab run --via-daemon` now submits a daemon control request, and `session request lab-run` provides the explicit request form.
+
+Scope:
+
+- Add `lab run --via-daemon` routing.
+- Add `session request lab-run` routing.
+- Require matching session lease metadata before daemon-side Lab run requests can read the package zip or reach device I/O.
+- Reuse the existing `lab run` implementation after the daemon lease gate; do not change Lab package execution semantics.
+- Advertise `session request lab-run` as an available lease-gated capability.
+
+Safety direction:
+
+- Daemon-routed Lab runs are task-level control requests and require `--lease-holder` metadata plus an active matching lease.
+- The lease gate runs before package zip validation, capture backend creation, or MaaTouch/input setup.
+- This milestone does not change direct local `lab run` execution behavior.
+- This milestone adds no scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_lab_run_request_requires_lease_before_zip_or_device_io -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab lab_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_lab_run_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for fallback, reconnect/retry loops, direct capture/input execution in the new daemon Lab run routing, SQLite, OCR/OpenCV, or ADB shell input/screencap.
+
+Known follow-ups:
+
+- Continue moving package/operation execution workflows through the resident daemon request boundary.
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+
+## Previous ActingLab Daemon Capture Routing
 
 The current Runtime task moves the normal one-shot `capture` command behind the resident Session Layer request boundary. `capture --via-daemon --out <path>` now submits a read-only daemon request, and `session request capture --out <path>` provides the explicit request form.
 

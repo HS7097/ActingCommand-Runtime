@@ -3521,7 +3521,14 @@ fn monitor_recovery_json(
 
 fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
-        "run" => lab_run::run_lab_run(global, args),
+        "run" => {
+            let flags = FlagArgs::parse(args)?;
+            if flags.bool("--via-daemon") {
+                submit_control_session_request(global, &flags, "lab_run", args)
+            } else {
+                lab_run::run_lab_run(global, args)
+            }
+        }
         "validate" => lab_run::run_lab_validate(args),
         "start" => {
             require_runtime(global)?;
@@ -3729,7 +3736,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3751,6 +3758,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "monitor-once" => submit_monitor_once_session_request(global, &flags, &args[1..]),
         "instance" => submit_session_instance_request(global, &flags, &args[1..]),
         "app" => submit_control_session_request(global, &flags, "app", &args[1..]),
+        "lab-run" => submit_control_session_request(global, &flags, "lab_run", &args[1..]),
         "tap" | "swipe" | "long-tap" | "key" | "text" => {
             submit_control_session_request(global, &flags, command, &args[1..])
         }
@@ -4194,6 +4202,11 @@ fn execute_session_command_request_inner(
             ensure_session_request_lease(state_dir, request)?;
             let global = request.global.to_global()?;
             run_session_app(&global, &request.args)
+        }
+        "lab_run" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_lab("run", &global, &request.args)
         }
         "tap" | "swipe" | "long-tap" => {
             ensure_session_request_lease(state_dir, request)?;
@@ -8557,6 +8570,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request app",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request lab-run",
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
@@ -13510,6 +13528,35 @@ mod tests {
     }
 
     #[test]
+    fn session_lab_run_request_requires_lease_before_zip_or_device_io() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "lab_run".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--zip".to_string(),
+                temp.path().join("missing.zip").display().to_string(),
+                "--out".to_string(),
+                temp.path().join("out.zip").display().to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_instance_reconnect_request_requires_lease_before_device_io() {
         let temp = TempDir::new().unwrap();
         let request = SessionCommandRequest {
@@ -13891,6 +13938,40 @@ mod tests {
     }
 
     #[test]
+    fn lab_run_via_daemon_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.path().join("input.zip");
+        let out = temp.path().join("out.zip");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "run",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_instance_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -13927,6 +14008,40 @@ mod tests {
                 "capture",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_lab_run_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.path().join("input.zip");
+        let out = temp.path().join("out.zip");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "lab-run",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
                 "--out",
                 out.to_str().unwrap(),
             ],
@@ -14365,6 +14480,7 @@ mod tests {
             "session request instance health",
             "session request instance reconnect",
             "session request app",
+            "session request lab-run",
             "session lease",
             "capture diagnose",
         ] {
