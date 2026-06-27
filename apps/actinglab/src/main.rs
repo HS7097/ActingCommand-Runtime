@@ -1095,11 +1095,11 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream"]
+                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture"]
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
             }
         },
         "safety": {
@@ -1180,6 +1180,7 @@ fn session_access_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session recover --stale-capture",
                     "session instance registry",
                     "session instance health",
                     "session instance keep-alive",
@@ -1212,7 +1213,7 @@ fn session_access_contract() -> Value {
                     "text",
                     "tap-target",
                     "navigate",
-                    "recover"
+                    "recover except --stale-capture"
                 ]
             }
         },
@@ -1458,6 +1459,16 @@ fn session_api_contract() -> Value {
                 "input_relay_requires_lease": true,
                 "input_relay_actions": ["tap", "swipe", "long-tap", "key", "text"],
                 "trusted_remote_long_lived_stream_status": "reserved"
+            },
+            "stale_capture_recovery_view": {
+                "query": "session recover --stale-capture [--capture|--diagnose]",
+                "daemon_query": "session request recover --stale-capture [--capture|--diagnose]",
+                "read_only": true,
+                "requires_lease": false,
+                "executes_input": false,
+                "executes_app_restart": false,
+                "diagnosis_statuses": ["planned", "diagnosed_fresh", "diagnosed_stale", "diagnosis_unavailable"],
+                "recovery_gate": "diagnose_capture_backend_before_restart"
             }
         },
         "command_classes": {
@@ -1479,6 +1490,7 @@ fn session_api_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session recover --stale-capture",
                     "session instance registry",
                     "session instance health",
                     "session instance keep-alive",
@@ -1512,7 +1524,7 @@ fn session_api_contract() -> Value {
                     "stream --input-relay",
                     "tap-target",
                     "navigate",
-                    "recover"
+                    "recover except --stale-capture"
                 ]
             }
         },
@@ -2990,11 +3002,14 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--stale-capture") {
+        if should_route_readonly_via_session_daemon(global, &flags)? {
+            return submit_readonly_session_request(global, &flags, "recover", args);
+        }
+        return run_session_stale_capture_recover(global, &flags);
+    }
     if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "recover", args);
-    }
-    if flags.bool("--stale-capture") {
-        return run_session_stale_capture_recover(global, &flags);
     }
     let dry_run = global.dry_run || flags.bool("--dry-run");
     if !dry_run && !flags.bool("--capture") {
@@ -5637,9 +5652,11 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             submit_control_session_request(global, &flags, command, &args[1..])
         }
         "tap-target" => submit_control_session_request(global, &flags, "tap_target", &args[1..]),
-        "navigate" | "recover" => {
-            submit_control_session_request(global, &flags, command, &args[1..])
+        "navigate" => submit_control_session_request(global, &flags, command, &args[1..]),
+        "recover" if flags.bool("--stale-capture") => {
+            submit_readonly_session_request(global, &flags, command, &args[1..])
         }
+        "recover" => submit_control_session_request(global, &flags, command, &args[1..]),
         other => Err(CliError::usage(format!(
             "unknown session request command: {other}"
         ))),
@@ -11389,6 +11406,11 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
+        command_cap(
+            "session request recover --stale-capture",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session instance list", ["offline"], "available"),
         command_cap("session instance registry", ["offline"], "available"),
@@ -11409,6 +11431,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture", ["device"], "available"),
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
+        command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap(
             "session lease run",
@@ -19174,6 +19197,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/request_classes/read_only/examples/13")
+                .and_then(Value::as_str),
+            Some("session recover --stale-capture")
+        );
+        assert_eq!(
+            payload
                 .pointer("/daemon_queries/api")
                 .and_then(Value::as_str),
             Some("session request api")
@@ -19396,6 +19425,30 @@ mod tests {
                 .pointer("/envelopes/stream_view/trusted_remote_long_lived_stream_status")
                 .and_then(Value::as_str),
             Some("reserved")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stale_capture_recovery_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request recover --stale-capture [--capture|--diagnose]")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stale_capture_recovery_view/requires_lease")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stale_capture_recovery_view/executes_input")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stale_capture_recovery_view/executes_app_restart")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 
@@ -20754,6 +20807,35 @@ mod tests {
     }
 
     #[test]
+    fn session_recover_daemon_request_still_requires_lease_for_maintenance_control() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-recover-control".to_string(),
+            command: "recover".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--to".to_string(),
+                "home".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_status_diagnostics_reports_queue_and_journal_summary() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -21881,6 +21963,7 @@ mod tests {
             "session app restart",
             "session capture",
             "session capture diagnose",
+            "session recover --stale-capture",
             "session request status",
             "session request journal",
             "session request events",
@@ -21906,6 +21989,7 @@ mod tests {
             "session request instance reconnect",
             "session request instance app",
             "session request app",
+            "session request recover --stale-capture",
             "session request lab-run",
             "session request package-run",
             "session request operation-run",

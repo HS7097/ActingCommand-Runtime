@@ -136,8 +136,35 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab app force-stop lifecycle alias: `session app force-stop` and `session instance app force-stop` now match the Phase A lifecycle wording while reusing the existing force-stop implementation behind the lease-gated app lifecycle path; workspace validation also hardened recognition-pack test temp-dir uniqueness for Windows parallel test stability.
 - ActingLab stream transport/API contract truthfulness: `session transport`, `session api`, and `stream` now distinguish available bounded local stream/per-request input relay surfaces from the still-reserved trusted remote long-lived stream.
 - ActingLab stale capture recovery diagnostic execution: `session recover --stale-capture --capture` can now run the fresh-frame probe and return evidence-backed recovery advice without clicking, restarting, or opening MaaTouch.
+- ActingLab stale capture recovery read-only routing: stale-capture recovery is now classified as a read-only Session Layer diagnostic surface in contracts, capabilities, top-level routing, and `session request recover --stale-capture`; ordinary `session recover` remains lease-gated control.
 
-## Current ActingLab Stale Capture Recovery Diagnostic Execution
+## Current ActingLab Stale Capture Recovery Read-only Routing
+
+The current Runtime task tightens the Session Layer contract around AK stale-frame recovery. Stale capture recovery is a diagnosis/planning surface and must not be treated like maintenance navigation recovery unless it is explicitly changed to execute input or app lifecycle actions in a later milestone.
+
+Scope:
+
+- Route `session recover --stale-capture` through daemon read-only request handling when a resident Session daemon is available.
+- Keep `session recover --stale-capture --local` as the explicit local override outside strict Session-throat mode.
+- Route `session request recover --stale-capture` as a read-only daemon request without LabLease metadata.
+- Keep ordinary `session recover` and maintenance recovery daemon requests lease-gated.
+- Expose `stale_capture_recovery_view` in `session api`.
+- List `session recover --stale-capture` under read-only examples and capabilities.
+
+Safety direction:
+
+- `session recover --stale-capture` remains `executed=false`, `click_allowed=false`, and `app_restart_executed=false`.
+- `--capture` / `--diagnose` may run fresh-frame diagnosis, but must not click, launch MaaTouch, reconnect, switch backend configuration, restart apps, or write resources.
+- Heavy app restart stays behind ordinary lease-gated lifecycle/recovery controls.
+
+Validation status:
+
+- Focused contract, API, stale-capture no-lease, and maintenance-recover lease-gate tests passed.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+- CLI smoke confirmed `session recover --stale-capture` remains `executed=false`, `click_allowed=false`, and `app_restart_executed=false`.
+- CLI smoke confirmed `session api` exposes `stale_capture_recovery_view` with `requires_lease=false` and `executes_app_restart=false`.
+
+## ActingLab Stale Capture Recovery Diagnostic Execution
 
 The current Runtime task advances the AK stale-frame finding from a static recovery plan to an optional read-only diagnostic execution path.
 

@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab stale capture recovery read-only routing
+
+### Current status
+
+- `session recover --stale-capture` is now routed as a read-only Session Layer request when a resident daemon is available.
+- `session request recover --stale-capture` is now submitted as a read-only daemon request without requiring LabLease metadata.
+- Ordinary `session recover` remains lease-gated daemon control.
+- `session api`, `session contract`, Session capabilities, and command capability listings now expose stale-capture recovery as a read-only diagnostic/planning surface.
+- No device I/O behavior, capture backend implementation, MaaTouch/input behavior, app lifecycle execution, resources, UI, SQLite, OCR/OpenCV, scheduler logic, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `5212ceddd2bc01f553f3315c67855f6b698bdb4e`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and error-handling workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session contracts, recover routing, daemon request dispatch, capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture_daemon_request_does_not_require_lease`
+- `cargo test -p actingcommand-actinglab session_recover_daemon_request_still_requires_lease_for_maintenance_control`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo run -q -p actingcommand-actinglab -- --json --capture-backend adb session recover --stale-capture`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+
+### Test results
+
+- Focused contract/API/stale-capture routing tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, SQLite, OCR/OpenCV, MaaTouch backend changes, capture backend changes, retry/background-loop additions, or game logic in newly added lines.
+- CLI smoke confirmed default `session recover --stale-capture` still returns `mode=stale_capture_recovery`, `executed=false`, `click_allowed=false`, `app_restart_executed=false`, and `diagnosis_executed=false`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `273` `actingcommand-actinglab` tests.
+- CLI smoke confirmed `session api` exposes `stale_capture_recovery_view` with `requires_lease=false` and `executes_app_restart=false`.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted remote transport, long-lived stream, scheduler arbitration integration, daemon-owned automatic recovery, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-stale-capture-readonly-route`.
+2. Continue Session Layer follow-ups from daemon-owned automatic recovery, trusted remote transport, long-lived stream, scheduler arbitration integration, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab stale capture recovery diagnostic execution
 
 ### Current status
