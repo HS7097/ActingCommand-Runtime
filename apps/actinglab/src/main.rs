@@ -1242,6 +1242,7 @@ fn session_access_contract() -> Value {
             "transport_check": "session request transport check --endpoint <url>",
             "capabilities": "session request capabilities",
             "readiness": "session request readiness",
+            "command_check": "session request command-check <command...>",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
             "events": "session request events",
@@ -1263,6 +1264,7 @@ fn session_access_contract() -> Value {
                     "status",
                     "journal",
                     "readiness",
+                    "command-check",
                     "contract",
                     "transport check",
                     "capabilities",
@@ -1565,6 +1567,17 @@ fn session_api_contract() -> Value {
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
             },
+            "command_check_view": {
+                "query": "session command-check <command...>",
+                "daemon_query": "session request command-check <command...>",
+                "schema_version": "session.command_check.v0.1",
+                "safe_to_submit_field": "safe_to_submit",
+                "command_class_field": "command_class",
+                "lease_gate_field": "lease_gate",
+                "routing_field": "routing",
+                "does_not_enqueue": true,
+                "does_not_touch_device": true
+            },
             "lease_view": {
                 "query": "session lease list|status|touch|wait|acquire|release|preempt",
                 "daemon_query": "session request lease list|status|touch|wait|acquire|release|preempt",
@@ -1734,6 +1747,7 @@ fn session_api_contract() -> Value {
                 "examples": [
                     "status",
                     "readiness",
+                    "command-check",
                     "journal",
                     "events",
                     "response",
@@ -5526,6 +5540,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
     match sub {
         "status" => run_session_status(global, args),
         "readiness" => run_session_readiness(global, args),
+        "command-check" => run_session_command_check(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "cleanup" => run_session_cleanup(global, args),
@@ -5703,6 +5718,272 @@ fn session_readiness_blockers(
             "error_code": transport.pointer("/check/error_code"),
             "blocked_by": transport.pointer("/check/blocked_by"),
             "message": "Transport endpoint is not safe to connect"
+        }));
+    }
+    blockers
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionCommandCheckClass {
+    command_class: &'static str,
+    requires_lease: bool,
+    device_affecting: bool,
+}
+
+fn run_session_command_check(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    session_command_check_payload(global, &flags, &state_dir, "session command-check")
+}
+
+fn session_command_check_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    let tokens = session_command_check_tokens(flags, command_name)?;
+    let classification = classify_session_command_for_check(&tokens, flags)?;
+    let daemon_alive = session_daemon_info_exists(flags)?;
+    let explicit_daemon = flags.bool("--via-daemon");
+    let local_override = flags.bool("--local");
+    let strict_session_required = session_throat_required(global);
+    let would_route_via_daemon = !local_override && (explicit_daemon || daemon_alive);
+    let daemon_route_ok = if would_route_via_daemon || strict_session_required {
+        daemon_alive
+    } else {
+        true
+    };
+    let lease_gate =
+        session_command_check_lease_gate(state_dir, global, flags, classification.requires_lease)?;
+    let lease_gate_ok = lease_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let blockers = session_command_check_blockers(
+        daemon_route_ok,
+        daemon_alive,
+        strict_session_required,
+        &lease_gate,
+    );
+    let safe_to_submit = daemon_route_ok && lease_gate_ok;
+    Ok(json!({
+        "schema_version": "session.command_check.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "command_tokens": tokens,
+        "normalized_command": tokens.join(" "),
+        "command_class": classification.command_class,
+        "requires_lease": classification.requires_lease,
+        "device_affecting": classification.device_affecting,
+        "safe_to_submit": safe_to_submit,
+        "routing": {
+            "would_route_via_daemon": would_route_via_daemon,
+            "daemon_alive": daemon_alive,
+            "daemon_route_ok": daemon_route_ok,
+            "explicit_daemon": explicit_daemon,
+            "local_override": local_override,
+            "strict_session_required": strict_session_required
+        },
+        "lease_gate": lease_gate,
+        "blockers": blockers,
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_start_maatouch": true,
+            "does_not_capture": true,
+            "does_not_start_listener": true
+        }
+    }))
+}
+
+fn session_command_check_tokens(flags: &FlagArgs, command_name: &str) -> CliOutcome<Vec<String>> {
+    if flags.positionals.is_empty() {
+        return Err(CliError::usage(format!(
+            "{command_name} requires <command...>"
+        )));
+    }
+    let mut tokens = flags.positionals.clone();
+    if tokens.first().map(String::as_str) == Some("session") {
+        tokens.remove(0);
+    }
+    if tokens.is_empty() {
+        return Err(CliError::usage(format!(
+            "{command_name} requires <command...>"
+        )));
+    }
+    Ok(tokens)
+}
+
+fn classify_session_command_for_check(
+    tokens: &[String],
+    flags: &FlagArgs,
+) -> CliOutcome<SessionCommandCheckClass> {
+    let first = tokens.first().map(String::as_str).unwrap_or_default();
+    let second = tokens.get(1).map(String::as_str);
+    let read_only = SessionCommandCheckClass {
+        command_class: "read_only",
+        requires_lease: false,
+        device_affecting: false,
+    };
+    let device_read_only = SessionCommandCheckClass {
+        command_class: "read_only",
+        requires_lease: false,
+        device_affecting: true,
+    };
+    let control = SessionCommandCheckClass {
+        command_class: "control",
+        requires_lease: true,
+        device_affecting: true,
+    };
+    let daemon_state = SessionCommandCheckClass {
+        command_class: "daemon_state",
+        requires_lease: false,
+        device_affecting: false,
+    };
+    let lease_arbitration = SessionCommandCheckClass {
+        command_class: "lease_arbitration",
+        requires_lease: false,
+        device_affecting: false,
+    };
+
+    match first {
+        "status" | "readiness" | "journal" | "events" | "response" | "request-state"
+        | "contract" | "api" | "transport" | "capabilities" | "command-check" => Ok(read_only),
+        "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
+        | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
+        "stream" => {
+            if second == Some("check") || !stream_input_relay_requested(flags) {
+                Ok(device_read_only)
+            } else {
+                Ok(control)
+            }
+        }
+        "monitor" => {
+            if flags.bool("--recover") {
+                Ok(control)
+            } else {
+                Ok(device_read_only)
+            }
+        }
+        "recover" => {
+            if flags.bool("--stale-capture") {
+                Ok(device_read_only)
+            } else {
+                Ok(control)
+            }
+        }
+        "instance" => match second {
+            Some("app" | "connect" | "reconnect") => Ok(control),
+            Some("list" | "registry" | "health" | "keep-alive") | None => Ok(device_read_only),
+            Some(other) => Err(CliError::usage(format!(
+                "unsupported session command-check instance command: {other}"
+            ))),
+        },
+        "app" | "lab-run" | "package-run" | "operation-run" | "tap" | "swipe" | "long-tap"
+        | "key" | "text" | "tap-target" | "navigate" => Ok(control),
+        "lab" if second == Some("run") => Ok(control),
+        "package" if second == Some("run") => Ok(control),
+        "operation" if matches!(second, Some("run" | "dry-run")) => Ok(control),
+        "lease" => Ok(lease_arbitration),
+        "record" | "monitor-policy" => Ok(daemon_state),
+        other => Err(CliError::usage(format!(
+            "unsupported session command-check command: {other}"
+        ))),
+    }
+}
+
+fn session_command_check_lease_gate(
+    state_dir: &Path,
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    requires_lease: bool,
+) -> CliOutcome<Value> {
+    let session_global = SessionCommandGlobal::from_global(global);
+    let instance_id = session_command_instance_id(&session_global);
+    let lease_path = session_lease_path(state_dir, &instance_id);
+    if !requires_lease {
+        return Ok(json!({
+            "ok": true,
+            "required": false,
+            "status": "not_required",
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string()
+        }));
+    }
+    let requested = session_command_lease_from_flags(flags);
+    let Some(requested) = requested.as_ref().filter(|lease| !lease.holder.is_empty()) else {
+        return Ok(json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "lab_lease_required",
+            "message": "control command requires --lease-holder <id>",
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string()
+        }));
+    };
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Ok(json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "lab_lease_missing",
+            "message": format!("control command requires an active lease for {instance_id}"),
+            "requested_lease": requested,
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string()
+        }));
+    };
+    match validate_lease_request(&current, requested) {
+        Ok(()) => Ok(json!({
+            "ok": true,
+            "required": true,
+            "status": "ready",
+            "requested_lease": requested,
+            "current_lease": current,
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string()
+        })),
+        Err(err) => Ok(json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": err.code,
+            "message": err.message,
+            "blocked_by": err.blocked_by,
+            "requested_lease": requested,
+            "current_lease": current,
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string()
+        })),
+    }
+}
+
+fn session_command_check_blockers(
+    daemon_route_ok: bool,
+    daemon_alive: bool,
+    strict_session_required: bool,
+    lease_gate: &Value,
+) -> Vec<Value> {
+    let mut blockers = Vec::new();
+    if !daemon_route_ok {
+        blockers.push(json!({
+            "kind": "daemon_liveness",
+            "daemon_alive": daemon_alive,
+            "strict_session_required": strict_session_required,
+            "message": "command requires an alive Session daemon before submission"
+        }));
+    }
+    if !lease_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        blockers.push(json!({
+            "kind": "lease_gate",
+            "code": lease_gate.get("code"),
+            "message": lease_gate.get("message"),
+            "lease_gate": lease_gate
         }));
     }
     blockers
@@ -7906,7 +8187,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, readiness, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, readiness, command-check, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -7914,6 +8195,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "cancel" => run_session_request_cancel(&flags),
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
+        "command-check" => {
+            submit_readonly_session_request(global, &flags, "command_check", &args[1..])
+        }
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
@@ -8872,6 +9156,16 @@ fn execute_session_command_request_inner(
                 state_dir,
                 Some(&config),
                 "session request readiness",
+            )
+        }
+        "command_check" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            session_command_check_payload(
+                &global,
+                &flags,
+                state_dir,
+                "session request command-check",
             )
         }
         "journal" => {
@@ -14564,6 +14858,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("text", ["device"], "available"),
         command_cap("session status", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
+        command_cap("session command-check", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
@@ -14588,6 +14883,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap(
             "session request readiness",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request command-check",
             ["running_runtime"],
             "available",
         ),
@@ -16055,6 +16355,229 @@ mod tests {
         assert_eq!(
             payload.pointer("/blockers/0/kind").and_then(Value::as_str),
             Some("daemon_liveness")
+        );
+    }
+
+    #[test]
+    fn session_command_check_readonly_local_is_safe_without_daemon() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(["--json", "session", "command-check", "status"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.command_check.v0.1")
+        );
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_explicit_daemon_requires_alive_daemon() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "status",
+                "--via-daemon",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("daemon_liveness")
+        );
+    }
+
+    #[test]
+    fn session_command_check_control_requires_matching_lease() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let missing = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "command-check",
+                "tap",
+                "100",
+                "200",
+            ],
+            true,
+        );
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "lab".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+        let matching = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "command-check",
+                "tap",
+                "100",
+                "200",
+                "--lease-holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        let wrong_holder = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "command-check",
+                "tap",
+                "100",
+                "200",
+                "--lease-holder",
+                "other",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(missing.exit_code(), 0);
+        let missing_data = missing.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            missing_data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            missing_data
+                .pointer("/lease_gate/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+
+        assert_eq!(matching.exit_code(), 0);
+        let matching_data = matching.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            matching_data.get("command_class").and_then(Value::as_str),
+            Some("control")
+        );
+        assert_eq!(
+            matching_data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            matching_data
+                .pointer("/lease_gate/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+
+        assert_eq!(wrong_holder.exit_code(), 0);
+        let wrong_holder_data = wrong_holder.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            wrong_holder_data
+                .get("safe_to_submit")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            wrong_holder_data
+                .pointer("/lease_gate/code")
+                .and_then(Value::as_str),
+            Some("lease_holder_mismatch")
+        );
+    }
+
+    #[test]
+    fn session_command_check_request_returns_command_check_payload() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "command-check-query".to_string(),
+            command: "command_check".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "navigate".to_string(),
+                "--to".to_string(),
+                "home".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.command_check.v0.1")
+        );
+        assert_eq!(
+            payload.get("command_class").and_then(Value::as_str),
+            Some("control")
+        );
+        assert_eq!(
+            payload.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload.pointer("/lease_gate/code").and_then(Value::as_str),
+            Some("lab_lease_required")
         );
     }
 

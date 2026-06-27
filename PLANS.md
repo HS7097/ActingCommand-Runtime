@@ -152,6 +152,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab trusted transport preflight surface: `session transport check --endpoint <url>` now exposes the existing local/trusted-remote endpoint policy as a machine-readable Session Layer preflight without starting a listener.
 - ActingLab bounded stream preflight surface: `stream check` and `session request stream check` now expose a machine-readable safety preflight for bounded frame streams and per-request input relay without capturing frames, starting MaaTouch, or starting a listener.
 - ActingLab session readiness surface: `session readiness` and `session request readiness` now aggregate daemon liveness, status diagnostics, optional transport endpoint checks, stream-preflight availability, blockers, and recommended actions for UI/scheduler consumers without device I/O.
+- ActingLab command-check surface: `session command-check <command...>` and `session request command-check <command...>` now classify a target command, report daemon-route readiness and lease-gate status, and return `safe_to_submit` without enqueueing, capturing, starting MaaTouch, or touching devices.
+
+## Current ActingLab Command-Check Surface
+
+This increment gives future UI/scheduler clients a command-specific preflight before they submit work to the Session Layer. It advances the lease/arbitration and unique-throat requirements by making safety gates inspectable without executing the target command.
+
+- `session command-check <command...>` returns `session.command_check.v0.1`.
+- `session request command-check <command...>` returns the same schema through the resident daemon request handler.
+- The payload reports `command_class`, `requires_lease`, `device_affecting`, route state, lease-gate state, blockers, and `safe_to_submit`.
+- Control commands such as `tap`, `key`, `text`, `tap-target`, `navigate`, app lifecycle, Lab/package/operation run, and non-stale recovery require a matching Session Layer lease.
+- Read-only commands such as status, readiness, capture/recognition/page queries, stale-capture recovery, and stream checks do not require a lease.
+- `session command-check` itself remains local and does not auto-enqueue through daemon-preferred routing; use `session request command-check` when checking from the resident request path.
+- The check records that it does not enqueue, touch devices, start MaaTouch, capture frames, or start a listener.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Session Readiness Surface
 

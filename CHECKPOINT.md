@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab command-check surface
+
+### Current status
+
+- Added `session command-check <command...>` as a read-only command-specific Session Layer preflight.
+- Added `session request command-check <command...>` through the resident daemon request handler.
+- The command-check payload returns `session.command_check.v0.1`.
+- Command-check classifies target commands as read-only, control, daemon-state, or lease-arbitration.
+- The payload reports route state, daemon liveness, strict Session throat requirements, lease-gate status, blockers, and `safe_to_submit`.
+- Control commands such as `tap`, `key`, `text`, `tap-target`, `navigate`, app lifecycle, Lab/package/operation run, and non-stale recovery require a matching Session Layer lease.
+- Read-only commands such as status, readiness, capture/recognition/page queries, stale-capture recovery, and stream checks do not require a lease.
+- `session command-check` itself stays local and does not auto-submit into daemon-preferred routing, preserving its `does_not_enqueue` guarantee.
+- `session api`, `session contract`, and `capabilities` now advertise the command-check surface.
+- No frame capture, MaaTouch startup, input execution, trusted remote listener, TLS implementation, token issuance, UI transport, unbounded long-lived stream transport, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `69dcef5a8b0558ece540c4c5203bd0f02c48f60e`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer status, readiness, transport, stream preflight, API, capability, request queue, and lease-gate code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- Added-line precise prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, MaaTouch startup, capture/direct-touch execution calls, fallback, reconnect loop, and retry loop.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused command-check tests passed.
+- Focused Session API contract test passed.
+- Focused capability contract test passed.
+- Focused readiness regression tests passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- A broad added-line scan matched only the existing `instance reconnect` command classification string, not a reconnect loop or implementation path.
+- The precise prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed with `373` ActingLab tests plus the rest of the workspace suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: actual trusted remote listener/TLS/auth service, unbounded long-lived stream transport, scheduler ownership, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-command-check`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session readiness surface
 
 ### Current status
