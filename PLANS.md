@@ -91,8 +91,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
+- ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 
-## Current ActingLab Daemon-Routed Recording Interface
+## Current ActingLab Daemon-Routed Devices Diagnostics
+
+The current Runtime task routes the `devices` diagnostic entry point through the resident daemon request queue. Local `devices` remains available, while `devices --via-daemon` and `session request devices` can now serialize device enumeration through the daemon.
+
+Scope:
+
+- Add `devices --via-daemon`.
+- Add `session request devices`.
+- Add daemon-side handling for the `devices` request.
+- Advertise `session request devices` in capabilities.
+
+Safety direction:
+
+- The routed devices request is diagnostic and read-only.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change device control, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab devices_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_devices_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Decide whether the default top-level `devices` command should auto-prefer the resident daemon when it is already running.
+- Expose the same daemon request devices/status diagnostics through the future trusted UI/API channel once that channel exists.
+- Continue moving user-facing diagnostic and control surfaces behind the resident Session Layer request/API boundary.
+
+## Previous ActingLab Daemon-Routed Recording Interface
 
 The current Runtime task routes the Session Layer recording interface through the resident daemon request queue. Local `session record ...` and top-level `record ...` remain available, and `session request record ...` can now serialize recording lifecycle and authoring commands through the daemon.
 

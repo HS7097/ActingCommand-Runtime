@@ -809,7 +809,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
                 "runtime": data,
             })
         }),
-        [cmd] if cmd == "devices" => run_devices(&invocation.global),
+        [cmd] if cmd == "devices" => run_devices(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
         [cmd] if cmd == "tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
@@ -1014,7 +1014,12 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
     }))
 }
 
-fn run_devices(_global: &GlobalOptions) -> CliOutcome<Value> {
+fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "devices", args);
+    }
+    flags.expect_positionals("devices", 0)?;
     let config = read_user_config()?;
     let resolved = effective_adb_path(&config)?;
     let adb = Adb::new(AdbConfig {
@@ -3968,13 +3973,14 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
+        "devices" => submit_readonly_session_request(global, &flags, "devices", &args[1..]),
         "lease" => submit_session_lease_request(global, &flags, &args[1..]),
         "record" => submit_session_record_request(global, &flags, &args[1..]),
         "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
@@ -4415,6 +4421,10 @@ fn execute_session_command_request_inner(
             flags.expect_positionals("session request journal", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             session_journal_payload(state_dir, limit)
+        }
+        "devices" => {
+            let global = request.global.to_global()?;
+            run_devices(&global, &request.args)
         }
         "lease" => {
             let global = request.global.to_global()?;
@@ -9006,6 +9016,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session journal", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
+        command_cap("session request devices", ["running_runtime"], "available"),
         command_cap("session request lease", ["running_runtime"], "available"),
         command_cap("session request record", ["running_runtime"], "available"),
         command_cap(
@@ -14675,6 +14686,49 @@ mod tests {
     }
 
     #[test]
+    fn devices_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "devices",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_devices_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "devices",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_lease_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -15981,6 +16035,7 @@ mod tests {
             "session capture diagnose",
             "session request status",
             "session request journal",
+            "session request devices",
             "session request lease",
             "session request record",
             "session request capture",
