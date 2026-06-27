@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording resource promotion
+
+### Current status
+
+- Advanced Phase D recording with an explicit resource promotion command.
+- `session record promote --repo <resource-repo-or-root>` now publishes a validated recording draft into an existing resource root or repository containing `ours/`.
+- `session record publish` is accepted as an alias for the same guarded promotion path.
+- Promotion reuses the existing `session_record_build_draft` validation, so anchors, operations, page references, coordinate bounds, and task-id safety are checked before any write.
+- Repository roots are resolved the same way as package/resource commands, including `<repo>/ours`.
+- Existing promoted task directories fail visibly by default with `record_promote_target_exists`.
+- `--force` replaces only the promoted task directory.
+- Existing shared `operations/resources.json` is preserved; the empty placeholder is created only when it is missing.
+- Promoted output was verified by running `package build-task --dry-run` against the promoted resource repository inside the new test.
+- No device I/O, MaaTouch startup, frame capture, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0f2184f057a54d77eeeaa7eca9886798759a4398`.
+- Resource repositories were not modified. A temporary synthetic `repo/ours` fixture was used in tests.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` with UTF-8 output.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- Read current `PLANS.md` and `CHECKPOINT.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_promote -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_promote -- --nocapture` passed with `1` test.
+- The promote test also verified overwrite guard, `--force` task replacement, preservation of shared `operations/resources.json`, repo/ours resolution, and `package build-task --dry-run` compatibility.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `30` tests.
+- `cargo test -p actingcommand-actinglab` passed with `138` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the resource promotion implementation.
+- Full Phase D remains incomplete: live prepared-emulator validation, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-promote`.
+3. Continue Phase D with live prepared-emulator validation or additional recording resource kinds after this promotion path is accepted.
+
 ## 2026-06-27 ActingLab session recording candidate preview
 
 ### Current status

@@ -70,8 +70,48 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording auto-region candidate report: frame-backed `--region auto` now records candidate regions, luma variance, contrast scores, selected reason, and prefers candidates rejected by the contrast frame before final artifact/backtest evaluation.
 - ActingLab session recording amend-by-candidate loop: `session record amend` can now choose a previously reported auto-region candidate by index, preserve operator-selection provenance, and immediately re-run artifact/backtest evaluation.
 - ActingLab session recording candidate preview: `session record candidates` can now list an anchor step's recorded auto-region candidates for operator review before amend/build.
+- ActingLab session recording resource promotion: `session record promote` can now publish a validated recording draft into an existing resource repository/root with overwrite protection and package dry-run compatibility.
 
-## Current ActingLab Session Recording Candidate Preview
+## Current ActingLab Session Recording Resource Promotion
+
+The current Runtime task advances Phase D's "record, correct, and generate resources" loop by adding an explicit promotion path from a recording context into a resource repository. This keeps resource writes deliberate and guarded instead of making `build-task` silently overwrite a repository.
+
+Scope:
+
+- Add `session record promote --repo <resource-repo-or-root>` for existing resource roots and repositories containing `ours/`.
+- Add alias `session record publish` for the same guarded promotion path.
+- Reuse the existing `session_record_build_draft` validation so promoted tasks must pass the same anchor, operation, coordinate, and page-reference checks as draft builds.
+- Resolve repository roots consistently with the existing resource/package builder path, including `<repo>/ours`.
+- Refuse to overwrite an existing task directory unless `--force` is supplied.
+- When `--force` is supplied, replace only the promoted task directory.
+- Preserve an existing shared `operations/resources.json`; create the empty placeholder only when it is missing.
+- Return promoted task paths, resource root/layout, resource action, counts, and asset destinations in JSON.
+- Expose the command through `capabilities`.
+
+Safety direction:
+
+- This milestone is an offline resource-write path only; it does not open MaaTouch or perform device I/O.
+- This milestone does not capture frames, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+- Existing task directories fail visibly by default and require explicit `--force` before replacement.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_promote -- --nocapture` passed with `1` test, including `package build-task --dry-run` against the promoted resource repository.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `30` tests.
+- `cargo test -p actingcommand-actinglab` passed with `138` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add additional recording resource kinds such as color-probe or verify-template after the anchor/operation promotion loop is accepted.
+- Add a UI/API surface for candidate review and promotion after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Candidate Preview
 
 The current Runtime task advances Phase D's "suggest, confirm, and micro-adjust" loop by adding a read-only candidate preview command. Operators can inspect the candidate report produced by `--region auto` before choosing one with `session record amend --candidate-index`.
 
@@ -103,7 +143,6 @@ Validation status:
 Known follow-ups:
 
 - Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
-- Add resource-promotion/write flow after recording correction semantics are accepted.
 - Add a UI/API surface for candidate review after the CLI shape is accepted.
 
 ## Previous ActingLab Session Recording Amend-By-Candidate Loop

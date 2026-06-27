@@ -4519,7 +4519,7 @@ fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease)
 fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session record requires start|status|stop|step|candidates|amend|build-task",
+            "session record requires start|status|stop|step|candidates|amend|build-task|promote",
         )
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -4693,6 +4693,9 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         "build-task" => {
             build_session_record_task(global, &config, &flags, &record_path, &instance_id)
         }
+        "promote" | "publish" => {
+            promote_session_record_task(global, &config, &flags, &record_path, &instance_id)
+        }
         other => Err(CliError::usage(format!(
             "unknown session record action: {other}"
         ))),
@@ -4756,6 +4759,83 @@ fn build_session_record_task(
             })
         }).collect::<Vec<_>>(),
         "bundle": draft.bundle
+    }))
+}
+
+fn promote_session_record_task(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    record_path: &Path,
+    instance_id: &str,
+) -> CliOutcome<Value> {
+    let Some(record) = read_json_file::<SessionRecordContext>(record_path)? else {
+        return Err(CliError::safety_blocked(
+            "record_session_not_active",
+            format!(
+                "no recording session exists for {instance_id}; run session record start first"
+            ),
+            &["session_record"],
+        ));
+    };
+    if !matches!(record.status.as_str(), "active" | "stopped") {
+        return Err(CliError::safety_blocked(
+            "record_session_not_active",
+            format!(
+                "recording session for {} is {}, not active or stopped",
+                record.instance, record.status
+            ),
+            &["session_record"],
+        ));
+    }
+    let repo = flags.required_path("--repo")?;
+    let resource_root = resolve_resource_root(&repo);
+    if resource_root.layout == "unresolved" {
+        return Err(CliError::usage(
+            "session record promote requires --repo to be an existing resource root or a repository containing ours/",
+        ));
+    }
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    let force = flags.bool("--force");
+    let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
+    let draft = session_record_build_draft(&record, flags, &resource_root.root, &game, &server)?;
+    validate_session_record_promote_target(&draft, force)?;
+    let resources_action = if dry_run {
+        if draft.resources_path.exists() {
+            "would_preserve"
+        } else {
+            "would_create"
+        }
+    } else {
+        write_session_record_promoted_task(&draft, force)?
+    };
+    Ok(json!({
+        "status": if dry_run { "validated" } else { "promoted" },
+        "mode": "session-record-promote",
+        "dry_run": dry_run,
+        "force": force,
+        "instance": instance_id,
+        "record_id": record.record_id,
+        "task_id": record.task_id,
+        "game": game,
+        "server": server,
+        "repo": resource_root.input.display().to_string(),
+        "resource_root": resource_root.root.display().to_string(),
+        "resource_layout": resource_root.layout,
+        "task_dir": draft.task_dir.display().to_string(),
+        "task_path": draft.task_path.display().to_string(),
+        "resources_path": draft.resources_path.display().to_string(),
+        "resources_action": resources_action,
+        "anchor_count": draft.bundle.get("anchors").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "operation_count": draft.bundle.get("operations").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "asset_count": draft.assets.len(),
+        "assets": draft.assets.iter().map(|asset| {
+            json!({
+                "template": &asset.template,
+                "source": asset.source.display().to_string(),
+                "destination": asset.destination.display().to_string()
+            })
+        }).collect::<Vec<_>>()
     }))
 }
 
@@ -4969,6 +5049,87 @@ fn session_record_build_draft(
 }
 
 fn write_session_record_build_draft(draft: &SessionRecordBuildDraft) -> CliOutcome<()> {
+    copy_session_record_build_assets(draft)?;
+    write_json_file(
+        &draft.resources_path,
+        &json!({
+            "schema_version": "1.0",
+            "resources": [],
+            "resource_count": 0
+        }),
+    )?;
+    write_json_file(&draft.task_path, &draft.bundle)
+}
+
+fn validate_session_record_promote_target(
+    draft: &SessionRecordBuildDraft,
+    force: bool,
+) -> CliOutcome<()> {
+    if draft.task_dir.exists() && !force {
+        return Err(CliError::safety_blocked(
+            "record_promote_target_exists",
+            format!(
+                "record promote target task directory already exists: {}; use --force to replace it",
+                draft.task_dir.display()
+            ),
+            &["session_record", "resource_repo"],
+        ));
+    }
+    Ok(())
+}
+
+fn write_session_record_promoted_task(
+    draft: &SessionRecordBuildDraft,
+    force: bool,
+) -> CliOutcome<&'static str> {
+    if draft.task_dir.exists() {
+        if !force {
+            return Err(CliError::safety_blocked(
+                "record_promote_target_exists",
+                format!(
+                    "record promote target task directory already exists: {}; use --force to replace it",
+                    draft.task_dir.display()
+                ),
+                &["session_record", "resource_repo"],
+            ));
+        }
+        remove_record_promote_task_dir(&draft.task_dir)?;
+    }
+    copy_session_record_build_assets(draft)?;
+    let resources_action = if draft.resources_path.exists() {
+        "preserved"
+    } else {
+        write_json_file(
+            &draft.resources_path,
+            &json!({
+                "schema_version": "1.0",
+                "resources": [],
+                "resource_count": 0
+            }),
+        )?;
+        "created"
+    };
+    write_json_file(&draft.task_path, &draft.bundle)?;
+    Ok(resources_action)
+}
+
+fn remove_record_promote_task_dir(task_dir: &Path) -> CliOutcome<()> {
+    if task_dir.is_dir() {
+        fs::remove_dir_all(task_dir).map_err(|err| {
+            CliError::usage(format!(
+                "failed to remove existing promoted task directory {}: {err}",
+                task_dir.display()
+            ))
+        })
+    } else {
+        Err(CliError::usage(format!(
+            "record promote target exists but is not a directory: {}",
+            task_dir.display()
+        )))
+    }
+}
+
+fn copy_session_record_build_assets(draft: &SessionRecordBuildDraft) -> CliOutcome<()> {
     for asset in &draft.assets {
         if let Some(parent) = asset.destination.parent() {
             fs::create_dir_all(parent).map_err(|err| {
@@ -4983,15 +5144,7 @@ fn write_session_record_build_draft(draft: &SessionRecordBuildDraft) -> CliOutco
             ))
         })?;
     }
-    write_json_file(
-        &draft.resources_path,
-        &json!({
-            "schema_version": "1.0",
-            "resources": [],
-            "resource_count": 0
-        }),
-    )?;
-    write_json_file(&draft.task_path, &draft.bundle)
+    Ok(())
 }
 
 fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> CliOutcome<Value> {
@@ -7811,6 +7964,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
+        command_cap("session record promote", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
@@ -9912,6 +10066,261 @@ mod tests {
         assert_eq!(
             packaged_data.get("task_id").and_then(Value::as_str),
             Some("daily-check")
+        );
+    }
+
+    #[test]
+    fn session_record_promote_writes_repo_ours_and_guards_overwrite() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let repo = temp.path().join("resource-repo");
+        let ours = repo.join("ours");
+        let resources_path = ours.join("operations/resources.json");
+        fs::create_dir_all(ours.join("operations")).unwrap();
+        fs::create_dir_all(ours.join("recognition")).unwrap();
+        fs::write(
+            &resources_path,
+            r#"{"schema_version":"1.0","resources":[{"id":"keep"}],"resource_count":1}"#,
+        )
+        .unwrap();
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let home_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let mail_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "mail-anchor",
+                "--id",
+                "page/mail",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-to-mail",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "5,6",
+            ],
+            true,
+        );
+        let promote = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "promote",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--repo",
+                repo.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        let reject = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "promote",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--repo",
+                repo.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        fs::write(
+            ours.join("operations/daily-check/obsolete.txt"),
+            "stale task file",
+        )
+        .unwrap();
+        let forced = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "promote",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--repo",
+                repo.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+                "--force",
+            ],
+            true,
+        );
+        let packaged = run_cli(
+            [
+                "--json",
+                "package",
+                "build-task",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--task",
+                "daily-check",
+                "--out",
+                temp.path().join("daily-check.zip").to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(home_anchor.exit_code(), 0);
+        assert_eq!(mail_anchor.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_eq!(
+            promote.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&promote.envelope).unwrap()
+        );
+        let data = promote.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("promoted"));
+        assert_eq!(
+            data.get("resource_layout").and_then(Value::as_str),
+            Some("repo_ours")
+        );
+        assert_eq!(
+            data.get("resources_action").and_then(Value::as_str),
+            Some("preserved")
+        );
+        assert!(ours.join("operations/daily-check/task.json").is_file());
+        assert!(
+            ours.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
+                .is_file()
+        );
+        let resources: Value =
+            serde_json::from_str(&fs::read_to_string(&resources_path).unwrap()).unwrap();
+        assert_eq!(
+            resources.pointer("/resources/0/id").and_then(Value::as_str),
+            Some("keep")
+        );
+        assert_eq!(reject.exit_code(), 3);
+        assert_eq!(
+            reject.envelope.error.as_ref().unwrap().code,
+            "record_promote_target_exists"
+        );
+        assert_eq!(
+            forced.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&forced.envelope).unwrap()
+        );
+        assert!(!ours.join("operations/daily-check/obsolete.txt").exists());
+        assert_eq!(
+            serde_json::from_str::<Value>(&fs::read_to_string(&resources_path).unwrap())
+                .unwrap()
+                .pointer("/resources/0/id")
+                .and_then(Value::as_str),
+            Some("keep")
+        );
+        assert_eq!(
+            packaged.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&packaged.envelope).unwrap()
+        );
+        assert_eq!(
+            packaged
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("status")
+                .and_then(Value::as_str),
+            Some("validated")
         );
     }
 
