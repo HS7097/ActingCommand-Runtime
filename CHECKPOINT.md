@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording anchor color-check output
+
+### Current status
+
+- Advanced Phase D recording by making `--color-check` produce an actual bundle color check.
+- Frame-backed anchors recorded with `color_check=true` now emit `color_check.region` and `color_check.expected` in `session record build-task`.
+- The expected color is derived as the average RGB value over the authorized anchor rectangle in the recorded source frame.
+- Anchors without `--color-check` still emit `color_check: null`.
+- If a requested color check lacks frame provenance, build-task fails visibly instead of silently omitting the check.
+- The updated build-task test verifies the generated color-check JSON and still runs `package build-task --dry-run` against the generated draft repository.
+- No device I/O, MaaTouch startup, frame capture, resource repository write, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `deee8151d310e62a3566b45330b211a5b5e4b9d9`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Searched current code and local Arknights resource examples for `color_check` format.
+- `cargo fmt --all`
+- First `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- Fixed the test flag placement after the first run showed the asserted build-task fixture had not enabled `--color-check`.
+- Reran `cargo fmt --all`
+- Reran `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- First targeted test run failed because the test assertion expected color-check output while the build-task fixture had not enabled `--color-check`; this was a test setup issue, not a production path failure.
+- Rerun `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `30` tests.
+- `cargo test -p actingcommand-actinglab` passed with `138` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the anchor color-check output implementation.
+- Full Phase D remains incomplete: live prepared-emulator validation, standalone color-probe/verify-template resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-color-check`.
+3. Continue Phase D with live prepared-emulator validation or standalone recording resource kinds after this color-check output path is accepted.
+
 ## 2026-06-27 ActingLab session recording resource promotion
 
 ### Current status

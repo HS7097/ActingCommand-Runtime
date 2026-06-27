@@ -71,8 +71,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording amend-by-candidate loop: `session record amend` can now choose a previously reported auto-region candidate by index, preserve operator-selection provenance, and immediately re-run artifact/backtest evaluation.
 - ActingLab session recording candidate preview: `session record candidates` can now list an anchor step's recorded auto-region candidates for operator review before amend/build.
 - ActingLab session recording resource promotion: `session record promote` can now publish a validated recording draft into an existing resource repository/root with overwrite protection and package dry-run compatibility.
+- ActingLab session recording anchor color-check output: frame-backed anchors recorded with `--color-check` now emit bundle `color_check` data derived from the authorized source-frame region instead of only storing the request as provenance.
 
-## Current ActingLab Session Recording Resource Promotion
+## Current ActingLab Session Recording Anchor Color-Check Output
+
+The current Runtime task advances Phase D's "authorized resource generation" path by making `record step --kind anchor --color-check` produce an actual bundle color check. Previously the flag was preserved only as provenance while the generated anchor still had `color_check: null`.
+
+Scope:
+
+- When a frame-backed recorded anchor has `color_check=true`, `session record build-task` now derives `color_check.expected` from the average RGB value of the authorized anchor rectangle in the recorded source frame.
+- The generated `color_check.region` uses the same rect as the materialized anchor artifact.
+- Anchors without `--color-check` continue to emit `color_check: null`.
+- Missing frame provenance for a requested color check fails visibly during build.
+- Existing package compatibility remains unchanged: the generated bundle still passes the existing `package build-task --dry-run` path.
+
+Safety direction:
+
+- This milestone is pure offline bundle generation.
+- This milestone performs no device I/O, MaaTouch startup, frame capture, resource repository write, OCR/OpenCV, SQLite, UI, or game logic.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test and verified the emitted color-check data plus package dry-run compatibility.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `30` tests.
+- `cargo test -p actingcommand-actinglab` passed with `138` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add additional recording resource kinds such as standalone color-probe or verify-template after the anchor/operation promotion loop is accepted.
+- Add a UI/API surface for candidate review, color-check review, and promotion after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Resource Promotion
 
 The current Runtime task advances Phase D's "record, correct, and generate resources" loop by adding an explicit promotion path from a recording context into a resource repository. This keeps resource writes deliberate and guarded instead of making `build-task` silently overwrite a repository.
 

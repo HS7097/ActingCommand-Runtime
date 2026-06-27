@@ -4892,6 +4892,12 @@ fn session_record_build_draft(
                     source.display()
                 )));
             }
+            let color_check_value = session_record_bundle_color_check(
+                *color_check,
+                frame_provenance.as_deref(),
+                &artifact.region,
+                &step.step_id,
+            )?;
             let asset_name = format!(
                 "anchor-{}-{}.png",
                 safe_file_stem(&step.step_id),
@@ -4916,7 +4922,7 @@ fn session_record_build_draft(
                         .map(|backtest| f64::from(backtest.threshold))
                         .unwrap_or(0.95)
                 }),
-                "color_check": Value::Null,
+                "color_check": color_check_value,
                 "provenance": {
                     "record_step_id": step.step_id,
                     "record_color_check_requested": color_check,
@@ -5145,6 +5151,56 @@ fn copy_session_record_build_assets(draft: &SessionRecordBuildDraft) -> CliOutco
         })?;
     }
     Ok(())
+}
+
+fn session_record_bundle_color_check(
+    enabled: bool,
+    frame_provenance: Option<&SessionRecordFrameProvenance>,
+    rect: &SessionRecordRect,
+    step_id: &str,
+) -> CliOutcome<Value> {
+    if !enabled {
+        return Ok(Value::Null);
+    }
+    let Some(frame_provenance) = frame_provenance else {
+        return Err(CliError::usage(format!(
+            "record build-task anchor '{step_id}' requested color_check but has no frame provenance"
+        )));
+    };
+    let source_frame = read_session_record_source_frame_from_provenance(frame_provenance)?;
+    let expected = mean_session_record_rect_rgb(&source_frame.frame, rect)?;
+    Ok(json!({
+        "region": {
+            "mode": "rect",
+            "rect": rect
+        },
+        "expected": expected
+    }))
+}
+
+fn mean_session_record_rect_rgb(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<[u8; 3]> {
+    let crop = crop_frame_rect(frame, rect)?;
+    let stride = match crop.pixel_format {
+        PixelFormat::Rgb8 => 3usize,
+        PixelFormat::Rgba8 => 4usize,
+    };
+    let mut sum = [0_u64; 3];
+    for pixel in crop.pixels.chunks_exact(stride) {
+        sum[0] += u64::from(pixel[0]);
+        sum[1] += u64::from(pixel[1]);
+        sum[2] += u64::from(pixel[2]);
+    }
+    let count = u64::from(crop.width)
+        .checked_mul(u64::from(crop.height))
+        .ok_or_else(|| CliError::usage("record color_check pixel count overflow"))?;
+    if count == 0 {
+        return Err(CliError::usage("record color_check region has no pixels"));
+    }
+    Ok([
+        (sum[0] / count) as u8,
+        (sum[1] / count) as u8,
+        (sum[2] / count) as u8,
+    ])
 }
 
 fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> CliOutcome<Value> {
@@ -9889,6 +9945,7 @@ mod tests {
                 "2,3,4,5",
                 "--frame",
                 frame_path.to_str().unwrap(),
+                "--color-check",
             ],
             true,
         );
@@ -10009,6 +10066,26 @@ mod tests {
             Some("assets/anchor-home-anchor-page_home.png")
         );
         assert_eq!(
+            data.pointer("/bundle/anchors/0/color_check/region/rect/x")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/bundle/anchors/0/color_check/expected/0")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/bundle/anchors/0/color_check/expected/1")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            data.pointer("/bundle/anchors/0/color_check/expected/2")
+                .and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
             data.pointer("/bundle/operations/0/click/kind")
                 .and_then(Value::as_str),
             Some("point")
@@ -10035,6 +10112,12 @@ mod tests {
         assert_eq!(
             written.pointer("/operations/0/id").and_then(Value::as_str),
             Some("home-to-mail")
+        );
+        assert_eq!(
+            written
+                .pointer("/anchors/0/color_check/expected/0")
+                .and_then(Value::as_u64),
+            Some(3)
         );
 
         let packaged = run_cli(
