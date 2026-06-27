@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon liveness-gated routing
+
+### Current status
+
+- Connected Session Layer liveness diagnostics to daemon routing.
+- Automatic daemon-preferred read-only and control routing now requires `session.json` plus an alive, pid-matched, fresh `heartbeat.json`.
+- Explicit daemon requests now fail before writing request files when daemon liveness is `heartbeat_missing`, `pid_mismatch`, or `stale`.
+- Existing alive-daemon request queue behavior remains unchanged.
+- No daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, or app lifecycle behavior was changed.
+- No live daemon or emulator operation was run for this routing-only milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `79fb29d600bc779398ed0b2caa170c3f5324dd15`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session routing, liveness diagnostics, daemon request submission, and related test sections.
+- `cargo test -p actingcommand-actinglab session_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Diff-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_ -- --nocapture` passed with `114` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Diff-only prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `217` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-liveness-gated-routing`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session liveness diagnostics
 
 ### Current status

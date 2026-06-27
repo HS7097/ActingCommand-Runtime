@@ -106,29 +106,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream multi-event relay: repeated `--input-event <action,args>` can now carry multiple tap/swipe/long-tap/key/text events through one bounded stream request, with daemon-side lease enforcement unchanged.
 - ActingLab stale capture recovery plan: `session recover --stale-capture` now exposes a read-only recovery plan that diagnoses stale frames and recommends capture-backend recovery before heavy app restart.
 - ActingLab session liveness diagnostics: `session status --diagnostics` now classifies daemon heartbeat state for UI/scheduler health checks.
+- ActingLab daemon liveness-gated routing: automatic daemon-preferred routing now requires an alive heartbeat, and explicit daemon requests fail fast before queueing when the daemon state is stale, missing a heartbeat, or pid-mismatched.
 
-## Current ActingLab Session Liveness Diagnostics
+## Current ActingLab Session Daemon Liveness-Gated Routing
 
-The current Runtime task improves the resident Session Layer health surface. `session status --diagnostics` now reports daemon liveness from `session.json` and `heartbeat.json` instead of leaving UI/scheduler callers to infer whether a stale info file can still accept requests.
+The current Runtime task connects Session Layer liveness diagnostics to daemon request routing. `session.json` alone is no longer enough for automatic daemon-preferred routing; the daemon must also have an alive, pid-matched, fresh heartbeat.
 
 Scope:
 
-- Add a fixed heartbeat stale threshold for diagnostics.
-- Report liveness status as `stopped`, `heartbeat_missing`, `pid_mismatch`, `stale`, or `alive`.
-- Report heartbeat age, clock skew, pid match, daemon pid, heartbeat pid, heartbeat state, and whether requests can be accepted.
-- Keep request execution, daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, and game logic unchanged.
+- Reuse the liveness states `stopped`, `heartbeat_missing`, `pid_mismatch`, `stale`, and `alive`.
+- Make automatic read-only/control daemon preference require `alive`.
+- Make explicit daemon requests fail before writing request files when heartbeat state is missing, stale, or pid-mismatched.
+- Preserve existing alive-daemon request behavior and queue semantics.
+- Keep daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, resource access, and game logic unchanged.
 
 Safety direction:
 
 - Corrupt status, heartbeat, lease, or journal files still fail visibly through existing status paths.
 - Stale or inconsistent daemon state is reported as not accepting requests instead of silently treating any `session.json` file as healthy.
-- This is a read-only diagnostics change and does not start, stop, reconnect, click, capture, or restart anything.
+- Stale daemon requests fail with `runtime_not_running` before queueing work that no resident daemon can process.
+- This is a routing and diagnostics consistency change and does not start, stop, reconnect, click, capture, or restart anything.
 
 Validation status:
 
-- `cargo test -p actingcommand-actinglab session_liveness_diagnostics -- --nocapture` passed with `1` test.
-- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture` passed with `1` test.
-- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test.
+- Focused `cargo test -p actingcommand-actinglab session_ -- --nocapture` passed after adding routing and stale-request coverage.
 - `cargo fmt --all -- --check`, `git diff --check`, diff-only prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 Out of scope:

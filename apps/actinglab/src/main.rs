@@ -317,6 +317,39 @@ struct SessionHeartbeat {
     state: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionLivenessStatus {
+    Stopped,
+    HeartbeatMissing,
+    PidMismatch,
+    Stale,
+    Alive,
+}
+
+impl SessionLivenessStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::HeartbeatMissing => "heartbeat_missing",
+            Self::PidMismatch => "pid_mismatch",
+            Self::Stale => "stale",
+            Self::Alive => "alive",
+        }
+    }
+
+    fn can_accept_requests(self) -> bool {
+        self == Self::Alive
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionLivenessSnapshot {
+    status: SessionLivenessStatus,
+    heartbeat_age_ms: Option<u64>,
+    heartbeat_clock_skew_ms: u64,
+    pid_match: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionCommandRequest {
     request_id: String,
@@ -1221,10 +1254,14 @@ fn session_daemon_info_exists(flags: &FlagArgs) -> CliOutcome<bool> {
         return Ok(false);
     };
     let info_path = session_info_path(&state_dir);
-    if !info_path.exists() {
-        return Ok(false);
-    }
-    read_json_file::<SessionInfo>(&info_path).map(|info| info.is_some())
+    let heartbeat_path = session_heartbeat_path(&state_dir);
+    let info = read_json_file::<SessionInfo>(&info_path)?;
+    let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+    Ok(
+        session_liveness_snapshot(info.as_ref(), heartbeat.as_ref(), current_unix_ms())
+            .status
+            .can_accept_requests(),
+    )
 }
 
 fn submit_readonly_session_request(
@@ -4304,6 +4341,28 @@ fn session_liveness_diagnostics(
     heartbeat: Option<&SessionHeartbeat>,
     now_ms: u64,
 ) -> Value {
+    let snapshot = session_liveness_snapshot(info, heartbeat, now_ms);
+    json!({
+        "status": snapshot.status.as_str(),
+        "info_present": info.is_some(),
+        "heartbeat_present": heartbeat.is_some(),
+        "daemon_pid": info.map(|value| value.pid),
+        "heartbeat_pid": heartbeat.map(|value| value.pid),
+        "pid_match": snapshot.pid_match,
+        "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
+        "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
+        "heartbeat_age_ms": snapshot.heartbeat_age_ms,
+        "heartbeat_clock_skew_ms": snapshot.heartbeat_clock_skew_ms,
+        "stale_after_ms": SESSION_HEARTBEAT_STALE_MS,
+        "can_accept_requests": snapshot.status.can_accept_requests()
+    })
+}
+
+fn session_liveness_snapshot(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    now_ms: u64,
+) -> SessionLivenessSnapshot {
     let heartbeat_age_ms = heartbeat.map(|value| now_ms.saturating_sub(value.updated_at_unix_ms));
     let heartbeat_clock_skew_ms = heartbeat
         .and_then(|value| value.updated_at_unix_ms.checked_sub(now_ms))
@@ -4313,26 +4372,20 @@ fn session_liveness_diagnostics(
         _ => None,
     };
     let status = match (info, heartbeat, pid_match, heartbeat_age_ms) {
-        (None, _, _, _) => "stopped",
-        (Some(_), None, _, _) => "heartbeat_missing",
-        (Some(_), Some(_), Some(false), _) => "pid_mismatch",
-        (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => "stale",
-        (Some(_), Some(_), _, _) => "alive",
+        (None, _, _, _) => SessionLivenessStatus::Stopped,
+        (Some(_), None, _, _) => SessionLivenessStatus::HeartbeatMissing,
+        (Some(_), Some(_), Some(false), _) => SessionLivenessStatus::PidMismatch,
+        (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => {
+            SessionLivenessStatus::Stale
+        }
+        (Some(_), Some(_), _, _) => SessionLivenessStatus::Alive,
     };
-    json!({
-        "status": status,
-        "info_present": info.is_some(),
-        "heartbeat_present": heartbeat.is_some(),
-        "daemon_pid": info.map(|value| value.pid),
-        "heartbeat_pid": heartbeat.map(|value| value.pid),
-        "pid_match": pid_match,
-        "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
-        "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
-        "heartbeat_age_ms": heartbeat_age_ms,
-        "heartbeat_clock_skew_ms": heartbeat_clock_skew_ms,
-        "stale_after_ms": SESSION_HEARTBEAT_STALE_MS,
-        "can_accept_requests": status == "alive"
-    })
+    SessionLivenessSnapshot {
+        status,
+        heartbeat_age_ms,
+        heartbeat_clock_skew_ms,
+        pid_match,
+    }
 }
 
 fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
@@ -4468,6 +4521,18 @@ fn submit_session_command_request(
             info_path.display()
         ))
     })?;
+    let heartbeat_path = session_heartbeat_path(&state_dir);
+    let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+    let liveness = session_liveness_snapshot(Some(&info), heartbeat.as_ref(), current_unix_ms());
+    if !liveness.status.can_accept_requests() {
+        return Err(CliError::runtime_not_running(format!(
+            "session daemon is not accepting requests; liveness status={}, heartbeat_age_ms={}, stale_after_ms={}, state_dir={}",
+            liveness.status.as_str(),
+            optional_u64_text(liveness.heartbeat_age_ms),
+            SESSION_HEARTBEAT_STALE_MS,
+            state_dir.display()
+        )));
+    }
     let request_id = format!("{}-{}", current_unix_ms(), std::process::id());
     let request = SessionCommandRequest {
         request_id: request_id.clone(),
@@ -8622,6 +8687,12 @@ fn current_unix_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+fn optional_u64_text(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
 fn read_json_file<T>(path: &Path) -> CliOutcome<Option<T>>
 where
     T: for<'de> Deserialize<'de>,
@@ -10281,10 +10352,29 @@ mod tests {
         };
         let heartbeat = SessionHeartbeat {
             pid: 321,
-            updated_at_unix_ms: 20,
+            updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
         write_json_file_atomic(&session_info_path(state_dir), &info).unwrap();
+        write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
+    }
+
+    fn write_test_session_info_only(state_dir: &Path) {
+        let info = SessionInfo {
+            pid: 321,
+            started_at_unix_ms: 10,
+            state_dir: state_dir.display().to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        write_json_file_atomic(&session_info_path(state_dir), &info).unwrap();
+    }
+
+    fn write_test_session_heartbeat(state_dir: &Path, pid: u32, updated_at_unix_ms: u64) {
+        let heartbeat = SessionHeartbeat {
+            pid,
+            updated_at_unix_ms,
+            state: "idle".to_string(),
+        };
         write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
     }
 
@@ -10377,6 +10467,66 @@ mod tests {
             pid_mismatch.get("status").and_then(Value::as_str),
             Some("pid_mismatch")
         );
+    }
+
+    #[test]
+    fn session_daemon_info_exists_requires_alive_heartbeat() {
+        let temp = TempDir::new().unwrap();
+        let flags = FlagArgs::parse(&[
+            "--state-dir".to_string(),
+            temp.path().to_str().unwrap().to_string(),
+        ])
+        .unwrap();
+
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+
+        write_test_session_info_only(temp.path());
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+
+        write_test_session_heartbeat(temp.path(), 999, current_unix_ms());
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+
+        write_test_session_heartbeat(temp.path(), 321, current_unix_ms());
+        assert!(session_daemon_info_exists(&flags).unwrap());
+    }
+
+    #[test]
+    fn session_status_via_daemon_with_stale_heartbeat_fails_before_request_write() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--via-daemon",
+                "--diagnostics",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "100",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("liveness status=stale"));
+        assert!(!session_requests_dir(temp.path()).exists());
     }
 
     #[test]
