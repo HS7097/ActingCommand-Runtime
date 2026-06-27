@@ -1523,6 +1523,9 @@ fn session_api_contract() -> Value {
                 "query": "session request-state get <request-id>",
                 "daemon_query": "session request request-state get <request-id>",
                 "schema_version": "session.request_state.v0.1",
+                "list_query": "session request-state list [--limit N] [--status <state>]",
+                "daemon_list_query": "session request request-state list [--limit N] [--status <state>]",
+                "list_schema_version": "session.request_state_list.v0.1",
                 "statuses": ["queued", "response_available", "completed", "failed", "unknown"],
                 "state_sources": ["requests", "responses", "request-journal"]
             },
@@ -5432,9 +5435,12 @@ fn run_session_request_state_in_state_dir(flags: &FlagArgs, state_dir: &Path) ->
         .positionals
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session request-state requires get <request-id>"))?;
+        .ok_or_else(|| {
+            CliError::usage("session request-state requires get <request-id> or list")
+        })?;
     match sub {
         "get" => run_session_request_state_get(flags, state_dir),
+        "list" => run_session_request_state_list(flags, state_dir),
         other => Err(CliError::usage(format!(
             "unknown session request-state command: {other}"
         ))),
@@ -5446,6 +5452,250 @@ fn run_session_request_state_get(flags: &FlagArgs, state_dir: &Path) -> CliOutco
     let request_id = flags.required_positional(1, "request-id")?;
     validate_session_request_id(request_id)?;
     session_request_state_payload(state_dir, request_id)
+}
+
+#[derive(Debug)]
+struct SessionRequestStateListItem {
+    request_id: String,
+    status: &'static str,
+    timestamp_unix_ms: u64,
+    priority: u8,
+    value: Value,
+}
+
+fn run_session_request_state_list(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    flags.expect_positionals("session request-state list", 1)?;
+    let limit = parse_optional_usize(flags, "--limit", 20)?;
+    if limit == 0 || limit > 1_000 {
+        return Err(CliError::usage("--limit must be between 1 and 1000"));
+    }
+    let status_filter = parse_session_request_state_list_status_filter(flags)?;
+    session_request_state_list_payload(state_dir, limit, &status_filter)
+}
+
+fn parse_session_request_state_list_status_filter(flags: &FlagArgs) -> CliOutcome<Vec<String>> {
+    let statuses = parse_optional_string_values(flags, "--status")?;
+    for status in &statuses {
+        if !matches!(
+            status.as_str(),
+            "queued" | "response_available" | "completed" | "failed"
+        ) {
+            return Err(CliError::usage(format!(
+                "unsupported session request-state list --status value: {status}; expected queued, response_available, completed, or failed"
+            )));
+        }
+    }
+    Ok(statuses)
+}
+
+fn session_request_state_list_payload(
+    state_dir: &Path,
+    limit: usize,
+    status_filter: &[String],
+) -> CliOutcome<Value> {
+    let requests_dir = session_requests_dir(state_dir);
+    let responses_dir = session_responses_dir(state_dir);
+    let mut items_by_id: BTreeMap<String, SessionRequestStateListItem> = BTreeMap::new();
+    let mut disappeared_requests = 0usize;
+    let mut disappeared_responses = 0usize;
+
+    for path in sorted_json_paths(&requests_dir)? {
+        let Some(request) = read_pending_session_request(&path)? else {
+            disappeared_requests += 1;
+            continue;
+        };
+        let request_id = request.request_id.clone();
+        let response_path = responses_dir.join(format!("{request_id}.json"));
+        insert_request_state_list_item(
+            &mut items_by_id,
+            SessionRequestStateListItem {
+                request_id: request_id.clone(),
+                status: "queued",
+                timestamp_unix_ms: request.created_at_unix_ms,
+                priority: 0,
+                value: json!({
+                    "request_id": request_id,
+                    "status": "queued",
+                    "known": true,
+                    "source": "pending_request",
+                    "command": request.command,
+                    "global": request.global,
+                    "lease": request.lease,
+                    "args_count": request.args.len(),
+                    "created_at_unix_ms": request.created_at_unix_ms,
+                    "paths": {
+                        "request": path.display().to_string(),
+                        "response": response_path.display().to_string()
+                    }
+                }),
+            },
+        );
+    }
+
+    for path in sorted_json_paths(&responses_dir)? {
+        let Some(response) = read_pending_session_response(&path)? else {
+            disappeared_responses += 1;
+            continue;
+        };
+        let data_summary = session_request_data_summary(&response);
+        let request_id = response.request_id.clone();
+        let request_path = requests_dir.join(format!("{request_id}.json"));
+        insert_request_state_list_item(
+            &mut items_by_id,
+            SessionRequestStateListItem {
+                request_id: request_id.clone(),
+                status: "response_available",
+                timestamp_unix_ms: response.completed_at_unix_ms,
+                priority: 1,
+                value: json!({
+                    "request_id": request_id,
+                    "status": "response_available",
+                    "known": true,
+                    "source": "pending_response",
+                    "command": response.command,
+                    "ok": response.ok,
+                    "error": response.error,
+                    "data_summary": data_summary,
+                    "started_at_unix_ms": response.started_at_unix_ms,
+                    "completed_at_unix_ms": response.completed_at_unix_ms,
+                    "paths": {
+                        "request": request_path.display().to_string(),
+                        "response": path.display().to_string()
+                    }
+                }),
+            },
+        );
+    }
+
+    let journal_entries = read_session_request_journal(state_dir, 1_000)?;
+    let journal_entries_scanned = journal_entries.len();
+    for entry in journal_entries.into_iter().rev() {
+        let event = session_request_event_json(&entry);
+        let request_id = entry.request_id.clone();
+        let status = session_request_event_status(&entry);
+        insert_request_state_list_item(
+            &mut items_by_id,
+            SessionRequestStateListItem {
+                request_id: request_id.clone(),
+                status,
+                timestamp_unix_ms: entry.completed_at_unix_ms,
+                priority: 2,
+                value: json!({
+                    "request_id": request_id,
+                    "status": status,
+                    "known": true,
+                    "source": "request_journal",
+                    "command": entry.command,
+                    "global": entry.global,
+                    "lease": entry.lease,
+                    "args_count": entry.args.len(),
+                    "ok": entry.ok,
+                    "error": entry.error,
+                    "data_summary": entry.data_summary,
+                    "created_at_unix_ms": entry.created_at_unix_ms,
+                    "started_at_unix_ms": entry.started_at_unix_ms,
+                    "completed_at_unix_ms": entry.completed_at_unix_ms,
+                    "journal_event": event,
+                    "paths": {
+                        "journal": session_request_journal_path(state_dir).display().to_string()
+                    }
+                }),
+            },
+        );
+    }
+
+    let status_filter_set = status_filter
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut all_items = items_by_id.into_values().collect::<Vec<_>>();
+    all_items.sort_by(|left, right| {
+        right
+            .timestamp_unix_ms
+            .cmp(&left.timestamp_unix_ms)
+            .then_with(|| left.request_id.cmp(&right.request_id))
+    });
+    let status_counts = request_state_status_counts(&all_items);
+    let mut filtered_items = all_items
+        .into_iter()
+        .filter(|item| status_filter_set.is_empty() || status_filter_set.contains(item.status))
+        .collect::<Vec<_>>();
+    let total_matching = filtered_items.len();
+    if filtered_items.len() > limit {
+        filtered_items.truncate(limit);
+    }
+    let items = filtered_items
+        .into_iter()
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "schema_version": "session.request_state_list.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "limit": limit,
+        "status_filter": if status_filter.is_empty() {
+            Value::Null
+        } else {
+            json!(status_filter)
+        },
+        "total_matching": total_matching,
+        "item_count": items.len(),
+        "counts": status_counts,
+        "sources": {
+            "requests_dir": requests_dir.display().to_string(),
+            "responses_dir": responses_dir.display().to_string(),
+            "journal": session_request_journal_path(state_dir).display().to_string(),
+            "journal_entries_scanned": journal_entries_scanned,
+            "disappeared_requests_during_read": disappeared_requests,
+            "disappeared_responses_during_read": disappeared_responses
+        },
+        "items": items
+    }))
+}
+
+fn sorted_json_paths(dir: &Path) -> CliOutcome<Vec<PathBuf>> {
+    let mut paths = file_paths_with_extension(dir, "json")?;
+    paths.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    Ok(paths)
+}
+
+fn insert_request_state_list_item(
+    items: &mut BTreeMap<String, SessionRequestStateListItem>,
+    item: SessionRequestStateListItem,
+) {
+    let should_insert = items
+        .get(&item.request_id)
+        .is_none_or(|existing| item.priority < existing.priority);
+    if should_insert {
+        items.insert(item.request_id.clone(), item);
+    }
+}
+
+fn request_state_status_counts(items: &[SessionRequestStateListItem]) -> Value {
+    let mut queued = 0usize;
+    let mut response_available = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    for item in items {
+        match item.status {
+            "queued" => queued += 1,
+            "response_available" => response_available += 1,
+            "completed" => completed += 1,
+            "failed" => failed += 1,
+            _ => {}
+        }
+    }
+    json!({
+        "total": items.len(),
+        "queued": queued,
+        "response_available": response_available,
+        "completed": completed,
+        "failed": failed
+    })
 }
 
 fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutcome<Value> {
@@ -12867,6 +13117,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session response get", ["offline"], "available"),
         command_cap("session request-state", ["offline"], "available"),
         command_cap("session request-state get", ["offline"], "available"),
+        command_cap("session request-state list", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
@@ -12892,6 +13143,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request request-state get",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request request-state list",
             ["running_runtime"],
             "available",
         ),
@@ -23570,6 +23826,276 @@ mod tests {
     }
 
     #[test]
+    fn session_request_state_list_reports_pending_and_journaled_states() {
+        let temp = TempDir::new().unwrap();
+        let queued = SessionCommandRequest {
+            request_id: "queued-list".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--diagnostics".to_string()],
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("queued-list.json"),
+            &queued,
+        )
+        .unwrap();
+        let response = SessionCommandResponse {
+            request_id: "response-list".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"schema_version": "session.stream.v0.1", "frames": []})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 30,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(temp.path()).join("response-list.json"),
+            &response,
+        )
+        .unwrap();
+        let completed_request = SessionCommandRequest {
+            request_id: "completed-list".to_string(),
+            command: "capture_diagnose".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 40,
+        };
+        let completed_response = SessionCommandResponse {
+            request_id: "completed-list".to_string(),
+            command: "capture_diagnose".to_string(),
+            ok: true,
+            data: Some(json!({"mode": "capture_diagnose", "status": "fresh"})),
+            error: None,
+            started_at_unix_ms: 41,
+            completed_at_unix_ms: 42,
+        };
+        append_session_request_journal(temp.path(), &completed_request, &completed_response)
+            .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "list",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.request_state_list.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/counts/queued").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/counts/response_available")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/counts/completed").and_then(Value::as_u64),
+            Some(1)
+        );
+        let items = data.get("items").and_then(Value::as_array).unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().any(|item| {
+            item.get("request_id").and_then(Value::as_str) == Some("queued-list")
+                && item.get("status").and_then(Value::as_str) == Some("queued")
+        }));
+        assert!(items.iter().any(|item| {
+            item.get("request_id").and_then(Value::as_str) == Some("response-list")
+                && item.get("status").and_then(Value::as_str) == Some("response_available")
+                && item.pointer("/data_summary/kind").and_then(Value::as_str) == Some("stream")
+        }));
+        assert!(items.iter().any(|item| {
+            item.get("request_id").and_then(Value::as_str) == Some("completed-list")
+                && item.get("status").and_then(Value::as_str) == Some("completed")
+                && item.get("journal_event").is_some()
+        }));
+    }
+
+    #[test]
+    fn session_request_state_list_filters_status_and_limit() {
+        let temp = TempDir::new().unwrap();
+        for (id, ok, completed_at_unix_ms) in [
+            ("failed-one", false, 20_u64),
+            ("completed-one", true, 30_u64),
+            ("failed-two", false, 40_u64),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: id.to_string(),
+                command: "monitor".to_string(),
+                global: SessionCommandGlobal {
+                    instance: None,
+                    game: None,
+                    server: None,
+                    resource_root: None,
+                    capture_backend: None,
+                    dry_run: false,
+                },
+                args: Vec::new(),
+                lease: None,
+                created_at_unix_ms: completed_at_unix_ms - 2,
+            };
+            let response = SessionCommandResponse {
+                request_id: id.to_string(),
+                command: "monitor".to_string(),
+                ok,
+                data: if ok {
+                    Some(json!({"status": "healthy"}))
+                } else {
+                    None
+                },
+                error: if ok {
+                    None
+                } else {
+                    Some(EnvelopeError {
+                        code: "monitor_failed".to_string(),
+                        message: "monitor failed".to_string(),
+                        blocked_by: vec!["monitor".to_string()],
+                    })
+                },
+                started_at_unix_ms: completed_at_unix_ms - 1,
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(temp.path(), &request, &response).unwrap();
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "list",
+                "--status",
+                "failed",
+                "--limit",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("total_matching").and_then(Value::as_u64), Some(2));
+        assert_eq!(data.get("item_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/items/0/request_id").and_then(Value::as_str),
+            Some("failed-two")
+        );
+        assert_eq!(
+            data.pointer("/items/0/status").and_then(Value::as_str),
+            Some("failed")
+        );
+    }
+
+    #[test]
+    fn session_request_state_list_rejects_unknown_status() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "list",
+                "--status",
+                "unknown",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(
+            error
+                .message
+                .contains("unsupported session request-state list")
+        );
+    }
+
+    #[test]
+    fn session_request_state_list_request_reads_daemon_state() {
+        let temp = TempDir::new().unwrap();
+        let queued = SessionCommandRequest {
+            request_id: "daemon-list-queued".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("daemon-list-queued.json"),
+            &queued,
+        )
+        .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "state-list-query".to_string(),
+            command: "request_state".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["list".to_string(), "--limit".to_string(), "5".to_string()],
+            lease: None,
+            created_at_unix_ms: 20,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.request_state_list.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/items/0/request_id")
+                .and_then(Value::as_str),
+            Some("daemon-list-queued")
+        );
+    }
+
+    #[test]
     fn session_state_request_payload_preserves_holder_and_lease_id() {
         let args = [
             "acquire".to_string(),
@@ -24881,6 +25407,16 @@ mod tests {
             Some("session.request_state.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/request_state_view/list_schema_version")
+                .and_then(Value::as_str),
+            Some("session.request_state_list.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/daemon_list_query")
+                .and_then(Value::as_str),
+            Some("session request request-state list [--limit N] [--status <state>]")
+        );
+        assert_eq!(
             data.pointer("/envelopes/request_state_view/statuses/1")
                 .and_then(Value::as_str),
             Some("response_available")
@@ -25030,8 +25566,10 @@ mod tests {
         for command_name in [
             "session request-state",
             "session request-state get",
+            "session request-state list",
             "session request request-state",
             "session request request-state get",
+            "session request request-state list",
         ] {
             let command = commands
                 .iter()

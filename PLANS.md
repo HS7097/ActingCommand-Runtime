@@ -134,6 +134,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session response view: `session response get <request-id> [--consume]` and `session request response get <request-id> [--consume]` expose pending daemon response files as a stable response-consumption surface for UI/scheduler clients.
 - ActingLab session request no-wait submit: `session request <command> --no-wait` now queues daemon requests and returns a request id plus response lookup commands without waiting for or consuming the daemon response.
 - ActingLab session request-state view: `session request-state get <request-id>` and `session request request-state get <request-id>` summarize queued, response-available, completed, failed, and unknown daemon request lifecycle states for UI/scheduler clients.
+- ActingLab session request-state list view: `session request-state list` and `session request request-state list` expose a bounded aggregate request lifecycle view across pending requests, pending responses, and recent request journal entries.
+
+## Current ActingLab Session Request-State List View
+
+This increment adds a bounded aggregate request lifecycle view for future UI and scheduler clients that need to inspect the Session Layer queue without scraping `requests/`, `responses/`, or the request journal directly.
+
+- `session request-state list [--limit N] [--status <state>]` reads the local Session Layer state directory and reports request lifecycle items from pending request files, pending response files, and recent request-journal entries.
+- `session request request-state list [--limit N] [--status <state>]` routes the same read-only view through the resident daemon request queue.
+- The list view uses schema `session.request_state_list.v0.1`.
+- Status filters support `queued`, `response_available`, `completed`, and `failed`.
+- Queue files have priority over journal entries for the same request id, so active queued work and unclaimed responses are not hidden by older completed journal records.
+- The payload includes status counts, source paths, disappeared-file counters for queue races, compact response summaries, and bounded sorted items.
+- `session api` advertises the request-state list contract, and `capabilities` advertises the local and daemon-routed list commands.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session request-state list tests.
+- Focused daemon request-state list test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Request-State View
 

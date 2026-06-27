@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session request-state list view
+
+### Current status
+
+- `session request-state list [--limit N] [--status <state>]` now reports a bounded aggregate lifecycle view across pending daemon requests, pending daemon responses, and recent request journal entries.
+- `session request request-state list [--limit N] [--status <state>]` exposes the same aggregate lifecycle view through the resident daemon request queue.
+- The list view returns schema `session.request_state_list.v0.1`.
+- Supported status filters are `queued`, `response_available`, `completed`, and `failed`.
+- Pending request files win over pending response files and journal entries for the same request id; pending response files win over journal entries.
+- The payload includes status counts, source paths, disappeared-file counters, compact response summaries, and sorted bounded items.
+- `session api` documents the request-state list query and daemon list query.
+- `capabilities` advertises local and daemon-routed request-state list commands.
+- No trusted remote network transport, long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e9ca5c1c564e6fedbbaf54d87a26539f0bb305ce`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed Runtime-local `LICENSE_POLICY.md` is absent.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session request-state routing, response view, queue preview helpers, request journal helpers, API contract, command capabilities, and tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session request-state tests passed, including request-state list local and daemon-routed tests.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Continue Session Layer follow-ups from trusted UI/API consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session request-state view
 
 ### Current status
