@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab stale capture recovery plan
+
+### Current status
+
+- Added `session recover --stale-capture` as a read-only Session Layer recovery plan for suspected stale capture surfaces.
+- The plan reports `executed=false`, `click_allowed=false`, and `app_restart_executed=false`.
+- The plan orders recovery as fresh-frame diagnosis, `nemu_ipc`, `droidcast_raw`, device health, and only then heavy `session app restart`.
+- Daemon-side stale-capture recovery planning does not require a LabLease because it does not issue input, restart the app, or touch the device.
+- Normal `session recover` execution remains unchanged and still requires `--capture` for real execution plus the existing lease gate when routed through the daemon.
+- No live emulator operation, resource repository access, capture backend hot-path change, app restart automation, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, fallback loop, reconnect loop, or trusted network API was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ecd55e0a10b44615a58ebf8d78d354877cab6bf5`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` capture diagnosis, session recover, daemon request, stream, monitor, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture -- --nocapture`
+- `cargo test -p actingcommand-actinglab capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json --capture-backend adb session recover --stale-capture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Diff-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale -- --nocapture` passed with `1` test.
+- `cargo run -q -p actingcommand-actinglab -- --json --capture-backend adb session recover --stale-capture` returned a planned stale-capture recovery payload with `executed=false`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Diff-only prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `214` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: real trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stale-capture-recovery-plan`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab bounded stream multi-event relay
 
 ### Current status

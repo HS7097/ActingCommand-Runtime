@@ -104,6 +104,38 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab LabLease status alias: `lab lease status` now exposes the same Session Layer lease status file from the Lab-facing CLI surface.
 - ActingLab bounded stream input relay scaffold: `stream --input-relay <tap|swipe|long-tap|key|text>` can now carry one input action through the bounded local stream contract, and daemon-routed input relay requires a matching Session Layer lease.
 - ActingLab bounded stream multi-event relay: repeated `--input-event <action,args>` can now carry multiple tap/swipe/long-tap/key/text events through one bounded stream request, with daemon-side lease enforcement unchanged.
+- ActingLab stale capture recovery plan: `session recover --stale-capture` now exposes a read-only recovery plan that diagnoses stale frames and recommends capture-backend recovery before heavy app restart.
+
+## Current ActingLab Stale Capture Recovery Plan
+
+The current Runtime task records the AK stale-frame finding as an explicit Session Layer recovery entry point. `session recover --stale-capture` is a diagnostic/planning command: it does not click, restart apps, open MaaTouch, or require resource packs.
+
+Scope:
+
+- Add `session recover --stale-capture` as a read-only plan for suspected stale capture surfaces.
+- Reuse the existing capture diagnosis recovery recommendations.
+- Make the plan order explicit: fresh-frame probe, `nemu_ipc`, `droidcast_raw`, device health, and only then heavy `session app restart`.
+- Allow daemon-side stale-capture recovery planning without a LabLease because no input or restart is executed.
+- Keep normal `session recover` route recovery lease-gated and unchanged.
+
+Safety direction:
+
+- The stale-capture recovery plan treats unchanged frames as a capture reliability problem first, not proof of game freeze.
+- The command returns `executed=false`, `click_allowed=false`, and `app_restart_executed=false`.
+- Real app restart remains a separate heavy recovery command and still requires the normal Session Layer lease path.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale -- --nocapture` passed with `1` test.
+- `cargo run -q -p actingcommand-actinglab -- --json --capture-backend adb session recover --stale-capture` returned the planned recovery sequence.
+- `cargo fmt --all -- --check`, `git diff --check`, diff-only prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+
+Out of scope:
+
+- No live emulator operation was required.
+- No capture backend hot-path change was made.
+- No app restart automation, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, fallback loop, reconnect loop, or resource repository access was added.
 
 ## Current ActingLab Bounded Stream Multi-Event Relay
 

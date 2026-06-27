@@ -2329,6 +2329,9 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "recover", args);
     }
+    if flags.bool("--stale-capture") {
+        return run_session_stale_capture_recover(global, &flags);
+    }
     let dry_run = global.dry_run || flags.bool("--dry-run");
     if !dry_run && !flags.bool("--capture") {
         return Err(CliError::usage(
@@ -2493,6 +2496,75 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "to": target_page,
         "steps": steps,
         "safety_gate": "maintenance_navigation_only"
+    }))
+}
+
+fn run_session_stale_capture_recover(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<Value> {
+    flags.expect_positionals("session recover --stale-capture", 0)?;
+    let requested = global.capture_backend.unwrap_or_default();
+    let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+    Ok(json!({
+        "status": "planned",
+        "mode": "stale_capture_recovery",
+        "executed": false,
+        "click_allowed": false,
+        "app_restart_executed": false,
+        "requested_backend": requested.as_str(),
+        "fresh_delay_ms": fresh_delay.as_millis(),
+        "diagnosis": {
+            "command": format!(
+                "capture diagnose --capture-backend auto --fresh-delay-ms {}",
+                fresh_delay.as_millis()
+            ),
+            "read_only": true,
+            "reason": "verify fresh frames before treating an unchanged screen as a game freeze"
+        },
+        "recovery": capture_diagnosis_recovery_json(
+            CaptureFreshProbeStatus::StaleSuspected,
+            requested,
+        ),
+        "steps": [
+            {
+                "order": 1,
+                "type": "fresh_probe",
+                "command": format!(
+                    "capture diagnose --capture-backend auto --fresh-delay-ms {}",
+                    fresh_delay.as_millis()
+                ),
+                "read_only": true
+            },
+            {
+                "order": 2,
+                "type": "capture_backend",
+                "backend": "nemu_ipc",
+                "reason": "try MuMu IPC before restarting the game"
+            },
+            {
+                "order": 3,
+                "type": "capture_backend",
+                "backend": "droidcast_raw",
+                "reason": "try alternate capture surface before restarting the game"
+            },
+            {
+                "order": 4,
+                "type": "device_health",
+                "command": "session instance health",
+                "read_only": true
+            },
+            {
+                "order": 5,
+                "type": "app_restart",
+                "command": "session app restart",
+                "requires_lease": true,
+                "heavy_recovery": true,
+                "reason": "last resort after capture-backend recovery checks fail"
+            }
+        ],
+        "safety_gate": "diagnose_capture_backend_before_restart",
+        "next": "run capture diagnose with auto backend selection; only restart the app if lighter capture-backend recovery cannot restore fresh frames"
     }))
 }
 
@@ -4850,7 +4922,10 @@ fn execute_session_command_request_inner(
             run_navigate(&global, &request.args)
         }
         "recover" => {
-            ensure_session_request_lease(state_dir, request)?;
+            let flags = FlagArgs::parse(&request.args)?;
+            if !flags.bool("--stale-capture") {
+                ensure_session_request_lease(state_dir, request)?;
+            }
             let global = request.global.to_global()?;
             run_session_recover(&global, &request.args)
         }
@@ -16921,6 +16996,49 @@ mod tests {
     }
 
     #[test]
+    fn session_recover_stale_capture_daemon_request_does_not_require_lease() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        let request = SessionCommandRequest {
+            request_id: "request-stale-capture".to_string(),
+            command: "recover".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: Some("adb".to_string()),
+                dry_run: false,
+            },
+            args: vec!["--stale-capture".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(&state_dir).join("request-stale-capture.json"),
+            &request,
+        )
+        .unwrap();
+
+        assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+        let response = read_json_file::<SessionCommandResponse>(
+            &session_responses_dir(&state_dir).join("request-stale-capture.json"),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(response.ok);
+        assert_eq!(
+            response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("mode"))
+                .and_then(Value::as_str),
+            Some("stale_capture_recovery")
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_reports_queue_and_journal_summary() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -17420,6 +17538,42 @@ mod tests {
                 .pointer("/recommendations/0/command")
                 .and_then(Value::as_str),
             Some("session instance health")
+        );
+    }
+
+    #[test]
+    fn session_recover_stale_capture_plans_lighter_steps_before_restart() {
+        let result = run_cli(
+            [
+                "--json",
+                "--capture-backend",
+                "adb",
+                "session",
+                "recover",
+                "--stale-capture",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("mode").and_then(Value::as_str),
+            Some("stale_capture_recovery")
+        );
+        assert_eq!(data.get("executed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.pointer("/steps/0/type").and_then(Value::as_str),
+            Some("fresh_probe")
+        );
+        assert_eq!(
+            data.pointer("/steps/4/type").and_then(Value::as_str),
+            Some("app_restart")
+        );
+        assert_eq!(
+            data.pointer("/steps/4/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
