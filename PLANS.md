@@ -127,6 +127,32 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab data-summary event filter: `session events` and `session request events` now support repeatable `--data-summary-kind <kind>` filters so future UI/scheduler clients can poll stream, capture-diagnose, or stale-capture recovery slices directly.
 - ActingLab request-status event filter: `session events` and `session request events` now support repeatable `--status completed|failed` filters so future UI/scheduler clients can poll success and failure slices without scraping the full journal.
 - ActingLab target-scoped event stream: daemon request journal entries now preserve request target selectors, and `session events` / `session request events` can filter by instance/game/server selectors and repeatable lease holder.
+- ActingLab target-scoped journal view: `session journal` and `session request journal` now reuse the Session event filter contract for command, data-summary, status, instance/game/server, and lease-holder diagnostics.
+
+## Current ActingLab Target-Scoped Journal View
+
+This increment gives future UI and scheduler clients a raw request-journal diagnostic view with the same target slicing as the event stream.
+
+- `session journal` supports repeatable `--command`, `--data-summary-kind`, `--status completed|failed`, and `--lease-holder` filters.
+- `session journal` also inherits global `--instance`, `--game`, and `--server` selectors as target filters.
+- `session request journal` supports the same filters through the resident daemon request path.
+- The journal payload includes `command_filter`, `data_summary_kind_filter`, `status_filter`, and `target_filter` for auditability.
+- Filtered journal reads expand their internal read window to the recent 1000 entries before applying filters, then return the requested `--limit`.
+- The same `SessionEventFilters` logic powers both journal and event matching, reducing drift between raw diagnostics and event-stream views.
+- `session api` advertises the journal filters and `entries[].global` selector field.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused journal filter test.
+- Focused request journal compatibility/rotation tests.
+- Focused Session events test set.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Target-Scoped Event Stream
 

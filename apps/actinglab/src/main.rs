@@ -1478,6 +1478,18 @@ fn session_api_contract() -> Value {
                     "monitor_policy_preempt_lease"
                 ]
             },
+            "journal_view": {
+                "query": "session journal",
+                "daemon_query": "session request journal",
+                "filters": ["--limit", "--command", "--data-summary-kind", "--status", "--lease-holder"],
+                "global_filters": ["--instance", "--game", "--server"],
+                "command_filter_repeats": true,
+                "data_summary_kind_filter_repeats": true,
+                "status_filter_values": ["completed", "failed"],
+                "status_filter_repeats": true,
+                "lease_holder_filter_repeats": true,
+                "entry_selector_field": "entries[].global"
+            },
             "event_view": {
                 "query": "session events",
                 "daemon_query": "session request events",
@@ -5347,35 +5359,7 @@ fn session_events_payload(
                 .map(|after| entry.completed_at_unix_ms > after)
                 .unwrap_or(true)
         })
-        .filter(|entry| {
-            filters.commands.is_empty()
-                || filters
-                    .commands
-                    .iter()
-                    .any(|command| command == &entry.command)
-        })
-        .filter(|entry| {
-            filters.data_summary_kinds.is_empty()
-                || entry
-                    .data_summary
-                    .as_ref()
-                    .and_then(|summary| summary.get("kind"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|kind| {
-                        filters
-                            .data_summary_kinds
-                            .iter()
-                            .any(|filtered| filtered == kind)
-                    })
-        })
-        .filter(|entry| {
-            filters.statuses.is_empty()
-                || filters
-                    .statuses
-                    .iter()
-                    .any(|status| status.as_str() == session_request_event_status(entry))
-        })
-        .filter(|entry| filters.target.matches(entry))
+        .filter(|entry| filters.matches(entry))
         .collect::<Vec<_>>();
     if entries.len() > limit {
         let keep_from = entries.len() - limit;
@@ -5468,6 +5452,47 @@ impl SessionEventFilters {
             || !self.data_summary_kinds.is_empty()
             || !self.statuses.is_empty()
             || self.target.is_active()
+    }
+
+    fn read_limit(&self, limit: usize) -> usize {
+        if self.is_active() { 1_000 } else { limit }
+    }
+
+    fn matches(&self, entry: &SessionRequestJournalEntry) -> bool {
+        self.command_matches(entry)
+            && self.data_summary_kind_matches(entry)
+            && self.status_matches(entry)
+            && self.target.matches(entry)
+    }
+
+    fn command_matches(&self, entry: &SessionRequestJournalEntry) -> bool {
+        self.commands.is_empty()
+            || self
+                .commands
+                .iter()
+                .any(|command| command == &entry.command)
+    }
+
+    fn data_summary_kind_matches(&self, entry: &SessionRequestJournalEntry) -> bool {
+        self.data_summary_kinds.is_empty()
+            || entry
+                .data_summary
+                .as_ref()
+                .and_then(|summary| summary.get("kind"))
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    self.data_summary_kinds
+                        .iter()
+                        .any(|filtered| filtered == kind)
+                })
+    }
+
+    fn status_matches(&self, entry: &SessionRequestJournalEntry) -> bool {
+        self.statuses.is_empty()
+            || self
+                .statuses
+                .iter()
+                .any(|status| status.as_str() == session_request_event_status(entry))
     }
 }
 
@@ -5590,18 +5615,51 @@ fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     flags.expect_positionals("session journal", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
-    session_journal_payload(&state_dir, limit)
+    let filters = parse_session_event_filters(
+        global.instance.clone(),
+        global.game.clone(),
+        global.server.clone(),
+        &flags,
+    )?;
+    session_journal_payload(&state_dir, limit, &filters)
 }
 
-fn session_journal_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+fn session_journal_payload(
+    state_dir: &Path,
+    limit: usize,
+    filters: &SessionEventFilters,
+) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let entries = read_session_request_journal(state_dir, limit)?;
+    let mut entries = read_session_request_journal(state_dir, filters.read_limit(limit))?
+        .into_iter()
+        .filter(|entry| filters.matches(entry))
+        .collect::<Vec<_>>();
+    if entries.len() > limit {
+        let keep_from = entries.len() - limit;
+        entries.drain(0..keep_from);
+    }
     Ok(json!({
         "state_dir": state_dir.display().to_string(),
         "journal": session_request_journal_path(state_dir).display().to_string(),
         "limit": limit,
+        "command_filter": if filters.commands.is_empty() {
+            Value::Null
+        } else {
+            json!(&filters.commands)
+        },
+        "data_summary_kind_filter": if filters.data_summary_kinds.is_empty() {
+            Value::Null
+        } else {
+            json!(&filters.data_summary_kinds)
+        },
+        "status_filter": if filters.statuses.is_empty() {
+            Value::Null
+        } else {
+            json!(&filters.statuses)
+        },
+        "target_filter": filters.target.to_json(),
         "entries": entries
     }))
 }
@@ -7271,7 +7329,13 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request journal", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
-            session_journal_payload(state_dir, limit)
+            let filters = parse_session_event_filters(
+                request.global.instance.clone(),
+                request.global.game.clone(),
+                request.global.server.clone(),
+                &flags,
+            )?;
+            session_journal_payload(state_dir, limit, &filters)
         }
         "events" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -19806,6 +19870,143 @@ mod tests {
     }
 
     #[test]
+    fn session_journal_filters_by_instance_status_and_lease_holder() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let ak_global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let ba_global = SessionCommandGlobal {
+            instance: Some("ba".to_string()),
+            game: Some("ba".to_string()),
+            server: Some("jp".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for (request_id, global, lease_holder, ok, completed_at_unix_ms) in [
+            ("status-ak", ak_global.clone(), None, true, 10_u64),
+            (
+                "stream-ak-lab-ok",
+                ak_global.clone(),
+                Some("lab"),
+                true,
+                20_u64,
+            ),
+            (
+                "stream-ba-lab-failed",
+                ba_global,
+                Some("lab"),
+                false,
+                30_u64,
+            ),
+            (
+                "tap-ak-scheduler-failed",
+                ak_global.clone(),
+                Some("scheduler"),
+                false,
+                40_u64,
+            ),
+            (
+                "tap-ak-lab-failed",
+                ak_global.clone(),
+                Some("lab"),
+                false,
+                50_u64,
+            ),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: "tap".to_string(),
+                global,
+                args: Vec::new(),
+                lease: lease_holder.map(|holder| SessionCommandLease {
+                    holder: holder.to_string(),
+                    lease_id: Some(format!("{holder}-lease")),
+                }),
+                created_at_unix_ms: completed_at_unix_ms.saturating_sub(2),
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: "tap".to_string(),
+                ok,
+                data: if ok {
+                    Some(json!({"status": "ok"}))
+                } else {
+                    None
+                },
+                error: if ok {
+                    None
+                } else {
+                    Some(EnvelopeError {
+                        code: "session_request_failed".to_string(),
+                        message: "session request failed".to_string(),
+                        blocked_by: vec!["session_request".to_string()],
+                    })
+                },
+                started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "journal-filter-query".to_string(),
+            command: "journal".to_string(),
+            global: ak_global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--status".to_string(),
+                "failed".to_string(),
+                "--lease-holder".to_string(),
+                "lab".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let entries = payload.get("entries").and_then(Value::as_array).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            payload
+                .pointer("/target_filter/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload.pointer("/status_filter/0").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/target_filter/lease_holders/0")
+                .and_then(Value::as_str),
+            Some("lab")
+        );
+        assert_eq!(
+            entries[0].get("request_id").and_then(Value::as_str),
+            Some("tap-ak-lab-failed")
+        );
+        assert_eq!(
+            entries[0]
+                .pointer("/global/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            entries[0].pointer("/lease/holder").and_then(Value::as_str),
+            Some("lab")
+        );
+    }
+
+    #[test]
     fn session_events_request_returns_stable_request_events() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -20928,6 +21129,30 @@ mod tests {
                 .pointer("/command_classes/control/requires_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/journal_view/filters/3")
+                .and_then(Value::as_str),
+            Some("--status")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/journal_view/filters/4")
+                .and_then(Value::as_str),
+            Some("--lease-holder")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/journal_view/global_filters/0")
+                .and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/journal_view/entry_selector_field")
+                .and_then(Value::as_str),
+            Some("entries[].global")
         );
         assert_eq!(
             payload
