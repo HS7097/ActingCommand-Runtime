@@ -3301,14 +3301,101 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "stream", args);
+    }
+    if flags.bool("--input-relay") || flags.bool("--interactive-input") {
+        return Err(CliError::not_implemented(
+            "stream_input_relay_not_implemented",
+            "stream input relay is reserved for the future trusted interactive channel; this milestone only exposes bounded frame sampling",
+        ));
+    }
     let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
-    Err(CliError::not_implemented(
-        "stream_not_implemented",
-        format!(
-            "stream for instance {instance_id} is reserved for the future interactive frame/input channel; use capture, monitor, or daemon requests for current CLI workflows"
-        ),
-    ))
+    let max_frames = parse_optional_usize(&flags, "--max-frames", 1)?;
+    if max_frames == 0 || max_frames > 60 {
+        return Err(CliError::usage("--max-frames must be between 1 and 60"));
+    }
+    let interval = parse_optional_duration_ms(&flags, "--interval-ms", 250)?;
+    let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    let frames = if dry_run {
+        stream_dry_run_frames(max_frames)
+    } else {
+        let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
+        stream_capture_frames(
+            global,
+            &flags,
+            &device_config,
+            max_frames,
+            interval,
+            fresh_delay,
+        )?
+    };
+    Ok(json!({
+        "mode": "bounded_stream",
+        "instance": instance_id,
+        "transport": "local_cli",
+        "max_frames": max_frames,
+        "interval_ms": interval.as_millis(),
+        "capture": {
+            "require_fresh": flags.bool("--require-fresh"),
+            "dry_run": dry_run
+        },
+        "trusted_channel": {
+            "status": "reserved",
+            "reason": "local CLI bounded stream scaffold only"
+        },
+        "input_relay": {
+            "status": "not_implemented",
+            "reason": "input relay requires the future trusted interactive channel"
+        },
+        "frames": frames
+    }))
+}
+
+fn stream_dry_run_frames(max_frames: usize) -> Vec<Value> {
+    (0..max_frames)
+        .map(|index| {
+            json!({
+                "index": index,
+                "captured": false,
+                "mode": "dry_run"
+            })
+        })
+        .collect()
+}
+
+fn stream_capture_frames(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    device_config: &DeviceRuntimeConfig,
+    max_frames: usize,
+    interval: Duration,
+    fresh_delay: Duration,
+) -> CliOutcome<Vec<Value>> {
+    let requested = global.capture_backend.unwrap_or_default();
+    let mut frames = Vec::with_capacity(max_frames);
+    for index in 0..max_frames {
+        let captured = capture_for_command(
+            device_config,
+            requested,
+            flags.bool("--require-fresh"),
+            fresh_delay,
+        )?;
+        frames.push(json!({
+            "index": index,
+            "captured": true,
+            "captured_at_unix_ms": current_unix_ms(),
+            "frame": capture_frame_summary_json(&captured.frame),
+            "freshness": captured.freshness,
+            "capture_backend_attempts": captured.attempts
+        }));
+        if index + 1 < max_frames && !interval.is_zero() {
+            thread::sleep(interval);
+        }
+    }
+    Ok(frames)
 }
 
 fn submit_monitor_once_session_request(
@@ -3745,7 +3832,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3756,6 +3843,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             push_optional_flag_value(&mut request_args, &flags, "--fresh-delay-ms");
             submit_session_command_request(global, &flags, "capture_diagnose", request_args)
         }
+        "stream" => submit_readonly_session_request(global, &flags, "stream", &args[1..]),
         "recognize" => submit_readonly_session_request(global, &flags, "recognize", &args[1..]),
         "detect-page" => submit_readonly_session_request(global, &flags, "detect_page", &args[1..]),
         "current-page" => {
@@ -4163,6 +4251,10 @@ fn execute_session_command_request_inner(
         "capture" => {
             let global = request.global.to_global()?;
             run_capture(&global, &request.args)
+        }
+        "stream" => {
+            let global = request.global.to_global()?;
+            run_stream(&global, &request.args)
         }
         "recognize" => {
             let global = request.global.to_global()?;
@@ -8542,6 +8634,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request stream",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
             "session request recognize",
             ["running_runtime", "device"],
             "available",
@@ -8688,11 +8785,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("navigate", ["device"], "available"),
         command_cap("monitor --once", ["device"], "available"),
         command_cap("monitor", ["device"], "available"),
-        command_cap(
-            "stream",
-            ["running_runtime", "device", "trusted_channel"],
-            "reserved",
-        ),
+        command_cap("stream", ["device"], "available"),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
         command_cap("scheduler resume", ["running_runtime"], "reserved"),
@@ -9415,22 +9508,60 @@ mod tests {
     }
 
     #[test]
-    fn stream_command_is_reserved_not_unknown() {
+    fn stream_command_reports_bounded_dry_run_contract() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(CONFIG_ENV, &config);
         }
-        let stream = run_cli(["--json", "--instance", "ak", "stream"], true);
+        let stream = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "--dry-run",
+                "--max-frames",
+                "2",
+            ],
+            true,
+        );
         unsafe {
             env::remove_var(CONFIG_ENV);
         }
 
+        assert_eq!(stream.exit_code(), 0);
+        let data = stream.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("mode").and_then(Value::as_str),
+            Some("bounded_stream")
+        );
+        assert_eq!(
+            data.pointer("/input_relay/status").and_then(Value::as_str),
+            Some("not_implemented")
+        );
+        assert_eq!(
+            data.pointer("/capture/dry_run").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("frames").and_then(Value::as_array).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn stream_input_relay_is_explicitly_not_implemented() {
+        let stream = run_cli(
+            ["--json", "--instance", "ak", "stream", "--input-relay"],
+            true,
+        );
+
         assert_eq!(stream.exit_code(), 6);
         assert_eq!(
             stream.envelope.error.as_ref().unwrap().code,
-            "stream_not_implemented"
+            "stream_input_relay_not_implemented"
         );
     }
 
@@ -13894,6 +14025,31 @@ mod tests {
     }
 
     #[test]
+    fn stream_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--max-frames",
+                "1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn readonly_via_daemon_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14399,6 +14555,32 @@ mod tests {
     }
 
     #[test]
+    fn session_request_stream_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "stream",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--max-frames",
+                "1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_payload_strips_client_only_flags() {
         let args = [
             "--target".to_string(),
@@ -14533,7 +14715,7 @@ mod tests {
             .expect("stream capability");
         assert_eq!(
             stream.get("status").and_then(Value::as_str),
-            Some("reserved")
+            Some("available")
         );
     }
 
@@ -14689,6 +14871,7 @@ mod tests {
             "session capture diagnose",
             "session request capture",
             "session request capture-diagnose",
+            "session request stream",
             "session request recognize",
             "session request detect-page",
             "session request current-page",
@@ -14703,6 +14886,7 @@ mod tests {
             "session request package-run",
             "session request operation-run",
             "session lease",
+            "stream",
             "capture diagnose",
         ] {
             let capability = commands

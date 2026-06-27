@@ -83,8 +83,51 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon capture routing: `capture --via-daemon` and `session request capture` can now submit normal one-shot capture through the resident daemon request queue while preserving `--out` and freshness flags.
 - ActingLab daemon Lab run routing: `lab run --via-daemon` and `session request lab-run` can now submit trusted Lab package execution through the resident daemon request queue, with daemon-side lease validation before zip or device I/O.
 - ActingLab daemon package/operation run routing: `package run --via-daemon`, `operation run --via-daemon`, `session request package-run`, and `session request operation-run` now submit through the resident daemon request queue with daemon-side lease validation before package, operation, or device I/O.
+- ActingLab bounded stream scaffold: `stream --max-frames N` now exposes a local bounded frame-sampling contract, `stream --via-daemon` and `session request stream` route through the resident Session Layer request queue, and interactive input relay remains explicitly reserved.
 
-## Current ActingLab Daemon Package/Operation Run Routing
+## Current ActingLab Bounded Stream Scaffold
+
+The current Runtime task turns the future `stream` command from an unknown/reserved placeholder into a small, bounded, read-only Session Layer surface. It samples capture frames through the existing capture backend path, reports frame metadata, and keeps the future trusted input relay explicitly unimplemented.
+
+Scope:
+
+- Add `stream --max-frames <N>` bounded local frame sampling.
+- Add `stream --dry-run --max-frames <N>` contract validation without device I/O.
+- Add `stream --via-daemon` routing through the resident Session Layer request queue.
+- Add `session request stream` as the explicit daemon request form.
+- Cap frame count at `1..=60` to avoid accidental unbounded local streaming.
+- Report frame digest, dimensions, backend, freshness, and capture backend attempts for captured frames.
+- Report `input_relay.status=not_implemented` and `trusted_channel.status=reserved` until the trusted interactive channel is implemented.
+
+Safety direction:
+
+- The stream scaffold is read-only and capture-only; it does not start MaaTouch or issue input.
+- `--input-relay` and `--interactive-input` fail explicitly with `stream_input_relay_not_implemented`.
+- Daemon-routed stream requests do not require a lease because they are read-only, matching capture and semantic read-only requests.
+- This milestone adds no UI, scheduler implementation, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_input_relay_is_explicitly_not_implemented -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_stream_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test after updating the former reserved-stream assertion.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Daemon Package/Operation Run Routing
 
 The current Runtime task moves the remaining package/operation execution surfaces behind the resident Session Layer request boundary. `package run --via-daemon` and `operation run --via-daemon` now submit daemon control requests, with explicit `session request package-run` and `session request operation-run` forms.
 

@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab bounded stream scaffold
+
+### Current status
+
+- Turned the future `stream` command from a reserved placeholder into a bounded, read-only frame sampling scaffold.
+- `stream --dry-run --max-frames <N>` now returns a local JSON contract without device I/O.
+- `stream --max-frames <N>` captures up to `60` frames through the existing capture backend path and reports frame metadata, freshness, and capture attempts.
+- `stream --via-daemon` now submits a read-only request through the resident Session Layer queue.
+- `session request stream` is now accepted by the daemon request client surface.
+- `--input-relay` and `--interactive-input` fail explicitly with `stream_input_relay_not_implemented`; the trusted input relay remains reserved.
+- Capabilities now advertise `stream` and `session request stream` as available while the returned stream payload still marks trusted channel and input relay as unfinished.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `eabc0823ff9cf14d410acb5df383158562b195a1`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab stream_input_relay_is_explicitly_not_implemented -- --nocapture`
+- `cargo test -p actingcommand-actinglab stream_via_daemon_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_stream_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace` initially failed because the former reserved-stream capability assertion still expected `stream` to be `reserved`.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_input_relay_is_explicitly_not_implemented -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_stream_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test after updating the old reserved-stream assertion.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed after the assertion update, with the full workspace test suite passing.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the bounded stream scaffold milestone.
+- Full Session Layer remains incomplete: actual trusted interactive streaming, daemon transport/API for long-lived frame streams, UI/API review surfaces, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-bounded-stream-scaffold`.
+2. Continue Session Layer follow-ups: trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon package/operation run routing
 
 ### Current status
