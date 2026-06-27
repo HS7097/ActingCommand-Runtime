@@ -4810,10 +4810,12 @@ fn run_session_lease_inner(
     args: &[String],
     forced_state_dir: Option<&Path>,
 ) -> CliOutcome<Value> {
-    let action = args
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session lease requires acquire|release|preempt|status"))?;
+    let action = args.first().map(String::as_str).ok_or_else(|| {
+        CliError::usage("session lease requires acquire|release|preempt|status|run")
+    })?;
+    if action == "run" {
+        return run_session_lease_run(global, &args[1..], forced_state_dir);
+    }
     let flags = FlagArgs::parse(&args[1..])?;
     let config = read_user_config()?;
     let state_dir = forced_state_dir
@@ -4885,35 +4887,176 @@ fn run_session_lease_inner(
                 "path": lease_path.display().to_string()
             }))
         }
-        "release" => {
-            let Some(lease) = read_json_file::<SessionLease>(&lease_path)? else {
-                return Ok(json!({
-                    "status": "not_held",
-                    "instance": instance_id,
-                    "path": lease_path.display().to_string()
-                }));
-            };
-            let force = flags.bool("--force");
-            validate_lease_release(&lease, &holder, flags.optional("--lease-id"), force)?;
-            fs::remove_file(&lease_path).map_err(|err| {
-                CliError::runtime_not_running(format!(
-                    "failed to remove lease {}: {err}",
-                    lease_path.display()
-                ))
-            })?;
-            Ok(json!({
-                "status": "released",
-                "instance": instance_id,
-                "holder": holder,
-                "force": force,
-                "released_lease": lease,
-                "path": lease_path.display().to_string()
-            }))
-        }
+        "release" => release_session_lease_file(
+            &lease_path,
+            &instance_id,
+            &holder,
+            flags.optional("--lease-id"),
+            flags.bool("--force"),
+        ),
         other => Err(CliError::usage(format!(
             "unknown session lease action: {other}"
         ))),
     }
+}
+
+fn run_session_lease_run(
+    global: &GlobalOptions,
+    args: &[String],
+    forced_state_dir: Option<&Path>,
+) -> CliOutcome<Value> {
+    if forced_state_dir.is_some() {
+        return Err(CliError::usage(
+            "session lease run is a local CLI wrapper; do not call it through session request lease",
+        ));
+    }
+    let (lease_args, command_args) = split_lease_run_args(args)?;
+    let flags = FlagArgs::parse(&lease_args)?;
+    validate_lease_run_flags(&flags)?;
+    let config = read_user_config()?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create session state dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+    let holder = flags
+        .optional("--holder")
+        .or_else(|| flags.optional("--lease-holder"))
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| "manual".to_string());
+    let lease_path = session_lease_path(&state_dir, &instance_id);
+    if lease_path.exists() {
+        let current = read_json_file::<SessionLease>(&lease_path)?;
+        return Err(CliError::safety_blocked(
+            "lease_conflict",
+            format!(
+                "session lease already exists for {instance_id}{}",
+                current
+                    .as_ref()
+                    .map(|lease| format!(" held by {}", lease.holder))
+                    .unwrap_or_default()
+            ),
+            &["lab_lease", "lease_holder"],
+        ));
+    }
+    let lease = new_session_lease(
+        instance_id,
+        holder,
+        flags.optional("--lease-id"),
+        false,
+        None,
+    );
+    write_json_file_atomic(&lease_path, &lease)?;
+
+    let mut request_args = command_args;
+    request_args.push("--state-dir".to_string());
+    request_args.push(state_dir.display().to_string());
+    if let Some(timeout) = flags.optional("--request-timeout-ms") {
+        request_args.push("--request-timeout-ms".to_string());
+        request_args.push(timeout);
+    }
+    request_args.push("--lease-holder".to_string());
+    request_args.push(lease.holder.clone());
+    request_args.push("--lease-id".to_string());
+    request_args.push(lease.lease_id.clone());
+
+    let command_result = run_session_request(global, &request_args);
+    let release_result = release_session_lease_file(
+        &lease_path,
+        &lease.instance,
+        &lease.holder,
+        Some(lease.lease_id.clone()),
+        false,
+    );
+
+    match (command_result, release_result) {
+        (Ok(command), Ok(release)) => Ok(json!({
+            "status": "completed",
+            "mode": "lease_run",
+            "lease": lease,
+            "command": command,
+            "release": release
+        })),
+        (Err(command), Ok(_)) => Err(command),
+        (Ok(_), Err(release)) => Err(release),
+        (Err(command), Err(release)) => Err(CliError::runtime_not_running(format!(
+            "session lease run command failed with {}: {}; additionally lease release failed with {}: {}",
+            command.code, command.message, release.code, release.message
+        ))),
+    }
+}
+
+fn split_lease_run_args(args: &[String]) -> CliOutcome<(Vec<String>, Vec<String>)> {
+    let Some(index) = args.iter().position(|arg| arg == "--") else {
+        return Err(CliError::usage(
+            "session lease run requires '--' before the daemon command, for example: session lease run --holder manual -- tap 100 200",
+        ));
+    };
+    let command_args = args[index + 1..].to_vec();
+    if command_args.is_empty() {
+        return Err(CliError::usage(
+            "session lease run requires a daemon command after '--'",
+        ));
+    }
+    Ok((args[..index].to_vec(), command_args))
+}
+
+fn validate_lease_run_flags(flags: &FlagArgs) -> CliOutcome<()> {
+    let allowed = [
+        "--state-dir",
+        "--request-timeout-ms",
+        "--holder",
+        "--lease-holder",
+        "--lease-id",
+    ];
+    let unexpected = flags
+        .flags
+        .keys()
+        .filter(|flag| !allowed.contains(&flag.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if unexpected.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::usage(format!(
+            "session lease run lease options do not accept: {}",
+            unexpected.join(", ")
+        )))
+    }
+}
+
+fn release_session_lease_file(
+    lease_path: &Path,
+    instance_id: &str,
+    holder: &str,
+    lease_id: Option<String>,
+    force: bool,
+) -> CliOutcome<Value> {
+    let Some(lease) = read_json_file::<SessionLease>(lease_path)? else {
+        return Ok(json!({
+            "status": "not_held",
+            "instance": instance_id,
+            "path": lease_path.display().to_string()
+        }));
+    };
+    validate_lease_release(&lease, holder, lease_id, force)?;
+    fs::remove_file(lease_path).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to remove lease {}: {err}",
+            lease_path.display()
+        ))
+    })?;
+    Ok(json!({
+        "status": "released",
+        "instance": instance_id,
+        "holder": holder,
+        "force": force,
+        "released_lease": lease,
+        "path": lease_path.display().to_string()
+    }))
 }
 
 fn session_lease_path(state_dir: &Path, instance_id: &str) -> PathBuf {
@@ -9220,6 +9363,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
+        command_cap(
+            "session lease run",
+            ["running_runtime", "lab_lease"],
+            "available",
+        ),
         command_cap("session record", ["offline"], "available"),
         command_cap("session record start", ["offline"], "available"),
         command_cap("session record status", ["offline"], "available"),
@@ -10092,6 +10240,90 @@ mod tests {
         assert_eq!(
             data.pointer("/previous/lease_id").and_then(Value::as_str),
             Some("scheduler-lease")
+        );
+    }
+
+    #[test]
+    fn session_lease_run_requires_command_separator() {
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "run",
+                "--holder",
+                "manual",
+                "tap",
+                "100",
+                "200",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("requires '--'")
+        );
+    }
+
+    #[test]
+    fn session_lease_run_submits_with_generated_lease_and_releases_on_timeout() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "run",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "1",
+                "--holder",
+                "manual",
+                "--",
+                "tap",
+                "100",
+                "200",
+            ],
+            true,
+        );
+
+        assert_daemon_request_timeout(result);
+        assert!(!session_lease_path(temp.path(), "ak").exists());
+
+        let request_paths = fs::read_dir(session_requests_dir(temp.path()))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(request_paths.len(), 1);
+        let request = read_json_file::<SessionCommandRequest>(&request_paths[0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.command, "tap");
+        assert_eq!(request.args, vec!["100".to_string(), "200".to_string()]);
+        let lease = request.lease.unwrap();
+        assert_eq!(lease.holder, "manual");
+        assert!(
+            lease
+                .lease_id
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
         );
     }
 

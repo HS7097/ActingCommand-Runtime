@@ -97,8 +97,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 - ActingLab daemon-preferred control routing: when session info indicates a resident daemon is running, direct touch/input and semantic control entries prefer the daemon request queue by default while daemon-side handlers force local execution to avoid recursive requeue.
 - ActingLab daemon-preferred lifecycle and run routing: monitor, instance lifecycle diagnostics/reconnect, app lifecycle, Lab run, package run, and operation run now prefer the resident daemon request queue when session info exists.
+- ActingLab manual lease run UX: `session lease run -- <command...>` now acquires a temporary local lease, submits a daemon request with lease metadata, and releases the lease after success or failure.
 
-## Current ActingLab Daemon-Preferred Lifecycle And Run Routing
+## Current ActingLab Manual Lease Run UX
+
+The current Runtime task adds a small manual-operator convenience layer above the existing Session Layer lease and daemon request queue. Operators can run one daemon-routed command through `session lease run -- <session-request-command...>` without manually acquiring and releasing a lease in separate commands.
+
+Scope:
+
+- Add `session lease run -- <session-request-command...>`.
+- Acquire a temporary local lease for the selected instance and holder.
+- Generate or preserve lease metadata and attach it to the delegated daemon request.
+- Release the temporary lease after command success or failure.
+- Keep daemon-side lease validation as the actual authority before control, lifecycle, Lab package, package, operation, recovery, or device I/O.
+- Reject missing command separators and reject use through `session request lease`.
+
+Safety direction:
+
+- This wrapper must not bypass the resident Session Layer daemon request queue.
+- A command timeout or daemon failure must fail visibly, and the local temporary lease must still be released when possible.
+- This milestone does not add scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, or live emulator execution.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_lease_run_requires_command_separator -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_lease_run_submits_with_generated_lease_and_releases_on_timeout -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Connect this operator UX to the future scheduler lease arbitration policy.
+- Expose lease acquisition and release status through the future trusted UI/API channel.
+- Continue live prepared-emulator validation after the Session Layer task sequence is ready.
+- Implement trusted interactive stream/input relay in a later milestone.
+
+## Previous ActingLab Daemon-Preferred Lifecycle And Run Routing
 
 The current Runtime task continues the Session Layer "sole throat" direction by routing the remaining device/lifecycle/run entry points through the resident daemon whenever session info indicates the daemon is running. This keeps CLI users and agents from bypassing the Session Layer for monitor diagnosis/recovery, instance health/reconnect, app launch/stop/restart, trusted Lab packages, package execution, and operation execution.
 
