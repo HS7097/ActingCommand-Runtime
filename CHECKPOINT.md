@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording candidate preview
+
+### Current status
+
+- Advanced Phase D recording with a read-only candidate preview command.
+- `session record candidates <step-id>` now lists a recorded anchor step's `evaluation.auto_region` report.
+- `session record candidate-list <step-id>` is accepted as an alias for the same read-only path.
+- The output includes record id, task id, instance, record status, step id, anchor id, current region, evaluation status, full auto-region report, candidate count, selected index, and record path.
+- Candidate preview requires an existing auto-region candidate report and fails visibly when the step has no report.
+- The command is exposed through capabilities.
+- No resource repository write, MaaTouch startup, click/navigation execution, frame capture, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1acdbc67f9665b08f1770eef1cf7c08132f893ae`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\Users\Alice\.codex\plugins\cache\personal\ecc\2.0.0\skills\rust-patterns\SKILL.md`.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- Read current `PLANS.md` and `CHECKPOINT.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_candidates -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_candidates -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `29` tests.
+- `cargo test -p actingcommand-actinglab` passed with `137` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the candidate preview implementation.
+- Full Phase D remains incomplete: live prepared-emulator validation, resource promotion/write flow, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-candidate-preview`.
+3. Continue Phase D with live prepared-emulator validation or resource-promotion flow after this candidate preview command is accepted.
+
 ## 2026-06-27 ActingLab session recording amend-by-candidate loop
 
 ### Current status

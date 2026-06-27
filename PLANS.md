@@ -69,8 +69,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording auto-region candidate slice: frame-backed `--region auto` anchor steps now deterministically resolve to a local rect candidate, materialize an artifact, and reuse the existing self/contrast backtest path while no-frame auto anchors remain deferred.
 - ActingLab session recording auto-region candidate report: frame-backed `--region auto` now records candidate regions, luma variance, contrast scores, selected reason, and prefers candidates rejected by the contrast frame before final artifact/backtest evaluation.
 - ActingLab session recording amend-by-candidate loop: `session record amend` can now choose a previously reported auto-region candidate by index, preserve operator-selection provenance, and immediately re-run artifact/backtest evaluation.
+- ActingLab session recording candidate preview: `session record candidates` can now list an anchor step's recorded auto-region candidates for operator review before amend/build.
 
-## Current ActingLab Session Recording Amend-By-Candidate Loop
+## Current ActingLab Session Recording Candidate Preview
+
+The current Runtime task advances Phase D's "suggest, confirm, and micro-adjust" loop by adding a read-only candidate preview command. Operators can inspect the candidate report produced by `--region auto` before choosing one with `session record amend --candidate-index`.
+
+Scope:
+
+- Add `session record candidates <step-id>` for anchor steps with an existing auto-region report.
+- Add alias `session record candidate-list <step-id>` for the same read-only path.
+- Return record id, task id, instance, step id, anchor id, current region, evaluation status, full `auto_region` report, `candidate_count`, and `selected_index`.
+- Require an existing `evaluation.auto_region.candidates` report and fail visibly when a step has no candidate report.
+- Expose the command through `capabilities`.
+
+Safety direction:
+
+- This milestone is read-only against the recording context.
+- This milestone performs no direct click/navigation execution and does not open MaaTouch.
+- This milestone does not capture frames, write resource repositories, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_candidates -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `29` tests.
+- `cargo test -p actingcommand-actinglab` passed with `137` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add resource-promotion/write flow after recording correction semantics are accepted.
+- Add a UI/API surface for candidate review after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Amend-By-Candidate Loop
 
 The current Runtime task advances Phase D's "suggest, confirm, and micro-adjust" loop. After an auto-region step records candidate metadata, an operator can now select one of those candidates directly during `session record amend` without manually copying rectangle coordinates.
 
@@ -104,7 +140,6 @@ Validation status:
 
 Known follow-ups:
 
-- Add a first-class candidate-list/preview command or UI/API surface for operator review.
 - Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
 - Add resource-promotion/write flow after recording correction semantics are accepted.
 

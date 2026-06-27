@@ -4518,7 +4518,9 @@ fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease)
 
 fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session record requires start|status|stop|step|amend|build-task")
+        CliError::usage(
+            "session record requires start|status|stop|step|candidates|amend|build-task",
+        )
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
     let config = read_user_config()?;
@@ -4666,6 +4668,27 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                 "path": record_path.display().to_string(),
                 "step_count": record.steps.len()
             }))
+        }
+        "candidates" | "candidate-list" => {
+            let Some(record) = read_json_file::<SessionRecordContext>(&record_path)? else {
+                return Err(CliError::safety_blocked(
+                    "record_session_not_active",
+                    format!(
+                        "no recording session exists for {}; run session record start first",
+                        instance_id
+                    ),
+                    &["session_record"],
+                ));
+            };
+            let step_id = record_candidates_step_id(&flags)?;
+            let Some(step) = record.steps.iter().find(|step| step.step_id == step_id) else {
+                return Err(CliError::safety_blocked(
+                    "record_step_not_found",
+                    format!("recording step does not exist: {step_id}"),
+                    &["session_record"],
+                ));
+            };
+            session_record_candidate_report(&record, step, &record_path)
         }
         "build-task" => {
             build_session_record_task(global, &config, &flags, &record_path, &instance_id)
@@ -5893,6 +5916,64 @@ fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
         return Err(CliError::usage("record amend step id must not be empty"));
     }
     Ok(value)
+}
+
+fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> {
+    let value = flags
+        .optional("--step-id")
+        .filter(|value| value != "true")
+        .or_else(|| flags.positionals.first().cloned())
+        .ok_or_else(|| {
+            CliError::usage("session record candidates requires <step-id> or --step-id")
+        })?;
+    if value.trim().is_empty() {
+        return Err(CliError::usage(
+            "record candidates step id must not be empty",
+        ));
+    }
+    Ok(value)
+}
+
+fn session_record_candidate_report(
+    record: &SessionRecordContext,
+    step: &SessionRecordStep,
+    record_path: &Path,
+) -> CliOutcome<Value> {
+    let SessionRecordStepData::Anchor {
+        id,
+        region,
+        evaluation,
+        ..
+    } = &step.data
+    else {
+        return Err(CliError::usage(
+            "session record candidates requires an anchor step with an auto-region candidate report",
+        ));
+    };
+    let Some(auto_region) = &evaluation.auto_region else {
+        return Err(CliError::usage(
+            "session record candidates requires an existing auto-region candidate report",
+        ));
+    };
+    let selected_index = auto_region
+        .candidates
+        .iter()
+        .position(|candidate| candidate.selected);
+    Ok(json!({
+        "status": "candidates_listed",
+        "record_id": record.record_id.as_str(),
+        "task_id": record.task_id.as_str(),
+        "instance": record.instance.as_str(),
+        "record_status": record.status.as_str(),
+        "step_id": step.step_id.as_str(),
+        "anchor_id": id,
+        "region": region,
+        "evaluation_status": evaluation.status.as_str(),
+        "auto_region": auto_region,
+        "candidate_count": auto_region.candidates.len(),
+        "selected_index": selected_index,
+        "path": record_path.display().to_string()
+    }))
 }
 
 fn amend_session_record_step(
@@ -7728,6 +7809,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session lease", ["offline"], "available"),
         command_cap("session record", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
+        command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
@@ -9189,6 +9271,207 @@ mod tests {
             data.pointer("/step/evaluation/status")
                 .and_then(Value::as_str),
             Some("passed")
+        );
+    }
+
+    #[test]
+    fn session_record_candidates_lists_auto_region_report() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let contrast_path = temp.path().join("contrast.png");
+        fs::write(
+            &frame_path,
+            test_auto_region_discrimination_frame_png(false),
+        )
+        .unwrap();
+        fs::write(
+            &contrast_path,
+            test_auto_region_discrimination_frame_png(true),
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--contrast-frame",
+                contrast_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let candidates = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "candidates",
+                "home-anchor",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(candidates.exit_code(), 0);
+        let data = candidates.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/status").and_then(Value::as_str),
+            Some("candidates_listed")
+        );
+        assert_eq!(
+            data.pointer("/step_id").and_then(Value::as_str),
+            Some("home-anchor")
+        );
+        assert_eq!(
+            data.pointer("/candidate_count").and_then(Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            data.pointer("/selected_index").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/auto_region/selected_reason")
+                .and_then(Value::as_str),
+            Some("contrast_rejected_highest_variance")
+        );
+        assert_eq!(
+            data.pointer("/auto_region/selected/x")
+                .and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/auto_region/selected/y")
+                .and_then(Value::as_i64),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn session_record_candidates_requires_auto_region_report() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let candidates = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "candidates",
+                "home-anchor",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(candidates.exit_code(), 2);
+        assert_eq!(
+            candidates.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            candidates
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("auto-region candidate report")
         );
     }
 
