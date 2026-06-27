@@ -66,6 +66,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording package handoff: generated draft bundles now satisfy the existing `package build-task` dry-run validation path, with early page-anchor and click-bound checks in `record build-task`.
 - ActingLab session recording current-frame inlet: authorized anchor steps can now use `--capture` / `--current-frame` to materialize a source frame through the existing CaptureBackend path, persist provenance/freshness metadata, and reuse the same crop/backtest path as local PNG frames.
 - ActingLab session recording amend re-backtest loop: frame-backed anchor amendments now immediately re-crop, re-materialize, and re-run self/contrast backtests from the recorded source frame instead of degrading to deferred evaluation.
+- ActingLab session recording auto-region candidate slice: frame-backed `--region auto` anchor steps now deterministically resolve to a local rect candidate, materialize an artifact, and reuse the existing self/contrast backtest path while no-frame auto anchors remain deferred.
+
+## Current ActingLab Session Recording Auto-Region Candidate Slice
+
+The current Runtime task advances Phase D by making `session record step --kind anchor --region auto` usable when a source frame is explicitly provided. The first implementation keeps candidate selection local and deterministic, then immediately passes the selected rect through the existing crop, artifact, self-backtest, and optional contrast-backtest path.
+
+Scope:
+
+- Support frame-backed `--region auto` with local `--frame` / `--source-frame` and explicit current-frame capture input.
+- Resolve auto-region to a stored `rect` before writing the step, so generated draft bundles receive usable coordinates.
+- Use a bounded brightness-variance heuristic over a small deterministic candidate grid.
+- Keep no-frame `--region auto` supported as an explicit deferred authoring intent with reason `frame_not_provided`.
+- Reuse the same source-frame provenance, artifact generation, and self/contrast backtest path as rect-backed anchors.
+- Allow amended frame-backed anchors that still contain `auto` metadata to resolve through the same source-frame path.
+
+Safety direction:
+
+- This milestone performs no direct click/navigation execution and does not open MaaTouch.
+- This milestone does not write resource repositories, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+- Auto-region selection never fabricates success without a source frame: source-backed selection must pass the existing materialization/backtest path, and no-frame anchors remain visibly deferred.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `24` tests.
+- `cargo test -p actingcommand-actinglab` passed with `132` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add richer multi-candidate reporting or operator selection UI after this minimal candidate path is accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add resource-promotion/write flow after recording correction semantics are accepted.
 
 ## Current ActingLab Session Recording Amend Re-Backtest Loop
 

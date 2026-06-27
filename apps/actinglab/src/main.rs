@@ -512,6 +512,7 @@ struct SessionRecordAnchorArtifact {
 }
 
 struct MaterializedAnchorArtifact {
+    region: SessionRecordRegion,
     frame_provenance: SessionRecordFrameProvenance,
     artifact: SessionRecordAnchorArtifact,
     evaluation: SessionRecordStepEvaluation,
@@ -5139,9 +5140,13 @@ fn new_session_record_anchor_step(
             backtest: None,
             contrast_backtest: None,
         });
+    let stored_region = materialized
+        .as_ref()
+        .map(|materialized| materialized.region.clone())
+        .unwrap_or(region);
     Ok(SessionRecordStepData::Anchor {
         id,
-        region,
+        region: stored_region,
         color_check: flags.bool("--color-check"),
         threshold,
         frame_provenance: materialized
@@ -5183,11 +5188,6 @@ fn materialize_anchor_artifact(
     if local_frame_path.is_none() && !capture_current_frame {
         return Ok(None);
     }
-    let SessionRecordRegion::Rect { rect } = region else {
-        return Err(CliError::usage(
-            "record anchor frame materialization requires a rect region; auto region candidate selection is not implemented",
-        ));
-    };
     let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
         context
             .state_dir
@@ -5207,9 +5207,10 @@ fn materialize_anchor_artifact(
         let frame_path = local_frame_path.expect("checked local frame path");
         read_session_record_source_frame(&frame_path)?
     };
+    let rect = resolve_session_record_anchor_rect(&source_frame.frame, region)?;
     materialize_anchor_artifact_from_source(
         source_frame,
-        rect,
+        &rect,
         &artifact_dir,
         step_id,
         anchor_id,
@@ -5321,6 +5322,7 @@ fn materialize_anchor_artifact_from_source(
         ))
     })?;
     Ok(MaterializedAnchorArtifact {
+        region: SessionRecordRegion::Rect { rect: rect.clone() },
         frame_provenance: SessionRecordFrameProvenance {
             source: source_frame.source,
             path: source_frame.path.display().to_string(),
@@ -5384,6 +5386,119 @@ fn backtest_anchor_crop(
         backtest: Some(backtest),
         contrast_backtest,
     })
+}
+
+fn resolve_session_record_anchor_rect(
+    frame: &Frame,
+    region: &SessionRecordRegion,
+) -> CliOutcome<SessionRecordRect> {
+    match region {
+        SessionRecordRegion::Auto => auto_session_record_anchor_rect(frame),
+        SessionRecordRegion::Rect { rect } => Ok(rect.clone()),
+    }
+}
+
+fn auto_session_record_anchor_rect(frame: &Frame) -> CliOutcome<SessionRecordRect> {
+    if frame.width == 0 || frame.height == 0 {
+        return Err(CliError::usage(
+            "record anchor auto region requires a non-empty source frame",
+        ));
+    }
+    let width = auto_session_record_axis_len(frame.width);
+    let height = auto_session_record_axis_len(frame.height);
+    let mut best: Option<(f64, SessionRecordRect)> = None;
+    for y in auto_session_record_axis_positions(frame.height, height) {
+        for x in auto_session_record_axis_positions(frame.width, width) {
+            let rect = SessionRecordRect {
+                x: i32::try_from(x)
+                    .map_err(|_| CliError::usage("record anchor auto x exceeds i32"))?,
+                y: i32::try_from(y)
+                    .map_err(|_| CliError::usage("record anchor auto y exceeds i32"))?,
+                width: i32::try_from(width)
+                    .map_err(|_| CliError::usage("record anchor auto width exceeds i32"))?,
+                height: i32::try_from(height)
+                    .map_err(|_| CliError::usage("record anchor auto height exceeds i32"))?,
+            };
+            let score = score_session_record_region_luma_variance(frame, &rect)?;
+            let should_replace = match best.as_ref() {
+                Some((best_score, best_rect)) => {
+                    score > *best_score
+                        || ((score - *best_score).abs() < f64::EPSILON
+                            && (rect.y, rect.x) < (best_rect.y, best_rect.x))
+                }
+                None => true,
+            };
+            if should_replace {
+                best = Some((score, rect));
+            }
+        }
+    }
+    best.map(|(_, rect)| rect)
+        .ok_or_else(|| CliError::usage("record anchor auto region produced no candidates"))
+}
+
+fn auto_session_record_axis_len(total: u32) -> u32 {
+    (total / 3).max(1).min(total)
+}
+
+fn auto_session_record_axis_positions(total: u32, len: u32) -> Vec<u32> {
+    if total <= len {
+        return vec![0];
+    }
+    let end = total - len;
+    let mut positions = vec![0, end / 2, end];
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
+fn score_session_record_region_luma_variance(
+    frame: &Frame,
+    rect: &SessionRecordRect,
+) -> CliOutcome<f64> {
+    let stride = match frame.pixel_format {
+        PixelFormat::Rgb8 => 3usize,
+        PixelFormat::Rgba8 => 4usize,
+    };
+    let x = usize::try_from(rect.x)
+        .map_err(|_| CliError::usage("record anchor auto rect x exceeds usize"))?;
+    let y = usize::try_from(rect.y)
+        .map_err(|_| CliError::usage("record anchor auto rect y exceeds usize"))?;
+    let width = usize::try_from(rect.width)
+        .map_err(|_| CliError::usage("record anchor auto rect width exceeds usize"))?;
+    let height = usize::try_from(rect.height)
+        .map_err(|_| CliError::usage("record anchor auto rect height exceeds usize"))?;
+    let frame_width = usize::try_from(frame.width)
+        .map_err(|_| CliError::usage("record source frame width exceeds usize"))?;
+    let mut count = 0f64;
+    let mut sum = 0f64;
+    let mut sum_sq = 0f64;
+    for row in 0..height {
+        for col in 0..width {
+            let column = x
+                .checked_add(col)
+                .ok_or_else(|| CliError::usage("record anchor auto score column overflow"))?;
+            let offset = ((y + row)
+                .checked_mul(frame_width)
+                .and_then(|value| value.checked_add(column))
+                .and_then(|value| value.checked_mul(stride)))
+            .ok_or_else(|| CliError::usage("record anchor auto score offset overflow"))?;
+            let r = f64::from(frame.pixels[offset]);
+            let g = f64::from(frame.pixels[offset + 1]);
+            let b = f64::from(frame.pixels[offset + 2]);
+            let luma = (r + g + b) / 3.0;
+            count += 1.0;
+            sum += luma;
+            sum_sq += luma * luma;
+        }
+    }
+    if count == 0.0 {
+        return Err(CliError::usage(
+            "record anchor auto region cannot score an empty candidate",
+        ));
+    }
+    let mean = sum / count;
+    Ok((sum_sq / count) - (mean * mean))
 }
 
 fn match_anchor_crop_in_frame(
@@ -5713,22 +5828,19 @@ fn refresh_amended_anchor_artifact(
         };
         return Ok(());
     };
-    let SessionRecordRegion::Rect { rect } = target.region else {
-        return Err(CliError::usage(
-            "record anchor amend re-backtest requires a rect region; auto region candidate selection is not implemented",
-        ));
-    };
     let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
+    let rect = resolve_session_record_anchor_rect(&source_frame.frame, target.region)?;
     let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
     let materialized = materialize_anchor_artifact_from_source(
         source_frame,
-        rect,
+        &rect,
         &artifact_dir,
         step_id,
         target.id,
         *target.threshold,
         flags,
     )?;
+    *target.region = materialized.region.clone();
     *target.frame_provenance = Some(Box::new(materialized.frame_provenance));
     *target.artifact = Some(Box::new(materialized.artifact));
     *target.evaluation = materialized.evaluation;
@@ -8602,12 +8714,13 @@ mod tests {
     }
 
     #[test]
-    fn session_record_step_anchor_frame_requires_rect_region() {
+    fn session_record_step_anchor_auto_region_materializes_frame_crop() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
+        let artifact_dir = temp.path().join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
@@ -8645,6 +8758,8 @@ mod tests {
                 "auto",
                 "--frame",
                 frame_path.to_str().unwrap(),
+                "--artifact-dir",
+                artifact_dir.to_str().unwrap(),
             ],
             true,
         );
@@ -8653,18 +8768,103 @@ mod tests {
         }
 
         assert_eq!(start.exit_code(), 0);
-        assert_eq!(step.exit_code(), 2);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
         assert_eq!(
-            step.envelope.error.as_ref().unwrap().code,
-            "validation_failed"
+            data.pointer("/step/region/mode").and_then(Value::as_str),
+            Some("rect")
         );
         assert!(
-            step.envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("rect region")
+            data.pointer("/step/region/rect/width")
+                .and_then(Value::as_i64)
+                .is_some_and(|width| width > 0 && width <= 12)
+        );
+        assert!(
+            data.pointer("/step/region/rect/height")
+                .and_then(Value::as_i64)
+                .is_some_and(|height| height > 0 && height <= 10)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/kind").and_then(Value::as_str),
+            Some("template_crop")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        let artifact_path = data
+            .pointer("/step/artifact/path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .expect("artifact path");
+        assert!(artifact_path.exists());
+    }
+
+    #[test]
+    fn session_record_step_anchor_auto_without_frame_stays_deferred() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/region/mode").and_then(Value::as_str),
+            Some("auto")
+        );
+        assert!(data.pointer("/step/artifact").is_none());
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("frame_not_provided")
         );
     }
 

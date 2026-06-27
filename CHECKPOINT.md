@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording auto-region candidate slice
+
+### Current status
+
+- Advanced Phase D recording by making frame-backed `session record step --kind anchor --region auto` usable.
+- `--region auto` now resolves to a deterministic rect candidate when a local source frame or explicit current capture frame is provided.
+- The selected rect is stored back into the recorded anchor step as `mode=rect`, making downstream draft bundles receive usable coordinates.
+- Auto-region selection uses a bounded local brightness-variance candidate grid and then reuses the existing crop/artifact/self-backtest/contrast-backtest path.
+- No-frame `--region auto` remains an explicit deferred authoring state with reason `frame_not_provided`; it does not fabricate an artifact or successful evaluation.
+- Frame-backed amend paths can resolve lingering `auto` region metadata through the same recorded source-frame path.
+- No resource repository write, MaaTouch startup, click/navigation execution, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `580c19837992ff6ca4aaf5abc44d16cc7faa16ac`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `rg -n "auto region|SessionRecordRegion|materialize_anchor_artifact|session_record_step_anchor_frame_requires_rect_region|record step" apps/actinglab/src/main.rs`
+- Read current `PLANS.md` and `CHECKPOINT.md`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `24` tests.
+- `cargo test -p actingcommand-actinglab` passed with `132` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the auto-region candidate implementation.
+- Full Phase D remains incomplete: richer candidate review, live prepared-emulator validation, resource promotion/write flow, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-auto-region`.
+3. Continue Phase D with richer candidate review, live prepared-emulator validation, or resource-promotion flow after this auto-region slice is accepted.
+
 ## 2026-06-27 ActingLab session recording amend re-backtest loop
 
 ### Current status
