@@ -1524,6 +1524,9 @@ fn session_api_contract() -> Value {
                     "monitor_policy_inspect_lease",
                     "monitor_policy_acquire_lease",
                     "monitor_policy_preempt_lease"
+                ],
+                "lease_freshness_actions": [
+                    "stale_lease_inspect"
                 ]
             },
             "lease_view": {
@@ -6679,9 +6682,11 @@ fn session_status_diagnostics(
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
     let monitor_policy = session_monitor_policy_payload(state_dir)?;
+    let recommended_actions =
+        session_status_recommended_actions(state_dir, liveness.status, &monitor_policy)?;
     Ok(json!({
         "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
-        "recommended_actions": session_status_recommended_actions(state_dir, liveness.status, &monitor_policy),
+        "recommended_actions": recommended_actions,
         "paths": {
             "info": session_info_path(state_dir).display().to_string(),
             "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
@@ -6906,13 +6911,52 @@ fn session_status_recommended_actions(
     state_dir: &Path,
     liveness_status: SessionLivenessStatus,
     monitor_policy: &Value,
-) -> Vec<Value> {
+) -> CliOutcome<Vec<Value>> {
     let mut actions = session_liveness_recommended_actions(state_dir, liveness_status);
+    actions.extend(session_stale_lease_recommended_actions(state_dir)?);
     actions.extend(session_monitor_policy_recommended_actions(
         state_dir,
         monitor_policy,
     ));
-    actions
+    Ok(actions)
+}
+
+fn session_stale_lease_recommended_actions(state_dir: &Path) -> CliOutcome<Vec<Value>> {
+    let now_ms = current_unix_ms();
+    let state_dir_display = state_dir.display().to_string();
+    let mut paths = session_lease_paths(state_dir)?;
+    paths.sort();
+    let mut actions = Vec::new();
+    for path in paths {
+        let Some(lease) = read_json_file::<SessionLease>(&path)? else {
+            continue;
+        };
+        let freshness = session_lease_freshness_json(&lease, now_ms);
+        if freshness.get("status").and_then(Value::as_str) != Some("stale") {
+            continue;
+        }
+        let mut action = session_recommended_action_owned(
+            20,
+            "stale_lease_inspect",
+            "Inspect a stale Session Layer lease before the scheduler decides whether to keep, release, or preempt it.",
+            vec![
+                "session".to_string(),
+                "lease".to_string(),
+                "status".to_string(),
+                "--state-dir".to_string(),
+                state_dir_display.clone(),
+                "--instance".to_string(),
+                lease.instance.clone(),
+            ],
+        );
+        action["requires_scheduler_decision"] = json!(true);
+        action["instance"] = json!(lease.instance);
+        action["lease_holder"] = json!(lease.holder);
+        action["lease_id"] = json!(lease.lease_id);
+        action["freshness"] = freshness;
+        actions.push(action);
+    }
+    Ok(actions)
 }
 
 fn session_monitor_policy_recommended_actions(
@@ -22189,6 +22233,57 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_recommends_stale_lease_inspect() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let mut lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        lease.updated_at_unix_ms = current_unix_ms().saturating_sub(SESSION_LEASE_STALE_MS + 1);
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("stale_lease_inspect")
+        );
+        assert_eq!(
+            actions[0]
+                .get("requires_scheduler_decision")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0].get("lease_holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            actions[0]
+                .pointer("/freshness/status")
+                .and_then(Value::as_str),
+            Some("stale")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("lease")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/2").and_then(Value::as_str),
+            Some("status")
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_stale_cleanup_sequence() {
         let temp = TempDir::new().unwrap();
         write_test_session_info_only(temp.path());
@@ -24398,6 +24493,12 @@ mod tests {
                 .pointer("/envelopes/status_view/recommended_actions_field")
                 .and_then(Value::as_str),
             Some("diagnostics.recommended_actions")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/lease_freshness_actions/0")
+                .and_then(Value::as_str),
+            Some("stale_lease_inspect")
         );
         assert_eq!(
             payload

@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab stale lease recommended action surface
+
+### Current status
+
+- `session status --diagnostics` now emits `stale_lease_inspect` recommendations for stale active leases.
+- The recommendation points to `session lease status --state-dir <dir> --instance <id>`.
+- The recommendation includes affected instance, lease holder, lease id, and freshness metadata.
+- The recommendation is marked with `requires_scheduler_decision=true`.
+- `session api` now advertises `stale_lease_inspect` under the status-view lease freshness actions.
+- This is advisory only: the Session Layer does not release, preempt, acquire, or mutate leases based on stale freshness.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8698706255ed9a9d0a5b56260d1f38e4b5d2f33b`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Confirmed Runtime remained clean and aligned with `origin/main`.
+- Inspected Session Layer recommended-action generation and status/API contract tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_request_returns_transport_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused status recommendation tests passed, including stale lease inspect recommendation coverage.
+- Focused Session API contract test passed.
+- Focused transport contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line prohibited-feature scan passed.
+- Full workspace clippy passed with `-D warnings`.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-stale-lease-recommended-action`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session lease freshness diagnostics
 
 ### Current status

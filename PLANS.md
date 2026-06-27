@@ -145,6 +145,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab LabLease list/wait aliases: `lab lease list` and `lab lease wait` now expose the same Session Layer lease-list and lease-wait views from the Lab-facing CLI surface.
 - ActingLab session lease touch view: `session lease touch`, `session request lease touch`, and `lab lease touch` let current lease holders refresh lease freshness metadata without executing device work.
 - ActingLab session lease freshness diagnostics: `session lease status`, `session lease list`, and `session status --diagnostics` now report lease freshness metadata for scheduler/UI visibility without reclaiming leases automatically.
+- ActingLab stale lease recommended action surface: `session status --diagnostics` now emits `stale_lease_inspect` recommendations for stale leases, marked as scheduler decisions rather than automatic recovery.
+
+## Current ActingLab Stale Lease Recommended Action Surface
+
+This increment turns stale lease freshness into a scheduler/UI-facing recommendation without moving arbitration into the Session Layer.
+
+- `session status --diagnostics` now emits `stale_lease_inspect` in `diagnostics.recommended_actions` when a held lease is older than the diagnostic freshness threshold.
+- The recommendation points to `session lease status --instance <id>` for inspection.
+- The recommendation includes the affected instance, lease holder, lease id, and freshness metadata.
+- The recommendation is marked with `requires_scheduler_decision=true`.
+- `session api` advertises `stale_lease_inspect` under the status-view lease freshness actions.
+- The Session Layer still does not release, preempt, acquire, or mutate leases based on stale freshness.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Session Lease Freshness Diagnostics
 
