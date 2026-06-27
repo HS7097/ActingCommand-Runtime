@@ -142,8 +142,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session request-state wait view: `session request-state wait <request-id>` and `session request request-state wait <request-id>` provide bounded lifecycle waiting over queued/running/response/journal request states for UI/scheduler clients.
 - ActingLab session lease wait view: `session lease wait` and `session request lease wait` provide bounded waiting for free or held lease state, including holder and lease-id filters for scheduler/Lab/UI coordination.
 - ActingLab session lease list view: `session lease list` and `session request lease list` expose all active Session Layer lease records with holder and lease-id filters for scheduler/Lab/UI arbitration diagnostics.
+- ActingLab LabLease list/wait aliases: `lab lease list` and `lab lease wait` now expose the same Session Layer lease-list and lease-wait views from the Lab-facing CLI surface.
 
-## Current ActingLab Session Lease List View
+## Current ActingLab LabLease List/Wait Alias View
+
+This increment keeps the Lab-facing CLI surface aligned with the Session Layer lease arbitration views: Lab users can inspect and wait on lease ownership without dropping down to raw `session lease ...` commands.
+
+- `lab lease list` is a thin alias over `session lease list`.
+- `lab lease wait` is a thin alias over `session lease wait`.
+- Both aliases preserve the existing state-dir, holder, lease-holder, lease-id, status, timeout, and poll behavior of the Session Layer lease views.
+- `lab lease list` does not require a default configured instance, matching the global lease-list semantics.
+- Capabilities now advertise `lab lease list` and `lab lease wait`.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+## Previous ActingLab Session Lease List View
 
 This increment closes an arbitration observability gap in the Session Layer: scheduler, Lab, and future UI clients can list all active lease records without inferring global state from single-instance status calls or raw `lease-*.json` files.
 

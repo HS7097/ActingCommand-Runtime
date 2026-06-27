@@ -5169,7 +5169,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
 
 fn run_lab_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match args.first().map(String::as_str) {
-        Some("acquire" | "status") => run_session_lease_inner(global, args, None),
+        Some("acquire" | "list" | "status" | "wait") => run_session_lease_inner(global, args, None),
         _ => {
             let mut lease_args = vec!["acquire".to_string()];
             lease_args.extend_from_slice(args);
@@ -14153,7 +14153,9 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("scheduler stop", ["running_runtime"], "reserved"),
         command_cap("lab status", ["offline"], "available"),
         command_cap("lab lease", ["offline", "lab_lease"], "available"),
+        command_cap("lab lease list", ["offline", "lab_lease"], "available"),
         command_cap("lab lease status", ["offline", "lab_lease"], "available"),
+        command_cap("lab lease wait", ["offline", "lab_lease"], "available"),
         command_cap("lab preempt", ["offline", "lab_lease"], "available"),
         command_cap("lab release", ["offline", "lab_lease"], "available"),
         command_cap("lab validate", ["offline"], "available"),
@@ -14614,6 +14616,105 @@ mod tests {
         assert_eq!(
             data.pointer("/lease/lease_id").and_then(Value::as_str),
             Some("scheduler-lease")
+        );
+    }
+
+    #[test]
+    fn lab_lease_list_alias_reads_all_session_lease_files() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        let ak_lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-ak".to_string()),
+            false,
+            None,
+        );
+        let ba_lease = new_session_lease(
+            "ba".to_string(),
+            "lab".to_string(),
+            Some("lease-ba".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &ak_lease).unwrap();
+        write_json_file_atomic(&session_lease_path(&state_dir, "ba"), &ba_lease).unwrap();
+
+        let list = run_cli(
+            [
+                "--json",
+                "lab",
+                "lease",
+                "list",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(list.exit_code(), 0);
+        let data = list.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_list.v0.1")
+        );
+        assert_eq!(data.get("active_count").and_then(Value::as_u64), Some(2));
+    }
+
+    #[test]
+    fn lab_lease_wait_alias_reads_session_lease_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("scheduler-lease".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let wait = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "wait",
+                "--status",
+                "held",
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "scheduler-lease",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(wait.exit_code(), 0);
+        let data = wait.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_wait.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -28074,7 +28175,9 @@ mod tests {
             "session request lease wait",
             "lab status",
             "lab lease",
+            "lab lease list",
             "lab lease status",
+            "lab lease wait",
             "lab preempt",
             "lab release",
         ] {

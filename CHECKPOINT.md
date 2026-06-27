@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab LabLease list/wait alias view
+
+### Current status
+
+- `lab lease list` now exposes the same payload as `session lease list`.
+- `lab lease wait` now exposes the same payload as `session lease wait`.
+- `lab lease list` does not require a configured default instance, matching the global lease-list behavior.
+- `lab lease wait` preserves status, holder, lease-holder, lease-id, timeout, poll, and state-dir behavior from the Session Layer lease wait view.
+- Capabilities now advertise `lab lease list` and `lab lease wait`.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ab96a18ab98add0569f08898dd7e7b7c216e9960`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Inspected LabLease alias routing and capabilities in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab_lease -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Focused LabLease alias tests passed, including lease acquire/release, status, list, wait, and capability coverage.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-lab-lease-list-wait-alias`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session lease list view
 
 ### Current status
