@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording auto-region candidate report
+
+### Current status
+
+- Advanced Phase D recording by making auto-region selection explainable and contrast-aware.
+- Frame-backed `session record step --kind anchor --region auto` now writes `evaluation.auto_region` metadata.
+- The metadata includes strategy, selected reason, selected rect, candidate rects, per-candidate luma variance, and contrast score/pass state when a contrast frame is supplied.
+- With a contrast frame, auto-region selection prefers candidates rejected by the contrast frame before final artifact materialization and self/contrast backtest.
+- If no candidate is rejected by the contrast frame, selection falls back to the lowest contrast score and still lets the existing final contrast backtest fail visibly if the result is ambiguous.
+- No-frame `--region auto` remains deferred with reason `frame_not_provided` and no fabricated artifact.
+- No resource repository write, MaaTouch startup, click/navigation execution, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ee4ba27579a3f0c5d83255b4b3bfcf02f9a5db0d`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read current `PLANS.md` and `CHECKPOINT.md`.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- First `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all`
+- Rerun `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo test -p actingcommand-actinglab`
+- Rerun `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `25` tests.
+- `cargo test -p actingcommand-actinglab` passed with `133` tests.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` failed because `materialize_anchor_artifact_from_source` had too many arguments after auto-region metadata was added.
+- Auto-region rect and metadata are now grouped into `SessionRecordAnchorRegionResolution`.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the auto-region candidate report implementation.
+- Full Phase D remains incomplete: explicit operator candidate selection, live prepared-emulator validation, resource promotion/write flow, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-auto-region-report`.
+3. Continue Phase D with explicit operator candidate selection, live prepared-emulator validation, or resource-promotion flow after this report format is accepted.
+
 ## 2026-06-27 ActingLab session recording auto-region candidate slice
 
 ### Current status

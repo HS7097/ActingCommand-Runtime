@@ -67,6 +67,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording current-frame inlet: authorized anchor steps can now use `--capture` / `--current-frame` to materialize a source frame through the existing CaptureBackend path, persist provenance/freshness metadata, and reuse the same crop/backtest path as local PNG frames.
 - ActingLab session recording amend re-backtest loop: frame-backed anchor amendments now immediately re-crop, re-materialize, and re-run self/contrast backtests from the recorded source frame instead of degrading to deferred evaluation.
 - ActingLab session recording auto-region candidate slice: frame-backed `--region auto` anchor steps now deterministically resolve to a local rect candidate, materialize an artifact, and reuse the existing self/contrast backtest path while no-frame auto anchors remain deferred.
+- ActingLab session recording auto-region candidate report: frame-backed `--region auto` now records candidate regions, luma variance, contrast scores, selected reason, and prefers candidates rejected by the contrast frame before final artifact/backtest evaluation.
+
+## Current ActingLab Session Recording Auto-Region Candidate Report
+
+The current Runtime task advances Phase D toward operator-confirmable resource generation. `session record step --kind anchor --region auto` now exposes why a region was selected, rather than silently choosing one rectangle. When a contrast frame is provided, selection prefers candidates that still match the source frame but are rejected by the contrast frame.
+
+Scope:
+
+- Add `evaluation.auto_region` metadata for source-frame-backed auto-region anchors.
+- Record selection strategy, selected reason, selected rect, and the full bounded candidate list.
+- Record per-candidate luma variance.
+- When a contrast frame is provided, record each candidate's contrast score and pass/fail result.
+- Prefer contrast-rejected candidates before falling back to the lowest contrast score.
+- Keep final self/contrast backtest semantics unchanged: selected candidates still must pass existing evaluation before build-task can use them.
+- Keep no-frame `--region auto` deferred and artifact-free.
+
+Safety direction:
+
+- This milestone performs no direct click/navigation execution and does not open MaaTouch.
+- This milestone does not write resource repositories, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+- Contrast-frame read/decode/scoring failures surface as validation errors; no candidate metadata is fabricated.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor_auto -- --nocapture` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `25` tests.
+- `cargo test -p actingcommand-actinglab` passed with `133` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after grouping auto-region resolution data into `SessionRecordAnchorRegionResolution`.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add explicit operator selection or amend-by-candidate once the CLI/API shape is accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add resource-promotion/write flow after recording correction semantics are accepted.
 
 ## Current ActingLab Session Recording Auto-Region Candidate Slice
 

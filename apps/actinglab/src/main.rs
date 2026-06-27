@@ -450,9 +450,30 @@ struct SessionRecordStepEvaluation {
     status: String,
     reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_region: Option<SessionRecordAutoRegionSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     backtest: Option<SessionRecordAnchorBacktest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     contrast_backtest: Option<SessionRecordAnchorContrastBacktest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordAutoRegionSelection {
+    strategy: String,
+    selected_reason: String,
+    selected: SessionRecordRect,
+    candidates: Vec<SessionRecordAutoRegionCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordAutoRegionCandidate {
+    region: SessionRecordRect,
+    luma_variance: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contrast_score: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contrast_passed: Option<bool>,
+    selected: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +539,11 @@ struct MaterializedAnchorArtifact {
     evaluation: SessionRecordStepEvaluation,
 }
 
+struct SessionRecordAnchorRegionResolution {
+    rect: SessionRecordRect,
+    auto_region: Option<SessionRecordAutoRegionSelection>,
+}
+
 struct SessionRecordSourceFrame {
     frame: Frame,
     png: Vec<u8>,
@@ -527,6 +553,12 @@ struct SessionRecordSourceFrame {
     capture_backend: Option<String>,
     freshness: Option<Value>,
     capture_attempts: Vec<Value>,
+}
+
+struct SessionRecordContrastFrame {
+    frame: Frame,
+    path: PathBuf,
+    sha256: String,
 }
 
 struct SessionRecordStepContext<'a> {
@@ -5137,6 +5169,7 @@ fn new_session_record_anchor_step(
         .unwrap_or_else(|| SessionRecordStepEvaluation {
             status: "deferred".to_string(),
             reason: "frame_not_provided".to_string(),
+            auto_region: None,
             backtest: None,
             contrast_backtest: None,
         });
@@ -5207,10 +5240,11 @@ fn materialize_anchor_artifact(
         let frame_path = local_frame_path.expect("checked local frame path");
         read_session_record_source_frame(&frame_path)?
     };
-    let rect = resolve_session_record_anchor_rect(&source_frame.frame, region)?;
+    let resolution =
+        resolve_session_record_anchor_rect(&source_frame.frame, region, threshold, flags)?;
     materialize_anchor_artifact_from_source(
         source_frame,
-        &rect,
+        resolution,
         &artifact_dir,
         step_id,
         anchor_id,
@@ -5292,18 +5326,21 @@ fn capture_session_record_source_frame(
 
 fn materialize_anchor_artifact_from_source(
     source_frame: SessionRecordSourceFrame,
-    rect: &SessionRecordRect,
+    resolution: SessionRecordAnchorRegionResolution,
     artifact_dir: &Path,
     step_id: &str,
     anchor_id: &str,
     threshold: Option<f64>,
     flags: &FlagArgs,
 ) -> CliOutcome<MaterializedAnchorArtifact> {
+    let rect = &resolution.rect;
     let crop = crop_frame_rect(&source_frame.frame, rect)?;
     let crop_png = crop
         .png_for_artifact()
         .map_err(|err| CliError::usage(format!("failed to encode record anchor crop: {err}")))?;
-    let evaluation = backtest_anchor_crop(&source_frame.frame, rect, &crop_png, threshold, flags)?;
+    let mut evaluation =
+        backtest_anchor_crop(&source_frame.frame, rect, &crop_png, threshold, flags)?;
+    evaluation.auto_region = resolution.auto_region;
     fs::create_dir_all(artifact_dir).map_err(|err| {
         CliError::usage(format!(
             "failed to create record artifact dir {}: {err}",
@@ -5322,7 +5359,9 @@ fn materialize_anchor_artifact_from_source(
         ))
     })?;
     Ok(MaterializedAnchorArtifact {
-        region: SessionRecordRegion::Rect { rect: rect.clone() },
+        region: SessionRecordRegion::Rect {
+            rect: resolution.rect.clone(),
+        },
         frame_provenance: SessionRecordFrameProvenance {
             source: source_frame.source,
             path: source_frame.path.display().to_string(),
@@ -5340,7 +5379,7 @@ fn materialize_anchor_artifact_from_source(
             sha256: hex_sha256(&crop_png),
             width: crop.width,
             height: crop.height,
-            region: rect.clone(),
+            region: resolution.rect,
         },
         evaluation,
     })
@@ -5383,6 +5422,7 @@ fn backtest_anchor_crop(
     Ok(SessionRecordStepEvaluation {
         status: if passed { "passed" } else { "failed" }.to_string(),
         reason: reason.to_string(),
+        auto_region: None,
         backtest: Some(backtest),
         contrast_backtest,
     })
@@ -5391,14 +5431,23 @@ fn backtest_anchor_crop(
 fn resolve_session_record_anchor_rect(
     frame: &Frame,
     region: &SessionRecordRegion,
-) -> CliOutcome<SessionRecordRect> {
+    threshold: Option<f64>,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordAnchorRegionResolution> {
     match region {
-        SessionRecordRegion::Auto => auto_session_record_anchor_rect(frame),
-        SessionRecordRegion::Rect { rect } => Ok(rect.clone()),
+        SessionRecordRegion::Auto => auto_session_record_anchor_rect(frame, threshold, flags),
+        SessionRecordRegion::Rect { rect } => Ok(SessionRecordAnchorRegionResolution {
+            rect: rect.clone(),
+            auto_region: None,
+        }),
     }
 }
 
-fn auto_session_record_anchor_rect(frame: &Frame) -> CliOutcome<SessionRecordRect> {
+fn auto_session_record_anchor_rect(
+    frame: &Frame,
+    threshold: Option<f64>,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordAnchorRegionResolution> {
     if frame.width == 0 || frame.height == 0 {
         return Err(CliError::usage(
             "record anchor auto region requires a non-empty source frame",
@@ -5406,7 +5455,14 @@ fn auto_session_record_anchor_rect(frame: &Frame) -> CliOutcome<SessionRecordRec
     }
     let width = auto_session_record_axis_len(frame.width);
     let height = auto_session_record_axis_len(frame.height);
-    let mut best: Option<(f64, SessionRecordRect)> = None;
+    let contrast_frame = read_session_record_contrast_frame(flags)?;
+    let metric = if contrast_frame.is_some() {
+        Some(parse_match_metric_flag(flags)?)
+    } else {
+        None
+    };
+    let match_threshold = threshold.unwrap_or(0.95) as f32;
+    let mut candidates = Vec::new();
     for y in auto_session_record_axis_positions(frame.height, height) {
         for x in auto_session_record_axis_positions(frame.width, width) {
             let rect = SessionRecordRect {
@@ -5420,21 +5476,117 @@ fn auto_session_record_anchor_rect(frame: &Frame) -> CliOutcome<SessionRecordRec
                     .map_err(|_| CliError::usage("record anchor auto height exceeds i32"))?,
             };
             let score = score_session_record_region_luma_variance(frame, &rect)?;
-            let should_replace = match best.as_ref() {
-                Some((best_score, best_rect)) => {
-                    score > *best_score
-                        || ((score - *best_score).abs() < f64::EPSILON
-                            && (rect.y, rect.x) < (best_rect.y, best_rect.x))
-                }
-                None => true,
+            let (contrast_score, contrast_passed) = if let Some(contrast_frame) = &contrast_frame {
+                let crop = crop_frame_rect(frame, &rect)?;
+                let crop_png = crop.png_for_artifact().map_err(|err| {
+                    CliError::usage(format!("failed to encode record auto-region crop: {err}"))
+                })?;
+                let backtest = match_anchor_crop_in_frame(
+                    &contrast_frame.frame,
+                    &rect,
+                    &crop_png,
+                    metric.ok_or_else(|| {
+                        CliError::usage("record auto-region contrast scoring requires match metric")
+                    })?,
+                    match_threshold,
+                    "auto_region_contrast",
+                )?;
+                (Some(backtest.score), Some(backtest.score < match_threshold))
+            } else {
+                (None, None)
             };
-            if should_replace {
-                best = Some((score, rect));
-            }
+            candidates.push(SessionRecordAutoRegionCandidate {
+                region: rect,
+                luma_variance: score,
+                contrast_score,
+                contrast_passed,
+                selected: false,
+            });
         }
     }
-    best.map(|(_, rect)| rect)
-        .ok_or_else(|| CliError::usage("record anchor auto region produced no candidates"))
+    let Some((selected_index, selected_reason)) =
+        select_session_record_auto_region_candidate(&candidates, contrast_frame.is_some())
+    else {
+        return Err(CliError::usage(
+            "record anchor auto region produced no candidates",
+        ));
+    };
+    let selected = candidates[selected_index].region.clone();
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        candidate.selected = index == selected_index;
+    }
+    Ok(SessionRecordAnchorRegionResolution {
+        rect: selected.clone(),
+        auto_region: Some(SessionRecordAutoRegionSelection {
+            strategy: "bounded_luma_variance_grid_v1".to_string(),
+            selected_reason,
+            selected,
+            candidates,
+        }),
+    })
+}
+
+fn select_session_record_auto_region_candidate(
+    candidates: &[SessionRecordAutoRegionCandidate],
+    has_contrast: bool,
+) -> Option<(usize, String)> {
+    let has_discriminating_candidate = candidates
+        .iter()
+        .any(|candidate| candidate.contrast_passed == Some(true));
+    let selected_reason = if has_discriminating_candidate {
+        "contrast_rejected_highest_variance"
+    } else if has_contrast {
+        "lowest_contrast_score"
+    } else {
+        "highest_luma_variance"
+    };
+    let mut selected = None;
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(best_index) = selected else {
+            selected = Some(index);
+            continue;
+        };
+        if session_record_auto_region_candidate_is_better(
+            candidate,
+            &candidates[best_index],
+            has_discriminating_candidate,
+            has_contrast,
+        ) {
+            selected = Some(index);
+        }
+    }
+    selected.map(|index| (index, selected_reason.to_string()))
+}
+
+fn session_record_auto_region_candidate_is_better(
+    candidate: &SessionRecordAutoRegionCandidate,
+    best: &SessionRecordAutoRegionCandidate,
+    prefer_discriminating: bool,
+    prefer_lowest_contrast: bool,
+) -> bool {
+    if prefer_discriminating {
+        let candidate_passed = candidate.contrast_passed == Some(true);
+        let best_passed = best.contrast_passed == Some(true);
+        if candidate_passed != best_passed {
+            return candidate_passed;
+        }
+    }
+    if prefer_lowest_contrast {
+        match (candidate.contrast_score, best.contrast_score) {
+            (Some(candidate_score), Some(best_score))
+                if (candidate_score - best_score).abs() > f32::EPSILON =>
+            {
+                return candidate_score < best_score;
+            }
+            (Some(_), None) => return true,
+            (None, Some(_)) => return false,
+            _ => {}
+        }
+    }
+    if (candidate.luma_variance - best.luma_variance).abs() > f64::EPSILON {
+        return candidate.luma_variance > best.luma_variance;
+    }
+    (candidate.region.y, candidate.region.x) < (best.region.y, best.region.x)
 }
 
 fn auto_session_record_axis_len(total: u32) -> u32 {
@@ -5542,6 +5694,37 @@ fn backtest_contrast_anchor_crop(
     threshold: f32,
     flags: &FlagArgs,
 ) -> CliOutcome<Option<SessionRecordAnchorContrastBacktest>> {
+    let Some(contrast_frame) = read_session_record_contrast_frame(flags)? else {
+        return Ok(None);
+    };
+    let backtest = match_anchor_crop_in_frame(
+        &contrast_frame.frame,
+        rect,
+        crop_png,
+        metric,
+        threshold,
+        "local_png_contrast",
+    )?;
+    Ok(Some(SessionRecordAnchorContrastBacktest {
+        source: "local_png_contrast".to_string(),
+        path: contrast_frame.path.display().to_string(),
+        sha256: contrast_frame.sha256,
+        width: contrast_frame.frame.width,
+        height: contrast_frame.frame.height,
+        metric: backtest.metric,
+        region: backtest.region,
+        x: backtest.x,
+        y: backtest.y,
+        raw_score: backtest.raw_score,
+        score: backtest.score,
+        threshold: backtest.threshold,
+        passed: backtest.score < threshold,
+    }))
+}
+
+fn read_session_record_contrast_frame(
+    flags: &FlagArgs,
+) -> CliOutcome<Option<SessionRecordContrastFrame>> {
     let Some(frame_path) = flags
         .optional_path("--contrast-frame")
         .or_else(|| flags.optional_path("--negative-frame"))
@@ -5557,28 +5740,10 @@ fn backtest_contrast_anchor_crop(
     let frame_hash = hex_sha256(&frame_png);
     let frame = Frame::from_png(frame_png, CaptureBackendName::AdbScreencap)
         .map_err(|err| CliError::usage(format!("failed to decode record contrast frame: {err}")))?;
-    let backtest = match_anchor_crop_in_frame(
-        &frame,
-        rect,
-        crop_png,
-        metric,
-        threshold,
-        "local_png_contrast",
-    )?;
-    Ok(Some(SessionRecordAnchorContrastBacktest {
-        source: "local_png_contrast".to_string(),
-        path: frame_path.display().to_string(),
+    Ok(Some(SessionRecordContrastFrame {
+        frame,
+        path: frame_path,
         sha256: frame_hash,
-        width: frame.width,
-        height: frame.height,
-        metric: backtest.metric,
-        region: backtest.region,
-        x: backtest.x,
-        y: backtest.y,
-        raw_score: backtest.raw_score,
-        score: backtest.score,
-        threshold: backtest.threshold,
-        passed: backtest.score < threshold,
     }))
 }
 
@@ -5823,17 +5988,23 @@ fn refresh_amended_anchor_artifact(
         *target.evaluation = SessionRecordStepEvaluation {
             status: "deferred".to_string(),
             reason: "amended_without_frame_provenance".to_string(),
+            auto_region: None,
             backtest: None,
             contrast_backtest: None,
         };
         return Ok(());
     };
     let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
-    let rect = resolve_session_record_anchor_rect(&source_frame.frame, target.region)?;
+    let resolution = resolve_session_record_anchor_rect(
+        &source_frame.frame,
+        target.region,
+        *target.threshold,
+        flags,
+    )?;
     let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
     let materialized = materialize_anchor_artifact_from_source(
         source_frame,
-        &rect,
+        resolution,
         &artifact_dir,
         step_id,
         target.id,
@@ -7635,6 +7806,37 @@ mod tests {
         .expect("test contrast frame png")
     }
 
+    fn test_auto_region_discrimination_frame_png(contrast: bool) -> Vec<u8> {
+        let width = 12;
+        let height = 9;
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let in_top_left = x < 4 && y < 3;
+                let in_center = (4..8).contains(&x) && (3..6).contains(&y);
+                let checker = if (x + y) % 2 == 0 { 240 } else { 40 };
+                let value = if in_top_left {
+                    checker
+                } else if in_center && !contrast {
+                    255 - checker
+                } else {
+                    72
+                };
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        Frame::from_pixels(
+            width,
+            height,
+            pixels,
+            PixelFormat::Rgba8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("test auto region frame")
+        .png_for_artifact()
+        .expect("test auto region frame png")
+    }
+
     #[test]
     fn version_outputs_json_envelope() {
         let result = run_cli(["--json", "--version"], true);
@@ -8427,11 +8629,14 @@ mod tests {
         };
         let materialized = materialize_anchor_artifact_from_source(
             source_frame,
-            &SessionRecordRect {
-                x: 2,
-                y: 3,
-                width: 4,
-                height: 5,
+            SessionRecordAnchorRegionResolution {
+                rect: SessionRecordRect {
+                    x: 2,
+                    y: 3,
+                    width: 4,
+                    height: 5,
+                },
+                auto_region: None,
             },
             &temp.path().join("artifacts"),
             "home-anchor",
@@ -8799,6 +9004,127 @@ mod tests {
             .map(PathBuf::from)
             .expect("artifact path");
         assert!(artifact_path.exists());
+    }
+
+    #[test]
+    fn session_record_step_anchor_auto_region_prefers_contrast_rejected_candidate() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let contrast_path = temp.path().join("contrast.png");
+        fs::write(
+            &frame_path,
+            test_auto_region_discrimination_frame_png(false),
+        )
+        .unwrap();
+        fs::write(
+            &contrast_path,
+            test_auto_region_discrimination_frame_png(true),
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--contrast-frame",
+                contrast_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected_reason")
+                .and_then(Value::as_str),
+            Some("contrast_rejected_highest_variance")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected/x")
+                .and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected/y")
+                .and_then(Value::as_i64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/x").and_then(Value::as_i64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/y").and_then(Value::as_i64),
+            Some(3)
+        );
+        let candidates = data
+            .pointer("/step/evaluation/auto_region/candidates")
+            .and_then(Value::as_array)
+            .expect("auto-region candidates");
+        assert_eq!(candidates.len(), 9);
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(
+                    |candidate| candidate.get("selected").and_then(Value::as_bool) == Some(true)
+                )
+                .count(),
+            1
+        );
+        assert!(candidates.iter().any(|candidate| {
+            candidate.get("contrast_passed").and_then(Value::as_bool) == Some(true)
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate.get("contrast_passed").and_then(Value::as_bool) == Some(false)
+        }));
+        assert_eq!(
+            data.pointer("/step/evaluation/contrast_backtest/passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
     }
 
     #[test]
