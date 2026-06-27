@@ -1274,11 +1274,36 @@ fn session_transport_contract() -> Value {
                 "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             },
             "interactive_stream": {
-                "status": "reserved",
-                "current_scaffold": "bounded local CLI stream",
-                "future_transport": "trusted bidirectional channel",
-                "frame_event_schema": "session.stream.event.v0.1",
-                "input_relay_requires_matching_lease": true
+                "status": "partial",
+                "implemented_surfaces": {
+                    "bounded_local_cli_stream": {
+                        "status": "available",
+                        "command": "stream --max-frames <N>",
+                        "schema_version": "session.stream.v0.1",
+                        "frame_delivery": "json_array",
+                        "frame_event_schema": "session.stream.event.v0.1",
+                        "max_frames_per_request": 60
+                    },
+                    "daemon_bounded_stream_request": {
+                        "status": "available",
+                        "command": "session request stream",
+                        "read_only_without_input_relay_requires_lease": false,
+                        "input_relay_requires_matching_lease": true
+                    },
+                    "per_request_input_relay": {
+                        "status": "available",
+                        "actions": ["tap", "swipe", "long-tap", "key", "text"],
+                        "max_events_per_request": 16,
+                        "long_lived_session": false
+                    }
+                },
+                "trusted_remote_long_lived_stream": {
+                    "status": "reserved",
+                    "future_transport": "trusted bidirectional channel",
+                    "network_listener_implemented": false,
+                    "encryption_required": true,
+                    "authentication_required": true
+                }
             }
         },
         "safety": {
@@ -1295,7 +1320,7 @@ fn session_transport_contract() -> Value {
             "network listener",
             "TLS implementation",
             "token issuance",
-            "UI transport",
+            "trusted remote long-lived stream transport",
             "scheduler runtime"
         ]
     })
@@ -1422,6 +1447,17 @@ fn session_api_contract() -> Value {
                 "actions": ["launch", "stop", "force-stop", "restart"],
                 "action_field": "action",
                 "package_field": "package"
+            },
+            "stream_view": {
+                "query": "stream --max-frames <N>",
+                "daemon_query": "session request stream",
+                "schema_version": "session.stream.v0.1",
+                "event_schema_version": "session.stream.event.v0.1",
+                "bounded_local_cli_status": "available",
+                "read_only_without_input_relay_requires_lease": false,
+                "input_relay_requires_lease": true,
+                "input_relay_actions": ["tap", "swipe", "long-tap", "key", "text"],
+                "trusted_remote_long_lived_stream_status": "reserved"
             }
         },
         "command_classes": {
@@ -1473,6 +1509,7 @@ fn session_api_contract() -> Value {
                     "long-tap",
                     "key",
                     "text",
+                    "stream --input-relay",
                     "tap-target",
                     "navigate",
                     "recover"
@@ -4355,7 +4392,8 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         },
         "trusted_channel": {
             "status": "reserved",
-            "reason": "local CLI bounded stream scaffold only"
+            "long_lived_stream_implemented": false,
+            "reason": "trusted remote long-lived stream transport is not implemented; this command is a bounded local CLI stream"
         },
         "contract": contract,
         "input_relay": input_relay,
@@ -4374,6 +4412,7 @@ fn stream_contract_json(
 ) -> Value {
     json!({
         "schema_version": "session.stream.v0.1",
+        "status": "available",
         "stream_kind": "bounded_cli_frame_sequence",
         "frame_delivery": "json_array",
         "event_schema_version": "session.stream.event.v0.1",
@@ -4382,6 +4421,8 @@ fn stream_contract_json(
             "supported": true,
             "requested": input_event_count > 0,
             "event_count": input_event_count,
+            "execution_model": if dry_run { "planned_only" } else { "per_request" },
+            "long_lived_session": false,
             "max_events_per_request": 16,
             "supported_actions": ["tap", "swipe", "long-tap", "key", "text"],
             "requires_matching_lease_when_daemon_routed": true
@@ -4397,7 +4438,7 @@ fn stream_contract_json(
         "safety": {
             "session_layer_only_throat": true,
             "ui_must_not_directly_touch_adb_or_device": true,
-            "trusted_remote_channel": "reserved"
+            "trusted_remote_long_lived_stream": "reserved"
         }
     })
 }
@@ -13538,6 +13579,10 @@ mod tests {
             Some("session.stream.v0.1")
         );
         assert_eq!(
+            data.pointer("/contract/status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
             data.pointer("/contract/event_schema_version")
                 .and_then(Value::as_str),
             Some("session.stream.event.v0.1")
@@ -13549,6 +13594,16 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/contract/input_relay/requested")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/contract/input_relay/execution_model")
+                .and_then(Value::as_str),
+            Some("planned_only")
+        );
+        assert_eq!(
+            data.pointer("/trusted_channel/long_lived_stream_implemented")
                 .and_then(Value::as_bool),
             Some(false)
         );
@@ -13650,6 +13705,11 @@ mod tests {
             data.pointer("/contract/input_relay/requested")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/contract/input_relay/long_lived_session")
+                .and_then(Value::as_bool),
+            Some(false)
         );
         let event_types = data
             .get("events")
@@ -19267,6 +19327,36 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request stream")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/event_schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/read_only_without_input_relay_requires_lease")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/input_relay_requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/trusted_remote_long_lived_stream_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
     }
 
     #[test]
@@ -19314,9 +19404,39 @@ mod tests {
         );
         assert_eq!(
             payload
-                .pointer("/channels/interactive_stream/frame_event_schema")
+                .pointer("/channels/interactive_stream/status")
+                .and_then(Value::as_str),
+            Some("partial")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/implemented_surfaces/bounded_local_cli_stream/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/implemented_surfaces/bounded_local_cli_stream/frame_event_schema")
                 .and_then(Value::as_str),
             Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/implemented_surfaces/daemon_bounded_stream_request/input_relay_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/implemented_surfaces/per_request_input_relay/long_lived_session")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/trusted_remote_long_lived_stream/status")
+                .and_then(Value::as_str),
+            Some("reserved")
         );
         assert_eq!(
             payload

@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab stream transport/API contract truthfulness
+
+### Current status
+
+- Updated `session transport` so `interactive_stream.status` is `partial` instead of treating the whole stream surface as reserved.
+- `session transport` now separately reports:
+  - available bounded local CLI stream;
+  - available daemon-routed bounded stream request;
+  - available per-request input relay;
+  - reserved trusted remote long-lived stream.
+- Updated `session api` with a `stream_view` envelope describing `session request stream`, the stream/event schema versions, read-only stream lease policy, input relay lease policy, and reserved trusted remote long-lived stream status.
+- Updated `stream` output contract to include `status=available`, per-request input relay execution metadata, `long_lived_session=false`, and an explicit `trusted_channel.long_lived_stream_implemented=false`.
+- No network listener, TLS, token issuance, UI transport, scheduler behavior, daemon queue semantics, capture backend behavior, input backend behavior, SQLite, OCR/OpenCV, resource access, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `2c529c79bf07b6992f9b8667792cf1c126b2f3ab`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and error-handling workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session transport/API contracts, bounded stream output, input relay, daemon request routing, capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_transport_request_returns_transport_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab stream_`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json session transport`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak stream --dry-run --max-frames 1`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_transport_request_returns_transport_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_` passed with `7` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, retry/background loops, new MaaTouch/Capture backend logic, SQLite, OCR/OpenCV, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `271` `actingcommand-actinglab` tests.
+- CLI smoke confirmed `session transport` exposes `interactive_stream.status=partial`, `bounded_local_cli_stream`, and `trusted_remote_long_lived_stream`.
+- CLI smoke confirmed `session api` exposes `stream_view`, `session.stream.v0.1`, and `trusted_remote_long_lived_stream_status=reserved`.
+- CLI smoke confirmed `stream --dry-run --max-frames 1` exposes `mode=bounded_stream`, `contract.schema_version=session.stream.v0.1`, and `trusted_channel.long_lived_stream_implemented=false`.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted remote network listener/TLS/auth implementation, actual long-lived remote interactive stream, scheduler lease arbitration integration, trusted UI exposure, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-stream-contract-truthfulness`.
+2. Continue Session Layer follow-ups from trusted remote transport, long-lived stream, scheduler lease arbitration integration, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab app force-stop lifecycle alias
 
 ### Current status

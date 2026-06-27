@@ -134,6 +134,33 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance app lifecycle alias: `session instance app <launch|stop|restart>` now matches the Session Layer task contract while reusing the existing lease-gated `session app <launch|stop|restart>` implementation.
 - ActingLab capture backend CLI alias: `--backend <auto|adb|droidcast_raw|nemu_ipc>` now matches the Session Layer task contract as a thin alias of the existing `--capture-backend` option.
 - ActingLab app force-stop lifecycle alias: `session app force-stop` and `session instance app force-stop` now match the Phase A lifecycle wording while reusing the existing force-stop implementation behind the lease-gated app lifecycle path; workspace validation also hardened recognition-pack test temp-dir uniqueness for Windows parallel test stability.
+- ActingLab stream transport/API contract truthfulness: `session transport`, `session api`, and `stream` now distinguish available bounded local stream/per-request input relay surfaces from the still-reserved trusted remote long-lived stream.
+
+## Current ActingLab Stream Transport/API Contract Truthfulness
+
+The current Runtime task aligns the machine-readable Session Layer contracts with the implementation that already exists today.
+
+Scope:
+
+- Mark the bounded local CLI stream surface as available in `session transport`.
+- Mark daemon-routed bounded stream requests as available while preserving lease requirements for input relay.
+- Mark per-request stream input relay as available, with actions `tap`, `swipe`, `long-tap`, `key`, and `text`.
+- Keep trusted remote long-lived stream transport explicitly reserved.
+- Add a `stream_view` envelope to `session api` so future UI/scheduler clients can discover the bounded stream schema and relay lease rules.
+- Add explicit availability and non-long-lived relay fields to `stream` output.
+
+Safety direction:
+
+- This is a contract alignment only.
+- It does not implement a network listener, TLS, token issuance, UI transport, scheduler behavior, daemon queue semantics, capture backend behavior, input backend behavior, SQLite, OCR/OpenCV, resource access, or game logic.
+- It does not turn the bounded local stream into a persistent trusted remote channel.
+- Control-capable stream input relay remains lease-gated when routed through the daemon.
+
+Validation status:
+
+- Focused `session_transport_request_returns_transport_contract`, `session_api_request_returns_api_contract`, and `stream_` tests passed.
+- CLI smoke confirmed `session transport`, `session api`, and `stream --dry-run` expose the corrected stream contract fields.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab App Force-Stop Lifecycle Alias
 
