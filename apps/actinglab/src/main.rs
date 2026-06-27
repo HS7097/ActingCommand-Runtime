@@ -3406,10 +3406,11 @@ fn poll_for_matched_page(
 
 fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
-        if flags.bool("--recover") {
+    if flags.bool("--recover") {
+        if should_route_control_via_session_daemon(global, &flags)? {
             return submit_monitor_session_request(global, &flags, args);
         }
+    } else if should_route_readonly_via_session_daemon(global, &flags)? {
         if flags.bool("--once") {
             return submit_monitor_once_session_request(global, &flags, args);
         }
@@ -3732,7 +3733,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     match sub {
         "run" => {
             let flags = FlagArgs::parse(args)?;
-            if flags.bool("--via-daemon") {
+            if should_route_control_via_session_daemon(global, &flags)? {
                 submit_control_session_request(global, &flags, "lab_run", args)
             } else {
                 lab_run::run_lab_run(global, args)
@@ -3776,7 +3777,7 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
             Ok(package_validation_json(&validate_package_zip(&zip)?, true))
         }
         "run" => {
-            if flags.bool("--via-daemon") {
+            if should_route_control_via_session_daemon(global, &flags)? {
                 return submit_control_session_request(global, &flags, "package_run", args);
             }
             let zip = flags.required_path("--zip")?;
@@ -3829,7 +3830,7 @@ fn run_operation(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutco
             ))
         }
         "run" => {
-            if flags.bool("--via-daemon") {
+            if should_route_control_via_session_daemon(global, &flags)? {
                 submit_control_session_request(global, &flags, "operation_run", args)
             } else {
                 Err(CliError::safety_blocked(
@@ -4679,7 +4680,12 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session instance requires list|health|reconnect"))?;
     let flags = FlagArgs::parse(&args[1..])?;
-    if flags.bool("--via-daemon") {
+    let should_route = if action == "reconnect" {
+        should_route_control_via_session_daemon(global, &flags)?
+    } else {
+        should_route_readonly_via_session_daemon(global, &flags)?
+    };
+    if should_route {
         return submit_session_instance_request(global, &flags, args);
     }
     let config = read_user_config()?;
@@ -4724,7 +4730,7 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session app requires launch|stop|restart"))?;
     let flags = FlagArgs::parse(&args[1..])?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "app", args);
     }
     let config = read_user_config()?;
@@ -9527,6 +9533,23 @@ mod tests {
         write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
     }
 
+    fn assert_daemon_request_timeout(result: CliResult) {
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("timed out")
+        );
+    }
+
     #[test]
     fn session_status_without_daemon_is_offline_ok() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -9672,6 +9695,151 @@ mod tests {
         assert!(should_route_control_via_session_daemon(&client_global, &flags).unwrap());
         assert!(!should_route_readonly_via_session_daemon(&daemon_global, &flags).unwrap());
         assert!(!should_route_control_via_session_daemon(&daemon_global, &flags).unwrap());
+    }
+
+    #[test]
+    fn device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let state_dir = temp.path().to_str().unwrap();
+        let input = temp.path().join("input.zip");
+        let out = temp.path().join("out.zip");
+        let operation_dir = temp.path().join("operation");
+
+        let cases: Vec<Vec<&str>> = vec![
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "monitor",
+                "--once",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "monitor",
+                "--recover",
+                "--capture",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "instance",
+                "health",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "instance",
+                "reconnect",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "app",
+                "launch",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--package",
+                "com.example.game",
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "run",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "package",
+                "run",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            vec![
+                "--json",
+                "--instance",
+                "ak",
+                "operation",
+                "run",
+                "--state-dir",
+                state_dir,
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--operation-dir",
+                operation_dir.to_str().unwrap(),
+            ],
+        ];
+
+        for args in cases {
+            assert_daemon_request_timeout(run_cli(args, true));
+        }
     }
 
     #[test]

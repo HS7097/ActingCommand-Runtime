@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-preferred lifecycle and run routing
+
+### Current status
+
+- Extended daemon-preferred routing to the remaining device/lifecycle/run entry points.
+- `monitor --once` and `session instance list|health` now prefer the resident daemon request queue when session info is visible.
+- `monitor --recover`, `session instance reconnect`, `session app launch|stop|restart`, `lab run`, `package run`, and `operation run` now prefer the resident daemon request queue when session info is visible.
+- Existing local/direct behavior remains available when no session info exists.
+- Existing daemon-side lease validation remains the gate before reconnect, app lifecycle, recovery, Lab run, package run, operation run, or device I/O.
+- Validation-only/build-only commands remain local/offline.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `48204cffd0cf8dd1dcbb97f9d03518879142ce00`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this split repository.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- Inspected `apps/actinglab/src/main.rs` monitor, lifecycle, run, request, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists -- --nocapture`
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture`
+- `Select-String -Path apps/actinglab/src/main.rs -Pattern 'flags.bool\(\"--via-daemon\"\)'`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture` passed with `1` test.
+- Remaining `flags.bool("--via-daemon")` branches are only in shared routing helpers.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: scheduler lease arbitration integration, manual operator lease UX, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-preferred-lifecycle-run`.
+2. Continue Session Layer follow-ups: manual lease UX, scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon-preferred control routing
 
 ### Current status

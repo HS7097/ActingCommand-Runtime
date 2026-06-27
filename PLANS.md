@@ -96,8 +96,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 - ActingLab daemon-preferred control routing: when session info indicates a resident daemon is running, direct touch/input and semantic control entries prefer the daemon request queue by default while daemon-side handlers force local execution to avoid recursive requeue.
+- ActingLab daemon-preferred lifecycle and run routing: monitor, instance lifecycle diagnostics/reconnect, app lifecycle, Lab run, package run, and operation run now prefer the resident daemon request queue when session info exists.
 
-## Current ActingLab Daemon-Preferred Control Routing
+## Current ActingLab Daemon-Preferred Lifecycle And Run Routing
+
+The current Runtime task continues the Session Layer "sole throat" direction by routing the remaining device/lifecycle/run entry points through the resident daemon whenever session info indicates the daemon is running. This keeps CLI users and agents from bypassing the Session Layer for monitor diagnosis/recovery, instance health/reconnect, app launch/stop/restart, trusted Lab packages, package execution, and operation execution.
+
+Scope:
+
+- Apply daemon-preferred read-only routing to `monitor --once` and `session instance list|health`.
+- Apply daemon-preferred control routing to `monitor --recover`, `session instance reconnect`, `session app launch|stop|restart`, `lab run`, `package run`, and `operation run`.
+- Preserve existing local/direct behavior when no session info exists.
+- Preserve daemon-side lease validation for control requests before app lifecycle, reconnect, Lab package, package, operation, recovery, or device I/O.
+- Keep validation-only and build-only commands such as `lab validate`, `package validate|inspect|build-task|build-pack`, and `operation validate|inspect|explain` local/offline.
+
+Safety direction:
+
+- With a resident Session Layer daemon visible, humans/agents/CLI should not directly touch ADB, app lifecycle, MaaTouch, package execution, or operation execution paths.
+- Missing or unprocessed daemon requests fail visibly with `runtime_not_running` timeout instead of silently falling back to direct device access.
+- This milestone does not add scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Add operator lease-acquisition UX for manual control.
+- Expose the Session Layer boundary through the future trusted UI/API channel.
+- Continue scheduler lease arbitration integration and live prepared-emulator validation.
+- Implement trusted interactive stream/input relay in a later milestone.
+
+## Previous ActingLab Daemon-Preferred Control Routing
 
 The current Runtime task extends the Session Layer default from diagnostics toward control safety: when a resident session daemon is visible through the session state info file, direct control CLI entries prefer the daemon request queue without requiring `--via-daemon`. Daemon-side request handlers now mark their reconstructed `GlobalOptions` as already inside the resident daemon, so they execute local command implementations instead of submitting a second request back into the same queue.
 
