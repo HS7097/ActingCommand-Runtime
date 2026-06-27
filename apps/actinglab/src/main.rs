@@ -1239,8 +1239,14 @@ fn session_api_contract() -> Value {
                 "query": "session events",
                 "daemon_query": "session request events",
                 "schema_version": "session.events.v0.1",
-                "filters": ["--limit", "--after-unix-ms"],
-                "cursor_fields": ["latest_timestamp_unix_ms", "next_after_unix_ms"]
+                "filters": ["--limit", "--after-unix-ms", "--after-request-id"],
+                "cursor_fields": [
+                    "latest_timestamp_unix_ms",
+                    "next_after_unix_ms",
+                    "latest_request_id",
+                    "next_after_request_id"
+                ],
+                "cursor_error": "event_cursor_not_found"
             }
         },
         "command_classes": {
@@ -1925,6 +1931,17 @@ fn parse_optional_u64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<u64>> {
         .parse::<u64>()
         .map(Some)
         .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
+}
+
+fn parse_optional_string_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
+    match flags.optional(name) {
+        None => Ok(None),
+        Some(value) if value == "true" => Err(CliError::usage(format!("missing {name} <value>"))),
+        Some(value) if value.trim().is_empty() => {
+            Err(CliError::usage(format!("{name} must not be empty")))
+        }
+        Some(value) => Ok(Some(value)),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4606,23 +4623,47 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     let state_dir = session_state_dir_from_flags(&flags)?;
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
     let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
-    session_events_payload(&state_dir, limit, after_unix_ms)
+    let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
+    session_events_payload(
+        &state_dir,
+        limit,
+        after_unix_ms,
+        after_request_id.as_deref(),
+    )
 }
 
 fn session_events_payload(
     state_dir: &Path,
     limit: usize,
     after_unix_ms: Option<u64>,
+    after_request_id: Option<&str>,
 ) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let read_limit = if after_unix_ms.is_some() {
+    let read_limit = if after_unix_ms.is_some() || after_request_id.is_some() {
         1_000
     } else {
         limit
     };
-    let mut entries = read_session_request_journal(state_dir, read_limit)?
+    let mut entries = read_session_request_journal(state_dir, read_limit)?;
+    if let Some(cursor_request_id) = after_request_id {
+        let Some(position) = entries
+            .iter()
+            .position(|entry| entry.request_id == cursor_request_id)
+        else {
+            return Err(CliError::new(
+                ErrorKind::UsageValidation,
+                "event_cursor_not_found",
+                format!(
+                    "request cursor '{cursor_request_id}' was not found in the recent request journal"
+                ),
+                &["request_journal"],
+            ));
+        };
+        entries.drain(0..=position);
+    }
+    let mut entries = entries
         .into_iter()
         .filter(|entry| {
             after_unix_ms
@@ -4639,6 +4680,7 @@ fn session_events_payload(
         .map(session_request_event_json)
         .collect::<Vec<_>>();
     let latest_timestamp_unix_ms = entries.iter().map(|entry| entry.completed_at_unix_ms).max();
+    let latest_request_id = entries.last().map(|entry| entry.request_id.as_str());
     Ok(json!({
         "schema_version": "session.events.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -4646,10 +4688,13 @@ fn session_events_payload(
         "journal": session_request_journal_path(state_dir).display().to_string(),
         "limit": limit,
         "after_unix_ms": after_unix_ms,
+        "after_request_id": after_request_id,
         "event_count": events.len(),
         "cursor": {
             "latest_timestamp_unix_ms": latest_timestamp_unix_ms,
-            "next_after_unix_ms": latest_timestamp_unix_ms
+            "next_after_unix_ms": latest_timestamp_unix_ms,
+            "latest_request_id": latest_request_id,
+            "next_after_request_id": latest_request_id
         },
         "events": events
     }))
@@ -5612,7 +5657,8 @@ fn execute_session_command_request_inner(
             flags.expect_positionals("session request events", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
-            session_events_payload(state_dir, limit, after_unix_ms)
+            let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
+            session_events_payload(state_dir, limit, after_unix_ms, after_request_id.as_deref())
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -17461,6 +17507,132 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(70)
         );
+        assert_eq!(
+            payload
+                .pointer("/cursor/next_after_request_id")
+                .and_then(Value::as_str),
+            Some("event-2")
+        );
+    }
+
+    #[test]
+    fn session_events_after_request_id_returns_same_timestamp_later_events() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for request_id in ["event-a", "event-b"] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: "status".to_string(),
+                global: global.clone(),
+                args: Vec::new(),
+                lease: None,
+                created_at_unix_ms: 10,
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: "status".to_string(),
+                ok: true,
+                data: Some(json!({"status": "ok"})),
+                error: None,
+                started_at_unix_ms: 20,
+                completed_at_unix_ms: 70,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "events-after-request-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-request-id".to_string(),
+                "event-a".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("event-b")
+        );
+        assert_eq!(
+            payload.get("after_request_id").and_then(Value::as_str),
+            Some("event-a")
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/latest_timestamp_unix_ms")
+                .and_then(Value::as_u64),
+            Some(70)
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/latest_request_id")
+                .and_then(Value::as_str),
+            Some("event-b")
+        );
+    }
+
+    #[test]
+    fn session_events_after_request_id_missing_fails_visibly() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let request = SessionCommandRequest {
+            request_id: "event-a".to_string(),
+            command: "status".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let response = SessionCommandResponse {
+            request_id: "event-a".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 70,
+        };
+        append_session_request_journal(state_dir, &request, &response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-missing-request-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--after-request-id".to_string(),
+                "missing-request".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let err = execute_session_command_request_inner(&query, state_dir).unwrap_err();
+
+        assert_eq!(err.code, "event_cursor_not_found");
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
@@ -17629,9 +17801,21 @@ mod tests {
         );
         assert_eq!(
             payload
-                .pointer("/envelopes/event_view/cursor_fields/0")
+                .pointer("/envelopes/event_view/filters/2")
                 .and_then(Value::as_str),
-            Some("latest_timestamp_unix_ms")
+            Some("--after-request-id")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/cursor_fields/2")
+                .and_then(Value::as_str),
+            Some("latest_request_id")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/cursor_error")
+                .and_then(Value::as_str),
+            Some("event_cursor_not_found")
         );
     }
 
@@ -19294,6 +19478,11 @@ mod tests {
             data.pointer("/envelopes/event_view/cursor_fields/1")
                 .and_then(Value::as_str),
             Some("next_after_unix_ms")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/cursor_fields/3")
+                .and_then(Value::as_str),
+            Some("next_after_request_id")
         );
     }
 

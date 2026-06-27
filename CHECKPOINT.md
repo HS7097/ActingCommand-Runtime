@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session request-id event cursor
+
+### Current status
+
+- Added request-id cursor support to `session.events.v0.1`.
+- `session events` now accepts `--after-request-id <request_id>` and returns only request-journal events written after that request.
+- `session request events` supports the same request-id filter through the resident daemon request path.
+- Event payloads now include `after_request_id`, `cursor.latest_request_id`, and `cursor.next_after_request_id`.
+- Missing request cursors fail visibly with `event_cursor_not_found` instead of silently returning an empty event list.
+- `session.api.v0.1` now documents `--after-request-id`, request-id cursor fields, and the cursor error code for local CLI and future trusted UI/API clients.
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ed18653ca4a279235c3049a3b665d3177d6ad476`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed `LICENSE_POLICY.md` is not present in this split Runtime repository.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session events, daemon request handling, request journal projection, API contract, CLI error handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_events`
+- `cargo test -p actingcommand-actinglab session_api`
+- `cargo run -q -p actingcommand-actinglab -- --json session events --state-dir target\session-events-request-cursor-smoke --limit 5 --after-request-id missing-request`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_events` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_api` passed with `2` tests.
+- Local missing request-id cursor smoke returned visible `event_cursor_not_found`.
+- Local `session api` advertised `--after-request-id`, request-id cursor fields, and `event_cursor_not_found`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `243` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-events-request-cursor`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session events cursor
 
 ### Current status

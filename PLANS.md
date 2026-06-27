@@ -117,6 +117,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session events view: `session events` and `session request events` expose daemon request journal outcomes as stable `session.events.v0.1` event data for future UI/API clients.
 - ActingLab Session API contract: `session api` and `session request api` expose `session.api.v0.1`, documenting local CLI access, reserved trusted remote access, daemon request queue fields, CLI/event envelopes, command classes, and required failure codes.
 - ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
+- ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
+
+## Current ActingLab Session Request-Id Event Cursor
+
+The current Runtime task tightens the incremental Session event view for future UI/API clients. Timestamp cursors remain available, and request-id cursors now provide a precise continuation point when multiple daemon request events share the same completion timestamp.
+
+Scope:
+
+- Add `--after-request-id <request_id>` to `session events`.
+- Add the same request-id cursor filter to resident daemon `session request events`.
+- Return `after_request_id`, `cursor.latest_request_id`, and `cursor.next_after_request_id` in `session.events.v0.1`.
+- Return visible `event_cursor_not_found` errors when a supplied request cursor is not present in the recent request journal.
+- Document the new filter, cursor fields, and cursor error code in `session.api.v0.1`.
+
+Safety direction:
+
+- This milestone is read-only and only projects existing request-journal data.
+- Missing request cursors fail visibly instead of returning a fake empty event list.
+- No device I/O, emulator control, capture backend change, resource repository access, UI, trusted network listener, scheduler implementation, SQLite, OCR/OpenCV, or game logic was added.
+
+Validation status:
+
+- Focused event tests passed for stable event output, timestamp cursors, request-id cursors with same-timestamp events, and missing-cursor failure.
+- Focused API contract tests passed and now cover request-id filters plus request-id cursor fields.
+- Manual CLI check confirmed missing `--after-request-id` emits `event_cursor_not_found`.
+- Manual CLI check confirmed `session api` advertises `--after-request-id`, request-id cursor fields, and `event_cursor_not_found`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `243` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session Events Cursor
 
