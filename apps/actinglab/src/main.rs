@@ -1525,6 +1525,19 @@ fn session_api_contract() -> Value {
                     "monitor_policy_preempt_lease"
                 ]
             },
+            "lease_view": {
+                "query": "session lease status|wait|acquire|release|preempt",
+                "daemon_query": "session request lease status|wait|acquire|release|preempt",
+                "status_schema_version": "session.lease_status.v0.1",
+                "wait_schema_version": "session.lease_wait.v0.1",
+                "wait_query": "session lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]",
+                "daemon_wait_query": "session request lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]",
+                "wait_default_status": "free",
+                "wait_statuses": ["free", "held"],
+                "wait_timeout_default_ms": SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+                "wait_poll_default_ms": 100,
+                "wait_timeout_returns_current_state": true
+            },
             "journal_view": {
                 "query": "session journal",
                 "daemon_query": "session request journal",
@@ -8620,7 +8633,7 @@ fn run_session_lease_inner(
     forced_state_dir: Option<&Path>,
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session lease requires acquire|release|preempt|status|run")
+        CliError::usage("session lease requires acquire|release|preempt|status|wait|run")
     })?;
     if action == "run" {
         return run_session_lease_run(global, &args[1..], forced_state_dir);
@@ -8645,11 +8658,8 @@ fn run_session_lease_inner(
         .unwrap_or_else(|| "manual".to_string());
     let lease_path = session_lease_path(&state_dir, &instance_id);
     match action {
-        "status" => Ok(json!({
-            "instance": instance_id,
-            "lease": read_json_value(&lease_path)?,
-            "path": lease_path.display().to_string()
-        })),
+        "status" => session_lease_status_payload(&instance_id, &lease_path),
+        "wait" => run_session_lease_wait(&instance_id, &lease_path, &flags),
         "acquire" => {
             if lease_path.exists() {
                 let current = read_json_file::<SessionLease>(&lease_path)?;
@@ -8707,6 +8717,119 @@ fn run_session_lease_inner(
             "unknown session lease action: {other}"
         ))),
     }
+}
+
+fn session_lease_status_payload(instance_id: &str, lease_path: &Path) -> CliOutcome<Value> {
+    let lease = read_json_file::<SessionLease>(lease_path)?;
+    Ok(json!({
+        "schema_version": "session.lease_status.v0.1",
+        "instance": instance_id,
+        "status": if lease.is_some() { "held" } else { "free" },
+        "lease": lease,
+        "path": lease_path.display().to_string()
+    }))
+}
+
+fn run_session_lease_wait(
+    instance_id: &str,
+    lease_path: &Path,
+    flags: &FlagArgs,
+) -> CliOutcome<Value> {
+    flags.expect_positionals("session lease wait", 0)?;
+    let expected_status = parse_session_lease_wait_status(flags)?;
+    let holder_filter = parse_session_lease_wait_holder(flags)?;
+    let lease_id_filter = parse_optional_string_value(flags, "--lease-id")?;
+    let timeout =
+        parse_optional_duration_ms(flags, "--timeout-ms", SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
+    let poll = parse_optional_duration_ms(flags, "--poll-ms", 100)?;
+    if poll.is_zero() || poll > Duration::from_millis(5_000) {
+        return Err(CliError::usage("--poll-ms must be between 1 and 5000"));
+    }
+    let started = Instant::now();
+    loop {
+        let mut payload = session_lease_status_payload(instance_id, lease_path)?;
+        let current_status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("free")
+            .to_string();
+        if session_lease_wait_matches(
+            &payload,
+            &expected_status,
+            holder_filter.as_deref(),
+            lease_id_filter.as_deref(),
+        ) {
+            payload["schema_version"] = json!("session.lease_wait.v0.1");
+            payload["wait"] = json!({
+                "completed": true,
+                "timed_out": false,
+                "matched_status": current_status,
+                "expected_status": expected_status.clone(),
+                "holder": holder_filter.clone(),
+                "lease_id": lease_id_filter.clone(),
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        if started.elapsed() >= timeout {
+            payload["schema_version"] = json!("session.lease_wait.v0.1");
+            payload["wait"] = json!({
+                "completed": false,
+                "timed_out": true,
+                "current_status": current_status,
+                "expected_status": expected_status.clone(),
+                "holder": holder_filter.clone(),
+                "lease_id": lease_id_filter.clone(),
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn parse_session_lease_wait_status(flags: &FlagArgs) -> CliOutcome<String> {
+    let status = parse_optional_string_value(flags, "--status")?.unwrap_or_else(|| "free".into());
+    if matches!(status.as_str(), "free" | "held") {
+        Ok(status)
+    } else {
+        Err(CliError::usage(format!(
+            "unsupported session lease wait --status value: {status}; expected free or held"
+        )))
+    }
+}
+
+fn parse_session_lease_wait_holder(flags: &FlagArgs) -> CliOutcome<Option<String>> {
+    if let Some(holder) = parse_optional_string_value(flags, "--holder")? {
+        Ok(Some(holder))
+    } else {
+        parse_optional_string_value(flags, "--lease-holder")
+    }
+}
+
+fn session_lease_wait_matches(
+    payload: &Value,
+    expected_status: &str,
+    holder: Option<&str>,
+    lease_id: Option<&str>,
+) -> bool {
+    let status = payload.get("status").and_then(Value::as_str);
+    if status != Some(expected_status) {
+        return false;
+    }
+    if expected_status == "free" {
+        return true;
+    }
+    let lease = payload.get("lease").unwrap_or(&Value::Null);
+    let holder_matches =
+        holder.is_none_or(|expected| lease.get("holder").and_then(Value::as_str) == Some(expected));
+    let lease_id_matches = lease_id
+        .is_none_or(|expected| lease.get("lease_id").and_then(Value::as_str) == Some(expected));
+    holder_matches && lease_id_matches
 }
 
 fn run_session_lease_run(
@@ -12635,10 +12758,6 @@ where
     Ok(Some(value))
 }
 
-fn read_json_value(path: &Path) -> CliOutcome<Option<Value>> {
-    read_json_file(path)
-}
-
 fn write_json_file<T>(path: &Path, value: &T) -> CliOutcome<()>
 where
     T: Serialize,
@@ -13749,6 +13868,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap("session request devices", ["running_runtime"], "available"),
         command_cap("session request lease", ["running_runtime"], "available"),
+        command_cap(
+            "session request lease wait",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request record", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
@@ -13922,6 +14046,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
+        command_cap("session lease wait", ["offline"], "available"),
         command_cap(
             "session lease run",
             ["running_runtime", "lab_lease"],
@@ -15702,6 +15827,259 @@ mod tests {
                 .get("status")
                 .and_then(Value::as_str),
             Some("released")
+        );
+    }
+
+    #[test]
+    fn session_lease_wait_returns_immediately_when_free() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_wait.v0.1")
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("free"));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/expected_status")
+                .and_then(Value::as_str),
+            Some("free")
+        );
+    }
+
+    #[test]
+    fn session_lease_wait_accepts_matching_holder_and_lease_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "wait",
+                "--status",
+                "held",
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("held"));
+        assert_eq!(
+            data.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            data.pointer("/wait/matched_status").and_then(Value::as_str),
+            Some("held")
+        );
+    }
+
+    #[test]
+    fn session_lease_wait_timeout_returns_current_held_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "wait",
+                "--status",
+                "free",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("held"));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/wait/timed_out").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/current_status").and_then(Value::as_str),
+            Some("held")
+        );
+    }
+
+    #[test]
+    fn session_lease_wait_rejects_zero_poll_ms() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "0",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("--poll-ms"));
+    }
+
+    #[test]
+    fn session_lease_wait_rejects_unknown_status() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "wait",
+                "--status",
+                "busy",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("unsupported session lease wait"));
+    }
+
+    #[test]
+    fn session_lease_wait_request_reads_daemon_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(state_dir, "ak"), &lease).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "lease-wait".to_string(),
+            command: "lease".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "wait".to_string(),
+                "--status".to_string(),
+                "held".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+                "--timeout-ms".to_string(),
+                "1".to_string(),
+                "--poll-ms".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_wait.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            payload.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -27080,6 +27458,40 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/envelopes/lease_view/status_schema_version")
+                .and_then(Value::as_str),
+            Some("session.lease_status.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/wait_schema_version")
+                .and_then(Value::as_str),
+            Some("session.lease_wait.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/wait_query")
+                .and_then(Value::as_str),
+            Some(
+                "session lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]"
+            )
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/daemon_wait_query")
+                .and_then(Value::as_str),
+            Some(
+                "session request lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]"
+            )
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/wait_default_status")
+                .and_then(Value::as_str),
+            Some("free")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/wait_timeout_returns_current_state")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/event_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.events.v0.1")
@@ -27388,6 +27800,10 @@ mod tests {
     fn lab_lease_capabilities_are_available() {
         let commands = command_capabilities();
         for command_name in [
+            "session lease",
+            "session lease wait",
+            "session request lease",
+            "session request lease wait",
             "lab status",
             "lab lease",
             "lab lease status",

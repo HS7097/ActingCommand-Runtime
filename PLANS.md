@@ -140,8 +140,24 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session request cancel view: `session request cancel <request-id>` removes queued daemon requests that have not produced a response, records a durable `request_cancelled` journal failure, and exposes the result through request-state and event views.
 - ActingLab session running request state view: resident daemon request processing now writes a `running/` marker while executing a request, and request-state/status diagnostics expose `running` lifecycle state between queued and response-available.
 - ActingLab session request-state wait view: `session request-state wait <request-id>` and `session request request-state wait <request-id>` provide bounded lifecycle waiting over queued/running/response/journal request states for UI/scheduler clients.
+- ActingLab session lease wait view: `session lease wait` and `session request lease wait` provide bounded waiting for free or held lease state, including holder and lease-id filters for scheduler/Lab/UI coordination.
 
-## Current ActingLab Session Request-State Wait View
+## Current ActingLab Session Lease Wait View
+
+This increment closes a lease-arbitration observability gap in the Session Layer: consumers can wait for an instance lease to become free or to be held by an expected owner without writing custom polling against `lease-*.json`.
+
+- `session lease wait [--status free|held]` waits in the local Session Layer state directory.
+- `session request lease wait [--status free|held]` exposes the same wait behavior through the resident daemon request queue.
+- The default expected status is `free`, supporting Lab/UI consumers waiting for a scheduler-owned lease to be released before attempting `acquire`.
+- `--status held` can be combined with `--holder` or `--lease-holder` and `--lease-id` to wait for a specific owner.
+- Timeout returns the current lease-state payload with `wait.timed_out=true`; it does not claim the desired lease state was reached.
+- Invalid status filters, invalid poll intervals, and corrupt lease files fail visibly.
+- `session lease status` now includes schema `session.lease_status.v0.1` and a machine-readable `status` field.
+- `session api` and `capabilities` advertise the new local and daemon-routed lease wait surfaces.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+## Previous ActingLab Session Request-State Wait View
 
 This increment closes a UI/scheduler polling gap in the Session Layer request lifecycle: clients can now wait for a specific request id to reach an expected lifecycle state without implementing custom file polling.
 

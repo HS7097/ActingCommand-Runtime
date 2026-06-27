@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session lease wait view
+
+### Current status
+
+- `session lease wait [--status free|held] [--timeout-ms N] [--poll-ms N]` now provides bounded local waiting for instance lease state.
+- `session request lease wait [--status free|held] [--timeout-ms N] [--poll-ms N]` exposes the same wait behavior through the resident daemon request queue.
+- The default wait status is `free`, so Lab/UI/scheduler clients can wait for a lease to be released before attempting acquisition.
+- `--status held` supports `--holder`, `--lease-holder`, and `--lease-id` filters for coordination with a specific owner or lease id.
+- Timeout returns the current lease-state payload with `wait.timed_out=true`; it does not fake the desired state.
+- Invalid status filters, invalid poll intervals, and corrupt lease files fail visibly.
+- `session lease status` now emits schema `session.lease_status.v0.1` and machine-readable `status`.
+- `session api` and `capabilities` now advertise the new local and daemon-routed lease wait surfaces.
+- New lease wait tests use the existing environment lock so full parallel workspace tests do not race on shared CLI environment/config state.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8a3d1a3f64d42c95dc977401c3a6ded7949306cc`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed Runtime-local `LICENSE_POLICY.md` is absent.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git log -1 --oneline`
+- `git tag --points-at HEAD`
+- Inspected Session Layer lease handling, daemon request routing, API contract, command capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_lease -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_lease_capabilities_are_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Re-ran focused `session_lease_wait_timeout_returns_current_held_state` after the full-suite isolation failure.
+- `git diff --check`
+
+### Test results
+
+- Focused Session lease tests passed, including free wait, held wait with holder and lease-id filters, timeout current-state payload, daemon-routed wait, invalid status, and invalid poll interval coverage.
+- Initial full-suite validation exposed that one new lease wait test could race with shared CLI environment state under parallel tests.
+- Added existing `ENV_LOCK` test isolation to the new lease wait tests; no production behavior changed for that fix.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-lease-wait-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session request-state wait view
 
 ### Current status
