@@ -1188,6 +1188,19 @@ fn submit_control_session_request(
     submit_session_command_request(global, flags, command, session_request_payload_args(args))
 }
 
+fn submit_session_lease_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    args: &[String],
+) -> CliOutcome<Value> {
+    submit_session_command_request(
+        global,
+        flags,
+        "lease",
+        session_lease_request_payload_args(args),
+    )
+}
+
 fn session_request_payload_args(args: &[String]) -> Vec<String> {
     let mut payload = Vec::new();
     let mut index = 0usize;
@@ -1198,6 +1211,29 @@ fn session_request_payload_args(args: &[String]) -> Vec<String> {
             continue;
         }
         if SESSION_REQUEST_VALUE_FLAGS.contains(&arg.as_str()) {
+            index += if index + 1 < args.len() && !args[index + 1].starts_with("--") {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        payload.push(arg.clone());
+        index += 1;
+    }
+    payload
+}
+
+fn session_lease_request_payload_args(args: &[String]) -> Vec<String> {
+    let mut payload = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--via-daemon" {
+            index += 1;
+            continue;
+        }
+        if ["--state-dir", "--request-timeout-ms"].contains(&arg.as_str()) {
             index += if index + 1 < args.len() && !args[index + 1].starts_with("--") {
                 2
             } else {
@@ -3919,13 +3955,14 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, lease, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
+        "lease" => submit_session_lease_request(global, &flags, &args[1..]),
         "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
         "capture-diagnose" => {
             let mut request_args = vec!["diagnose".to_string()];
@@ -4365,6 +4402,10 @@ fn execute_session_command_request_inner(
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             session_journal_payload(state_dir, limit)
         }
+        "lease" => {
+            let global = request.global.to_global()?;
+            run_session_lease_in_state_dir(&global, &request.args, state_dir)
+        }
         "capture_diagnose" => {
             let global = request.global.to_global()?;
             let flags = FlagArgs::parse(&request.args)?;
@@ -4661,13 +4702,32 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 }
 
 fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    run_session_lease_inner(global, args, None)
+}
+
+fn run_session_lease_in_state_dir(
+    global: &GlobalOptions,
+    args: &[String],
+    state_dir: &Path,
+) -> CliOutcome<Value> {
+    run_session_lease_inner(global, args, Some(state_dir))
+}
+
+fn run_session_lease_inner(
+    global: &GlobalOptions,
+    args: &[String],
+    forced_state_dir: Option<&Path>,
+) -> CliOutcome<Value> {
     let action = args
         .first()
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session lease requires acquire|release|preempt|status"))?;
     let flags = FlagArgs::parse(&args[1..])?;
     let config = read_user_config()?;
-    let state_dir = session_state_dir_from_flags(&flags)?;
+    let state_dir = forced_state_dir
+        .map(Path::to_path_buf)
+        .map(Ok)
+        .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
     fs::create_dir_all(&state_dir).map_err(|err| {
         CliError::runtime_not_running(format!(
             "failed to create session state dir {}: {err}",
@@ -4677,6 +4737,7 @@ fn run_session_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let holder = flags
         .optional("--holder")
+        .or_else(|| flags.optional("--lease-holder"))
         .filter(|value| value != "true")
         .unwrap_or_else(|| "manual".to_string());
     let lease_path = session_lease_path(&state_dir, &instance_id);
@@ -8908,6 +8969,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session journal", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
+        command_cap("session request lease", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
             ["running_runtime", "device"],
@@ -14353,6 +14415,76 @@ mod tests {
     }
 
     #[test]
+    fn session_lease_request_acquires_and_releases_in_daemon_state_dir() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("daemon-state");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let acquire = SessionCommandRequest {
+            request_id: "lease-acquire".to_string(),
+            command: "lease".to_string(),
+            global: global.clone(),
+            args: vec![
+                "acquire".to_string(),
+                "--holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let acquired = execute_session_command_request_inner(&acquire, &state_dir).unwrap();
+
+        assert_eq!(
+            acquired.get("status").and_then(Value::as_str),
+            Some("acquired")
+        );
+        assert_eq!(
+            acquired.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert!(session_lease_path(&state_dir, "ak").exists());
+
+        let release = SessionCommandRequest {
+            request_id: "lease-release".to_string(),
+            command: "lease".to_string(),
+            global,
+            args: vec![
+                "release".to_string(),
+                "--holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 2,
+        };
+        let released = execute_session_command_request_inner(&release, &state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(
+            released.get("status").and_then(Value::as_str),
+            Some("released")
+        );
+        assert!(!session_lease_path(&state_dir, "ak").exists());
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14405,6 +14537,29 @@ mod tests {
                 "session",
                 "request",
                 "journal",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_lease_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "lease",
+                "status",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
             ],
@@ -15048,6 +15203,33 @@ mod tests {
     }
 
     #[test]
+    fn session_lease_request_payload_preserves_holder_and_lease_id() {
+        let args = [
+            "acquire".to_string(),
+            "--via-daemon".to_string(),
+            "--state-dir".to_string(),
+            "target/session".to_string(),
+            "--request-timeout-ms".to_string(),
+            "15000".to_string(),
+            "--holder".to_string(),
+            "scheduler".to_string(),
+            "--lease-id".to_string(),
+            "lease-1".to_string(),
+        ];
+
+        assert_eq!(
+            session_lease_request_payload_args(&args),
+            vec![
+                "acquire".to_string(),
+                "--holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn session_request_journal_records_success_and_error() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -15652,6 +15834,7 @@ mod tests {
             "session capture diagnose",
             "session request status",
             "session request journal",
+            "session request lease",
             "session request capture",
             "session request capture-diagnose",
             "session request stream",

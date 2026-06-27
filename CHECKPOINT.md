@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-routed lease interface
+
+### Current status
+
+- Added `session request lease` as a daemon-routed Session Layer request.
+- `session request lease acquire|release|preempt|status` now runs through the resident daemon request queue.
+- Lease request payloads preserve `--holder`, `--lease-holder`, and `--lease-id` while stripping client-only request flags such as `--state-dir` and `--request-timeout-ms`.
+- Daemon-routed lease operations use the daemon's state directory, so custom daemon state paths do not accidentally fall back to the client's default session state.
+- Capabilities now advertise `session request lease`.
+- Missing daemon state still fails visibly with `runtime_not_running`.
+- Lease conflicts and holder/id mismatches remain visible safety-blocked errors.
+- No device control, capture/input path, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e0ef4082b9063c71aa6c4b6925d7cd212d06d735`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_lease_request_payload_preserves_holder_and_lease_id -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_lease_request_acquires_and_releases_in_daemon_state_dir -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_lease_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_lease_request_payload_preserves_holder_and_lease_id -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_lease_request_acquires_and_releases_in_daemon_state_dir -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_lease_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon-routed lease interface milestone.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-lease-interface`.
+2. Continue Session Layer follow-ups: trusted UI/API diagnostics, scheduler lease arbitration integration, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon-routed journal diagnostics
 
 ### Current status

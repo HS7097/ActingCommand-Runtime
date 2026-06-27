@@ -89,8 +89,48 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
+- ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 
-## Current ActingLab Daemon-Routed Journal Diagnostics
+## Current ActingLab Daemon-Routed Lease Interface
+
+The current Runtime task routes the Session Layer lease interface through the resident daemon request queue. Local `session lease ...` remains available, and `session request lease ...` can now serialize lease acquire/release/preempt/status operations through the daemon.
+
+Scope:
+
+- Add `session request lease ...`.
+- Preserve lease command arguments such as `--holder`, `--lease-holder`, and `--lease-id` in daemon payloads while still stripping client-only request flags.
+- Add daemon-side handling for the `lease` request.
+- Ensure daemon-routed lease operations use the daemon's state directory instead of the client's default session state path.
+- Advertise `session request lease` in capabilities.
+
+Safety direction:
+
+- `session request lease` does not perform device I/O.
+- Lease conflicts and holder/id mismatches remain visible safety-blocked errors.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change device control, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_lease_request_payload_preserves_holder_and_lease_id -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_lease_request_acquires_and_releases_in_daemon_state_dir -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_lease_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Expose the same daemon request/lease surface through the future trusted UI/API channel once that channel exists.
+- Connect lease ownership to the real scheduler arbitration layer once that layer exists.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+
+## Previous ActingLab Daemon-Routed Journal Diagnostics
 
 The current Runtime task extends the resident Session Layer diagnostic surface by routing request-journal reads through the daemon request queue. Local `session journal` remains available, and `session request journal [--limit N]` can now submit the same read-only query through the resident daemon.
 
