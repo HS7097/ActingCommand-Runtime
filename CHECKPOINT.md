@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording current-frame inlet
+
+### Current status
+
+- Advanced Phase D recording by adding an explicit current-frame inlet for authorized anchor steps.
+- `session record step --kind anchor` now accepts `--capture` and alias `--current-frame`.
+- `--capture` reuses the existing CaptureBackend command path and honors `--require-fresh` plus `--fresh-delay-ms`.
+- Captured source frames are saved under the recording artifact directory before anchor cropping.
+- Anchor frame provenance now records source type, source path, SHA-256, dimensions, capture backend, freshness data, and capture attempts.
+- Local `--frame` / `--source-frame` behavior remains available and uses the same crop/backtest helper as current-capture frames.
+- Local frame input and current-capture input are mutually exclusive and fail visibly if combined.
+- `session record step` is now marked as both offline and device-capable in command capabilities.
+- No resource repository write, MaaTouch startup, click/navigation execution, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1a8be32a19c445dc14d2c39abff750b77be29c24`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- First `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Rerun `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `22` tests.
+- `cargo test -p actingcommand-actinglab` passed with `130` tests.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` failed because `materialize_anchor_artifact` had too many arguments and one `create_dir_all` call used a needless generic borrow.
+- The helper signature now uses a small `SessionRecordStepContext`, and the needless borrow was removed.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Rerun `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the current-frame recording inlet.
+- Full Phase D remains incomplete: live prepared-emulator validation, resource promotion/write flow, `--region auto`, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-current-frame-inlet`.
+3. Continue Phase D with live prepared-emulator validation or resource-promotion flow after this current-frame inlet is accepted.
+
 ## 2026-06-27 ActingLab session recording package handoff
 
 ### Current status

@@ -493,6 +493,12 @@ struct SessionRecordFrameProvenance {
     width: u32,
     height: u32,
     recorded_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    freshness: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    capture_attempts: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +515,23 @@ struct MaterializedAnchorArtifact {
     frame_provenance: SessionRecordFrameProvenance,
     artifact: SessionRecordAnchorArtifact,
     evaluation: SessionRecordStepEvaluation,
+}
+
+struct SessionRecordSourceFrame {
+    frame: Frame,
+    png: Vec<u8>,
+    source: String,
+    path: PathBuf,
+    capture_backend: Option<String>,
+    freshness: Option<Value>,
+    capture_attempts: Vec<Value>,
+}
+
+struct SessionRecordStepContext<'a> {
+    global: &'a GlobalOptions,
+    config: &'a UserConfig,
+    record: &'a SessionRecordContext,
+    state_dir: &'a Path,
 }
 
 struct SessionRecordBuildDraft {
@@ -4532,7 +4555,13 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                     &["session_record"],
                 ));
             }
-            let step = new_session_record_step(&record, &state_dir, &flags)?;
+            let step_context = SessionRecordStepContext {
+                global,
+                config: &config,
+                record: &record,
+                state_dir: &state_dir,
+            };
+            let step = new_session_record_step(&step_context, &flags)?;
             record.steps.push(step.clone());
             record.updated_at_unix_ms = current_unix_ms();
             write_json_file_atomic(&record_path, &record)?;
@@ -5030,19 +5059,23 @@ fn safe_task_dir_name(task_id: &str) -> CliOutcome<String> {
 }
 
 fn new_session_record_step(
-    record: &SessionRecordContext,
-    state_dir: &Path,
+    context: &SessionRecordStepContext<'_>,
     flags: &FlagArgs,
 ) -> CliOutcome<SessionRecordStep> {
     let kind = flags.required("--kind")?;
     let step_id = flags
         .optional("--step-id")
         .filter(|value| value != "true")
-        .unwrap_or_else(|| format!("step-{:04}", record.steps.len() + 1));
+        .unwrap_or_else(|| format!("step-{:04}", context.record.steps.len() + 1));
     if step_id.trim().is_empty() {
         return Err(CliError::usage("--step-id must not be empty"));
     }
-    if record.steps.iter().any(|step| step.step_id == step_id) {
+    if context
+        .record
+        .steps
+        .iter()
+        .any(|step| step.step_id == step_id)
+    {
         return Err(CliError::safety_blocked(
             "record_step_id_conflict",
             format!("recording step id already exists: {step_id}"),
@@ -5050,7 +5083,7 @@ fn new_session_record_step(
         ));
     }
     let data = match kind.as_str() {
-        "anchor" => new_session_record_anchor_step(record, state_dir, &step_id, flags)?,
+        "anchor" => new_session_record_anchor_step(context, &step_id, flags)?,
         "operation" => new_session_record_operation_step(flags)?,
         other => {
             return Err(CliError::usage(format!(
@@ -5068,8 +5101,7 @@ fn new_session_record_step(
 }
 
 fn new_session_record_anchor_step(
-    record: &SessionRecordContext,
-    state_dir: &Path,
+    context: &SessionRecordStepContext<'_>,
     step_id: &str,
     flags: &FlagArgs,
 ) -> CliOutcome<SessionRecordStepData> {
@@ -5077,7 +5109,7 @@ fn new_session_record_anchor_step(
     let region = parse_session_record_region(&flags.required("--region")?)?;
     let threshold = parse_optional_unit_f64(flags, "--threshold")?;
     let materialized =
-        materialize_anchor_artifact(record, state_dir, step_id, &id, &region, threshold, flags)?;
+        materialize_anchor_artifact(context, step_id, &id, &region, threshold, flags)?;
     let evaluation = materialized
         .as_ref()
         .map(|materialized| materialized.evaluation.clone())
@@ -5112,45 +5144,144 @@ fn new_session_record_operation_step(flags: &FlagArgs) -> CliOutcome<SessionReco
 }
 
 fn materialize_anchor_artifact(
-    record: &SessionRecordContext,
-    state_dir: &Path,
+    context: &SessionRecordStepContext<'_>,
     step_id: &str,
     anchor_id: &str,
     region: &SessionRecordRegion,
     threshold: Option<f64>,
     flags: &FlagArgs,
 ) -> CliOutcome<Option<MaterializedAnchorArtifact>> {
-    let Some(frame_path) = flags
+    let local_frame_path = flags
         .optional_path("--frame")
-        .or_else(|| flags.optional_path("--source-frame"))
-    else {
+        .or_else(|| flags.optional_path("--source-frame"));
+    let capture_current_frame = flags.bool("--capture") || flags.bool("--current-frame");
+    if local_frame_path.is_some() && capture_current_frame {
+        return Err(CliError::usage(
+            "record anchor requires either --frame/--source-frame or --capture, not both",
+        ));
+    }
+    if local_frame_path.is_none() && !capture_current_frame {
         return Ok(None);
-    };
+    }
     let SessionRecordRegion::Rect { rect } = region else {
         return Err(CliError::usage(
             "record anchor frame materialization requires a rect region; auto region candidate selection is not implemented",
         ));
     };
-    let frame_png = fs::read(&frame_path).map_err(|err| {
+    let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
+        context
+            .state_dir
+            .join("record-artifacts")
+            .join(safe_file_stem(&context.record.record_id))
+    });
+    let source_frame = if capture_current_frame {
+        capture_session_record_source_frame(
+            context.global,
+            context.config,
+            flags,
+            &artifact_dir,
+            step_id,
+            anchor_id,
+        )?
+    } else {
+        let frame_path = local_frame_path.expect("checked local frame path");
+        read_session_record_source_frame(&frame_path)?
+    };
+    materialize_anchor_artifact_from_source(
+        source_frame,
+        rect,
+        &artifact_dir,
+        step_id,
+        anchor_id,
+        threshold,
+        flags,
+    )
+    .map(Some)
+}
+
+fn read_session_record_source_frame(frame_path: &Path) -> CliOutcome<SessionRecordSourceFrame> {
+    let frame_png = fs::read(frame_path).map_err(|err| {
         CliError::usage(format!(
             "failed to read record source frame {}: {err}",
             frame_path.display()
         ))
     })?;
-    let source_hash = hex_sha256(&frame_png);
-    let frame = Frame::from_png(frame_png, CaptureBackendName::AdbScreencap)
+    let frame = Frame::from_png(frame_png.clone(), CaptureBackendName::AdbScreencap)
         .map_err(|err| CliError::usage(format!("failed to decode record source frame: {err}")))?;
-    let crop = crop_frame_rect(&frame, rect)?;
+    Ok(SessionRecordSourceFrame {
+        frame,
+        png: frame_png,
+        source: "local_png".to_string(),
+        path: frame_path.to_path_buf(),
+        capture_backend: None,
+        freshness: None,
+        capture_attempts: Vec::new(),
+    })
+}
+
+fn capture_session_record_source_frame(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    artifact_dir: &Path,
+    step_id: &str,
+    anchor_id: &str,
+) -> CliOutcome<SessionRecordSourceFrame> {
+    let device_config = device_config(global, config)?;
+    let requested = global.capture_backend.unwrap_or_default();
+    let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+    let captured = capture_for_command(
+        &device_config,
+        requested,
+        flags.bool("--require-fresh"),
+        fresh_delay,
+    )?;
+    let png = captured.frame.png_for_artifact().map_err(|err| {
+        CliError::device(format!("failed to encode record source capture: {err}"))
+    })?;
+    fs::create_dir_all(artifact_dir).map_err(|err| {
+        CliError::usage(format!(
+            "failed to create record artifact dir {}: {err}",
+            artifact_dir.display()
+        ))
+    })?;
+    let source_path = artifact_dir.join(format!(
+        "source-frame-{}-{}.png",
+        safe_file_stem(step_id),
+        safe_file_stem(anchor_id)
+    ));
+    fs::write(&source_path, &png).map_err(|err| {
+        CliError::usage(format!(
+            "failed to write record source frame {}: {err}",
+            source_path.display()
+        ))
+    })?;
+    Ok(SessionRecordSourceFrame {
+        capture_backend: Some(captured.frame.backend_name.as_str().to_string()),
+        freshness: Some(captured.freshness),
+        capture_attempts: captured.attempts,
+        frame: captured.frame,
+        png,
+        source: "current_capture".to_string(),
+        path: source_path,
+    })
+}
+
+fn materialize_anchor_artifact_from_source(
+    source_frame: SessionRecordSourceFrame,
+    rect: &SessionRecordRect,
+    artifact_dir: &Path,
+    step_id: &str,
+    anchor_id: &str,
+    threshold: Option<f64>,
+    flags: &FlagArgs,
+) -> CliOutcome<MaterializedAnchorArtifact> {
+    let crop = crop_frame_rect(&source_frame.frame, rect)?;
     let crop_png = crop
         .png_for_artifact()
         .map_err(|err| CliError::usage(format!("failed to encode record anchor crop: {err}")))?;
-    let evaluation = backtest_anchor_crop(&frame, rect, &crop_png, threshold, flags)?;
-    let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
-        state_dir
-            .join("record-artifacts")
-            .join(safe_file_stem(&record.record_id))
-    });
-    fs::create_dir_all(&artifact_dir).map_err(|err| {
+    let evaluation = backtest_anchor_crop(&source_frame.frame, rect, &crop_png, threshold, flags)?;
+    fs::create_dir_all(artifact_dir).map_err(|err| {
         CliError::usage(format!(
             "failed to create record artifact dir {}: {err}",
             artifact_dir.display()
@@ -5167,14 +5298,17 @@ fn materialize_anchor_artifact(
             artifact_path.display()
         ))
     })?;
-    Ok(Some(MaterializedAnchorArtifact {
+    Ok(MaterializedAnchorArtifact {
         frame_provenance: SessionRecordFrameProvenance {
-            source: "local_png".to_string(),
-            path: frame_path.display().to_string(),
-            sha256: source_hash,
-            width: frame.width,
-            height: frame.height,
+            source: source_frame.source,
+            path: source_frame.path.display().to_string(),
+            sha256: hex_sha256(&source_frame.png),
+            width: source_frame.frame.width,
+            height: source_frame.frame.height,
             recorded_at_unix_ms: current_unix_ms(),
+            capture_backend: source_frame.capture_backend,
+            freshness: source_frame.freshness,
+            capture_attempts: source_frame.capture_attempts,
         },
         artifact: SessionRecordAnchorArtifact {
             kind: "template_crop".to_string(),
@@ -5185,7 +5319,7 @@ fn materialize_anchor_artifact(
             region: rect.clone(),
         },
         evaluation,
-    }))
+    })
 }
 
 fn backtest_anchor_crop(
@@ -7129,7 +7263,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("session record", ["offline"], "available"),
-        command_cap("session record step", ["offline"], "available"),
+        command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
@@ -8032,6 +8166,142 @@ mod tests {
             data.pointer("/record/steps/0/artifact/path")
                 .and_then(Value::as_str),
             Some(artifact_path.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn session_record_anchor_materializes_current_capture_source_frame_metadata() {
+        let temp = TempDir::new().unwrap();
+        let png = test_record_frame_png(12, 10);
+        let frame =
+            Frame::from_png(png.clone(), CaptureBackendName::NemuIpc).expect("source frame");
+        let source_path = temp.path().join("source-frame-home.png");
+        fs::write(&source_path, &png).unwrap();
+        let empty_args = Vec::<String>::new();
+        let flags = FlagArgs::parse(&empty_args).unwrap();
+        let source_frame = SessionRecordSourceFrame {
+            frame,
+            png,
+            source: "current_capture".to_string(),
+            path: source_path.clone(),
+            capture_backend: Some("nemu_ipc".to_string()),
+            freshness: Some(json!({
+                "required": true,
+                "fresh": true,
+                "backend": "nemu_ipc"
+            })),
+            capture_attempts: vec![json!({
+                "backend": "nemu_ipc",
+                "ok": true,
+                "message": "primed"
+            })],
+        };
+        let materialized = materialize_anchor_artifact_from_source(
+            source_frame,
+            &SessionRecordRect {
+                x: 2,
+                y: 3,
+                width: 4,
+                height: 5,
+            },
+            &temp.path().join("artifacts"),
+            "home-anchor",
+            "page/home",
+            Some(0.95),
+            &flags,
+        )
+        .expect("materialized current capture source frame");
+
+        assert_eq!(materialized.frame_provenance.source, "current_capture");
+        assert_eq!(
+            materialized.frame_provenance.path,
+            source_path.display().to_string()
+        );
+        assert_eq!(
+            materialized.frame_provenance.capture_backend.as_deref(),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            materialized
+                .frame_provenance
+                .freshness
+                .as_ref()
+                .and_then(|value| value.get("fresh"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(materialized.frame_provenance.capture_attempts.len(), 1);
+        assert_eq!(materialized.artifact.width, 4);
+        assert_eq!(materialized.artifact.height, 5);
+        assert_eq!(materialized.evaluation.status, "passed");
+        assert!(PathBuf::from(&materialized.artifact.path).is_file());
+    }
+
+    #[test]
+    fn session_record_step_anchor_rejects_frame_and_capture_together() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--capture",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 2);
+        assert_eq!(
+            step.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            step.envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("not both")
         );
     }
 

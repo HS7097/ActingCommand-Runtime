@@ -64,6 +64,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording build-task draft: authorized, backtested recording steps can now assemble a local draft operation bundle and asset directory without device I/O, resource writes, UI, SQLite, or game logic.
 - ActingLab session recording anchor contrast validation: frame-backed anchor crops can now be checked against an explicit contrast frame so ambiguous anchors fail before draft bundle generation.
 - ActingLab session recording package handoff: generated draft bundles now satisfy the existing `package build-task` dry-run validation path, with early page-anchor and click-bound checks in `record build-task`.
+- ActingLab session recording current-frame inlet: authorized anchor steps can now use `--capture` / `--current-frame` to materialize a source frame through the existing CaptureBackend path, persist provenance/freshness metadata, and reuse the same crop/backtest path as local PNG frames.
+
+## Current ActingLab Session Recording Current-Frame Inlet
+
+The current Runtime task advances Phase D by connecting authorized anchor recording to the Session Layer capture path. `session record step --kind anchor` can still operate fully offline with `--frame`, and now can also explicitly request the current device frame with `--capture` or `--current-frame`.
+
+Scope:
+
+- Add `--capture` / `--current-frame` to frame-backed anchor recording.
+- Keep capture explicit; recording still does not auto-record anything.
+- Reuse the existing `capture_for_command` path, selected capture backend, `--require-fresh`, and `--fresh-delay-ms`.
+- Persist a source-frame PNG under the recording artifact directory when a frame is captured from the device.
+- Add provenance metadata for current-capture anchors: capture backend, freshness record, and capture attempts.
+- Keep local `--frame` / `--source-frame` behavior unchanged and reject mixing local frame input with `--capture`.
+- Reuse the same crop, self-backtest, contrast-frame, and artifact generation path for local and captured source frames.
+- Mark `session record step` as both offline and device-capable in the capability list.
+
+Safety direction:
+
+- This milestone does not write resource repositories.
+- This milestone does not open MaaTouch, click, navigate, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+- Capture failures surface as device errors; local frame/crop/validation failures surface as validation errors.
+- `--require-fresh` remains available for stale-frame-sensitive recording, and captured-frame provenance records the freshness result.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `22` tests.
+- `cargo test -p actingcommand-actinglab` passed with `130` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after replacing an over-wide helper signature with a small recording-step context.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Run a live `--capture --require-fresh` recording flow only when the target emulator state is intentionally prepared for recording.
+- Add resource-promotion/write flow after generated draft bundles and current-frame provenance are accepted.
+- Add `--region auto`, color-probe, or verify-template recording step kinds in later milestones.
 
 ## Current ActingLab Session Recording Package Handoff
 
