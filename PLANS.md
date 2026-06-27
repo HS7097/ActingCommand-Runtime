@@ -89,12 +89,48 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
 - ActingLab top-level daemon-routed status entry: `status --via-daemon` now submits the top-level status diagnostic through the resident daemon request queue while bare `status` keeps its existing local runtime probe behavior.
+- ActingLab session diagnostics daemon routing: `session status --via-daemon` and `session journal --via-daemon` now route local session diagnostics through the resident daemon request queue while preserving their offline local forms.
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 
-## Current ActingLab Top-Level Daemon-Routed Status Entry
+## Current ActingLab Session Diagnostics Daemon Routing
+
+The current Runtime task routes `session status` and `session journal` diagnostics through the resident daemon request queue when `--via-daemon` is present. Their bare forms remain local/offline state readers, while the routed forms reuse the existing daemon-side `status` and `journal` request handlers.
+
+Scope:
+
+- Add `session status --via-daemon`.
+- Add `session journal --via-daemon`.
+- Reuse the existing daemon-side `status` and `journal` request handling instead of adding duplicate diagnostics paths.
+- Preserve bare `session status` and `session journal` local behavior.
+- Add no-daemon regression tests for both routed session diagnostics.
+
+Safety direction:
+
+- The routed session diagnostics are read-only.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change device control, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_status_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_journal_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Decide whether the default `session status` and `session journal` commands should auto-prefer the resident daemon when it is already running.
+- Expose daemon session diagnostics through the future trusted UI/API channel once that channel exists.
+- Continue moving user-facing diagnostic and control surfaces behind the resident Session Layer request/API boundary.
+
+## Previous ActingLab Top-Level Daemon-Routed Status Entry
 
 The current Runtime task routes the top-level `status` diagnostic entry point through the resident daemon request queue when `--via-daemon` is present. Bare `status` remains the local runtime-info probe, while `status --via-daemon --diagnostics` now reaches the same daemon-side status diagnostics already exposed by `session request status --diagnostics`.
 

@@ -3875,12 +3875,12 @@ fn run_scheduler(sub: &str, _global: &GlobalOptions) -> CliOutcome<Value> {
 
 fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
-        "status" => run_session_status(args),
+        "status" => run_session_status(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "daemon" => run_session_daemon(args),
         "request" => run_session_request(global, args),
-        "journal" => run_session_journal(args),
+        "journal" => run_session_journal(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
@@ -3891,8 +3891,11 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
     }
 }
 
-fn run_session_journal(args: &[String]) -> CliOutcome<Value> {
+fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "journal", args);
+    }
     flags.expect_positionals("session journal", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
@@ -3912,8 +3915,11 @@ fn session_journal_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> 
     }))
 }
 
-fn run_session_status(args: &[String]) -> CliOutcome<Value> {
+fn run_session_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "status", args);
+    }
     flags.expect_positionals("session status", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     session_status_payload(&state_dir, flags.bool("--diagnostics"))
@@ -9482,6 +9488,53 @@ mod tests {
                 .get("running")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn session_status_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--via-daemon",
+                "--diagnostics",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_journal_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "journal",
+                "--via-daemon",
+                "--limit",
+                "3",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
         );
     }
 
