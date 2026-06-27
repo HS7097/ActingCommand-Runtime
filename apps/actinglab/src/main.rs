@@ -1527,6 +1527,10 @@ fn session_api_contract() -> Value {
                 ],
                 "lease_freshness_actions": [
                     "stale_lease_inspect"
+                ],
+                "capture_health_actions": [
+                    "stale_capture_recover",
+                    "capture_backend_health_check"
                 ]
             },
             "lease_view": {
@@ -6682,8 +6686,12 @@ fn session_status_diagnostics(
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
     let monitor_policy = session_monitor_policy_payload(state_dir)?;
-    let recommended_actions =
-        session_status_recommended_actions(state_dir, liveness.status, &monitor_policy)?;
+    let recommended_actions = session_status_recommended_actions(
+        state_dir,
+        liveness.status,
+        &monitor_policy,
+        &recent_entries,
+    )?;
     Ok(json!({
         "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
         "recommended_actions": recommended_actions,
@@ -6911,14 +6919,135 @@ fn session_status_recommended_actions(
     state_dir: &Path,
     liveness_status: SessionLivenessStatus,
     monitor_policy: &Value,
+    recent_entries: &[SessionRequestJournalEntry],
 ) -> CliOutcome<Vec<Value>> {
     let mut actions = session_liveness_recommended_actions(state_dir, liveness_status);
     actions.extend(session_stale_lease_recommended_actions(state_dir)?);
+    actions.extend(session_capture_health_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_monitor_policy_recommended_actions(
         state_dir,
         monitor_policy,
     ));
     Ok(actions)
+}
+
+fn session_capture_health_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    for entry in recent_entries.iter().rev() {
+        let Some(summary) = entry.data_summary.as_ref() else {
+            continue;
+        };
+        let Some(signal) = session_capture_health_signal(summary) else {
+            continue;
+        };
+        return match signal {
+            "fresh" => Vec::new(),
+            "stale_capture_suspected" => {
+                let mut args = vec![
+                    "session".to_string(),
+                    "recover".to_string(),
+                    "--stale-capture".to_string(),
+                    "--capture".to_string(),
+                    "--state-dir".to_string(),
+                    state_dir_display,
+                ];
+                if let Some(instance) = entry
+                    .global
+                    .as_ref()
+                    .and_then(|global| global.instance.as_ref())
+                {
+                    args.extend(["--instance".to_string(), instance.clone()]);
+                }
+                let mut action = session_recommended_action_owned(
+                    30,
+                    "stale_capture_recover",
+                    "Recent capture diagnostics suggest stale frames; run read-only stale-capture recovery before treating the game as frozen.",
+                    args,
+                );
+                action["read_only"] = json!(true);
+                action["executes_app_restart"] = json!(false);
+                action["source_request_id"] = json!(entry.request_id);
+                action["source_command"] = json!(entry.command);
+                action["data_summary"] = summary.clone();
+                vec![action]
+            }
+            "capture_backend_unavailable" => {
+                let mut args = vec![
+                    "session".to_string(),
+                    "instance".to_string(),
+                    "health".to_string(),
+                    "--capture-diagnose".to_string(),
+                    "--state-dir".to_string(),
+                    state_dir_display,
+                ];
+                if let Some(instance) = entry
+                    .global
+                    .as_ref()
+                    .and_then(|global| global.instance.as_ref())
+                {
+                    args.extend(["--instance".to_string(), instance.clone()]);
+                }
+                let mut action = session_recommended_action_owned(
+                    31,
+                    "capture_backend_health_check",
+                    "Recent capture diagnostics could not obtain fresh frames; inspect device and capture backend health.",
+                    args,
+                );
+                action["read_only"] = json!(true);
+                action["executes_app_restart"] = json!(false);
+                action["source_request_id"] = json!(entry.request_id);
+                action["source_command"] = json!(entry.command);
+                action["data_summary"] = summary.clone();
+                vec![action]
+            }
+            _ => Vec::new(),
+        };
+    }
+    Vec::new()
+}
+
+fn session_capture_health_signal(summary: &Value) -> Option<&'static str> {
+    let kind = summary.get("kind").and_then(Value::as_str)?;
+    if !matches!(kind, "capture_diagnose" | "stale_capture_recovery") {
+        return None;
+    }
+
+    let status = summary.get("status").and_then(Value::as_str);
+    let diagnosis_status = summary.get("diagnosis_status").and_then(Value::as_str);
+    let freshness_status = summary.pointer("/freshness/status").and_then(Value::as_str);
+    let recovery_reason = summary.pointer("/recovery/reason").and_then(Value::as_str);
+
+    if matches!(status, Some("fresh" | "diagnosed_fresh"))
+        || matches!(diagnosis_status, Some("diagnosed_fresh"))
+        || matches!(freshness_status, Some("fresh"))
+        || matches!(recovery_reason, Some("fresh_frame_observed"))
+    {
+        return Some("fresh");
+    }
+    if matches!(
+        status,
+        Some("stale_suspected" | "capture_stale_suspected" | "diagnosed_stale" | "planned")
+    ) || matches!(diagnosis_status, Some("diagnosed_stale" | "planned"))
+        || matches!(freshness_status, Some("stale_suspected"))
+        || matches!(recovery_reason, Some("stale_capture_suspected"))
+    {
+        return Some("stale_capture_suspected");
+    }
+    if matches!(
+        status,
+        Some("capture_unavailable" | "diagnosis_unavailable")
+    ) || matches!(diagnosis_status, Some("diagnosis_unavailable"))
+        || matches!(recovery_reason, Some("capture_backend_unavailable"))
+    {
+        return Some("capture_backend_unavailable");
+    }
+    None
 }
 
 fn session_stale_lease_recommended_actions(state_dir: &Path) -> CliOutcome<Vec<Value>> {
@@ -15172,6 +15301,40 @@ mod tests {
         write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
     }
 
+    fn append_test_session_journal_response(
+        state_dir: &Path,
+        request_id: &str,
+        command: &str,
+        instance: Option<&str>,
+        data: Value,
+    ) {
+        let request = SessionCommandRequest {
+            request_id: request_id.to_string(),
+            command: command.to_string(),
+            global: SessionCommandGlobal {
+                instance: instance.map(str::to_string),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        let response = SessionCommandResponse {
+            request_id: request_id.to_string(),
+            command: command.to_string(),
+            ok: true,
+            data: Some(data),
+            error: None,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        append_session_request_journal(state_dir, &request, &response).unwrap();
+    }
+
     fn assert_daemon_request_timeout(result: CliResult) {
         assert_eq!(result.exit_code(), 5);
         assert_eq!(
@@ -22230,6 +22393,194 @@ mod tests {
                 .and_then(Value::as_str),
             Some("clear")
         );
+    }
+
+    #[test]
+    fn session_status_diagnostics_recommends_stale_capture_recovery_from_recent_journal() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "capture-diagnose-a",
+            "capture_diagnose",
+            Some("ak"),
+            json!({
+                "status": "stale_suspected",
+                "mode": "capture_diagnose",
+                "requested_backend": "adb_screencap",
+                "freshness": {
+                    "required": true,
+                    "fresh": false,
+                    "status": "stale_suspected"
+                },
+                "capture_backend_attempts": [
+                    {"backend": "adb_screencap", "ok": true}
+                ],
+                "frame": null,
+                "recovery": {
+                    "needed": true,
+                    "available": true,
+                    "reason": "stale_capture_suspected",
+                    "recommendations": [
+                        {"type": "configure_backend", "backend": "nemu_ipc"}
+                    ]
+                }
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("stale_capture_recover")
+        );
+        assert_eq!(
+            actions[0].get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("executes_app_restart")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            actions[0].get("source_request_id").and_then(Value::as_str),
+            Some("capture-diagnose-a")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("recover")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/2").and_then(Value::as_str),
+            Some("--stale-capture")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/3").and_then(Value::as_str),
+            Some("--capture")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/6").and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/7").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            actions[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_recommends_capture_backend_health_from_recent_journal() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "capture-diagnose-unavailable",
+            "capture_diagnose",
+            Some("ak"),
+            json!({
+                "status": "capture_unavailable",
+                "mode": "capture_diagnose",
+                "requested_backend": "adb_screencap",
+                "freshness": {
+                    "required": true,
+                    "fresh": false,
+                    "status": "capture_unavailable"
+                },
+                "capture_backend_attempts": [],
+                "frame": null,
+                "recovery": {
+                    "needed": true,
+                    "available": false,
+                    "reason": "capture_backend_unavailable",
+                    "recommendations": [
+                        {"type": "device_health", "command": "session instance health"}
+                    ]
+                }
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("capture_backend_health_check")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("instance")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/2").and_then(Value::as_str),
+            Some("health")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/3").and_then(Value::as_str),
+            Some("--capture-diagnose")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/6").and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/7").and_then(Value::as_str),
+            Some("ak")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_uses_latest_capture_health_signal() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "capture-diagnose-stale",
+            "capture_diagnose",
+            Some("ak"),
+            json!({
+                "status": "stale_suspected",
+                "mode": "capture_diagnose",
+                "freshness": {"status": "stale_suspected"},
+                "recovery": {"reason": "stale_capture_suspected"}
+            }),
+        );
+        append_test_session_journal_response(
+            temp.path(),
+            "capture-diagnose-fresh",
+            "capture_diagnose",
+            Some("ak"),
+            json!({
+                "status": "fresh",
+                "mode": "capture_diagnose",
+                "freshness": {"status": "fresh"},
+                "recovery": {"reason": "fresh_frame_observed"}
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert!(actions.is_empty());
     }
 
     #[test]

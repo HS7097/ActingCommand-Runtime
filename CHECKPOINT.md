@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab capture health recommended action surface
+
+### Current status
+
+- `session status --diagnostics` now inspects the latest recent capture-health data summary in the daemon request journal.
+- Recent stale capture diagnostics now emit `stale_capture_recover` recommendations.
+- Recent capture-unavailable diagnostics now emit `capture_backend_health_check` recommendations.
+- A newer fresh capture diagnostic suppresses older stale-capture recommendations.
+- Recommendations include source request id, source command, and data summary for auditability.
+- Recommendations are read-only and explicitly do not execute app restart.
+- `session api` now advertises capture-health recommendation actions.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `4f3f76ca5b024b504fd0d184dc63cd3dc903c74c`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer status diagnostics, request journal summaries, capture diagnosis recovery output, and status/API tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_capture -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_stale_capture -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_uses_latest_capture_health_signal -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused stale capture recommendation test passed.
+- Focused capture-unavailable recommendation test passed.
+- Focused latest-fresh-suppresses-stale test passed.
+- Focused Session API contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line prohibited-feature scan passed.
+- Full workspace clippy passed with `-D warnings`.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-capture-health-recommended-action`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab stale lease recommended action surface
 
 ### Current status

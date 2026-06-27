@@ -146,6 +146,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session lease touch view: `session lease touch`, `session request lease touch`, and `lab lease touch` let current lease holders refresh lease freshness metadata without executing device work.
 - ActingLab session lease freshness diagnostics: `session lease status`, `session lease list`, and `session status --diagnostics` now report lease freshness metadata for scheduler/UI visibility without reclaiming leases automatically.
 - ActingLab stale lease recommended action surface: `session status --diagnostics` now emits `stale_lease_inspect` recommendations for stale leases, marked as scheduler decisions rather than automatic recovery.
+- ActingLab capture health recommended action surface: `session status --diagnostics` now turns recent stale/unavailable capture journal summaries into read-only scheduler/UI recommendations before anyone treats a game as frozen.
+
+## Current ActingLab Capture Health Recommended Action Surface
+
+This increment connects the AK stale-screencap finding to the Session Layer diagnostics surface. Recent capture-health journal summaries can now become machine-readable next actions without executing recovery automatically.
+
+- `session status --diagnostics` inspects the latest recent `capture_diagnose` or `stale_capture_recovery` data summary from the daemon request journal.
+- A latest stale capture signal emits `stale_capture_recover`, pointing to `session recover --stale-capture --capture`.
+- A latest capture-unavailable signal emits `capture_backend_health_check`, pointing to `session instance health --capture-diagnose`.
+- A newer fresh capture signal suppresses older stale recommendations so UI/scheduler consumers are not misled by stale historical events.
+- Recommendations include the source request id, source command, and compact data summary for auditability.
+- The recommended actions are read-only and explicitly record that they do not execute app restart.
+- `session api` advertises the capture-health recommendation actions in the status-view contract.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Stale Lease Recommended Action Surface
 
