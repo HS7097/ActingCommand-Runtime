@@ -1165,6 +1165,7 @@ fn session_layer_capability_contract() -> Value {
                 "status": "reserved",
                 "encryption_required": true,
                 "authentication_required": true,
+                "preflight_command": "session transport check --endpoint <url>",
                 "auth_env": {
                     "token": TRUSTED_REMOTE_TOKEN_ENV,
                     "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
@@ -1177,7 +1178,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "journal", "capabilities", "devices", "session transport check", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1237,6 +1238,7 @@ fn session_access_contract() -> Value {
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
+            "transport_check": "session request transport check --endpoint <url>",
             "capabilities": "session request capabilities",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
@@ -1259,6 +1261,7 @@ fn session_access_contract() -> Value {
                     "status",
                     "journal",
                     "contract",
+                    "transport check",
                     "capabilities",
                     "devices",
                     "capture",
@@ -1360,6 +1363,7 @@ fn session_transport_contract() -> Value {
             "trusted_remote": {
                 "status": "reserved",
                 "network_listener_implemented": false,
+                "preflight_command": "session transport check --endpoint <url>",
                 "encryption_required": true,
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
@@ -1506,7 +1510,10 @@ fn session_api_contract() -> Value {
             "transport_view": {
                 "query": "session transport",
                 "daemon_query": "session request transport",
-                "schema_version": "session.transport.v0.1"
+                "schema_version": "session.transport.v0.1",
+                "check_query": "session transport check --endpoint <url>",
+                "daemon_check_query": "session request transport check --endpoint <url>",
+                "check_schema_version": "session.transport_check.v0.1"
             },
             "status_view": {
                 "query": "session status --diagnostics",
@@ -5417,8 +5424,30 @@ fn run_session_transport(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "transport", args);
     }
-    flags.expect_positionals("session transport", 0)?;
-    Ok(session_transport_contract())
+    session_transport_payload(&flags)
+}
+
+fn session_transport_payload(flags: &FlagArgs) -> CliOutcome<Value> {
+    match flags.positionals.first().map(String::as_str) {
+        None => Ok(session_transport_contract()),
+        Some("check") => session_transport_check_payload(&flags.without_first_positional()),
+        Some(other) => Err(CliError::usage(format!(
+            "unknown session transport command: {other}"
+        ))),
+    }
+}
+
+fn session_transport_check_payload(flags: &FlagArgs) -> CliOutcome<Value> {
+    flags.expect_positionals("session transport check", 0)?;
+    let endpoint = flags.required("--endpoint")?;
+    let check = runtime_endpoint_check(&endpoint);
+    Ok(json!({
+        "schema_version": "session.transport_check.v0.1",
+        "endpoint": endpoint,
+        "check": check,
+        "safe_to_connect": check.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "does_not_start_listener": true
+    }))
 }
 
 fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -8585,8 +8614,7 @@ fn execute_session_command_request_inner(
         }
         "transport" => {
             let flags = FlagArgs::parse(&request.args)?;
-            flags.expect_positionals("session request transport", 0)?;
-            Ok(session_transport_contract())
+            session_transport_payload(&flags)
         }
         "capabilities" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -14249,6 +14277,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
+        command_cap("session transport check", ["offline"], "available"),
         command_cap("session monitor-policy", ["offline"], "available"),
         command_cap("session request cancel", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
@@ -14299,6 +14328,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request api", ["running_runtime"], "available"),
         command_cap(
             "session request transport",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request transport check",
             ["running_runtime"],
             "available",
         ),
@@ -14785,6 +14819,77 @@ mod tests {
         assert_eq!(policy.channel, RuntimeEndpointChannel::TrustedRemote);
         assert_eq!(policy.scheme, "https");
         assert_eq!(policy.auth_material, Some("token"));
+    }
+
+    #[test]
+    fn session_transport_check_reports_loopback_policy() {
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "transport",
+                "check",
+                "--endpoint",
+                "http://127.0.0.1:4317",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.transport_check.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/check/policy/channel")
+                .and_then(Value::as_str),
+            Some("local_direct")
+        );
+        assert_eq!(
+            data.pointer("/check/policy/authentication_required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("does_not_start_listener").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_transport_check_blocks_remote_http() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "transport",
+                "check",
+                "--endpoint",
+                "http://192.0.2.1:4317",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_connect").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/check/error_code").and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
+        );
+        assert_eq!(
+            data.pointer("/check/blocked_by/1").and_then(Value::as_str),
+            Some("encryption")
+        );
     }
 
     #[test]
@@ -24720,11 +24825,19 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
-        assert_eq!(
-            payload
-                .pointer("/request_classes/read_only/examples/13")
-                .and_then(Value::as_str),
-            Some("session recover --stale-capture")
+        let readonly_examples = payload
+            .pointer("/request_classes/read_only/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            readonly_examples
+                .iter()
+                .any(|item| item.as_str() == Some("transport check"))
+        );
+        assert!(
+            readonly_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session recover --stale-capture"))
         );
         assert_eq!(
             payload
@@ -29246,6 +29359,16 @@ mod tests {
             Some("session.transport.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/transport_view/check_query")
+                .and_then(Value::as_str),
+            Some("session transport check --endpoint <url>")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/transport_view/check_schema_version")
+                .and_then(Value::as_str),
+            Some("session.transport_check.v0.1")
+        );
+        assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")
                 .and_then(Value::as_str),
             Some("trusted_remote_transport_blocked")
@@ -29277,9 +29400,54 @@ mod tests {
             Some(TRUSTED_REMOTE_CLIENT_CERT_ENV)
         );
         assert_eq!(
+            data.pointer("/channels/trusted_remote/preflight_command")
+                .and_then(Value::as_str),
+            Some("session transport check --endpoint <url>")
+        );
+        assert_eq!(
             data.pointer("/safety/remote_transport_must_not_start_without_authentication")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn session_transport_check_request_returns_transport_check() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "transport-check-query".to_string(),
+            command: "transport".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "check".to_string(),
+                "--endpoint".to_string(),
+                "http://192.0.2.1:4317".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let data = execute_session_command_request_inner(&request, temp.path()).unwrap();
+
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.transport_check.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/check/error_code").and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
         );
     }
 

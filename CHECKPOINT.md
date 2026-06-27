@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab trusted transport preflight surface
+
+### Current status
+
+- Added `session transport check --endpoint <url>` as a local trusted-transport preflight.
+- Added `session request transport check --endpoint <url>` through the resident daemon request handler.
+- The preflight returns `session.transport_check.v0.1` and reuses the existing local/trusted-remote endpoint policy.
+- Loopback endpoints are classified as `local_direct`.
+- Non-loopback HTTP endpoints are reported as blocked with `trusted_remote_transport_blocked`.
+- `session api`, `session transport`, and `capabilities` now advertise the transport-check surface.
+- No network listener, TLS implementation, token issuance, UI transport, unbounded long-lived stream transport, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ef93966491b355880f4847238a028da74adf8df6`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand workspace constraints.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer transport/API/capability contracts, runtime endpoint policy, stream contract, and transport tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_transport_check_reports_loopback_policy -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_check_blocks_remote_http -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_check_request_returns_transport_check -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_is_offline_transport_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused loopback transport preflight test passed.
+- Focused remote HTTP transport-blocking test passed.
+- Focused daemon-routed transport preflight test passed.
+- Focused Session API contract test passed.
+- Focused Session transport contract test passed.
+- Initial full workspace test run failed because an existing contract test used a fixed read-only example index that shifted after adding `transport check`.
+- Fixed that test to assert by example value rather than fragile array position.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: actual trusted remote listener/TLS/auth service, unbounded long-lived stream transport, scheduler ownership, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-transport-preflight`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, actual trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab failed request recommended action surface
 
 ### Current status

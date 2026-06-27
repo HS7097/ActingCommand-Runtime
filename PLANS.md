@@ -149,6 +149,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture health recommended action surface: `session status --diagnostics` now turns recent stale/unavailable capture journal summaries into read-only scheduler/UI recommendations before anyone treats a game as frozen.
 - ActingLab queue health recommended action surface: `session status --diagnostics` now turns blocked queued/running requests and unclaimed responses into read-only inspect/read actions for UI/scheduler clients.
 - ActingLab failed request recommended action surface: `session status --diagnostics` now turns the latest failed daemon journal entry into a read-only `failed_request_inspect` action for UI/scheduler clients.
+- ActingLab trusted transport preflight surface: `session transport check --endpoint <url>` now exposes the existing local/trusted-remote endpoint policy as a machine-readable Session Layer preflight without starting a listener.
+
+## Current ActingLab Trusted Transport Preflight Surface
+
+This increment advances the multi-channel access requirement without starting a network service. Future UI/API clients can now ask the Session Layer whether a configured endpoint is local, trusted remote, encrypted, authenticated, and safe to connect to.
+
+- `session transport check --endpoint <url>` returns `session.transport_check.v0.1`.
+- Loopback endpoints are classified as `local_direct` and do not require authentication.
+- Non-loopback HTTP endpoints are reported as blocked with `trusted_remote_transport_blocked`.
+- Trusted remote endpoints still require encrypted transport and token/certificate auth before any connection is considered safe.
+- `session request transport check --endpoint <url>` reuses the same preflight payload through the resident daemon request path.
+- `session api`, `session transport`, and `capabilities` now advertise the transport-check surface.
+
+No network listener, TLS implementation, token issuance, UI transport, unbounded long-lived stream transport, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Failed Request Recommended Action Surface
 
