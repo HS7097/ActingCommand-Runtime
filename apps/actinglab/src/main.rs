@@ -34,6 +34,8 @@ const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
 const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
+const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
+const TRUSTED_REMOTE_CLIENT_CERT_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT";
 const SESSION_INFO_FILE: &str = "session.json";
 const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
@@ -1000,10 +1002,14 @@ fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
         }),
     };
     checks.push(adb_check);
+    let runtime_endpoint_check = runtime_endpoint
+        .as_ref()
+        .map(|endpoint| runtime_endpoint_check(endpoint));
     checks.push(json!({
         "name": "runtime_endpoint",
-        "ok": runtime_endpoint.as_ref().map(|endpoint| runtime_tcp_available(endpoint)).unwrap_or(false),
-        "endpoint": runtime_endpoint
+        "ok": runtime_endpoint_check.as_ref().and_then(|check| check.get("ok")).and_then(Value::as_bool).unwrap_or(false),
+        "endpoint": runtime_endpoint,
+        "policy": runtime_endpoint_check
     }));
     checks.push(json!({
         "name": "resource_root",
@@ -1067,6 +1073,12 @@ fn session_layer_capability_contract() -> Value {
                 "status": "reserved",
                 "encryption_required": true,
                 "authentication_required": true,
+                "auth_env": {
+                    "token": TRUSTED_REMOTE_TOKEN_ENV,
+                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+                },
+                "blocked_without_auth_code": "trusted_remote_auth_required",
+                "blocked_without_encryption_code": "trusted_remote_transport_blocked",
                 "reason": "future UI/API channel must be authenticated and encrypted"
             }
         ],
@@ -1111,7 +1123,13 @@ fn session_access_contract() -> Value {
                 "encryption_required": true,
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
-                "token_or_certificate_required": true
+                "token_or_certificate_required": true,
+                "auth_env": {
+                    "token": TRUSTED_REMOTE_TOKEN_ENV,
+                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+                },
+                "blocked_without_auth_code": "trusted_remote_auth_required",
+                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             }
         },
         "daemon_queries": {
@@ -1210,7 +1228,13 @@ fn session_transport_contract() -> Value {
                 "encryption_required": true,
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
-                "token_or_certificate_required": true
+                "token_or_certificate_required": true,
+                "auth_env": {
+                    "token": TRUSTED_REMOTE_TOKEN_ENV,
+                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+                },
+                "blocked_without_auth_code": "trusted_remote_auth_required",
+                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             },
             "interactive_stream": {
                 "status": "reserved",
@@ -1260,7 +1284,13 @@ fn session_api_contract() -> Value {
                 "encryption_required": true,
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
-                "token_or_certificate_required": true
+                "token_or_certificate_required": true,
+                "auth_env": {
+                    "token": TRUSTED_REMOTE_TOKEN_ENV,
+                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+                },
+                "blocked_without_auth_code": "trusted_remote_auth_required",
+                "blocked_without_encryption_code": "trusted_remote_transport_blocked"
             }
         },
         "daemon_request_queue": {
@@ -1358,6 +1388,8 @@ fn session_api_contract() -> Value {
         "failure_contract": {
             "missing_or_stale_daemon_code": "runtime_not_running",
             "control_without_matching_lease_code": "lab_lease_required",
+            "untrusted_remote_endpoint_code": "trusted_remote_transport_blocked",
+            "missing_trusted_remote_auth_code": "trusted_remote_auth_required",
             "severe_errors_fail_loud": true
         },
         "out_of_scope": [
@@ -9139,6 +9171,7 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
     let endpoint = effective_runtime_endpoint(global, &config)
         .ok_or_else(|| CliError::runtime_not_running("runtime endpoint is not configured"))?;
+    let policy = runtime_endpoint_policy(&endpoint)?;
     if !runtime_tcp_available(&endpoint) {
         return Err(CliError::runtime_not_running(format!(
             "Runtime is not reachable at {endpoint}"
@@ -9146,8 +9179,126 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
     }
     Ok(json!({
         "endpoint": endpoint,
-        "connection": "tcp"
+        "connection": "tcp",
+        "policy": runtime_endpoint_policy_json(&policy)
     }))
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeEndpointPolicy {
+    scheme: String,
+    host: String,
+    port: u16,
+    channel: RuntimeEndpointChannel,
+    auth_material: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeEndpointChannel {
+    LocalDirect,
+    TrustedRemote,
+}
+
+impl RuntimeEndpointChannel {
+    fn as_str(self) -> &'static str {
+        match self {
+            RuntimeEndpointChannel::LocalDirect => "local_direct",
+            RuntimeEndpointChannel::TrustedRemote => "trusted_remote",
+        }
+    }
+}
+
+fn runtime_endpoint_check(endpoint: &str) -> Value {
+    match runtime_endpoint_policy(endpoint) {
+        Ok(policy) => {
+            let reachable = runtime_tcp_available(endpoint);
+            json!({
+                "ok": reachable,
+                "endpoint": endpoint,
+                "reachable": reachable,
+                "policy": runtime_endpoint_policy_json(&policy)
+            })
+        }
+        Err(err) => json!({
+            "ok": false,
+            "endpoint": endpoint,
+            "error_code": err.code,
+            "error": err.message,
+            "blocked_by": err.blocked_by
+        }),
+    }
+}
+
+fn runtime_endpoint_policy(endpoint: &str) -> CliOutcome<RuntimeEndpointPolicy> {
+    let (scheme, host, port) = parse_endpoint_parts(endpoint).ok_or_else(|| {
+        CliError::runtime_not_running(format!(
+            "runtime endpoint is invalid; expected host:port, http://host:port, or https://host:port, got {endpoint}"
+        ))
+    })?;
+    if is_loopback_host(&host) {
+        return Ok(RuntimeEndpointPolicy {
+            scheme,
+            host,
+            port,
+            channel: RuntimeEndpointChannel::LocalDirect,
+            auth_material: None,
+        });
+    }
+    if scheme != "https" {
+        return Err(CliError::safety_blocked(
+            "trusted_remote_transport_blocked",
+            "trusted remote runtime endpoints must use https:// with encryption",
+            &["trusted_remote", "encryption"],
+        ));
+    }
+    let auth_material = trusted_remote_auth_material().ok_or_else(|| {
+        CliError::safety_blocked(
+            "trusted_remote_auth_required",
+            format!(
+                "trusted remote runtime endpoints require {TRUSTED_REMOTE_TOKEN_ENV} or {TRUSTED_REMOTE_CLIENT_CERT_ENV}"
+            ),
+            &["trusted_remote", "authentication"],
+        )
+    })?;
+    Ok(RuntimeEndpointPolicy {
+        scheme,
+        host,
+        port,
+        channel: RuntimeEndpointChannel::TrustedRemote,
+        auth_material: Some(auth_material),
+    })
+}
+
+fn runtime_endpoint_policy_json(policy: &RuntimeEndpointPolicy) -> Value {
+    json!({
+        "channel": policy.channel.as_str(),
+        "scheme": policy.scheme,
+        "host": policy.host,
+        "port": policy.port,
+        "encryption_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
+        "authentication_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
+        "auth_material": policy.auth_material,
+        "auth_env": {
+            "token": TRUSTED_REMOTE_TOKEN_ENV,
+            "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+        }
+    })
+}
+
+fn trusted_remote_auth_material() -> Option<&'static str> {
+    if env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV) {
+        Some("token")
+    } else if env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV) {
+        Some("client_certificate")
+    } else {
+        None
+    }
+}
+
+fn env_var_non_empty(name: &str) -> bool {
+    env::var(name)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn runtime_tcp_available(endpoint: &str) -> bool {
@@ -9161,13 +9312,32 @@ fn runtime_tcp_available(endpoint: &str) -> bool {
 }
 
 fn parse_endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
-    let trimmed = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .unwrap_or(endpoint);
+    parse_endpoint_parts(endpoint).map(|(_scheme, host, port)| (host, port))
+}
+
+fn parse_endpoint_parts(endpoint: &str) -> Option<(String, String, u16)> {
+    let (scheme, trimmed) = if let Some(rest) = endpoint.strip_prefix("http://") {
+        ("http", rest)
+    } else if let Some(rest) = endpoint.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        ("tcp", endpoint)
+    };
     let host_port = trimmed.split('/').next()?;
     let (host, port) = host_port.rsplit_once(':')?;
-    Some((host.to_string(), port.parse().ok()?))
+    Some((
+        scheme.to_string(),
+        host.trim_matches(['[', ']']).to_string(),
+        port.parse().ok()?,
+    ))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let normalized = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    normalized == "localhost"
+        || normalized == "::1"
+        || normalized == "0:0:0:0:0:0:0:1"
+        || normalized.starts_with("127.")
 }
 
 fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<DeviceRuntimeConfig> {
@@ -10910,6 +11080,124 @@ mod tests {
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
             "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn runtime_endpoint_policy_allows_loopback_without_auth() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let policy = runtime_endpoint_policy("http://127.0.0.1:4317").unwrap();
+        assert_eq!(policy.channel, RuntimeEndpointChannel::LocalDirect);
+        assert_eq!(policy.scheme, "http");
+        assert_eq!(policy.host, "127.0.0.1");
+        assert_eq!(policy.port, 4317);
+        assert_eq!(policy.auth_material, None);
+    }
+
+    #[test]
+    fn runtime_endpoint_policy_blocks_remote_http() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let err = runtime_endpoint_policy("http://example.invalid:4317").unwrap_err();
+        assert_eq!(err.code, "trusted_remote_transport_blocked");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn runtime_endpoint_policy_blocks_remote_https_without_auth() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let err = runtime_endpoint_policy("https://example.invalid:4317").unwrap_err();
+        assert_eq!(err.code, "trusted_remote_auth_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn runtime_endpoint_policy_accepts_remote_https_with_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let policy = runtime_endpoint_policy("https://example.invalid:4317").unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+        }
+        assert_eq!(policy.channel, RuntimeEndpointChannel::TrustedRemote);
+        assert_eq!(policy.scheme, "https");
+        assert_eq!(policy.auth_material, Some("token"));
+    }
+
+    #[test]
+    fn status_blocks_untrusted_remote_runtime_endpoint() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--runtime-endpoint",
+                "http://example.invalid:4317",
+                "status",
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "trusted_remote_transport_blocked"
+        );
+    }
+
+    #[test]
+    fn doctor_reports_remote_endpoint_policy_without_blocking() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--runtime-endpoint",
+                "https://example.invalid:4317",
+                "doctor",
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 0);
+        let checks = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("checks")
+            .and_then(Value::as_array)
+            .unwrap();
+        let runtime = checks
+            .iter()
+            .find(|check| check.get("name").and_then(Value::as_str) == Some("runtime_endpoint"))
+            .expect("runtime endpoint check");
+        assert_eq!(runtime.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            runtime
+                .pointer("/policy/error_code")
+                .and_then(Value::as_str),
+            Some("trusted_remote_auth_required")
         );
     }
 
@@ -19697,6 +19985,11 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/entrypoints/trusted_remote/auth_env/token")
+                .and_then(Value::as_str),
+            Some(TRUSTED_REMOTE_TOKEN_ENV)
+        );
+        assert_eq!(
             data.pointer("/safety/control_requests_require_matching_lease")
                 .and_then(Value::as_bool),
             Some(true)
@@ -19737,6 +20030,11 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/access_channels/trusted_remote/blocked_without_auth_code")
+                .and_then(Value::as_str),
+            Some("trusted_remote_auth_required")
+        );
+        assert_eq!(
             data.pointer("/envelopes/event_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.events.v0.1")
@@ -19761,6 +20059,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("session.transport.v0.1")
         );
+        assert_eq!(
+            data.pointer("/failure_contract/untrusted_remote_endpoint_code")
+                .and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
+        );
     }
 
     #[test]
@@ -19781,6 +20084,11 @@ mod tests {
             data.pointer("/channels/trusted_remote/encryption_required")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/channels/trusted_remote/auth_env/client_certificate")
+                .and_then(Value::as_str),
+            Some(TRUSTED_REMOTE_CLIENT_CERT_ENV)
         );
         assert_eq!(
             data.pointer("/safety/remote_transport_must_not_start_without_authentication")

@@ -120,6 +120,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
 - ActingLab bounded stream event envelope: `stream` now emits a `stream_id`, `session.stream.event.v0.1` event records, and stable event indexes for future UI/API stream consumers.
 - ActingLab Session transport contract: `session transport` and `session request transport` expose `session.transport.v0.1`, describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream transport boundaries.
+- ActingLab trusted remote endpoint policy: runtime endpoint use now distinguishes local direct endpoints from trusted remote endpoints, blocks unencrypted remote endpoints, requires explicit trusted remote auth material, and reports the policy through `doctor` and Session contracts.
+
+## Current ActingLab Trusted Remote Endpoint Policy
+
+The current Runtime task tightens the Session Layer multi-channel boundary. Local loopback endpoints remain allowed for local CLI/runtime checks, while non-loopback runtime endpoints are treated as trusted remote access and must satisfy encryption plus authentication policy before any runtime reachability check is considered valid.
+
+Scope:
+
+- Classify runtime endpoints as `local_direct` or `trusted_remote`.
+- Allow loopback endpoints such as `localhost` and `127.x.x.x` without trusted-remote auth material.
+- Block non-loopback endpoints unless they use `https://`.
+- Require `ACTINGLAB_TRUSTED_REMOTE_TOKEN` or `ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT` for non-loopback `https://` endpoints.
+- Return visible safety errors `trusted_remote_transport_blocked` and `trusted_remote_auth_required` instead of silently probing unsafe endpoints.
+- Report runtime endpoint policy diagnostics through `doctor`.
+- Advertise trusted remote auth environment variables and failure codes through the capability, access, transport, and API contracts.
+
+Safety direction:
+
+- This milestone does not implement a network listener, TLS stack, token issuance, UI transport, or remote server.
+- The policy prevents future trusted remote wiring from accidentally accepting plain HTTP or unauthenticated remote endpoints.
+- Local CLI loopback use remains low-friction and still fails visibly when the runtime is unreachable.
+
+Validation status:
+
+- Focused endpoint policy tests passed for loopback, remote HTTP blocking, remote HTTPS auth blocking, and remote HTTPS with token.
+- Focused CLI tests passed for `status` blocking untrusted remote endpoints and `doctor` reporting trusted remote policy errors without failing the diagnostic command.
+- Focused Session contract tests passed for access, API, transport, and capabilities surfaces.
+- Manual CLI check confirmed remote `http://` status returns `trusted_remote_transport_blocked`.
+- Manual CLI check confirmed remote `https://` without auth appears in `doctor` as `trusted_remote_auth_required`.
+- Manual CLI check confirmed loopback `http://127.0.0.1:1` remains a local runtime reachability failure with `runtime_not_running`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `252` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No network listener, TLS/auth transport implementation, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session Transport Contract
 

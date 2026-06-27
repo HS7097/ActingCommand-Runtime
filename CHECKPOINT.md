@@ -1,5 +1,87 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab trusted remote endpoint policy
+
+### Current status
+
+- Added Runtime endpoint policy classification for `local_direct` versus `trusted_remote`.
+- Loopback endpoints such as `localhost` and `127.x.x.x` remain allowed without trusted-remote auth material.
+- Non-loopback runtime endpoints are blocked unless they use `https://`.
+- Non-loopback `https://` endpoints require `ACTINGLAB_TRUSTED_REMOTE_TOKEN` or `ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT`.
+- Unsafe remote endpoints now fail visibly with `trusted_remote_transport_blocked` or `trusted_remote_auth_required`.
+- `doctor` reports runtime endpoint policy diagnostics without failing the diagnostic command.
+- Capability, access, transport, and API contracts now advertise trusted remote auth environment variables and safety failure codes.
+- No network listener, TLS/auth transport implementation, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8f7f83b757778e17487223d184e83999812b7900`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed `LICENSE_POLICY.md` is not present in this split Runtime repository.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` runtime endpoint handling, `doctor`, `status`, Session contracts, command capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab runtime_endpoint_policy`
+- `cargo test -p actingcommand-actinglab status_blocks_untrusted_remote_runtime_endpoint`
+- `cargo test -p actingcommand-actinglab doctor_reports_remote_endpoint_policy_without_blocking`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo test -p actingcommand-actinglab session_transport_is_offline_transport_contract`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline`
+- `cargo run -q -p actingcommand-actinglab -- --json --runtime-endpoint http://example.invalid:4317 status`
+- `cargo run -q -p actingcommand-actinglab -- --json --runtime-endpoint https://example.invalid:4317 doctor`
+- `cargo run -q -p actingcommand-actinglab -- --json --runtime-endpoint http://127.0.0.1:1 status`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab runtime_endpoint_policy` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab status_blocks_untrusted_remote_runtime_endpoint` passed with `1` test.
+- `cargo test -p actingcommand-actinglab doctor_reports_remote_endpoint_policy_without_blocking` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_transport_is_offline_transport_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline` passed with `1` test.
+- Remote `http://` status smoke returned `trusted_remote_transport_blocked`.
+- Remote `https://` without auth appeared in `doctor` as `trusted_remote_auth_required` while `doctor` exited successfully.
+- Loopback `http://127.0.0.1:1` status smoke returned `runtime_not_running`, confirming local direct endpoints are still treated as local runtime reachability checks.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `252` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-trusted-remote-endpoint-policy`.
+2. Continue Session Layer follow-ups: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session transport contract
 
 ### Current status
