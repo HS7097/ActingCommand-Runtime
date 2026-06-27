@@ -121,6 +121,28 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab lease-gated daemon monitor recovery policy: daemon monitor policies can opt into maintenance recovery only when stored lease metadata matches the active Session Layer lease; daemon ticks persist recovery results or visible recovery errors in monitor state.
 - ActingLab lease-deferred daemon monitor recovery coordination: daemon monitor recovery now defers visibly with `deferred_by_lease` when the active lease is missing or held by another client, so self-heal does not fight scheduler or Lab ownership.
 - ActingLab monitor-policy lease recommendation surface: `session status --diagnostics` now translates `deferred_by_lease` monitor recovery into scheduler/UI-facing recommended actions for lease inspect, acquire, or preempt decisions without executing them.
+- ActingLab Session events command filter: `session events` and `session request events` now support repeatable `--command <name>` filters so future UI/API clients can poll stream, lease, monitor, or control event slices without scanning the full request journal.
+
+## Current ActingLab Session Events Command Filter
+
+This increment improves the event-consumption side of the Session Layer API without starting a network listener or implementing UI code.
+
+- `session events --command <name>` filters request-journal events by command.
+- `--command` is repeatable for future clients that need several command slices.
+- `--after-request-id` still locates the cursor in the complete journal first, then applies the command filter, so filtered polling can resume after a non-matching cursor request.
+- `session request events` supports the same command filter through the resident daemon request path.
+- `session api` advertises `--command` as an event-view filter and records that the filter is repeatable.
+- This phase does not add trusted remote network transport, long-lived stream transport, scheduler implementation, UI, SQLite, OCR, game logic, new capture/input backends, direct ADB input fallback, live device action, or resource repository access.
+
+Validation for this phase:
+
+- Focused `session_events` tests.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Monitor-Policy Lease Recommendation Surface
 
