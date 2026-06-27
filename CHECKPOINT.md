@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-routed status diagnostics
+
+### Current status
+
+- Added `session request status` as a read-only daemon request.
+- `session request status --diagnostics` now returns the same status/diagnostics payload as local `session status --diagnostics`, but through the resident daemon request queue.
+- Local `session status [--diagnostics]` now shares the same `session_status_payload` helper.
+- Capabilities now advertise `session request status`.
+- Missing daemon state still fails visibly with `runtime_not_running`.
+- No daemon command execution semantics, request ordering, response retention, lease enforcement, capture/input path, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ae33290be9b6fc4601d9dc7c6d5810047c011e8d`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_status_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_status_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` initially found a needless-borrow warning in the extracted status helper; after correcting it, the command passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon-routed status diagnostics milestone.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-status-diagnostics`.
+2. Continue Session Layer follow-ups: trusted UI/API diagnostics, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab request journal retention
 
 ### Current status

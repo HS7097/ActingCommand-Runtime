@@ -87,8 +87,47 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon request journal: processed resident daemon requests now append a durable JSONL journal, and `session journal` exposes recent request outcomes for diagnostics after response files are consumed.
 - ActingLab session status diagnostics: `session status --diagnostics` now reports queue depths, daemon state paths, journal totals, recent request summary, and latest request error for UI/scheduler health inspection.
 - ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
+- ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
 
-## Current ActingLab Request Journal Retention
+## Current ActingLab Daemon-Routed Status Diagnostics
+
+The current Runtime task moves the Session Layer status surface one step closer to the shared internal API. Local `session status --diagnostics` remains available, and `session request status --diagnostics` can now submit a read-only request through the resident daemon queue and return the same daemon state/diagnostics payload.
+
+Scope:
+
+- Extract shared status rendering into `session_status_payload`.
+- Keep local `session status [--diagnostics]` behavior stable.
+- Add `session request status [--diagnostics]`.
+- Add daemon-side handling for the read-only `status` request.
+- Advertise `session request status` in capabilities.
+
+Safety direction:
+
+- `session request status` is read-only and requires no lease.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change daemon command execution, request ordering, response retention, lease enforcement, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_status_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after correcting a needless-borrow warning in the extracted status helper.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Expose the same daemon request/status surface through the future trusted UI/API channel once that channel exists.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Request Journal Retention
 
 The current Runtime task adds a bounded retention policy to the resident daemon request journal. This keeps a long-running Session Layer from growing `request-journal.jsonl` without limit while preserving the most recent active entries for `session journal` and diagnostics.
 

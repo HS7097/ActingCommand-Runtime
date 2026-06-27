@@ -3848,9 +3848,14 @@ fn run_session_journal(args: &[String]) -> CliOutcome<Value> {
 
 fn run_session_status(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    flags.expect_positionals("session status", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
-    let info_path = session_info_path(&state_dir);
-    let heartbeat_path = session_heartbeat_path(&state_dir);
+    session_status_payload(&state_dir, flags.bool("--diagnostics"))
+}
+
+fn session_status_payload(state_dir: &Path, diagnostics: bool) -> CliOutcome<Value> {
+    let info_path = session_info_path(state_dir);
+    let heartbeat_path = session_heartbeat_path(state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
     let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
     let mut status = json!({
@@ -3859,8 +3864,8 @@ fn run_session_status(args: &[String]) -> CliOutcome<Value> {
         "info": info,
         "heartbeat": heartbeat
     });
-    if flags.bool("--diagnostics") {
-        status["diagnostics"] = session_status_diagnostics(&state_dir)?;
+    if diagnostics {
+        status["diagnostics"] = session_status_diagnostics(state_dir)?;
     }
     Ok(status)
 }
@@ -3910,11 +3915,12 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
+        "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
         "capture-diagnose" => {
             let mut request_args = vec!["diagnose".to_string()];
@@ -4343,6 +4349,11 @@ fn execute_session_command_request_inner(
     state_dir: &Path,
 ) -> CliOutcome<Value> {
     match request.command.as_str() {
+        "status" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request status", 0)?;
+            session_status_payload(state_dir, flags.bool("--diagnostics"))
+        }
         "capture_diagnose" => {
             let global = request.global.to_global()?;
             let flags = FlagArgs::parse(&request.args)?;
@@ -8884,6 +8895,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
+        command_cap("session request status", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
             ["running_runtime", "device"],
@@ -14218,6 +14230,60 @@ mod tests {
     }
 
     #[test]
+    fn session_status_request_returns_daemon_diagnostics() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let info = SessionInfo {
+            pid: 123,
+            started_at_unix_ms: 10,
+            state_dir: state_dir.display().to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: 123,
+            updated_at_unix_ms: 20,
+            state: "idle".to_string(),
+        };
+        write_json_file_atomic(&session_info_path(state_dir), &info).unwrap();
+        write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-status".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--diagnostics".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let status = execute_session_command_request_inner(&request, state_dir).unwrap();
+
+        assert_eq!(status.get("running").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            status.pointer("/info/pid").and_then(Value::as_u64),
+            Some(123)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/queues/pending_requests")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/journal/retention/max_bytes")
+                .and_then(Value::as_u64),
+            Some(SESSION_REQUEST_JOURNAL_MAX_BYTES)
+        );
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14226,6 +14292,28 @@ mod tests {
                 "session",
                 "request",
                 "capture-diagnose",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_status_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "status",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
             ],
@@ -15471,6 +15559,7 @@ mod tests {
             "session app restart",
             "session capture",
             "session capture diagnose",
+            "session request status",
             "session request capture",
             "session request capture-diagnose",
             "session request stream",
