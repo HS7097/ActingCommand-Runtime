@@ -1519,6 +1519,13 @@ fn session_api_contract() -> Value {
                 "delete_after_successful_parse": true,
                 "missing_response_code": "runtime_not_running"
             },
+            "request_state_view": {
+                "query": "session request-state get <request-id>",
+                "daemon_query": "session request request-state get <request-id>",
+                "schema_version": "session.request_state.v0.1",
+                "statuses": ["queued", "response_available", "completed", "failed", "unknown"],
+                "state_sources": ["requests", "responses", "request-journal"]
+            },
             "event_view": {
                 "query": "session events",
                 "daemon_query": "session request events",
@@ -1616,6 +1623,7 @@ fn session_api_contract() -> Value {
                     "journal",
                     "events",
                     "response",
+                    "request-state",
                     "contract",
                     "api",
                     "capabilities",
@@ -5287,6 +5295,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "journal" => run_session_journal(global, args),
         "events" => run_session_events(global, args),
         "response" => run_session_response(global, args),
+        "request-state" => run_session_request_state(global, args),
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
@@ -5375,7 +5384,7 @@ fn run_session_response_in_state_dir(flags: &FlagArgs, state_dir: &Path) -> CliO
 fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
     flags.expect_positionals("session response get", 2)?;
     let request_id = flags.required_positional(1, "request-id")?;
-    validate_session_response_request_id(request_id)?;
+    validate_session_request_id(request_id)?;
     let consume = flags.bool("--consume");
     let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
     let response = read_pending_session_response(&response_path)?.ok_or_else(|| {
@@ -5407,6 +5416,78 @@ fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Va
         "response_path": response_path.display().to_string(),
         "response": response,
         "data_summary": data_summary
+    }))
+}
+
+fn run_session_request_state(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "request_state", args);
+    }
+    run_session_request_state_in_state_dir(&flags, &session_state_dir_from_flags(&flags)?)
+}
+
+fn run_session_request_state_in_state_dir(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    let sub = flags
+        .positionals
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session request-state requires get <request-id>"))?;
+    match sub {
+        "get" => run_session_request_state_get(flags, state_dir),
+        other => Err(CliError::usage(format!(
+            "unknown session request-state command: {other}"
+        ))),
+    }
+}
+
+fn run_session_request_state_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    flags.expect_positionals("session request-state get", 2)?;
+    let request_id = flags.required_positional(1, "request-id")?;
+    validate_session_request_id(request_id)?;
+    session_request_state_payload(state_dir, request_id)
+}
+
+fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutcome<Value> {
+    let request_path = session_requests_dir(state_dir).join(format!("{request_id}.json"));
+    let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
+    let pending_request = read_pending_session_request(&request_path)?;
+    let pending_response = read_pending_session_response(&response_path)?;
+    let journal_entry = read_session_request_journal(state_dir, 1_000)?
+        .into_iter()
+        .rev()
+        .find(|entry| entry.request_id == request_id);
+    let status = if pending_request.is_some() {
+        "queued"
+    } else if pending_response.is_some() {
+        "response_available"
+    } else if let Some(entry) = journal_entry.as_ref() {
+        session_request_event_status(entry)
+    } else {
+        "unknown"
+    };
+    let known = status != "unknown";
+    let response_summary = pending_response
+        .as_ref()
+        .and_then(session_request_data_summary);
+    let journal_event = journal_entry.as_ref().map(session_request_event_json);
+
+    Ok(json!({
+        "schema_version": "session.request_state.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "request_id": request_id,
+        "status": status,
+        "known": known,
+        "paths": {
+            "request": request_path.display().to_string(),
+            "response": response_path.display().to_string(),
+            "journal": session_request_journal_path(state_dir).display().to_string()
+        },
+        "pending_request": pending_request,
+        "pending_response": pending_response,
+        "response_data_summary": response_summary,
+        "journal_entry": journal_entry,
+        "journal_event": journal_event
     }))
 }
 
@@ -6501,7 +6582,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
         CliError::usage(
-                "session request requires status, journal, events, response, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -6510,6 +6591,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
+        "request-state" => {
+            submit_readonly_session_request(global, &flags, "request_state", &args[1..])
+        }
         "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
         "api" => submit_readonly_session_request(global, &flags, "api", &args[1..]),
         "transport" => submit_readonly_session_request(global, &flags, "transport", &args[1..]),
@@ -7484,6 +7568,10 @@ fn execute_session_command_request_inner(
         "response" => {
             let flags = FlagArgs::parse(&request.args)?;
             run_session_response_in_state_dir(&flags, state_dir)
+        }
+        "request_state" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            run_session_request_state_in_state_dir(&flags, state_dir)
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -11792,7 +11880,7 @@ fn safe_file_stem(value: &str) -> String {
         .collect()
 }
 
-fn validate_session_response_request_id(request_id: &str) -> CliOutcome<()> {
+fn validate_session_request_id(request_id: &str) -> CliOutcome<()> {
     if request_id.is_empty()
         || request_id.len() > 160
         || !request_id
@@ -11800,7 +11888,7 @@ fn validate_session_response_request_id(request_id: &str) -> CliOutcome<()> {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
     {
         return Err(CliError::usage(
-            "session response request-id must contain only ASCII letters, digits, '-' or '_'",
+            "session request-id must contain only ASCII letters, digits, '-' or '_'",
         ));
     }
     Ok(())
@@ -12777,6 +12865,8 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session events", ["offline"], "available"),
         command_cap("session response", ["offline"], "available"),
         command_cap("session response get", ["offline"], "available"),
+        command_cap("session request-state", ["offline"], "available"),
+        command_cap("session request-state get", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
@@ -12792,6 +12882,16 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request response", ["running_runtime"], "available"),
         command_cap(
             "session request response get",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request request-state",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request request-state get",
             ["running_runtime"],
             "available",
         ),
@@ -23218,6 +23318,258 @@ mod tests {
     }
 
     #[test]
+    fn session_request_state_reports_queued_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "queued-1".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--diagnostics".to_string()],
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("queued-1.json"),
+            &request,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "queued-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.request_state.v0.1")
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(data.get("known").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/pending_request/command")
+                .and_then(Value::as_str),
+            Some("status")
+        );
+    }
+
+    #[test]
+    fn session_request_state_reports_available_response() {
+        let temp = TempDir::new().unwrap();
+        let response = SessionCommandResponse {
+            request_id: "response-available".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"schema_version": "session.stream.v0.1", "frame_count": 2})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 30,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(temp.path()).join("response-available.json"),
+            &response,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "response-available",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("response_available")
+        );
+        assert_eq!(
+            data.pointer("/pending_response/command")
+                .and_then(Value::as_str),
+            Some("stream")
+        );
+        assert_eq!(
+            data.pointer("/response_data_summary/kind")
+                .and_then(Value::as_str),
+            Some("stream")
+        );
+    }
+
+    #[test]
+    fn session_request_state_reports_journaled_failure() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "failed-journal".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 40,
+        };
+        let response = SessionCommandResponse {
+            request_id: "failed-journal".to_string(),
+            command: "tap".to_string(),
+            ok: false,
+            data: None,
+            error: Some(EnvelopeError {
+                code: "lab_lease_required".to_string(),
+                message: "lease required".to_string(),
+                blocked_by: vec!["lab_lease".to_string()],
+            }),
+            started_at_unix_ms: 41,
+            completed_at_unix_ms: 42,
+        };
+        append_session_request_journal(temp.path(), &request, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "failed-journal",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            data.pointer("/journal_event/error/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+    }
+
+    #[test]
+    fn session_request_state_reports_unknown_request() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "unknown-request",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("unknown"));
+        assert_eq!(data.get("known").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn session_request_state_rejects_unsafe_request_id() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "../escape",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("request-id"));
+    }
+
+    #[test]
+    fn session_request_state_request_reads_daemon_state() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "daemon-queued".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 50,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("daemon-queued.json"),
+            &request,
+        )
+        .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "state-query".to_string(),
+            command: "request_state".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["get".to_string(), "daemon-queued".to_string()],
+            lease: None,
+            created_at_unix_ms: 60,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.request_state.v0.1")
+        );
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("queued")
+        );
+    }
+
+    #[test]
     fn session_state_request_payload_preserves_holder_and_lease_id() {
         let args = [
             "acquire".to_string(),
@@ -24524,6 +24876,21 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/envelopes/request_state_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.request_state.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/statuses/1")
+                .and_then(Value::as_str),
+            Some("response_available")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/state_sources/2")
+                .and_then(Value::as_str),
+            Some("request-journal")
+        );
+        assert_eq!(
             data.pointer("/envelopes/transport_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.transport.v0.1")
@@ -24655,6 +25022,28 @@ mod tests {
             command.get("status").and_then(Value::as_str),
             Some("available")
         );
+    }
+
+    #[test]
+    fn session_request_state_capabilities_are_available() {
+        let commands = command_capabilities();
+        for command_name in [
+            "session request-state",
+            "session request-state get",
+            "session request request-state",
+            "session request request-state get",
+        ] {
+            let command = commands
+                .iter()
+                .find(|command| {
+                    command.get("command").and_then(Value::as_str) == Some(command_name)
+                })
+                .unwrap_or_else(|| panic!("{command_name} capability"));
+            assert_eq!(
+                command.get("status").and_then(Value::as_str),
+                Some("available")
+            );
+        }
     }
 
     #[test]

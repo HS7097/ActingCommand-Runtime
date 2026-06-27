@@ -133,6 +133,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session queue health diagnostics: `session status --diagnostics` now reports queue health across pending requests and unclaimed responses using the daemon request timeout threshold.
 - ActingLab session response view: `session response get <request-id> [--consume]` and `session request response get <request-id> [--consume]` expose pending daemon response files as a stable response-consumption surface for UI/scheduler clients.
 - ActingLab session request no-wait submit: `session request <command> --no-wait` now queues daemon requests and returns a request id plus response lookup commands without waiting for or consuming the daemon response.
+- ActingLab session request-state view: `session request-state get <request-id>` and `session request request-state get <request-id>` summarize queued, response-available, completed, failed, and unknown daemon request lifecycle states for UI/scheduler clients.
+
+## Current ActingLab Session Request-State View
+
+This increment adds a small request lifecycle lookup surface for future UI and scheduler clients that submit daemon work with `--no-wait`.
+
+- `session request-state get <request-id>` reads the local Session Layer state directory and reports whether the request is queued, has a pending response, is completed or failed in the durable request journal, or is unknown.
+- `session request request-state get <request-id>` routes the same read-only view through the resident daemon request queue.
+- The request-state view uses schema `session.request_state.v0.1`.
+- Request ids are restricted to ASCII letters, digits, `-`, and `_` before any queue or response path is built.
+- The payload includes request/response/journal paths, pending request data, pending response data, compact response data summary, and matching journal event data when available.
+- `session api` advertises `request_state_view`, and `capabilities` advertises the local and daemon-routed request-state commands.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session request-state tests.
+- Focused daemon request-state test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Request No-Wait Submit
 
