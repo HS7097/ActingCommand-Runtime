@@ -1526,13 +1526,18 @@ fn session_api_contract() -> Value {
                 ]
             },
             "lease_view": {
-                "query": "session lease list|status|wait|acquire|release|preempt",
-                "daemon_query": "session request lease list|status|wait|acquire|release|preempt",
+                "query": "session lease list|status|touch|wait|acquire|release|preempt",
+                "daemon_query": "session request lease list|status|touch|wait|acquire|release|preempt",
                 "list_schema_version": "session.lease_list.v0.1",
                 "list_query": "session lease list [--holder <id>] [--lease-id <id>]",
                 "daemon_list_query": "session request lease list [--holder <id>] [--lease-id <id>]",
                 "list_filters": ["--holder", "--lease-holder", "--lease-id"],
                 "status_schema_version": "session.lease_status.v0.1",
+                "touch_schema_version": "session.lease_touch.v0.1",
+                "touch_query": "session lease touch [--holder <id>] [--lease-id <id>]",
+                "daemon_touch_query": "session request lease touch [--holder <id>] [--lease-id <id>]",
+                "touch_updates": "updated_at_unix_ms",
+                "touch_requires_matching_holder": true,
                 "wait_schema_version": "session.lease_wait.v0.1",
                 "wait_query": "session lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]",
                 "daemon_wait_query": "session request lease wait [--status free|held] [--holder <id>] [--lease-id <id>] [--timeout-ms N] [--poll-ms N]",
@@ -5169,7 +5174,9 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
 
 fn run_lab_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match args.first().map(String::as_str) {
-        Some("acquire" | "list" | "status" | "wait") => run_session_lease_inner(global, args, None),
+        Some("acquire" | "list" | "status" | "touch" | "wait") => {
+            run_session_lease_inner(global, args, None)
+        }
         _ => {
             let mut lease_args = vec!["acquire".to_string()];
             lease_args.extend_from_slice(args);
@@ -8637,7 +8644,7 @@ fn run_session_lease_inner(
     forced_state_dir: Option<&Path>,
 ) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session lease requires acquire|release|preempt|list|status|wait|run")
+        CliError::usage("session lease requires acquire|release|preempt|list|status|touch|wait|run")
     })?;
     if action == "run" {
         return run_session_lease_run(global, &args[1..], forced_state_dir);
@@ -8666,6 +8673,13 @@ fn run_session_lease_inner(
     let lease_path = session_lease_path(&state_dir, &instance_id);
     match action {
         "status" => session_lease_status_payload(&instance_id, &lease_path),
+        "touch" => touch_session_lease_file(
+            &lease_path,
+            &instance_id,
+            &holder,
+            flags.optional("--lease-id"),
+            &flags,
+        ),
         "wait" => run_session_lease_wait(&instance_id, &lease_path, &flags),
         "acquire" => {
             if lease_path.exists() {
@@ -8724,6 +8738,42 @@ fn run_session_lease_inner(
             "unknown session lease action: {other}"
         ))),
     }
+}
+
+fn touch_session_lease_file(
+    lease_path: &Path,
+    instance_id: &str,
+    holder: &str,
+    lease_id: Option<String>,
+    flags: &FlagArgs,
+) -> CliOutcome<Value> {
+    flags.expect_positionals("session lease touch", 0)?;
+    let Some(mut lease) = read_json_file::<SessionLease>(lease_path)? else {
+        return Err(CliError::safety_blocked(
+            "lease_not_held",
+            format!("cannot touch missing session lease for {instance_id}"),
+            &["lab_lease", "lease_holder"],
+        ));
+    };
+    validate_lease_request(
+        &lease,
+        &SessionCommandLease {
+            holder: holder.to_string(),
+            lease_id,
+        },
+    )?;
+    let previous_updated_at_unix_ms = lease.updated_at_unix_ms;
+    lease.updated_at_unix_ms = current_unix_ms();
+    write_json_file_atomic(lease_path, &lease)?;
+    Ok(json!({
+        "schema_version": "session.lease_touch.v0.1",
+        "status": "touched",
+        "instance": instance_id,
+        "holder": holder,
+        "previous_updated_at_unix_ms": previous_updated_at_unix_ms,
+        "lease": lease,
+        "path": lease_path.display().to_string()
+    }))
 }
 
 fn session_lease_status_payload(instance_id: &str, lease_path: &Path) -> CliOutcome<Value> {
@@ -13936,6 +13986,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request lease touch",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
             "session request lease list",
             ["running_runtime"],
             "available",
@@ -14115,6 +14170,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session lease", ["offline"], "available"),
         command_cap("session lease wait", ["offline"], "available"),
         command_cap("session lease list", ["offline"], "available"),
+        command_cap("session lease touch", ["offline"], "available"),
         command_cap(
             "session lease run",
             ["running_runtime", "lab_lease"],
@@ -14155,6 +14211,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab lease", ["offline", "lab_lease"], "available"),
         command_cap("lab lease list", ["offline", "lab_lease"], "available"),
         command_cap("lab lease status", ["offline", "lab_lease"], "available"),
+        command_cap("lab lease touch", ["offline", "lab_lease"], "available"),
         command_cap("lab lease wait", ["offline", "lab_lease"], "available"),
         command_cap("lab preempt", ["offline", "lab_lease"], "available"),
         command_cap("lab release", ["offline", "lab_lease"], "available"),
@@ -14617,6 +14674,72 @@ mod tests {
             data.pointer("/lease/lease_id").and_then(Value::as_str),
             Some("scheduler-lease")
         );
+    }
+
+    #[test]
+    fn lab_lease_touch_alias_updates_session_lease_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let leased = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        let path = session_lease_path(&state_dir, "ak");
+        let mut stored = read_json_file::<SessionLease>(&path).unwrap().unwrap();
+        stored.updated_at_unix_ms = 20;
+        write_json_file_atomic(&path, &stored).unwrap();
+        let touched = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "touch",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(leased.exit_code(), 0);
+        assert_eq!(touched.exit_code(), 0);
+        let data = touched.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_touch.v0.1")
+        );
+        assert_eq!(
+            data.get("previous_updated_at_unix_ms")
+                .and_then(Value::as_u64),
+            Some(20)
+        );
+        let updated = read_json_file::<SessionLease>(&path).unwrap().unwrap();
+        assert!(updated.updated_at_unix_ms > 20);
     }
 
     #[test]
@@ -16000,6 +16123,141 @@ mod tests {
     }
 
     #[test]
+    fn session_lease_touch_updates_matching_lease_timestamp() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let mut lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        lease.acquired_at_unix_ms = 10;
+        lease.updated_at_unix_ms = 20;
+        let lease_path = session_lease_path(temp.path(), "ak");
+        write_json_file_atomic(&lease_path, &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "touch",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_touch.v0.1")
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("touched"));
+        assert_eq!(
+            data.get("previous_updated_at_unix_ms")
+                .and_then(Value::as_u64),
+            Some(20)
+        );
+        assert_eq!(
+            data.pointer("/lease/acquired_at_unix_ms")
+                .and_then(Value::as_u64),
+            Some(10)
+        );
+        assert!(
+            data.pointer("/lease/updated_at_unix_ms")
+                .and_then(Value::as_u64)
+                .unwrap()
+                > 20
+        );
+        let stored = read_json_file::<SessionLease>(&lease_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.acquired_at_unix_ms, 10);
+        assert!(stored.updated_at_unix_ms > 20);
+    }
+
+    #[test]
+    fn session_lease_touch_rejects_wrong_holder_without_mutating() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let mut lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        lease.updated_at_unix_ms = 20;
+        let lease_path = session_lease_path(temp.path(), "ak");
+        write_json_file_atomic(&lease_path, &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "touch",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lease_holder_mismatch"
+        );
+        let stored = read_json_file::<SessionLease>(&lease_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.updated_at_unix_ms, 20);
+    }
+
+    #[test]
+    fn session_lease_touch_missing_lease_fails_visibly() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "lease",
+                "touch",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--holder",
+                "scheduler",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lease_not_held"
+        );
+    }
+
+    #[test]
     fn session_lease_wait_returns_immediately_when_free() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -16220,6 +16478,61 @@ mod tests {
             payload.pointer("/leases/0/holder").and_then(Value::as_str),
             Some("scheduler")
         );
+    }
+
+    #[test]
+    fn session_lease_touch_request_updates_daemon_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let mut lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        lease.updated_at_unix_ms = 20;
+        let path = session_lease_path(state_dir, "ak");
+        write_json_file_atomic(&path, &lease).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "lease-touch".to_string(),
+            command: "lease".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "touch".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.lease_touch.v0.1")
+        );
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("touched")
+        );
+        assert_eq!(
+            payload.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        let stored = read_json_file::<SessionLease>(&path).unwrap().unwrap();
+        assert!(stored.updated_at_unix_ms > 20);
     }
 
     #[test]
@@ -27830,6 +28143,26 @@ mod tests {
             Some("session.lease_status.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/lease_view/touch_schema_version")
+                .and_then(Value::as_str),
+            Some("session.lease_touch.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/touch_query")
+                .and_then(Value::as_str),
+            Some("session lease touch [--holder <id>] [--lease-id <id>]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/daemon_touch_query")
+                .and_then(Value::as_str),
+            Some("session request lease touch [--holder <id>] [--lease-id <id>]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/lease_view/touch_requires_matching_holder")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/lease_view/wait_schema_version")
                 .and_then(Value::as_str),
             Some("session.lease_wait.v0.1")
@@ -28169,14 +28502,17 @@ mod tests {
         for command_name in [
             "session lease",
             "session lease list",
+            "session lease touch",
             "session lease wait",
             "session request lease",
             "session request lease list",
+            "session request lease touch",
             "session request lease wait",
             "lab status",
             "lab lease",
             "lab lease list",
             "lab lease status",
+            "lab lease touch",
             "lab lease wait",
             "lab preempt",
             "lab release",

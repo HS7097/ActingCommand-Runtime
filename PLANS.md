@@ -143,6 +143,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session lease wait view: `session lease wait` and `session request lease wait` provide bounded waiting for free or held lease state, including holder and lease-id filters for scheduler/Lab/UI coordination.
 - ActingLab session lease list view: `session lease list` and `session request lease list` expose all active Session Layer lease records with holder and lease-id filters for scheduler/Lab/UI arbitration diagnostics.
 - ActingLab LabLease list/wait aliases: `lab lease list` and `lab lease wait` now expose the same Session Layer lease-list and lease-wait views from the Lab-facing CLI surface.
+- ActingLab session lease touch view: `session lease touch`, `session request lease touch`, and `lab lease touch` let current lease holders refresh lease freshness metadata without executing device work.
+
+## Current ActingLab Session Lease Touch View
+
+This increment closes a lease freshness observability gap in the Session Layer: scheduler, Lab, and future UI clients can now refresh a held lease's `updated_at_unix_ms` without touching devices or inferring liveness from unrelated command activity.
+
+- `session lease touch` updates only `updated_at_unix_ms` on the matching lease record.
+- `session request lease touch` exposes the same touch operation through the resident daemon request queue.
+- `lab lease touch` is a thin Lab-facing alias over the same Session Layer lease touch path.
+- Touch requires the active holder to match, and optional `--lease-id` must match when supplied.
+- Missing leases fail visibly with `lease_not_held`; holder and lease-id mismatches keep the existing safety-blocked errors and do not mutate the lease file.
+- `session api` advertises `session.lease_touch.v0.1`, and capabilities advertise the local, daemon-routed, and Lab-facing touch surfaces.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab LabLease List/Wait Alias View
 

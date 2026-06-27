@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session lease touch view
+
+### Current status
+
+- `session lease touch` now updates only `updated_at_unix_ms` on a matching held lease.
+- `session request lease touch` exposes the same touch behavior through the resident daemon request queue.
+- `lab lease touch` exposes the same touch behavior from the Lab-facing CLI surface.
+- Touch requires matching holder metadata and optional matching lease id.
+- Missing leases fail visibly with `lease_not_held`; wrong holder and wrong lease id keep the existing safety-blocked mismatch errors and do not mutate lease files.
+- `session api` now advertises `session.lease_touch.v0.1`.
+- Capabilities now advertise local, daemon-routed, and Lab-facing lease touch commands.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0a5d0fa7220b96ee9e51b4d637cb5602fe5bf617`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git log -1 --oneline`
+- `git tag --points-at HEAD`
+- Inspected Session Layer lease routing, lease diagnostics, API contract, command capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_lease -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_lease -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session lease tests passed, including lease touch success, missing-lease failure, wrong-holder non-mutation, and daemon-state request execution.
+- Focused LabLease tests passed, including `lab lease touch`.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback/reconnect text, app restart/force-stop/monkey additions, or new device backend additions in newly added `apps/actinglab/src/main.rs` lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-lease-touch-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab LabLease list/wait alias view
 
 ### Current status
