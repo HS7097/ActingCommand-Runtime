@@ -131,6 +131,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending request diagnostics: `session status --diagnostics` now exposes a bounded pending-request preview for future UI/scheduler queue inspection, and corrupt pending request files fail visibly.
 - ActingLab pending response diagnostics: `session status --diagnostics` now exposes a bounded pending-response preview for unconsumed daemon responses, and corrupt response files fail visibly.
 - ActingLab session queue health diagnostics: `session status --diagnostics` now reports queue health across pending requests and unclaimed responses using the daemon request timeout threshold.
+- ActingLab session response view: `session response get <request-id> [--consume]` and `session request response get <request-id> [--consume]` expose pending daemon response files as a stable response-consumption surface for UI/scheduler clients.
+
+## Current ActingLab Session Response View
+
+This increment gives future UI and scheduler clients a direct way to inspect or claim a specific daemon response file after it has been left in the Session Layer response queue.
+
+- `session response get <request-id>` reads a response from the selected session state directory without deleting it.
+- `session response get <request-id> --consume` deletes the response file only after it has been read, parsed, and request-id checked.
+- `session request response get <request-id>` lets the resident daemon execute the same response-view logic through the existing serialized request queue.
+- The response view uses schema `session.response.v0.1`.
+- Request ids for direct response-file lookup are restricted to ASCII letters, digits, `-`, and `_` to avoid path traversal or accidental arbitrary-file reads.
+- Missing responses, corrupt response JSON, and response id mismatches fail visibly instead of returning empty success data.
+- `session api` advertises the `response_view` contract, and `capabilities` advertises the local and daemon-routed response commands.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session response tests.
+- Focused daemon response-view test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Queue Health Diagnostics
 

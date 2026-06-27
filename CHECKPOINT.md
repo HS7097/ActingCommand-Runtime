@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session response view
+
+### Current status
+
+- `session response get <request-id>` now reads a specific pending daemon response file from the selected session state directory without deleting it.
+- `session response get <request-id> --consume` removes the response file only after successful read, parse, and request-id validation.
+- `session request response get <request-id>` now exposes the same response-view logic through the resident daemon request queue.
+- The response view returns schema `session.response.v0.1`, the original response envelope, and compact `data_summary` when available.
+- Response request ids are restricted to ASCII letters, digits, `-`, and `_` to avoid path traversal and arbitrary-file reads.
+- Missing responses, corrupt response JSON, response id mismatches, and failed consume deletes fail visibly.
+- `session api` advertises `response_view`, and command capabilities advertise local and daemon response commands.
+- No trusted remote network transport, long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `683394c77e9ef7be729c65b83011fef72433ce99`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session API contract, request routing, response queue helpers, command capabilities, and tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_response -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_response_get_reads_daemon_state_response -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session response tests passed.
+- Focused Session API contract test passed.
+- Focused daemon response-view test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-response-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session queue health diagnostics
 
 ### Current status

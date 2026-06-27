@@ -1496,6 +1496,14 @@ fn session_api_contract() -> Value {
                 "lease_holder_filter_repeats": true,
                 "entry_selector_field": "entries[].global"
             },
+            "response_view": {
+                "query": "session response get <request-id> [--consume]",
+                "daemon_query": "session request response get <request-id> [--consume]",
+                "schema_version": "session.response.v0.1",
+                "consume_flag": "--consume",
+                "delete_after_successful_parse": true,
+                "missing_response_code": "runtime_not_running"
+            },
             "event_view": {
                 "query": "session events",
                 "daemon_query": "session request events",
@@ -1592,6 +1600,7 @@ fn session_api_contract() -> Value {
                     "status",
                     "journal",
                     "events",
+                    "response",
                     "contract",
                     "api",
                     "capabilities",
@@ -5262,6 +5271,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "transport" => run_session_transport(global, args),
         "journal" => run_session_journal(global, args),
         "events" => run_session_events(global, args),
+        "response" => run_session_response(global, args),
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
@@ -5323,6 +5333,66 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         after_request_id.as_deref(),
         &filters,
     )
+}
+
+fn run_session_response(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "response", args);
+    }
+    run_session_response_in_state_dir(&flags, &session_state_dir_from_flags(&flags)?)
+}
+
+fn run_session_response_in_state_dir(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    let sub = flags
+        .positionals
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session response requires get <request-id>"))?;
+    match sub {
+        "get" => run_session_response_get(flags, state_dir),
+        other => Err(CliError::usage(format!(
+            "unknown session response command: {other}"
+        ))),
+    }
+}
+
+fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    flags.expect_positionals("session response get", 2)?;
+    let request_id = flags.required_positional(1, "request-id")?;
+    validate_session_response_request_id(request_id)?;
+    let consume = flags.bool("--consume");
+    let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
+    let response = read_pending_session_response(&response_path)?.ok_or_else(|| {
+        CliError::runtime_not_running(format!(
+            "session response {request_id} is not available in {}",
+            session_responses_dir(state_dir).display()
+        ))
+    })?;
+    if response.request_id != request_id {
+        return Err(CliError::runtime_not_running(format!(
+            "session response id mismatch: expected {request_id}, found {}",
+            response.request_id
+        )));
+    }
+    let data_summary = session_request_data_summary(&response);
+    if consume {
+        fs::remove_file(&response_path).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to consume session response {}: {err}",
+                response_path.display()
+            ))
+        })?;
+    }
+    Ok(json!({
+        "schema_version": "session.response.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "request_id": request_id,
+        "consumed": consume,
+        "response_path": response_path.display().to_string(),
+        "response": response,
+        "data_summary": data_summary
+    }))
 }
 
 fn session_events_payload(
@@ -6416,7 +6486,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
         CliError::usage(
-                "session request requires status, journal, events, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, events, response, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -6424,6 +6494,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
+        "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
         "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
         "api" => submit_readonly_session_request(global, &flags, "api", &args[1..]),
         "transport" => submit_readonly_session_request(global, &flags, "transport", &args[1..]),
@@ -7379,6 +7450,10 @@ fn execute_session_command_request_inner(
                 after_request_id.as_deref(),
                 &filters,
             )
+        }
+        "response" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            run_session_response_in_state_dir(&flags, state_dir)
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -11687,6 +11762,20 @@ fn safe_file_stem(value: &str) -> String {
         .collect()
 }
 
+fn validate_session_response_request_id(request_id: &str) -> CliOutcome<()> {
+    if request_id.is_empty()
+        || request_id.len() > 160
+        || !request_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(CliError::usage(
+            "session response request-id must contain only ASCII letters, digits, '-' or '_'",
+        ));
+    }
+    Ok(())
+}
+
 fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {
     match key {
         "adb_path" => Ok(json!(config.adb_path)),
@@ -12656,6 +12745,8 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session cleanup", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
         command_cap("session events", ["offline"], "available"),
+        command_cap("session response", ["offline"], "available"),
+        command_cap("session response get", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
@@ -12663,6 +12754,12 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request events", ["running_runtime"], "available"),
+        command_cap("session request response", ["running_runtime"], "available"),
+        command_cap(
+            "session request response get",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request contract", ["running_runtime"], "available"),
         command_cap("session request api", ["running_runtime"], "available"),
         command_cap(
@@ -20135,6 +20232,186 @@ mod tests {
     }
 
     #[test]
+    fn session_response_get_reads_without_consuming() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "response_ok".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ready"})),
+            error: None,
+            started_at_unix_ms: 10,
+            completed_at_unix_ms: 11,
+        };
+        let response_path = session_responses_dir(state_dir).join("response_ok.json");
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "get",
+                "response_ok",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.response.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/response/data/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(data.get("consumed").and_then(Value::as_bool), Some(false));
+        assert!(response_path.exists());
+    }
+
+    #[test]
+    fn session_response_get_consume_removes_response_after_read() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "response_consume".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"schema_version": "session.stream.v0.1", "frame_count": 0})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 21,
+        };
+        let response_path = session_responses_dir(state_dir).join("response_consume.json");
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "get",
+                "response_consume",
+                "--consume",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("consumed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/data_summary/kind").and_then(Value::as_str),
+            Some("stream")
+        );
+        assert!(!response_path.exists());
+    }
+
+    #[test]
+    fn session_response_get_missing_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "get",
+                "missing_response",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("missing_response"));
+    }
+
+    #[test]
+    fn session_response_get_rejects_unsafe_request_id() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "get",
+                "../escape",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("request-id"));
+    }
+
+    #[test]
+    fn session_request_response_get_reads_daemon_state_response() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "daemon_response".to_string(),
+            command: "capture_diagnose".to_string(),
+            ok: true,
+            data: Some(json!({"status": "fresh", "mode": "capture_diagnose"})),
+            error: None,
+            started_at_unix_ms: 30,
+            completed_at_unix_ms: 31,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(state_dir).join("daemon_response.json"),
+            &response,
+        )
+        .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "response-query".to_string(),
+            command: "response".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["get".to_string(), "daemon_response".to_string()],
+            lease: None,
+            created_at_unix_ms: 32,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.response.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/response/command").and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+    }
+
+    #[test]
     fn session_journal_filters_by_instance_status_and_lease_holder() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -24141,6 +24418,16 @@ mod tests {
             Some("next_after_request_id")
         );
         assert_eq!(
+            data.pointer("/envelopes/response_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.response.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/response_view/delete_after_successful_parse")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/transport_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.transport.v0.1")
@@ -24235,6 +24522,28 @@ mod tests {
             stream.get("status").and_then(Value::as_str),
             Some("available")
         );
+    }
+
+    #[test]
+    fn session_response_capabilities_are_available() {
+        let commands = command_capabilities();
+        for command_name in [
+            "session response",
+            "session response get",
+            "session request response",
+            "session request response get",
+        ] {
+            let command = commands
+                .iter()
+                .find(|command| {
+                    command.get("command").and_then(Value::as_str) == Some(command_name)
+                })
+                .unwrap_or_else(|| panic!("{command_name} capability"));
+            assert_eq!(
+                command.get("status").and_then(Value::as_str),
+                Some("available")
+            );
+        }
     }
 
     #[test]
