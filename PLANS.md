@@ -135,6 +135,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session request no-wait submit: `session request <command> --no-wait` now queues daemon requests and returns a request id plus response lookup commands without waiting for or consuming the daemon response.
 - ActingLab session request-state view: `session request-state get <request-id>` and `session request request-state get <request-id>` summarize queued, response-available, completed, failed, and unknown daemon request lifecycle states for UI/scheduler clients.
 - ActingLab session request-state list view: `session request-state list` and `session request request-state list` expose a bounded aggregate request lifecycle view across pending requests, pending responses, and recent request journal entries.
+- ActingLab session response wait view: `session response wait <request-id>` and `session request response wait <request-id>` provide a bounded wait/read/consume surface for a specific daemon response without custom polling in UI/scheduler clients.
+
+## Current ActingLab Session Response Wait View
+
+This increment adds a bounded response wait surface for future UI and scheduler clients that already have a daemon request id and need to wait for the matching response without implementing their own polling loop.
+
+- `session response wait <request-id> [--timeout-ms N] [--poll-ms N] [--consume]` waits within the selected local Session Layer state directory for a specific pending daemon response file.
+- `session request response wait <request-id> [--timeout-ms N] [--poll-ms N] [--consume]` exposes the same wait/read/consume behavior through the resident daemon request queue.
+- The wait view reuses schema `session.response.v0.1` and adds a `wait` object with completion, elapsed, timeout, and poll metadata.
+- `--consume` still deletes the response file only after successful read, parse, and request-id validation.
+- Missing responses after timeout, corrupt response JSON, response id mismatches, invalid request ids, invalid polling intervals, and failed consume deletes fail visibly.
+- `session api` advertises the response wait contract, and `capabilities` advertises local and daemon-routed wait commands.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session response tests.
+- Focused daemon response wait test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Request-State List View
 

@@ -1514,8 +1514,12 @@ fn session_api_contract() -> Value {
             "response_view": {
                 "query": "session response get <request-id> [--consume]",
                 "daemon_query": "session request response get <request-id> [--consume]",
+                "wait_query": "session response wait <request-id> [--timeout-ms N] [--poll-ms N] [--consume]",
+                "daemon_wait_query": "session request response wait <request-id> [--timeout-ms N] [--poll-ms N] [--consume]",
                 "schema_version": "session.response.v0.1",
                 "consume_flag": "--consume",
+                "wait_timeout_default_ms": SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+                "wait_poll_default_ms": 100,
                 "delete_after_successful_parse": true,
                 "missing_response_code": "runtime_not_running"
             },
@@ -5375,9 +5379,10 @@ fn run_session_response_in_state_dir(flags: &FlagArgs, state_dir: &Path) -> CliO
         .positionals
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session response requires get <request-id>"))?;
+        .ok_or_else(|| CliError::usage("session response requires get or wait <request-id>"))?;
     match sub {
         "get" => run_session_response_get(flags, state_dir),
+        "wait" => run_session_response_wait(flags, state_dir),
         other => Err(CliError::usage(format!(
             "unknown session response command: {other}"
         ))),
@@ -5389,6 +5394,54 @@ fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Va
     let request_id = flags.required_positional(1, "request-id")?;
     validate_session_request_id(request_id)?;
     let consume = flags.bool("--consume");
+    session_response_payload(state_dir, request_id, consume, None)
+}
+
+fn run_session_response_wait(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+    flags.expect_positionals("session response wait", 2)?;
+    let request_id = flags.required_positional(1, "request-id")?;
+    validate_session_request_id(request_id)?;
+    let consume = flags.bool("--consume");
+    let timeout =
+        parse_optional_duration_ms(flags, "--timeout-ms", SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
+    let poll = parse_optional_duration_ms(flags, "--poll-ms", 100)?;
+    if poll.is_zero() || poll > Duration::from_millis(5_000) {
+        return Err(CliError::usage("--poll-ms must be between 1 and 5000"));
+    }
+    let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
+    let started = Instant::now();
+    loop {
+        if response_path.exists() {
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            return session_response_payload(
+                state_dir,
+                request_id,
+                consume,
+                Some(json!({
+                    "completed": true,
+                    "elapsed_ms": elapsed_ms,
+                    "timeout_ms": timeout.as_millis() as u64,
+                    "poll_ms": poll.as_millis() as u64
+                })),
+            );
+        }
+        if started.elapsed() >= timeout {
+            return Err(CliError::runtime_not_running(format!(
+                "session response {request_id} timed out after {} ms in {}",
+                timeout.as_millis(),
+                session_responses_dir(state_dir).display()
+            )));
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn session_response_payload(
+    state_dir: &Path,
+    request_id: &str,
+    consume: bool,
+    wait: Option<Value>,
+) -> CliOutcome<Value> {
     let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
     let response = read_pending_session_response(&response_path)?.ok_or_else(|| {
         CliError::runtime_not_running(format!(
@@ -5411,7 +5464,7 @@ fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Va
             ))
         })?;
     }
-    Ok(json!({
+    let mut payload = json!({
         "schema_version": "session.response.v0.1",
         "state_dir": state_dir.display().to_string(),
         "request_id": request_id,
@@ -5419,7 +5472,11 @@ fn run_session_response_get(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Va
         "response_path": response_path.display().to_string(),
         "response": response,
         "data_summary": data_summary
-    }))
+    });
+    if let Some(wait) = wait {
+        payload["wait"] = wait;
+    }
+    Ok(payload)
 }
 
 fn run_session_request_state(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -13115,6 +13172,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session events", ["offline"], "available"),
         command_cap("session response", ["offline"], "available"),
         command_cap("session response get", ["offline"], "available"),
+        command_cap("session response wait", ["offline"], "available"),
         command_cap("session request-state", ["offline"], "available"),
         command_cap("session request-state get", ["offline"], "available"),
         command_cap("session request-state list", ["offline"], "available"),
@@ -13133,6 +13191,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request response", ["running_runtime"], "available"),
         command_cap(
             "session request response get",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request response wait",
             ["running_runtime"],
             "available",
         ),
@@ -20707,6 +20770,162 @@ mod tests {
     }
 
     #[test]
+    fn session_response_wait_reads_available_response_without_consuming() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "response_wait".to_string(),
+            command: "current_page".to_string(),
+            ok: true,
+            data: Some(json!({"page": "home"})),
+            error: None,
+            started_at_unix_ms: 40,
+            completed_at_unix_ms: 41,
+        };
+        let response_path = session_responses_dir(state_dir).join("response_wait.json");
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "wait",
+                "response_wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.response.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/response/data/page").and_then(Value::as_str),
+            Some("home")
+        );
+        assert_eq!(data.get("consumed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/timeout_ms").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/wait/poll_ms").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(response_path.exists());
+    }
+
+    #[test]
+    fn session_response_wait_consume_removes_response_after_read() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "response_wait_consume".to_string(),
+            command: "recognize".to_string(),
+            ok: true,
+            data: Some(json!({"schema_version": "recognition.v0.1"})),
+            error: None,
+            started_at_unix_ms: 50,
+            completed_at_unix_ms: 51,
+        };
+        let response_path = session_responses_dir(state_dir).join("response_wait_consume.json");
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "wait",
+                "response_wait_consume",
+                "--consume",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("consumed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(!response_path.exists());
+    }
+
+    #[test]
+    fn session_response_wait_timeout_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "wait",
+                "missing_wait_response",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("missing_wait_response"));
+        assert!(error.message.contains("timed out"));
+    }
+
+    #[test]
+    fn session_response_wait_rejects_zero_poll_ms() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "wait",
+                "response_wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "0",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("--poll-ms"));
+    }
+
+    #[test]
     fn session_response_get_missing_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -20799,6 +21018,69 @@ mod tests {
                 .pointer("/data_summary/kind")
                 .and_then(Value::as_str),
             Some("capture_diagnose")
+        );
+    }
+
+    #[test]
+    fn session_request_response_wait_reads_daemon_state_response() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "daemon_wait_response".to_string(),
+            command: "detect_page".to_string(),
+            ok: true,
+            data: Some(json!({"page_id": "ba.home"})),
+            error: None,
+            started_at_unix_ms: 60,
+            completed_at_unix_ms: 61,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(state_dir).join("daemon_wait_response.json"),
+            &response,
+        )
+        .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "response-wait-query".to_string(),
+            command: "response".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "wait".to_string(),
+                "daemon_wait_response".to_string(),
+                "--timeout-ms".to_string(),
+                "1".to_string(),
+                "--poll-ms".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 62,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.response.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/response/command").and_then(Value::as_str),
+            Some("detect_page")
+        );
+        assert_eq!(
+            payload
+                .pointer("/response/data/page_id")
+                .and_then(Value::as_str),
+            Some("ba.home")
+        );
+        assert_eq!(
+            payload.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -25402,6 +25684,21 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/envelopes/response_view/wait_query")
+                .and_then(Value::as_str),
+            Some("session response wait <request-id> [--timeout-ms N] [--poll-ms N] [--consume]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/response_view/wait_timeout_default_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/response_view/wait_poll_default_ms")
+                .and_then(Value::as_u64),
+            Some(100)
+        );
+        assert_eq!(
             data.pointer("/envelopes/request_state_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.request_state.v0.1")
@@ -25529,8 +25826,10 @@ mod tests {
         for command_name in [
             "session response",
             "session response get",
+            "session response wait",
             "session request response",
             "session request response get",
+            "session request response wait",
         ] {
             let command = commands
                 .iter()
