@@ -135,6 +135,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture backend CLI alias: `--backend <auto|adb|droidcast_raw|nemu_ipc>` now matches the Session Layer task contract as a thin alias of the existing `--capture-backend` option.
 - ActingLab app force-stop lifecycle alias: `session app force-stop` and `session instance app force-stop` now match the Phase A lifecycle wording while reusing the existing force-stop implementation behind the lease-gated app lifecycle path; workspace validation also hardened recognition-pack test temp-dir uniqueness for Windows parallel test stability.
 - ActingLab stream transport/API contract truthfulness: `session transport`, `session api`, and `stream` now distinguish available bounded local stream/per-request input relay surfaces from the still-reserved trusted remote long-lived stream.
+- ActingLab stale capture recovery diagnostic execution: `session recover --stale-capture --capture` can now run the fresh-frame probe and return evidence-backed recovery advice without clicking, restarting, or opening MaaTouch.
+
+## Current ActingLab Stale Capture Recovery Diagnostic Execution
+
+The current Runtime task advances the AK stale-frame finding from a static recovery plan to an optional read-only diagnostic execution path.
+
+Scope:
+
+- Keep `session recover --stale-capture` as a no-device static plan by default.
+- Add `--capture` / `--diagnose` to run the existing fresh-frame probe from the stale-capture recovery entry point.
+- Report `diagnosed_fresh`, `diagnosed_stale`, or `diagnosis_unavailable` based on probe evidence.
+- Preserve the existing recommendation ordering: fresh probe, faster capture backends, device health, and only then heavy `session app restart`.
+- Keep daemon-side stale-capture recovery compatible with lease-free planning/diagnosis because no input or restart is executed.
+
+Safety direction:
+
+- This is a read-only diagnosis enhancement.
+- It does not click, start MaaTouch, switch capture backend configuration, reconnect, restart the app, run a scheduler loop, touch resource repositories, add UI, add SQLite, add OCR/OpenCV, or add game logic.
+- Heavy app restart remains a separate lease-gated lifecycle command.
+
+Validation status:
+
+- Focused stale-capture recovery and capture-diagnosis tests passed.
+- CLI smoke confirmed default `session recover --stale-capture` remains a no-device plan with `diagnosis_executed=false` and `app_restart_executed=false`.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Stream Transport/API Contract Truthfulness
 

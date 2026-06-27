@@ -3179,27 +3179,67 @@ fn run_session_stale_capture_recover(
         instance,
     )?;
     let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
-    Ok(json!({
-        "status": "planned",
+    let run_diagnosis = flags.bool("--capture") || flags.bool("--diagnose");
+    if run_diagnosis {
+        let device_config = device_config(global, &config)?;
+        let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+        return Ok(stale_capture_recovery_json(
+            requested,
+            fresh_delay,
+            Some(&report),
+        ));
+    }
+    Ok(stale_capture_recovery_json(requested, fresh_delay, None))
+}
+
+fn stale_capture_recovery_json(
+    requested: CaptureBackendChoice,
+    fresh_delay: Duration,
+    report: Option<&CaptureFreshProbeReport>,
+) -> Value {
+    let diagnosis = report.map_or_else(
+        || {
+            json!({
+                "executed": false,
+                "command": format!(
+                    "capture diagnose --capture-backend {} --fresh-delay-ms {}",
+                    requested.as_str(),
+                    fresh_delay.as_millis()
+                ),
+                "read_only": true,
+                "reason": "verify fresh frames before treating an unchanged screen as a game freeze"
+            })
+        },
+        |report| {
+            json!({
+                "executed": true,
+                "read_only": true,
+                "result": capture_fresh_probe_report_json(report, requested)
+            })
+        },
+    );
+    let status = report
+        .map(|report| match report.status {
+            CaptureFreshProbeStatus::Fresh => "diagnosed_fresh",
+            CaptureFreshProbeStatus::StaleSuspected => "diagnosed_stale",
+            CaptureFreshProbeStatus::Unavailable => "diagnosis_unavailable",
+        })
+        .unwrap_or("planned");
+    let recovery_status = report
+        .map(|report| report.status)
+        .unwrap_or(CaptureFreshProbeStatus::StaleSuspected);
+    json!({
+        "status": status,
         "mode": "stale_capture_recovery",
         "executed": false,
         "click_allowed": false,
         "app_restart_executed": false,
+        "diagnosis_executed": report.is_some(),
+        "diagnosis_status": status,
         "requested_backend": requested.as_str(),
         "fresh_delay_ms": fresh_delay.as_millis(),
-        "diagnosis": {
-            "command": format!(
-                "capture diagnose --capture-backend {} --fresh-delay-ms {}",
-                requested.as_str(),
-                fresh_delay.as_millis()
-            ),
-            "read_only": true,
-            "reason": "verify fresh frames before treating an unchanged screen as a game freeze"
-        },
-        "recovery": capture_diagnosis_recovery_json(
-            CaptureFreshProbeStatus::StaleSuspected,
-            requested,
-        ),
+        "diagnosis": diagnosis,
+        "recovery": capture_diagnosis_recovery_json(recovery_status, requested),
         "steps": [
             {
                 "order": 1,
@@ -3240,7 +3280,7 @@ fn run_session_stale_capture_recover(
         ],
         "safety_gate": "diagnose_capture_backend_before_restart",
         "next": "run capture diagnose with the effective backend selection; only restart the app if lighter capture-backend recovery cannot restore fresh frames"
-    }))
+    })
 }
 
 #[derive(Debug)]
@@ -21748,6 +21788,55 @@ mod tests {
             data.pointer("/steps/4/requires_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn stale_capture_recovery_json_reports_executed_fresh_diagnosis() {
+        let report = CaptureFreshProbeReport {
+            status: CaptureFreshProbeStatus::Fresh,
+            frame: None,
+            attempts: vec![json!({
+                "backend": "nemu_ipc",
+                "ok": true,
+                "stage": "fresh_probe"
+            })],
+            freshness: json!({
+                "required": true,
+                "fresh": true,
+                "status": "fresh"
+            }),
+        };
+
+        let value = stale_capture_recovery_json(
+            CaptureBackendChoice::Auto,
+            Duration::from_millis(200),
+            Some(&report),
+        );
+
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("diagnosed_fresh")
+        );
+        assert_eq!(
+            value.get("diagnosis_executed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .pointer("/diagnosis/result/status")
+                .and_then(Value::as_str),
+            Some("fresh")
+        );
+        assert_eq!(
+            value.pointer("/recovery/needed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .pointer("/diagnosis/result/capture_backend_attempts/0/backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
         );
     }
 

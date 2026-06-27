@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab stale capture recovery diagnostic execution
+
+### Current status
+
+- `session recover --stale-capture` remains a static no-device plan by default.
+- Added `session recover --stale-capture --capture` and `--diagnose` as read-only diagnostic execution flags.
+- When diagnosis is requested, the command runs the existing fresh-frame probe and reports `diagnosed_fresh`, `diagnosed_stale`, or `diagnosis_unavailable`.
+- Actual diagnosis output is embedded under `diagnosis.result`, using the same capture diagnosis schema and recovery recommendations as `capture diagnose`.
+- Existing recovery ordering remains explicit: fresh probe, `nemu_ipc`, `droidcast_raw`, device health, and only then heavy `session app restart`.
+- No click, MaaTouch startup, backend configuration switch, reconnect, app restart, scheduler loop, resource repository access, UI, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8edb126b10c1156bacce8714a1b34267999d33bd`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and error-handling workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session routing, stale-capture recovery, capture fresh-probe helpers, daemon request handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stale_capture_recovery`
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture`
+- `cargo test -p actingcommand-actinglab capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json --capture-backend adb session recover --stale-capture`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stale_capture_recovery` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_recover_stale_capture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, retry/background loops, new MaaTouch/Capture backend logic, SQLite, OCR/OpenCV, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `272` `actingcommand-actinglab` tests.
+- CLI smoke confirmed default `session recover --stale-capture` still returns `mode=stale_capture_recovery`, `diagnosis_executed=false`, `app_restart_executed=false`, and `safety_gate=diagnose_capture_backend_before_restart`.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted remote network listener/TLS/auth implementation, actual long-lived remote interactive stream, scheduler lease arbitration integration, trusted UI exposure, live prepared-emulator validation, daemon-resident automatic recovery ownership, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-stale-capture-diagnosis`.
+2. Continue Session Layer follow-ups from daemon-resident recovery ownership, trusted remote transport, long-lived stream, scheduler lease arbitration integration, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab stream transport/API contract truthfulness
 
 ### Current status
