@@ -39,6 +39,7 @@ const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
 const SESSION_REQUESTS_DIR: &str = "requests";
 const SESSION_RESPONSES_DIR: &str = "responses";
+const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &["--state-dir", "--request-timeout-ms"];
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
@@ -851,6 +852,38 @@ fn submit_capture_diagnose_request(global: &GlobalOptions, flags: &FlagArgs) -> 
     submit_session_command_request(global, flags, "capture_diagnose", args)
 }
 
+fn submit_readonly_session_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command: &str,
+    args: &[String],
+) -> CliOutcome<Value> {
+    submit_session_command_request(global, flags, command, session_request_payload_args(args))
+}
+
+fn session_request_payload_args(args: &[String]) -> Vec<String> {
+    let mut payload = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--via-daemon" {
+            index += 1;
+            continue;
+        }
+        if SESSION_REQUEST_VALUE_FLAGS.contains(&arg.as_str()) {
+            index += if index + 1 < args.len() && !args[index + 1].starts_with("--") {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        payload.push(arg.clone());
+        index += 1;
+    }
+    payload
+}
+
 struct CaptureCommandResult {
     frame: Frame,
     attempts: Vec<Value>,
@@ -1377,6 +1410,9 @@ fn canonical_key(key: &str) -> String {
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "recognize", args);
+    }
     let target = flags.required("--target")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
@@ -1426,6 +1462,9 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "detect_page", args);
+    }
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, true)?;
     let pages_path = resources
@@ -1447,6 +1486,9 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 
 fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "current_page", args);
+    }
     let config = read_user_config()?;
     let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
     let scene = load_scene_from_flags(global, &flags)?;
@@ -1456,6 +1498,9 @@ fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value
 
 fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "is_visible", args);
+    }
     let target = target_argument(&flags, "is-visible")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
@@ -1483,6 +1528,9 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
 fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "locate", args);
+    }
     let template = flags
         .optional_path("--template")
         .or_else(|| flags.positionals.first().map(PathBuf::from))
@@ -3286,7 +3334,11 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let command = args
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session request requires capture-diagnose"))?;
+        .ok_or_else(|| {
+            CliError::usage(
+                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, or locate",
+            )
+        })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "capture-diagnose" => {
@@ -3294,6 +3346,13 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             push_optional_flag_value(&mut request_args, &flags, "--fresh-delay-ms");
             submit_session_command_request(global, &flags, "capture_diagnose", request_args)
         }
+        "recognize" => submit_readonly_session_request(global, &flags, "recognize", &args[1..]),
+        "detect-page" => submit_readonly_session_request(global, &flags, "detect_page", &args[1..]),
+        "current-page" => {
+            submit_readonly_session_request(global, &flags, "current_page", &args[1..])
+        }
+        "is-visible" => submit_readonly_session_request(global, &flags, "is_visible", &args[1..]),
+        "locate" => submit_readonly_session_request(global, &flags, "locate", &args[1..]),
         other => Err(CliError::usage(format!(
             "unknown session request command: {other}"
         ))),
@@ -3663,6 +3722,26 @@ fn execute_session_command_request_inner(request: &SessionCommandRequest) -> Cli
             let global = request.global.to_global()?;
             let flags = FlagArgs::parse(&request.args)?;
             run_capture_diagnose(&global, &flags)
+        }
+        "recognize" => {
+            let global = request.global.to_global()?;
+            run_recognize(&global, &request.args)
+        }
+        "detect_page" => {
+            let global = request.global.to_global()?;
+            run_detect_page(&global, &request.args)
+        }
+        "current_page" => {
+            let global = request.global.to_global()?;
+            run_current_page(&global, &request.args)
+        }
+        "is_visible" => {
+            let global = request.global.to_global()?;
+            run_is_visible(&global, &request.args)
+        }
+        "locate" => {
+            let global = request.global.to_global()?;
+            run_locate(&global, &request.args)
         }
         other => Err(CliError::usage(format!(
             "unsupported daemon request command: {other}"
@@ -5338,6 +5417,31 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device"],
             "available",
         ),
+        command_cap(
+            "session request recognize",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "session request detect-page",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "session request current-page",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "session request is-visible",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "session request locate",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
@@ -5618,6 +5722,74 @@ mod tests {
     }
 
     #[test]
+    fn readonly_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "current-page",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_readonly_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "is-visible",
+                "--target",
+                "arknights/home",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_payload_strips_client_only_flags() {
+        let args = [
+            "--target".to_string(),
+            "arknights/home".to_string(),
+            "--via-daemon".to_string(),
+            "--state-dir".to_string(),
+            "target/session".to_string(),
+            "--request-timeout-ms".to_string(),
+            "15000".to_string(),
+            "--capture".to_string(),
+        ];
+
+        assert_eq!(
+            session_request_payload_args(&args),
+            vec![
+                "--target".to_string(),
+                "arknights/home".to_string(),
+                "--capture".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn session_instance_list_reads_config() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -5820,6 +5992,11 @@ mod tests {
             "session capture",
             "session capture diagnose",
             "session request capture-diagnose",
+            "session request recognize",
+            "session request detect-page",
+            "session request current-page",
+            "session request is-visible",
+            "session request locate",
             "session lease",
             "capture diagnose",
         ] {

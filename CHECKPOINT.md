@@ -1,5 +1,93 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session daemon read-only semantic routing
+
+### Current status
+
+- Extended the resident session daemon request lane beyond capture diagnosis.
+- Added `--via-daemon` routing for `recognize`, `detect-page`, `current-page`, `is-visible`, and `locate`.
+- Added `session request recognize`.
+- Added `session request detect-page`.
+- Added `session request current-page`.
+- Added `session request is-visible`.
+- Added `session request locate`.
+- Request-only client flags are stripped before the daemon executes the inner command:
+  - `--via-daemon`
+  - `--state-dir`
+  - `--request-timeout-ms`
+- The daemon still processes queued JSON requests serially and returns structured success/error responses.
+- This task routes read-only recognition/status/template-location work only.
+- No tap, key, text, navigate, recover, app restart, scheduler body, game-task action, UI, SQLite, OCR, new capture backend, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `20af6bd37285c06d225115f94298948f2d41f69d`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for Runtime.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for the three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request`
+- Attempted `cargo test -p actingcommand-actinglab readonly_via_daemon_without_daemon_is_runtime_error direct_touch_commands_are_capability_registered`; Cargo rejected the extra test filter, so the tests were rerun separately.
+- `cargo test -p actingcommand-actinglab readonly_via_daemon_without_daemon_is_runtime_error`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+- Started a live-safe session daemon in `target\session-readonly-smoke`.
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark current-page --via-daemon --state-dir target\session-readonly-smoke --request-timeout-ms 20000`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark current-page --via-daemon --capture --state-dir target\session-readonly-smoke --request-timeout-ms 20000`
+- Stopped the live-safe session daemon and checked session status.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_request` passed with `3` focused tests.
+- `cargo test -p actingcommand-actinglab readonly_via_daemon_without_daemon_is_runtime_error` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
+- `cargo test -p actingcommand-actinglab` passed with `96` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+- The first live-safe daemon smoke without `--capture` returned visible `validation_failed` with message `command requires --scene <png> or --capture`.
+- The corrected live-safe daemon smoke with `--capture` passed:
+  - started session daemon pid `9924`;
+  - submitted AK `current-page --via-daemon --capture` for `127.0.0.1:16416`;
+  - daemon response returned `mode = daemon_request`;
+  - daemon response returned `daemon_command = current_page`;
+  - inner response reported `page = arknights/home`, `matched = true`, and `standby = false`;
+  - no click, app restart, recovery, or screenshot file write was performed;
+  - daemon was stopped and final status reported `running = false`.
+
+### Current blocker
+
+- No blocker for the read-only semantic request-routing increment.
+- Full Session Layer is still incomplete: input routing, semantic tap, navigation, recovery, app restart, scheduler-owned lease arbitration, API/event streaming, UI integration, recording, and broader command dispatch remain future work.
+- Arknights resource matching still reports several pages as matched on the same home frame; this is existing resource ambiguity and not fixed by this Runtime routing task.
+
+### Next step
+
+1. Commit and push the read-only semantic request-routing Runtime changes.
+2. Add a checkpoint tag if this is accepted as a stable daemon-routing rollback point.
+3. Continue by adding lease-gated maintenance recovery requests or by routing additional read-only status commands through the daemon.
+
 ## 2026-06-27 ActingLab session daemon request channel
 
 ### Current status
