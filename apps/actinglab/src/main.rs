@@ -49,6 +49,7 @@ const SESSION_MONITOR_STATE_FILE: &str = "monitor-state.json";
 const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
 const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
+const SESSION_DAEMON_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const SESSION_MONITOR_POLICY_MIN_INTERVAL_MS: u64 = 500;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
@@ -1472,6 +1473,7 @@ fn session_api_contract() -> Value {
                 "instance_registry_field": "diagnostics.instances",
                 "lease_field": "diagnostics.leases",
                 "queue_field": "diagnostics.queues",
+                "queue_health_field": "diagnostics.queues.health",
                 "pending_request_preview_field": "diagnostics.queues.pending_request_preview",
                 "pending_response_preview_field": "diagnostics.queues.pending_response_preview",
                 "journal_field": "diagnostics.journal",
@@ -5952,6 +5954,11 @@ fn session_status_diagnostics(
         "queues": {
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?,
+            "health": session_queue_health(
+                state_dir,
+                now_ms,
+                SESSION_DAEMON_REQUEST_TIMEOUT_MS
+            )?,
             "pending_request_preview": session_pending_request_preview(
                 state_dir,
                 SESSION_PENDING_REQUEST_PREVIEW_LIMIT
@@ -6514,7 +6521,11 @@ fn submit_session_command_request(
     let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
     let response_path = session_responses_dir(&state_dir).join(format!("{request_id}.json"));
     write_json_file_atomic(&request_path, &request)?;
-    let timeout = parse_optional_duration_ms(flags, "--request-timeout-ms", 10_000)?;
+    let timeout = parse_optional_duration_ms(
+        flags,
+        "--request-timeout-ms",
+        SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+    )?;
     let started = Instant::now();
     while started.elapsed() <= timeout {
         if let Some(response) = read_json_file::<SessionCommandResponse>(&response_path)? {
@@ -11425,6 +11436,118 @@ fn read_pending_session_response(path: &Path) -> CliOutcome<Option<SessionComman
         ))
     })?;
     Ok(Some(response))
+}
+
+fn session_queue_health(state_dir: &Path, now_ms: u64, stale_after_ms: u64) -> CliOutcome<Value> {
+    let requests = session_pending_request_queue_health(state_dir, now_ms, stale_after_ms)?;
+    let responses = session_pending_response_queue_health(state_dir, now_ms, stale_after_ms)?;
+    let request_status = requests.get("status").and_then(Value::as_str);
+    let response_status = responses.get("status").and_then(Value::as_str);
+    let status = if request_status == Some("blocked") || response_status == Some("unclaimed") {
+        "needs_attention"
+    } else if request_status == Some("pending") || response_status == Some("available") {
+        "active"
+    } else {
+        "clear"
+    };
+
+    Ok(json!({
+        "schema_version": "session.queue_health.v0.1",
+        "status": status,
+        "stale_after_ms": stale_after_ms,
+        "pending_requests": requests,
+        "pending_responses": responses
+    }))
+}
+
+fn session_pending_request_queue_health(
+    state_dir: &Path,
+    now_ms: u64,
+    stale_after_ms: u64,
+) -> CliOutcome<Value> {
+    let mut oldest: Option<(String, String, u64)> = None;
+    for path in file_paths_with_extension(&session_requests_dir(state_dir), "json")? {
+        let Some(request) = read_pending_session_request(&path)? else {
+            continue;
+        };
+        if oldest
+            .as_ref()
+            .is_none_or(|(_, _, timestamp)| request.created_at_unix_ms < *timestamp)
+        {
+            oldest = Some((
+                request.request_id,
+                request.command,
+                request.created_at_unix_ms,
+            ));
+        }
+    }
+    let Some((request_id, command, created_at_unix_ms)) = oldest else {
+        return Ok(json!({
+            "status": "clear",
+            "oldest_request_id": Value::Null,
+            "oldest_command": Value::Null,
+            "oldest_created_at_unix_ms": Value::Null,
+            "oldest_age_ms": Value::Null
+        }));
+    };
+    let oldest_age_ms = now_ms.saturating_sub(created_at_unix_ms);
+    let status = if oldest_age_ms > stale_after_ms {
+        "blocked"
+    } else {
+        "pending"
+    };
+    Ok(json!({
+        "status": status,
+        "oldest_request_id": request_id,
+        "oldest_command": command,
+        "oldest_created_at_unix_ms": created_at_unix_ms,
+        "oldest_age_ms": oldest_age_ms
+    }))
+}
+
+fn session_pending_response_queue_health(
+    state_dir: &Path,
+    now_ms: u64,
+    stale_after_ms: u64,
+) -> CliOutcome<Value> {
+    let mut oldest: Option<(String, String, u64)> = None;
+    for path in file_paths_with_extension(&session_responses_dir(state_dir), "json")? {
+        let Some(response) = read_pending_session_response(&path)? else {
+            continue;
+        };
+        if oldest
+            .as_ref()
+            .is_none_or(|(_, _, timestamp)| response.completed_at_unix_ms < *timestamp)
+        {
+            oldest = Some((
+                response.request_id,
+                response.command,
+                response.completed_at_unix_ms,
+            ));
+        }
+    }
+    let Some((request_id, command, completed_at_unix_ms)) = oldest else {
+        return Ok(json!({
+            "status": "clear",
+            "oldest_request_id": Value::Null,
+            "oldest_command": Value::Null,
+            "oldest_completed_at_unix_ms": Value::Null,
+            "oldest_age_ms": Value::Null
+        }));
+    };
+    let oldest_age_ms = now_ms.saturating_sub(completed_at_unix_ms);
+    let status = if oldest_age_ms > stale_after_ms {
+        "unclaimed"
+    } else {
+        "available"
+    };
+    Ok(json!({
+        "status": status,
+        "oldest_request_id": request_id,
+        "oldest_command": command,
+        "oldest_completed_at_unix_ms": completed_at_unix_ms,
+        "oldest_age_ms": oldest_age_ms
+    }))
 }
 
 fn app_state_root() -> CliOutcome<PathBuf> {
@@ -19803,6 +19926,12 @@ mod tests {
             .unwrap();
 
         assert!(actions.is_empty());
+        assert_eq!(
+            status
+                .pointer("/diagnostics/queues/health/status")
+                .and_then(Value::as_str),
+            Some("clear")
+        );
     }
 
     #[test]
@@ -21409,6 +21538,12 @@ mod tests {
                 .pointer("/envelopes/status_view/recommended_actions_field")
                 .and_then(Value::as_str),
             Some("diagnostics.recommended_actions")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/queue_health_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.queues.health")
         );
         assert_eq!(
             payload
@@ -23216,6 +23351,54 @@ mod tests {
                 .pointer("/queues/pending_responses")
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/schema_version")
+                .and_then(Value::as_str),
+            Some("session.queue_health.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/status")
+                .and_then(Value::as_str),
+            Some("needs_attention")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/pending_requests/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/pending_requests/oldest_request_id")
+                .and_then(Value::as_str),
+            Some("pending-1")
+        );
+        assert!(
+            diagnostics
+                .pointer("/queues/health/pending_requests/oldest_age_ms")
+                .and_then(Value::as_u64)
+                .is_some_and(|value| value > SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/pending_responses/status")
+                .and_then(Value::as_str),
+            Some("unclaimed")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/pending_responses/oldest_request_id")
+                .and_then(Value::as_str),
+            Some("response-1")
         );
         assert_eq!(
             diagnostics
