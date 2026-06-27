@@ -1468,6 +1468,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
+                "data_summary_kinds": ["stream", "capture_diagnose", "stale_capture_recovery"],
                 "cursor_fields": [
                     "latest_timestamp_unix_ms",
                     "next_after_unix_ms",
@@ -6938,11 +6939,22 @@ fn append_session_request_journal(
 }
 
 fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Value> {
-    if response.command != "stream" || !response.ok {
+    if !response.ok {
         return None;
     }
     let data = response.data.as_ref()?;
-    Some(json!({
+    match response.command.as_str() {
+        "stream" => Some(stream_request_data_summary(data)),
+        "capture_diagnose" => Some(capture_diagnose_request_data_summary(data)),
+        "recover" if data.get("mode").and_then(Value::as_str) == Some("stale_capture_recovery") => {
+            Some(stale_capture_recovery_request_data_summary(data))
+        }
+        _ => None,
+    }
+}
+
+fn stream_request_data_summary(data: &Value) -> Value {
+    json!({
         "schema_version": "session.request.data_summary.v0.1",
         "kind": "stream",
         "stream_id": data.get("stream_id").cloned().unwrap_or(Value::Null),
@@ -6958,7 +6970,71 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
             "status": data.pointer("/trusted_channel/status").cloned().unwrap_or(Value::Null),
             "long_lived_stream_implemented": data.pointer("/trusted_channel/long_lived_stream_implemented").cloned().unwrap_or(Value::Null)
         }
-    }))
+    })
+}
+
+fn capture_diagnose_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "capture_diagnose",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "requested_backend": data.get("requested_backend").cloned().unwrap_or(Value::Null),
+        "freshness": capture_freshness_summary(data),
+        "attempt_count": data.get("capture_backend_attempts").and_then(Value::as_array).map(Vec::len),
+        "frame_present": data.get("frame").is_some_and(|frame| !frame.is_null()),
+        "recovery": capture_recovery_summary(data.get("recovery"))
+    })
+}
+
+fn stale_capture_recovery_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "stale_capture_recovery",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "diagnosis_status": data.get("diagnosis_status").cloned().unwrap_or(Value::Null),
+        "diagnosis_executed": data.get("diagnosis_executed").cloned().unwrap_or(Value::Null),
+        "requested_backend": data.get("requested_backend").cloned().unwrap_or(Value::Null),
+        "fresh_delay_ms": data.get("fresh_delay_ms").cloned().unwrap_or(Value::Null),
+        "recovery": capture_recovery_summary(data.get("recovery"))
+    })
+}
+
+fn capture_freshness_summary(data: &Value) -> Value {
+    json!({
+        "required": data.pointer("/freshness/required").cloned().unwrap_or(Value::Null),
+        "fresh": data.pointer("/freshness/fresh").cloned().unwrap_or(Value::Null),
+        "status": data.pointer("/freshness/status").cloned().unwrap_or(Value::Null),
+        "backend": data.pointer("/freshness/backend").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn capture_recovery_summary(recovery: Option<&Value>) -> Value {
+    let Some(recovery) = recovery else {
+        return Value::Null;
+    };
+    let recommendations = recovery
+        .get("recommendations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let first_recommendation = recommendations
+        .first()
+        .map(|recommendation| {
+            json!({
+                "type": recommendation.get("type").cloned().unwrap_or(Value::Null),
+                "command": recommendation.get("command").cloned().unwrap_or(Value::Null),
+                "backend": recommendation.get("backend").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .unwrap_or(Value::Null);
+
+    json!({
+        "needed": recovery.get("needed").cloned().unwrap_or(Value::Null),
+        "available": recovery.get("available").cloned().unwrap_or(Value::Null),
+        "reason": recovery.get("reason").cloned().unwrap_or(Value::Null),
+        "recommendation_count": recommendations.len(),
+        "first_recommendation": first_recommendation
+    })
 }
 
 fn execute_session_command_request(
@@ -20253,6 +20329,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/event_view/data_summary_kinds/1")
+                .and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/data_summary_kinds/2")
+                .and_then(Value::as_str),
+            Some("stale_capture_recovery")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/event_view/cursor_fields/2")
                 .and_then(Value::as_str),
             Some("latest_request_id")
@@ -21755,6 +21843,134 @@ mod tests {
             events[1].pointer("/error/code").and_then(Value::as_str),
             Some("lab_lease_required")
         );
+    }
+
+    #[test]
+    fn session_request_data_summary_reports_capture_diagnostics() {
+        let capture_response = SessionCommandResponse {
+            request_id: "capture-diagnose".to_string(),
+            command: "capture_diagnose".to_string(),
+            ok: true,
+            data: Some(json!({
+                "status": "stale_suspected",
+                "mode": "capture_diagnose",
+                "requested_backend": "adb_screencap",
+                "freshness": {
+                    "required": true,
+                    "fresh": false,
+                    "status": "stale_suspected"
+                },
+                "capture_backend_attempts": [
+                    {"backend": "adb_screencap", "ok": false}
+                ],
+                "frame": null,
+                "recovery": {
+                    "needed": true,
+                    "available": true,
+                    "reason": "stale_capture_suspected",
+                    "recommendations": [
+                        {
+                            "type": "capture_backend",
+                            "command": "capture diagnose --capture-backend auto"
+                        },
+                        {
+                            "type": "configure_backend",
+                            "backend": "nemu_ipc"
+                        }
+                    ]
+                }
+            })),
+            error: None,
+            started_at_unix_ms: 1,
+            completed_at_unix_ms: 2,
+        };
+
+        let capture_summary = session_request_data_summary(&capture_response).unwrap();
+        assert_eq!(
+            capture_summary.get("kind").and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+        assert_eq!(
+            capture_summary
+                .pointer("/freshness/status")
+                .and_then(Value::as_str),
+            Some("stale_suspected")
+        );
+        assert_eq!(
+            capture_summary
+                .pointer("/recovery/reason")
+                .and_then(Value::as_str),
+            Some("stale_capture_suspected")
+        );
+        assert_eq!(
+            capture_summary
+                .pointer("/recovery/recommendation_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            capture_summary
+                .pointer("/recovery/first_recommendation/type")
+                .and_then(Value::as_str),
+            Some("capture_backend")
+        );
+
+        let stale_response = SessionCommandResponse {
+            request_id: "stale-recovery".to_string(),
+            command: "recover".to_string(),
+            ok: true,
+            data: Some(json!({
+                "status": "diagnosed_stale",
+                "mode": "stale_capture_recovery",
+                "diagnosis_status": "diagnosed_stale",
+                "diagnosis_executed": true,
+                "requested_backend": "adb_screencap",
+                "fresh_delay_ms": 250,
+                "recovery": {
+                    "needed": true,
+                    "available": true,
+                    "reason": "stale_capture_suspected",
+                    "recommendations": [
+                        {
+                            "type": "configure_backend",
+                            "backend": "nemu_ipc"
+                        }
+                    ]
+                }
+            })),
+            error: None,
+            started_at_unix_ms: 3,
+            completed_at_unix_ms: 4,
+        };
+
+        let stale_summary = session_request_data_summary(&stale_response).unwrap();
+        assert_eq!(
+            stale_summary.get("kind").and_then(Value::as_str),
+            Some("stale_capture_recovery")
+        );
+        assert_eq!(
+            stale_summary
+                .get("diagnosis_status")
+                .and_then(Value::as_str),
+            Some("diagnosed_stale")
+        );
+        assert_eq!(
+            stale_summary
+                .pointer("/recovery/first_recommendation/backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+
+        let unrelated_recover = SessionCommandResponse {
+            request_id: "other-recovery".to_string(),
+            command: "recover".to_string(),
+            ok: true,
+            data: Some(json!({"mode": "normal_recovery"})),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        assert!(session_request_data_summary(&unrelated_recover).is_none());
     }
 
     #[test]

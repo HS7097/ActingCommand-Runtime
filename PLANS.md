@@ -123,6 +123,28 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab monitor-policy lease recommendation surface: `session status --diagnostics` now translates `deferred_by_lease` monitor recovery into scheduler/UI-facing recommended actions for lease inspect, acquire, or preempt decisions without executing them.
 - ActingLab Session events command filter: `session events` and `session request events` now support repeatable `--command <name>` filters so future UI/API clients can poll stream, lease, monitor, or control event slices without scanning the full request journal.
 - ActingLab Session request data summary: daemon request journal events now retain compact stream response summaries so future UI/API clients can observe stream ids, frame counts, event counts, and input relay status from `session events` without reading full response files.
+- ActingLab capture diagnosis event summaries: daemon request journal events now retain compact stale-capture and capture-diagnose summaries so future UI/scheduler clients can observe fresh-frame status and recommended capture-backend recovery without reading full response files.
+
+## Current ActingLab Capture Diagnosis Event Summaries
+
+This increment carries the AK stale-screenshot finding into the Session Layer event surface without adding new capture behavior.
+
+- Successful `capture_diagnose` daemon requests now write a compact `data_summary` with status, requested backend, freshness, attempt count, frame presence, and recovery recommendation summary.
+- Successful `recover` daemon requests whose response mode is `stale_capture_recovery` now write a compact `data_summary` with diagnosis status, requested backend, fresh-delay timing, and recovery recommendation summary.
+- `session events` and `session request events` expose these summaries through the existing `events[].data_summary` field.
+- `session api` advertises the supported data summary kinds: `stream`, `capture_diagnose`, and `stale_capture_recovery`.
+- Failed requests and unrelated recovery requests do not write response data summaries.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, or access resource repositories.
+
+Validation for this phase:
+
+- Focused capture diagnosis summary test.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Request Data Summary
 
