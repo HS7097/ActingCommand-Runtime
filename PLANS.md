@@ -121,6 +121,39 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream event envelope: `stream` now emits a `stream_id`, `session.stream.event.v0.1` event records, and stable event indexes for future UI/API stream consumers.
 - ActingLab Session transport contract: `session transport` and `session request transport` expose `session.transport.v0.1`, describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream transport boundaries.
 - ActingLab trusted remote endpoint policy: runtime endpoint use now distinguishes local direct endpoints from trusted remote endpoints, blocks unencrypted remote endpoints, requires explicit trusted remote auth material, and reports the policy through `doctor` and Session contracts.
+- ActingLab strict Session throat policy: `--require-session` and `ACTINGLAB_REQUIRE_SESSION_DAEMON` force device/control commands through an alive resident Session daemon or fail visibly with `session_daemon_required`.
+
+## Current ActingLab Strict Session Throat Policy
+
+The current Runtime task adds an explicit strict Session Layer gate for local CLI clients and future UI/API callers. When strict mode is enabled, device-touching or game-control command surfaces must route through the resident Session daemon instead of falling back to direct local ADB, MaaTouch, capture, or Lab execution paths.
+
+Scope:
+
+- Add global `--require-session`.
+- Add environment flag `ACTINGLAB_REQUIRE_SESSION_DAEMON`.
+- Block direct local execution of device/control commands when strict mode is enabled and no alive daemon heartbeat is available.
+- Block explicit `--local` bypasses for strict-mode device/control commands even when daemon state exists.
+- Preserve explicit `--via-daemon` request behavior so missing or stale daemon state continues to fail as `runtime_not_running`.
+- Keep daemon-internal request handlers unblocked so resident daemon requests can execute local implementations without recursive requeue.
+- Advertise `session_daemon_required` through capabilities, access, transport, and API contracts.
+
+Safety direction:
+
+- This milestone tightens the Session Layer "only throat" boundary without changing device backends, capture backends, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+- Strict mode is opt-in for now through the CLI flag or environment variable.
+- Severe bypass attempts fail visibly with safety exit code `3`.
+
+Validation status:
+
+- Focused strict-throat tests passed for missing daemon, explicit `--local` bypass, explicit `--via-daemon` liveness failure, and environment-variable activation.
+- Manual CLI check confirmed strict `capture` without a daemon returns `session_daemon_required`.
+- Manual CLI check confirmed strict `capture --via-daemon` without a daemon returns `runtime_not_running`.
+- Manual CLI check confirmed strict `session status --diagnostics` remains an offline diagnostic command.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found only the strict classification reference to existing `session instance reconnect`; no reconnect logic, fallback, direct ADB input, shell screencap, SQLite, OCR/OpenCV, scheduler implementation, or game logic was added.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `256` `actingcommand-actinglab` tests.
 
 ## Current ActingLab Trusted Remote Endpoint Policy
 

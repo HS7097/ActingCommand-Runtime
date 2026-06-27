@@ -34,6 +34,7 @@ const SCHEMA_VERSION: &str = "0.2";
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
 const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
+const REQUIRE_SESSION_DAEMON_ENV: &str = "ACTINGLAB_REQUIRE_SESSION_DAEMON";
 const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
 const TRUSTED_REMOTE_CLIENT_CERT_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT";
 const SESSION_INFO_FILE: &str = "session.json";
@@ -280,6 +281,7 @@ struct GlobalOptions {
     server: Option<String>,
     runtime_endpoint: Option<String>,
     capture_backend: Option<CaptureBackendChoice>,
+    require_session: bool,
     version: bool,
     // Daemon request handlers must execute local command implementations instead of
     // re-submitting work into the same resident request queue.
@@ -775,6 +777,7 @@ where
                         )
                     })?);
             }
+            "--require-session" => global.require_session = true,
             "--version" => global.version = true,
             other => rest.push(other.to_string()),
         }
@@ -828,10 +831,12 @@ fn execute_invocation(
 ) -> Result<(Invocation, Value, String), (String, bool, CliError)> {
     let command_name = invocation.command_name.clone();
     let print_json = invocation.global.json;
-    let result = execute(&invocation).map(|data| {
-        let human = human_summary(&invocation.command_name, &data);
-        (invocation, data, human)
-    });
+    let result = enforce_session_throat_policy(&invocation)
+        .and_then(|()| execute(&invocation))
+        .map(|data| {
+            let human = human_summary(&invocation.command_name, &data);
+            (invocation, data, human)
+        });
     result.map_err(|err| (command_name, print_json, err))
 }
 
@@ -911,6 +916,7 @@ fn help_data() -> Value {
             "--server <server>",
             "--runtime-endpoint <url>",
             "--capture-backend <auto|adb|droidcast_raw|nemu_ipc>",
+            "--require-session",
             "--dry-run",
             "--verbose",
             "--quiet",
@@ -1094,6 +1100,9 @@ fn session_layer_capability_contract() -> Value {
         },
         "safety": {
             "session_layer_only_throat": true,
+            "strict_session_throat_flag": "--require-session",
+            "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
+            "strict_session_throat_failure_code": "session_daemon_required",
             "ui_must_not_directly_touch_adb_or_device": true,
             "control_requests_require_matching_lease": true,
             "severe_errors_fail_loud": true
@@ -1183,6 +1192,9 @@ fn session_access_contract() -> Value {
             }
         },
         "safety": {
+            "strict_session_throat_flag": "--require-session",
+            "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
+            "strict_session_throat_failure_code": "session_daemon_required",
             "control_requests_require_matching_lease": true,
             "requests_are_serialized_by_resident_daemon": true,
             "severe_errors_fail_loud": true,
@@ -1245,6 +1257,9 @@ fn session_transport_contract() -> Value {
             }
         },
         "safety": {
+            "strict_session_throat_flag": "--require-session",
+            "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
+            "strict_session_throat_failure_code": "session_daemon_required",
             "clients_must_not_directly_touch_adb_or_devices": true,
             "remote_transport_must_not_start_without_authentication": true,
             "remote_transport_must_not_start_without_encryption": true,
@@ -1387,6 +1402,7 @@ fn session_api_contract() -> Value {
         },
         "failure_contract": {
             "missing_or_stale_daemon_code": "runtime_not_running",
+            "strict_session_throat_failure_code": "session_daemon_required",
             "control_without_matching_lease_code": "lab_lease_required",
             "untrusted_remote_endpoint_code": "trusted_remote_transport_blocked",
             "missing_trusted_remote_auth_code": "trusted_remote_auth_required",
@@ -1603,6 +1619,91 @@ fn should_route_control_via_session_daemon(
         return Ok(true);
     }
     session_daemon_info_exists(flags)
+}
+
+fn enforce_session_throat_policy(invocation: &Invocation) -> CliOutcome<()> {
+    if !session_throat_required(&invocation.global) || invocation.global.inside_session_daemon {
+        return Ok(());
+    }
+    if !command_requires_session_throat(invocation) {
+        return Ok(());
+    }
+
+    let flags = FlagArgs::parse(&invocation.args)?;
+    if flags.bool("--local") {
+        return Err(session_daemon_required_error(&invocation.command_name));
+    }
+    if flags.bool("--via-daemon") || session_daemon_info_exists(&flags)? {
+        return Ok(());
+    }
+    Err(session_daemon_required_error(&invocation.command_name))
+}
+
+fn session_throat_required(global: &GlobalOptions) -> bool {
+    global.require_session || env_flag_enabled(REQUIRE_SESSION_DAEMON_ENV)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty() && !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        })
+        .unwrap_or(false)
+}
+
+fn command_requires_session_throat(invocation: &Invocation) -> bool {
+    match invocation.command.as_slice() {
+        [cmd] => matches!(
+            cmd.as_str(),
+            "devices"
+                | "tap"
+                | "swipe"
+                | "long-tap"
+                | "key"
+                | "text"
+                | "capture"
+                | "detect-page"
+                | "recognize"
+                | "current-page"
+                | "is-visible"
+                | "locate"
+                | "tap-target"
+                | "navigate"
+                | "monitor"
+                | "stream"
+        ),
+        [group, sub] if group == "lab" => sub.as_str() == "run",
+        [group, sub] if group == "package" => sub.as_str() == "run",
+        [group, sub] if group == "operation" => matches!(sub.as_str(), "run" | "dry-run"),
+        [group, sub] if group == "session" => {
+            session_subcommand_requires_throat(sub, &invocation.args)
+        }
+        _ => false,
+    }
+}
+
+fn session_subcommand_requires_throat(sub: &str, args: &[String]) -> bool {
+    match sub {
+        "capture" | "recover" | "app" => true,
+        "instance" => matches!(
+            args.first().map(String::as_str),
+            Some("health" | "reconnect")
+        ),
+        "record" | "lease" | "request" | "status" | "start" | "stop" | "cleanup" | "daemon"
+        | "contract" | "api" | "transport" | "journal" | "events" => false,
+        _ => false,
+    }
+}
+
+fn session_daemon_required_error(command: &str) -> CliError {
+    CliError::safety_blocked(
+        "session_daemon_required",
+        format!(
+            "{command} requires an alive Session daemon when --require-session or {REQUIRE_SESSION_DAEMON_ENV} is enabled"
+        ),
+        &["session_layer", "running_runtime"],
+    )
 }
 
 fn session_daemon_info_exists(flags: &FlagArgs) -> CliOutcome<bool> {
@@ -11650,6 +11751,111 @@ mod tests {
 
         write_test_session_heartbeat(temp.path(), 321, current_unix_ms());
         assert!(session_daemon_info_exists(&flags).unwrap());
+    }
+
+    #[test]
+    fn require_session_blocks_device_command_without_alive_daemon() {
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("frame.png");
+
+        let result = run_cli(
+            [
+                "--json",
+                "--require-session",
+                "capture",
+                "--out",
+                out.to_str().unwrap(),
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "session_daemon_required");
+        assert_eq!(
+            error.blocked_by,
+            vec!["session_layer".to_string(), "running_runtime".to_string()]
+        );
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn require_session_blocks_explicit_local_bypass() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let out = temp.path().join("frame.png");
+
+        let result = run_cli(
+            [
+                "--json",
+                "--require-session",
+                "capture",
+                "--local",
+                "--out",
+                out.to_str().unwrap(),
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "session_daemon_required");
+    }
+
+    #[test]
+    fn require_session_allows_explicit_daemon_route_to_report_liveness() {
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("frame.png");
+
+        let result = run_cli(
+            [
+                "--json",
+                "--require-session",
+                "capture",
+                "--via-daemon",
+                "--out",
+                out.to_str().unwrap(),
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+    }
+
+    #[test]
+    fn require_session_env_blocks_device_command() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(REQUIRE_SESSION_DAEMON_ENV, "1");
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "devices",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+        assert_eq!(result.exit_code(), 3);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "session_daemon_required");
     }
 
     #[test]

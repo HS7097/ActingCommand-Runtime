@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab strict Session throat policy
+
+### Current status
+
+- Added opt-in strict Session Layer enforcement through global `--require-session`.
+- Added environment flag `ACTINGLAB_REQUIRE_SESSION_DAEMON`.
+- Device/control command surfaces now fail visibly with `session_daemon_required` when strict mode is enabled and no alive resident Session daemon is available.
+- Explicit `--local` bypasses are blocked for strict-mode device/control commands.
+- Explicit `--via-daemon` remains routed through the existing resident request path and reports `runtime_not_running` when daemon liveness is missing.
+- Daemon-internal request handlers remain unblocked to avoid recursive requeue.
+- Capabilities, access, transport, and API contracts now advertise the strict Session throat flag, environment variable, and failure code.
+- No device backend, capture backend, resource repository, UI, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `d25cdb98bfd091ff10bd4a541505c10d4568bfe4`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` Session routing, daemon liveness checks, contracts, command capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab require_session`
+- `cargo run -q -p actingcommand-actinglab -- --json --require-session capture --out target\strict-throat.png --state-dir target\strict-throat-empty`
+- `cargo run -q -p actingcommand-actinglab -- --json --require-session capture --via-daemon --out target\strict-throat.png --state-dir target\strict-throat-empty --request-timeout-ms 1`
+- `cargo run -q -p actingcommand-actinglab -- --json --require-session session status --state-dir target\strict-throat-empty --diagnostics`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab require_session` passed with `4` tests.
+- Strict `capture` without a daemon returned `session_daemon_required` with safety exit code `3`.
+- Strict `capture --via-daemon` without a daemon returned `runtime_not_running` with exit code `5`.
+- Strict `session status --diagnostics` remained an offline diagnostic command and exited successfully.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found only the strict classification reference to existing `session instance reconnect`; no reconnect logic, fallback, direct ADB input, shell screencap, SQLite, OCR/OpenCV, scheduler implementation, or game logic was added.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `256` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-strict-throat-policy`.
+2. Continue Session Layer follow-ups only after this strict-throat milestone is verified.
+
 ## 2026-06-27 ActingLab trusted remote endpoint policy
 
 ### Current status
