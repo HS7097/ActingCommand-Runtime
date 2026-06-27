@@ -1099,7 +1099,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app restart", "tap-target", "navigate", "recover"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover"]
             }
         },
         "safety": {
@@ -1158,8 +1158,8 @@ fn session_access_contract() -> Value {
             "instance_keep_alive": "session request instance keep-alive"
         },
         "daemon_controls": {
-            "app_lifecycle": "session request app <launch|stop|restart>",
-            "instance_app_lifecycle": "session request instance app <launch|stop|restart>",
+            "app_lifecycle": "session request app <launch|stop|force-stop|restart>",
+            "instance_app_lifecycle": "session request instance app <launch|stop|force-stop|restart>",
             "instance_connect": "session request instance connect",
             "instance_reconnect": "session request instance reconnect"
         },
@@ -1196,9 +1196,11 @@ fn session_access_contract() -> Value {
                     "session instance reconnect",
                     "session app launch",
                     "session app stop",
+                    "session app force-stop",
                     "session app restart",
                     "session instance app launch",
                     "session instance app stop",
+                    "session instance app force-stop",
                     "session instance app restart",
                     "lab-run",
                     "package-run",
@@ -1413,11 +1415,11 @@ fn session_api_contract() -> Value {
                 "action_field": "action"
             },
             "app_lifecycle_view": {
-                "query": "session app <launch|stop|restart>",
-                "daemon_query": "session request app <launch|stop|restart>",
-                "aliases": ["session instance app <launch|stop|restart>", "session request instance app <launch|stop|restart>"],
+                "query": "session app <launch|stop|force-stop|restart>",
+                "daemon_query": "session request app <launch|stop|force-stop|restart>",
+                "aliases": ["session instance app <launch|stop|force-stop|restart>", "session request instance app <launch|stop|force-stop|restart>"],
                 "requires_lease": true,
-                "actions": ["launch", "stop", "restart"],
+                "actions": ["launch", "stop", "force-stop", "restart"],
                 "action_field": "action",
                 "package_field": "package"
             }
@@ -1457,9 +1459,11 @@ fn session_api_contract() -> Value {
                     "session instance reconnect",
                     "session app launch",
                     "session app stop",
+                    "session app force-stop",
                     "session app restart",
                     "session instance app launch",
                     "session instance app stop",
+                    "session instance app force-stop",
                     "session instance app restart",
                     "lab-run",
                     "package-run",
@@ -6378,7 +6382,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
     if action == "app" {
         if args.get(1).is_none() {
             return Err(CliError::usage(
-                "session instance app requires launch|stop|restart",
+                "session instance app requires launch|stop|force-stop|restart",
             ));
         }
         return run_session_app(global, &args[1..]);
@@ -6453,7 +6457,7 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     let action = args
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session app requires launch|stop|restart"))?;
+        .ok_or_else(|| CliError::usage("session app requires launch|stop|force-stop|restart"))?;
     let flags = FlagArgs::parse(&args[1..])?;
     if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "app", args);
@@ -6480,12 +6484,12 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                 "stderr": output.stderr
             }))
         }
-        "stop" => {
+        "stop" | "force-stop" => {
             let output = adb
                 .force_stop(&serial, &package)
                 .map_err(|err| CliError::device(err.to_string()))?;
             Ok(json!({
-                "action": "stop",
+                "action": action,
                 "instance": instance_id,
                 "serial": serial,
                 "package": package,
@@ -11314,10 +11318,12 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance app", ["device"], "available"),
         command_cap("session instance app launch", ["device"], "available"),
         command_cap("session instance app stop", ["device"], "available"),
+        command_cap("session instance app force-stop", ["device"], "available"),
         command_cap("session instance app restart", ["device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session app launch", ["device"], "available"),
         command_cap("session app stop", ["device"], "available"),
+        command_cap("session app force-stop", ["device"], "available"),
         command_cap("session app restart", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
         command_cap("session capture diagnose", ["device"], "available"),
@@ -17832,10 +17838,27 @@ mod tests {
                 ],
             ),
             (
+                "app",
+                vec![
+                    "force-stop".to_string(),
+                    "--package".to_string(),
+                    "com.example.game".to_string(),
+                ],
+            ),
+            (
                 "instance",
                 vec![
                     "app".to_string(),
                     "launch".to_string(),
+                    "--package".to_string(),
+                    "com.example.game".to_string(),
+                ],
+            ),
+            (
+                "instance",
+                vec![
+                    "app".to_string(),
+                    "force-stop".to_string(),
                     "--package".to_string(),
                     "com.example.game".to_string(),
                 ],
@@ -19083,13 +19106,13 @@ mod tests {
             payload
                 .pointer("/daemon_controls/app_lifecycle")
                 .and_then(Value::as_str),
-            Some("session request app <launch|stop|restart>")
+            Some("session request app <launch|stop|force-stop|restart>")
         );
         assert_eq!(
             payload
                 .pointer("/daemon_controls/instance_app_lifecycle")
                 .and_then(Value::as_str),
-            Some("session request instance app <launch|stop|restart>")
+            Some("session request instance app <launch|stop|force-stop|restart>")
         );
         assert_eq!(
             payload
@@ -19218,19 +19241,25 @@ mod tests {
             payload
                 .pointer("/envelopes/app_lifecycle_view/daemon_query")
                 .and_then(Value::as_str),
-            Some("session request app <launch|stop|restart>")
+            Some("session request app <launch|stop|force-stop|restart>")
         );
         assert_eq!(
             payload
                 .pointer("/envelopes/app_lifecycle_view/aliases/0")
                 .and_then(Value::as_str),
-            Some("session instance app <launch|stop|restart>")
+            Some("session instance app <launch|stop|force-stop|restart>")
         );
         assert_eq!(
             payload
                 .pointer("/envelopes/app_lifecycle_view/aliases/1")
                 .and_then(Value::as_str),
-            Some("session request instance app <launch|stop|restart>")
+            Some("session request instance app <launch|stop|force-stop|restart>")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/app_lifecycle_view/actions/2")
+                .and_then(Value::as_str),
+            Some("force-stop")
         );
         assert_eq!(
             payload
@@ -19753,7 +19782,9 @@ mod tests {
     fn session_app_via_daemon_accepts_lease_flags_before_daemon_lookup() {
         for args in [
             vec!["session", "app", "launch"],
+            vec!["session", "app", "force-stop"],
             vec!["session", "instance", "app", "launch"],
+            vec!["session", "instance", "app", "force-stop"],
         ] {
             let temp = TempDir::new().unwrap();
             let mut command = vec!["--json", "--instance", "ak"];
@@ -21632,10 +21663,12 @@ mod tests {
             "session instance app",
             "session instance app launch",
             "session instance app stop",
+            "session instance app force-stop",
             "session instance app restart",
             "session app",
             "session app launch",
             "session app stop",
+            "session app force-stop",
             "session app restart",
             "session capture",
             "session capture diagnose",

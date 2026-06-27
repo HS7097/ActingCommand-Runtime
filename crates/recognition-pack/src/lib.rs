@@ -617,7 +617,10 @@ fn default_match_metric() -> RecognitionMatchMetric {
 mod tests {
     use super::*;
     use std::io;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn json_pack_parses() {
@@ -1297,9 +1300,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("time")
                 .as_nanos();
+            let sequence = TEST_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "actingcommand-recognition-pack-{}-{unique}",
-                std::process::id()
+                "actingcommand-recognition-pack-{}-{unique}-{sequence}",
+                std::process::id(),
             ));
             fs::create_dir_all(&path).expect("create temp dir");
             Self { path }

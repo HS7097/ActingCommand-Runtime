@@ -133,6 +133,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance connect lifecycle surface: `session instance connect` now completes the explicit connect/reconnect/keep-alive Phase A instance lifecycle surface, advertises `session request instance connect`, and routes daemon usage through the same lease-gated control path as reconnect.
 - ActingLab session instance app lifecycle alias: `session instance app <launch|stop|restart>` now matches the Session Layer task contract while reusing the existing lease-gated `session app <launch|stop|restart>` implementation.
 - ActingLab capture backend CLI alias: `--backend <auto|adb|droidcast_raw|nemu_ipc>` now matches the Session Layer task contract as a thin alias of the existing `--capture-backend` option.
+- ActingLab app force-stop lifecycle alias: `session app force-stop` and `session instance app force-stop` now match the Phase A lifecycle wording while reusing the existing force-stop implementation behind the lease-gated app lifecycle path; workspace validation also hardened recognition-pack test temp-dir uniqueness for Windows parallel test stability.
+
+## Current ActingLab App Force-Stop Lifecycle Alias
+
+The current Runtime task closes the remaining app lifecycle wording gap from the Session Layer task draft, which explicitly calls out `force-stop`.
+
+Scope:
+
+- Add `session app force-stop` as an alias for the existing stop lifecycle operation.
+- Add `session instance app force-stop` through the existing instance app lifecycle alias path.
+- Preserve `session app stop` and `session instance app stop` for compatibility.
+- Expose `force-stop` in capabilities, `session contract`, `session api`, and Session Layer control examples.
+- Keep daemon-routed force-stop requests lease-gated before app/device I/O.
+
+Safety direction:
+
+- This is a lifecycle wording alias only.
+- It reuses the existing `adb.force_stop` implementation that already powered `session app stop`.
+- It does not change package resolution, app launch/restart behavior, ADB path selection, device backend behavior, capture backend behavior, daemon queue semantics, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+- Explicit `--via-daemon` requests still fail with `runtime_not_running` when no alive resident daemon exists instead of falling back to local execution.
+- During workspace validation, a recognition-pack test-only temp directory race was fixed by adding a monotonic test sequence to temp directory names; recognition-pack runtime behavior was not changed.
+
+Validation status:
+
+- Focused lease-gate, daemon-route, access contract, API contract, and capability tests passed.
+- CLI smoke confirmed capabilities expose `session app force-stop` and `session instance app force-stop`.
+- CLI smoke confirmed both force-stop daemon routes fail visibly with `runtime_not_running` when no daemon is present.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Capture Backend CLI Alias
 

@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab app force-stop lifecycle alias
+
+### Current status
+
+- Added `session app force-stop` as a lifecycle alias for the existing `session app stop` force-stop behavior.
+- Added `session instance app force-stop` through the existing instance app lifecycle alias path.
+- `session app stop` and `session instance app stop` remain available.
+- Session capabilities now advertise `session app force-stop` and `session instance app force-stop`.
+- `session contract` and `session api` now expose app lifecycle actions as `launch|stop|force-stop|restart`.
+- Daemon-routed force-stop requests remain lease-gated before app/device I/O.
+- During full workspace validation, fixed a recognition-pack test-only temp directory naming race by adding a monotonic test sequence so Windows parallel tests do not collide and remove each other's temp directories.
+- No package resolution, app launch/restart behavior, ADB path selection, device backend behavior, capture backend behavior, daemon queue semantics, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `bbd93fea9971c106cefcd079b270a07c6ac466ab`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and error-handling workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session contracts, capabilities, app lifecycle handling, daemon request routing, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_app_request_requires_lease_before_device_io`
+- `cargo test -p actingcommand-actinglab session_app_via_daemon_accepts_lease_flags_before_daemon_lookup`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session app force-stop --via-daemon --state-dir target\force-stop-empty-session --lease-holder scheduler --lease-id lease-1 --package com.example.game --request-timeout-ms 1`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session instance app force-stop --via-daemon --state-dir target\instance-force-stop-empty-session --lease-holder scheduler --lease-id lease-1 --package com.example.game --request-timeout-ms 1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs` and `crates/recognition-pack/src/lib.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- Initial `cargo test --workspace` exposed a recognition-pack parallel test temp directory collision in `broken_template_png_is_fatal_in_evaluate`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-recognition-pack broken_template_png_is_fatal_in_evaluate`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs` and `crates/recognition-pack/src/lib.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused lease-gate, daemon-route, access contract, API contract, and capability tests passed.
+- CLI smoke confirmed `capabilities` exposes `session app force-stop` and `session instance app force-stop`.
+- CLI smoke confirmed `session app force-stop --via-daemon` returns `runtime_not_running` with exit code `5` when no daemon is present.
+- CLI smoke confirmed `session instance app force-stop --via-daemon` returns `runtime_not_running` with exit code `5` when no daemon is present.
+- `cargo test -p actingcommand-recognition-pack broken_template_png_is_fatal_in_evaluate` passed after the test temp directory uniqueness fix.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, retry/background loops, new MaaTouch/Capture backend logic, SQLite, OCR/OpenCV, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `271` `actingcommand-actinglab` tests and the recognition-pack disk fixture suite.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-app-force-stop-alias`.
+2. Continue the Session Layer plan from the next trusted UI/API or live validation increment.
+
 ## 2026-06-28 ActingLab capture backend CLI alias
 
 ### Current status
