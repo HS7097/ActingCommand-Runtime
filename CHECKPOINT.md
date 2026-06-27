@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab daemon-owned read-only monitor policy invocation
+
+### Current status
+
+- Added `session monitor-policy set|status|clear` as a Session Layer state surface.
+- Added `session request monitor-policy ...` so resident daemon clients can access the same policy through the request queue.
+- Monitor policy is stored in `monitor-policy.json`; latest daemon-owned observation result is stored in `monitor-state.json`.
+- The resident daemon loop now runs due monitor policies as read-only `monitor --once` diagnostics and records success or failure in monitor state.
+- `session status --diagnostics` now includes `diagnostics.monitor_policy`.
+- Session capabilities, access contract, and API contract now advertise the monitor policy surface.
+- Policy storage rejects `--recover`, `--max-iterations`, and client-only daemon routing flags so the daemon-owned loop cannot silently start recovery or input.
+- No click, MaaTouch/input behavior, reconnect, capture backend implementation, backend configuration mutation, app restart, startup-login recovery, scheduler implementation, resource access, UI, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8f2d2d1d5b0de481b15ec1251e8b657e1565942d`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session daemon, request queue, monitor, status diagnostics, contracts, capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_policy -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_request_returns_transport_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused monitor policy tests passed with `5` tests.
+- Session API/access/transport/capability focused tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/background-loop text, force-stop, or monkey additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `281` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: recovery execution under daemon ownership, scheduler lease coordination, trusted remote transport, long-lived stream, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-daemon-monitor-policy`.
+2. Continue Session Layer follow-ups from daemon-owned recovery execution, scheduler lease coordination, trusted remote transport, long-lived stream, trusted UI exposure, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab monitor stale-capture diagnosis integration
 
 ### Current status

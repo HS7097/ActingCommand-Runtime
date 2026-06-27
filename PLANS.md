@@ -138,8 +138,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stale capture recovery diagnostic execution: `session recover --stale-capture --capture` can now run the fresh-frame probe and return evidence-backed recovery advice without clicking, restarting, or opening MaaTouch.
 - ActingLab stale capture recovery read-only routing: stale-capture recovery is now classified as a read-only Session Layer diagnostic surface in contracts, capabilities, top-level routing, and `session request recover --stale-capture`; ordinary `session recover` remains lease-gated control.
 - ActingLab monitor stale-capture diagnosis integration: `monitor --capture --require-fresh` can now report `capture_stale_suspected` or `capture_unavailable` as structured monitor states, with stale capture pointing to the read-only `session recover --stale-capture --capture` path.
+- ActingLab daemon-owned read-only monitor policy invocation: the resident daemon can store a read-only `monitor --once` policy, run it on its own interval, and persist the latest monitor state without clicking, recovering, or restarting apps.
 
-## Current ActingLab Monitor Stale-Capture Diagnosis Integration
+## Current ActingLab Daemon-Owned Read-only Monitor Policy Invocation
+
+The current Runtime task advances Session Layer Phase C from ad-hoc monitor calls toward resident daemon ownership. The daemon can now store a monitor policy under the session state directory and run read-only `monitor --once` diagnostics on its own tick. This is the first automatic daemon-owned observation loop; it intentionally does not execute recovery yet.
+
+Scope:
+
+- Add `session monitor-policy set|status|clear` for local session state.
+- Add `session request monitor-policy ...` so daemon/API clients can inspect or update the same policy through the resident request queue.
+- Store policy in `monitor-policy.json` and latest result in `monitor-state.json`.
+- Run due policies from the resident daemon loop and write success/failure results into monitor state.
+- Expose monitor policy status through `session status --diagnostics`, capabilities, Session access contract, and Session API contract.
+- Reject `--recover` and multi-iteration monitor arguments in policy storage so the daemon loop stays read-only in this milestone.
+
+Safety direction:
+
+- This is daemon-owned observation only.
+- It does not click, launch MaaTouch, reconnect, change capture backend configuration, restart apps, run startup-login recovery, implement scheduler arbitration, add UI, add SQLite, add OCR/OpenCV, touch resource repositories, or add game logic.
+- Monitor failures are recorded in `monitor-state.json` as visible errors; they are not converted into fake healthy state.
+
+Validation status:
+
+- Focused monitor-policy tests passed.
+- Session API/access/transport/capability contract tests passed.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+
+## Previous ActingLab Monitor Stale-Capture Diagnosis Integration
 
 The current Runtime task connects the AK stale-frame finding into the Session Layer monitor surface. Fresh-frame failure during monitor capture is no longer only a capture-stage fatal path for the monitor caller; it becomes a structured monitor diagnosis that future scheduler/UI clients can consume.
 
