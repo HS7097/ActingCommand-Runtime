@@ -77,8 +77,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording color-probe/verify-template amend loop: `session record amend` can now correct standalone color-probe and verify-template steps, recompute authorized frame-backed data, and keep metadata-only steps visibly deferred.
 - ActingLab session recording top-level CLI contract alias: `record ...` now routes to the same implementation as `session record ...`, matching the Session Layer interface draft while preserving existing behavior.
 - ActingLab session recording build-task capability close-out: top-level and session-scoped record capabilities now advertise `build-task`, and top-level `record build-task` is covered by route tests.
+- ActingLab session interface surface alignment: record lifecycle capabilities now advertise start/status/stop, and the future interactive `stream` command is explicitly reserved instead of being an unknown command.
 
-## Current ActingLab Session Recording Build-Task Capability Close-Out
+## Current ActingLab Session Interface Surface Alignment
+
+The current Runtime task aligns the visible ActingLab CLI surface with the Session Layer interface draft without implementing the future UI/interactive stream itself.
+
+Scope:
+
+- Advertise `record start`, `record status`, and `record stop` as available offline capabilities.
+- Advertise `session record start`, `session record status`, and `session record stop` as available offline capabilities.
+- Add a top-level `stream` command entry point matching the Session Layer draft's future interactive frame/input channel.
+- Keep `stream` explicitly reserved with a stable `stream_not_implemented` error instead of returning an unknown-command failure or fake success.
+
+Safety direction:
+
+- This milestone is interface-surface alignment only.
+- This milestone adds no frame streaming, input relay, UI, TLS/authentication, scheduler, SQLite, OCR/OpenCV, game logic, device I/O, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab stream_command_is_reserved_not_unknown -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for device I/O, capture/input execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add UI/API surfaces for candidate review, color-check review, color-probe review, verify-template review, promotion, and amend flows after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Build-Task Capability Close-Out
 
 The current Runtime task closes the small interface gap left after enabling top-level `record ...`: the Session Layer interface draft names `record build-task`, and the implementation already routed it, but the capabilities surface did not advertise `record build-task` or `session record build-task`.
 

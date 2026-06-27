@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session interface surface alignment
+
+### Current status
+
+- Aligned the visible Session Layer CLI surface with the current task document without implementing the future stream transport.
+- `record start`, `record status`, and `record stop` are now advertised as available offline capabilities.
+- `session record start`, `session record status`, and `session record stop` are now advertised as available offline capabilities.
+- Added a top-level `stream` command entry point for the future interactive frame/input channel.
+- `stream` now fails explicitly with `stream_not_implemented` instead of returning an unknown-command error or fake success.
+- Existing `session record` behavior, build-task generation, daemon request routing, lease gates, device capture/input behavior, and JSON envelope shape remain unchanged.
+- No frame streaming, input relay, UI, TLS/authentication, scheduler, SQLite, OCR/OpenCV, game logic, device I/O, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `aff8fcbb18f28518856d06a247622e04750484a5`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `LICENSE_POLICY.md` if present, and `NOTICE.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream_command_is_reserved_not_unknown -- --nocapture`
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for device I/O, capture/input execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream_command_is_reserved_not_unknown -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the interface-surface alignment milestone.
+- Full Session Layer remains incomplete: actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-interface-surface`.
+2. Continue full Session Layer follow-ups: actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session recording build-task capability close-out
 
 ### Current status

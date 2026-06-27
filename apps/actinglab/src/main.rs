@@ -809,6 +809,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
         [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
         [cmd] if cmd == "monitor" => run_monitor(&invocation.global, &invocation.args),
+        [cmd] if cmd == "stream" => run_stream(&invocation.global, &invocation.args),
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
         [group, sub] if group == "config" => run_config(sub, &invocation.args),
@@ -3293,6 +3294,18 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         return run_monitor_once(global, &flags);
     }
     run_monitor_loop(global, &flags)
+}
+
+fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let config = read_user_config()?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
+    Err(CliError::not_implemented(
+        "stream_not_implemented",
+        format!(
+            "stream for instance {instance_id} is reserved for the future interactive frame/input channel; use capture, monitor, or daemon requests for current CLI workflows"
+        ),
+    ))
 }
 
 fn submit_monitor_once_session_request(
@@ -8530,12 +8543,18 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("session record", ["offline"], "available"),
+        command_cap("session record start", ["offline"], "available"),
+        command_cap("session record status", ["offline"], "available"),
+        command_cap("session record stop", ["offline"], "available"),
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         command_cap("session record build-task", ["offline"], "available"),
         command_cap("session record promote", ["offline"], "available"),
         command_cap("record", ["offline"], "available"),
+        command_cap("record start", ["offline"], "available"),
+        command_cap("record status", ["offline"], "available"),
+        command_cap("record stop", ["offline"], "available"),
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
@@ -8548,6 +8567,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("navigate", ["device"], "available"),
         command_cap("monitor --once", ["device"], "available"),
         command_cap("monitor", ["device"], "available"),
+        command_cap(
+            "stream",
+            ["running_runtime", "device", "trusted_channel"],
+            "reserved",
+        ),
         command_cap("scheduler status", ["running_runtime"], "reserved"),
         command_cap("scheduler pause", ["running_runtime"], "reserved"),
         command_cap("scheduler resume", ["running_runtime"], "reserved"),
@@ -9266,6 +9290,26 @@ mod tests {
         assert_eq!(
             build.envelope.error.as_ref().unwrap().code,
             "record_session_not_active"
+        );
+    }
+
+    #[test]
+    fn stream_command_is_reserved_not_unknown() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let stream = run_cli(["--json", "--instance", "ak", "stream"], true);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(stream.exit_code(), 6);
+        assert_eq!(
+            stream.envelope.error.as_ref().unwrap().code,
+            "stream_not_implemented"
         );
     }
 
@@ -13816,7 +13860,16 @@ mod tests {
                 }),
             Some("offline")
         );
-        for command_name in ["record build-task", "session record build-task"] {
+        for command_name in [
+            "record start",
+            "record status",
+            "record stop",
+            "record build-task",
+            "session record start",
+            "session record status",
+            "session record stop",
+            "session record build-task",
+        ] {
             let command = commands
                 .iter()
                 .find(|command| {
@@ -13828,6 +13881,14 @@ mod tests {
                 Some("available")
             );
         }
+        let stream = commands
+            .iter()
+            .find(|command| command.get("command").and_then(Value::as_str) == Some("stream"))
+            .expect("stream capability");
+        assert_eq!(
+            stream.get("status").and_then(Value::as_str),
+            Some("reserved")
+        );
     }
 
     #[test]
