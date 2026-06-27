@@ -127,6 +127,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab instance registry backend fields: instance config now stores `adb_path` and `capture_backend`; status/list diagnostics expose them; capture commands use instance default backend unless CLI `--capture-backend` overrides it.
 - ActingLab session instance registry contract: `session instance registry` now exposes a machine-readable `session.instance_registry.v0.1` config contract with required/recommended fields, effective capture backend, configured flags, and validation diagnostics for future UI/scheduler consumers.
 - ActingLab daemon-routed instance registry contract advertisement: Session capabilities, access contract, and API contract now explicitly advertise `session request instance registry`, and daemon request tests verify the resident queue can return the registry contract.
+- ActingLab session instance keep-alive surface: `session instance keep-alive` now exposes an explicit no-click instance reachability probe, and Session capabilities, access contract, API contract, and daemon request naming advertise `session request instance keep-alive` for future UI/scheduler consumers.
+
+## Current ActingLab Session Instance Keep-Alive Surface
+
+The current Runtime task adds an explicit Phase A keep-alive entry point for configured instances.
+
+Scope:
+
+- Add `session instance keep-alive` as a discoverable instance command.
+- Reuse the existing device reachability path that verifies ADB device state and screen size.
+- Return `action = keep-alive` and `keep_alive = true` in the command payload.
+- Advertise `session request instance keep-alive` in capabilities.
+- Include the daemon keep-alive query in `session contract`.
+- Include the keep-alive view in `session api`.
+- Include `session instance keep-alive` in read-only Session Layer examples.
+
+Safety direction:
+
+- This is a no-click, no-restart reachability probe.
+- It does not capture frames, start MaaTouch, read resource repositories, change daemon queue semantics, call the scheduler, or add game logic.
+- Explicit `--via-daemon` requests still fail with `runtime_not_running` when no alive resident daemon exists instead of falling back to local ADB.
+
+Validation status:
+
+- Focused capabilities, access contract, API contract, and capability registration tests passed.
+- CLI smoke confirmed capabilities and `session api` expose the keep-alive contract.
+- CLI smoke confirmed `session instance keep-alive --via-daemon` fails visibly with `runtime_not_running` when no daemon is present.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Daemon-Routed Instance Registry Contract Advertisement
 

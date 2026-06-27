@@ -1094,7 +1094,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "capture", "stream"]
+                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "session instance keep-alive", "capture", "stream"]
             },
             "control": {
                 "requires_lease": true,
@@ -1152,7 +1152,8 @@ fn session_access_contract() -> Value {
             "status": "session request status --diagnostics",
             "journal": "session request journal",
             "events": "session request events",
-            "instance_registry": "session request instance registry"
+            "instance_registry": "session request instance registry",
+            "instance_keep_alive": "session request instance keep-alive"
         },
         "request_classes": {
             "read_only": {
@@ -1172,6 +1173,7 @@ fn session_access_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session instance registry",
+                    "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
@@ -1375,6 +1377,12 @@ fn session_api_contract() -> Value {
                 "daemon_query": "session request instance registry",
                 "schema_version": "session.instance_registry.v0.1",
                 "ready_field": "instances[].validation.ready_for_device_control"
+            },
+            "instance_keep_alive_view": {
+                "query": "session instance keep-alive",
+                "daemon_query": "session request instance keep-alive",
+                "status_field": "status",
+                "action_field": "action"
             }
         },
         "command_classes": {
@@ -1397,6 +1405,7 @@ fn session_api_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session instance registry",
+                    "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
@@ -6311,7 +6320,7 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
 
 fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage("session instance requires list|registry|health|reconnect")
+        CliError::usage("session instance requires list|registry|health|keep-alive|reconnect")
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
     let should_route = if action == "reconnect" {
@@ -6336,7 +6345,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
             })).collect::<Vec<_>>()
         })),
         "registry" => session_instance_registry_contract(&config),
-        "health" | "reconnect" => {
+        "health" | "keep-alive" | "reconnect" => {
             let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
             let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
             let serial = device_config.target.resolved_serial();
@@ -6369,6 +6378,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
                 "state": state,
                 "screen_size": screen_size,
                 "action": action,
+                "keep_alive": action == "keep-alive",
                 "capture": capture
             }))
         }
@@ -11154,6 +11164,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request instance keep-alive",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
             "session request instance reconnect",
             ["running_runtime", "device", "lab_lease"],
             "available",
@@ -11222,6 +11237,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance list", ["offline"], "available"),
         command_cap("session instance registry", ["offline"], "available"),
         command_cap("session instance health", ["device"], "available"),
+        command_cap("session instance keep-alive", ["device"], "available"),
         command_cap("session instance reconnect", ["device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session app launch", ["device"], "available"),
@@ -18805,6 +18821,15 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request instance registry"))
         );
+        assert!(
+            payload
+                .get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request instance keep-alive"))
+        );
     }
 
     #[test]
@@ -18923,6 +18948,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("session request instance registry")
         );
+        assert_eq!(
+            payload
+                .pointer("/daemon_queries/instance_keep_alive")
+                .and_then(Value::as_str),
+            Some("session request instance keep-alive")
+        );
     }
 
     #[test]
@@ -19015,6 +19046,12 @@ mod tests {
                 .pointer("/envelopes/instance_registry_view/daemon_query")
                 .and_then(Value::as_str),
             Some("session request instance registry")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/instance_keep_alive_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request instance keep-alive")
         );
     }
 
@@ -20945,6 +20982,14 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session instance registry"))
         );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session instance keep-alive"))
+        );
     }
 
     #[test]
@@ -21395,6 +21440,7 @@ mod tests {
             "session instance",
             "session instance list",
             "session instance health",
+            "session instance keep-alive",
             "session instance reconnect",
             "session app",
             "session app launch",
@@ -21422,6 +21468,7 @@ mod tests {
             "session request instance list",
             "session request instance registry",
             "session request instance health",
+            "session request instance keep-alive",
             "session request instance reconnect",
             "session request app",
             "session request lab-run",

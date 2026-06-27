@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session instance keep-alive surface
+
+### Current status
+
+- Added `session instance keep-alive` as an explicit no-click instance reachability probe.
+- The command reuses the existing instance health path to verify device state and screen size, then returns `action = keep-alive` and `keep_alive = true`.
+- Session capabilities now advertise both `session instance keep-alive` and `session request instance keep-alive`.
+- `session contract` now exposes `daemon_queries.instance_keep_alive = session request instance keep-alive`.
+- `session api` now exposes `envelopes.instance_keep_alive_view`.
+- Session Layer read-only command examples now include `session instance keep-alive`.
+- Explicit daemon-routed keep-alive requests fail visibly with `runtime_not_running` when no alive daemon exists; they do not silently fall back to local ADB.
+- No device backend, capture backend implementation, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, daemon queue behavior, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `52b1a3018bd292b84921b2f6ad54a55861b23afd`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` from the active goal context.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` from the active goal context.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- Inspected `apps/actinglab/src/main.rs` Session contracts, capabilities, daemon request dispatch, instance command handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo run -q -p actingcommand-actinglab -- --json session instance keep-alive --via-daemon --state-dir target\keep-alive-empty-session --request-timeout-ms 1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed with `1` test.
+- CLI smoke confirmed `session request instance keep-alive` and `session instance keep-alive` appear in `capabilities`.
+- CLI smoke confirmed `session api` exposes `envelopes.instance_keep_alive_view`.
+- CLI smoke confirmed explicit daemon routing returns `runtime_not_running` with exit code `5` when no daemon is present.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `268` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-instance-keep-alive`.
+2. Continue Session Layer follow-ups only after this keep-alive surface milestone is verified.
+
 ## 2026-06-28 ActingLab daemon-routed instance registry contract advertisement
 
 ### Current status
