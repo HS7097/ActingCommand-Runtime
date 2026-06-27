@@ -1197,7 +1197,20 @@ fn submit_session_lease_request(
         global,
         flags,
         "lease",
-        session_lease_request_payload_args(args),
+        session_state_request_payload_args(args),
+    )
+}
+
+fn submit_session_record_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    args: &[String],
+) -> CliOutcome<Value> {
+    submit_session_command_request(
+        global,
+        flags,
+        "record",
+        session_state_request_payload_args(args),
     )
 }
 
@@ -1224,7 +1237,7 @@ fn session_request_payload_args(args: &[String]) -> Vec<String> {
     payload
 }
 
-fn session_lease_request_payload_args(args: &[String]) -> Vec<String> {
+fn session_state_request_payload_args(args: &[String]) -> Vec<String> {
     let mut payload = Vec::new();
     let mut index = 0usize;
     while index < args.len() {
@@ -3955,7 +3968,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, lease, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3963,6 +3976,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "lease" => submit_session_lease_request(global, &flags, &args[1..]),
+        "record" => submit_session_record_request(global, &flags, &args[1..]),
         "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
         "capture-diagnose" => {
             let mut request_args = vec!["diagnose".to_string()];
@@ -4405,6 +4419,10 @@ fn execute_session_command_request_inner(
         "lease" => {
             let global = request.global.to_global()?;
             run_session_lease_in_state_dir(&global, &request.args, state_dir)
+        }
+        "record" => {
+            let global = request.global.to_global()?;
+            run_session_record_in_state_dir(&global, &request.args, state_dir)
         }
         "capture_diagnose" => {
             let global = request.global.to_global()?;
@@ -4914,6 +4932,22 @@ fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease)
 }
 
 fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    run_session_record_inner(global, args, None)
+}
+
+fn run_session_record_in_state_dir(
+    global: &GlobalOptions,
+    args: &[String],
+    state_dir: &Path,
+) -> CliOutcome<Value> {
+    run_session_record_inner(global, args, Some(state_dir))
+}
+
+fn run_session_record_inner(
+    global: &GlobalOptions,
+    args: &[String],
+    forced_state_dir: Option<&Path>,
+) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
             "session record requires start|status|stop|step|candidates|amend|build-task|promote",
@@ -4921,7 +4955,10 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     })?;
     let flags = FlagArgs::parse(&args[1..])?;
     let config = read_user_config()?;
-    let state_dir = session_state_dir_from_flags(&flags)?;
+    let state_dir = forced_state_dir
+        .map(Path::to_path_buf)
+        .map(Ok)
+        .unwrap_or_else(|| session_state_dir_from_flags(&flags))?;
     fs::create_dir_all(&state_dir).map_err(|err| {
         CliError::runtime_not_running(format!(
             "failed to create session state dir {}: {err}",
@@ -8970,6 +9007,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request lease", ["running_runtime"], "available"),
+        command_cap("session request record", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
             ["running_runtime", "device"],
@@ -14485,6 +14523,92 @@ mod tests {
     }
 
     #[test]
+    fn session_record_request_starts_statuses_and_stops_in_daemon_state_dir() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("daemon-state");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let start = SessionCommandRequest {
+            request_id: "record-start".to_string(),
+            command: "record".to_string(),
+            global: global.clone(),
+            args: vec![
+                "start".to_string(),
+                "--task-id".to_string(),
+                "task_alpha".to_string(),
+                "--holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let started = execute_session_command_request_inner(&start, &state_dir).unwrap();
+
+        assert_eq!(
+            started.get("status").and_then(Value::as_str),
+            Some("started")
+        );
+        assert_eq!(
+            started.pointer("/record/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert!(session_record_path(&state_dir, "ak").exists());
+
+        let status = SessionCommandRequest {
+            request_id: "record-status".to_string(),
+            command: "record".to_string(),
+            global: global.clone(),
+            args: vec!["status".to_string()],
+            lease: None,
+            created_at_unix_ms: 2,
+        };
+        let status_payload = execute_session_command_request_inner(&status, &state_dir).unwrap();
+
+        assert_eq!(
+            status_payload
+                .pointer("/record/task_id")
+                .and_then(Value::as_str),
+            Some("task_alpha")
+        );
+
+        let stop = SessionCommandRequest {
+            request_id: "record-stop".to_string(),
+            command: "record".to_string(),
+            global,
+            args: vec!["stop".to_string()],
+            lease: None,
+            created_at_unix_ms: 3,
+        };
+        let stopped = execute_session_command_request_inner(&stop, &state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(
+            stopped.get("status").and_then(Value::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
+            stopped.pointer("/record/status").and_then(Value::as_str),
+            Some("stopped")
+        );
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14559,6 +14683,29 @@ mod tests {
                 "session",
                 "request",
                 "lease",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_record_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "record",
                 "status",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
@@ -15203,7 +15350,7 @@ mod tests {
     }
 
     #[test]
-    fn session_lease_request_payload_preserves_holder_and_lease_id() {
+    fn session_state_request_payload_preserves_holder_and_lease_id() {
         let args = [
             "acquire".to_string(),
             "--via-daemon".to_string(),
@@ -15218,7 +15365,7 @@ mod tests {
         ];
 
         assert_eq!(
-            session_lease_request_payload_args(&args),
+            session_state_request_payload_args(&args),
             vec![
                 "acquire".to_string(),
                 "--holder".to_string(),
@@ -15835,6 +15982,7 @@ mod tests {
             "session request status",
             "session request journal",
             "session request lease",
+            "session request record",
             "session request capture",
             "session request capture-diagnose",
             "session request stream",

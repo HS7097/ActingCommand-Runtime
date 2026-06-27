@@ -90,8 +90,47 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
+- ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 
-## Current ActingLab Daemon-Routed Lease Interface
+## Current ActingLab Daemon-Routed Recording Interface
+
+The current Runtime task routes the Session Layer recording interface through the resident daemon request queue. Local `session record ...` and top-level `record ...` remain available, and `session request record ...` can now serialize recording lifecycle and authoring commands through the daemon.
+
+Scope:
+
+- Add `session request record ...`.
+- Preserve recording provenance arguments such as `--holder`, `--lease-holder`, and `--lease-id` in daemon payloads while still stripping client-only request flags.
+- Add daemon-side handling for the `record` request.
+- Ensure daemon-routed recording operations use the daemon's state directory instead of the client's default session state path.
+- Advertise `session request record` in capabilities.
+
+Safety direction:
+
+- `session request record start|status|stop` does not perform device I/O.
+- Recording commands continue to fail visibly for invalid task ids, missing active recording sessions, malformed state, or unsupported actions.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change device control, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_state_request_payload_preserves_holder_and_lease_id -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record_request_starts_statuses_and_stops_in_daemon_state_dir -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_record_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Expose the same daemon request/record surface through the future trusted UI/API channel once that channel exists.
+- Decide which recording subcommands should require explicit scheduler/lease ownership before live device capture is allowed through the daemon.
+- Connect recording review/promotion flows to the future scheduler and resource-review workflow.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+
+## Previous ActingLab Daemon-Routed Lease Interface
 
 The current Runtime task routes the Session Layer lease interface through the resident daemon request queue. Local `session lease ...` remains available, and `session request lease ...` can now serialize lease acquire/release/preempt/status operations through the daemon.
 
