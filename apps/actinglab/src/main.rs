@@ -1238,7 +1238,9 @@ fn session_api_contract() -> Value {
             "event_view": {
                 "query": "session events",
                 "daemon_query": "session request events",
-                "schema_version": "session.events.v0.1"
+                "schema_version": "session.events.v0.1",
+                "filters": ["--limit", "--after-unix-ms"],
+                "cursor_fields": ["latest_timestamp_unix_ms", "next_after_unix_ms"]
             }
         },
         "command_classes": {
@@ -1912,6 +1914,16 @@ fn parse_optional_usize(flags: &FlagArgs, name: &str, default_value: usize) -> C
     };
     value
         .parse::<usize>()
+        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
+}
+
+fn parse_optional_u64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<u64>> {
+    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
+        return Ok(None);
+    };
+    value
+        .parse::<u64>()
+        .map(Some)
         .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
 }
 
@@ -4593,25 +4605,52 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     flags.expect_positionals("session events", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
-    session_events_payload(&state_dir, limit)
+    let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
+    session_events_payload(&state_dir, limit, after_unix_ms)
 }
 
-fn session_events_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+fn session_events_payload(
+    state_dir: &Path,
+    limit: usize,
+    after_unix_ms: Option<u64>,
+) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let entries = read_session_request_journal(state_dir, limit)?;
+    let read_limit = if after_unix_ms.is_some() {
+        1_000
+    } else {
+        limit
+    };
+    let mut entries = read_session_request_journal(state_dir, read_limit)?
+        .into_iter()
+        .filter(|entry| {
+            after_unix_ms
+                .map(|after| entry.completed_at_unix_ms > after)
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    if entries.len() > limit {
+        let keep_from = entries.len() - limit;
+        entries.drain(0..keep_from);
+    }
     let events = entries
         .iter()
         .map(session_request_event_json)
         .collect::<Vec<_>>();
+    let latest_timestamp_unix_ms = entries.iter().map(|entry| entry.completed_at_unix_ms).max();
     Ok(json!({
         "schema_version": "session.events.v0.1",
         "state_dir": state_dir.display().to_string(),
         "source": "request_journal",
         "journal": session_request_journal_path(state_dir).display().to_string(),
         "limit": limit,
+        "after_unix_ms": after_unix_ms,
         "event_count": events.len(),
+        "cursor": {
+            "latest_timestamp_unix_ms": latest_timestamp_unix_ms,
+            "next_after_unix_ms": latest_timestamp_unix_ms
+        },
         "events": events
     }))
 }
@@ -5572,7 +5611,8 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request events", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
-            session_events_payload(state_dir, limit)
+            let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
+            session_events_payload(state_dir, limit, after_unix_ms)
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -17335,6 +17375,95 @@ mod tests {
     }
 
     #[test]
+    fn session_events_after_unix_ms_returns_incremental_cursor_window() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let first = SessionCommandRequest {
+            request_id: "event-1".to_string(),
+            command: "status".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let first_response = SessionCommandResponse {
+            request_id: "event-1".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 30,
+        };
+        append_session_request_journal(state_dir, &first, &first_response).unwrap();
+        let second = SessionCommandRequest {
+            request_id: "event-2".to_string(),
+            command: "events".to_string(),
+            global,
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 40,
+        };
+        let second_response = SessionCommandResponse {
+            request_id: "event-2".to_string(),
+            command: "events".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 41,
+            completed_at_unix_ms: 70,
+        };
+        append_session_request_journal(state_dir, &second, &second_response).unwrap();
+
+        let query = SessionCommandRequest {
+            request_id: "events-after-query".to_string(),
+            command: "events".to_string(),
+            global: second.global.clone(),
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-unix-ms".to_string(),
+                "30".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("event-2")
+        );
+        assert_eq!(
+            payload.get("after_unix_ms").and_then(Value::as_u64),
+            Some(30)
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/latest_timestamp_unix_ms")
+                .and_then(Value::as_u64),
+            Some(70)
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/next_after_unix_ms")
+                .and_then(Value::as_u64),
+            Some(70)
+        );
+    }
+
+    #[test]
     fn session_capabilities_request_returns_daemon_contract() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -17491,6 +17620,18 @@ mod tests {
                 .pointer("/command_classes/control/requires_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/filters/1")
+                .and_then(Value::as_str),
+            Some("--after-unix-ms")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/cursor_fields/0")
+                .and_then(Value::as_str),
+            Some("latest_timestamp_unix_ms")
         );
     }
 
@@ -19143,6 +19284,16 @@ mod tests {
             data.pointer("/envelopes/event_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.events.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/filters/1")
+                .and_then(Value::as_str),
+            Some("--after-unix-ms")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/cursor_fields/1")
+                .and_then(Value::as_str),
+            Some("next_after_unix_ms")
         );
     }
 

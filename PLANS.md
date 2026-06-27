@@ -116,6 +116,40 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session access contract: `session contract` and `session request contract` expose a machine-readable `session.access.v0.1` access boundary for local CLI and future trusted UI/API clients.
 - ActingLab Session events view: `session events` and `session request events` expose daemon request journal outcomes as stable `session.events.v0.1` event data for future UI/API clients.
 - ActingLab Session API contract: `session api` and `session request api` expose `session.api.v0.1`, documenting local CLI access, reserved trusted remote access, daemon request queue fields, CLI/event envelopes, command classes, and required failure codes.
+- ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
+
+## Current ActingLab Session Events Cursor
+
+The current Runtime task advances Session Layer requirement #8 and #10 by making the request-journal event view incrementally consumable. Local CLI clients and future trusted UI/API clients can request only events completed after a known timestamp and use the returned cursor for the next poll.
+
+Scope:
+
+- Add `--after-unix-ms <timestamp>` to `session events`.
+- Add the same filter to resident daemon `session request events`.
+- Keep `--limit` validation at `1..=1000`.
+- Expose `after_unix_ms`, `cursor.latest_timestamp_unix_ms`, and `cursor.next_after_unix_ms` in `session.events.v0.1`.
+- Document event filters and cursor fields in `session.api.v0.1`.
+
+Safety direction:
+
+- This milestone is read-only and only projects existing request-journal data.
+- No device I/O, emulator control, capture backend change, resource repository access, UI, trusted network listener, scheduler implementation, SQLite, OCR/OpenCV, or game logic was added.
+- Daemon-routed event queries still fail visibly when the resident daemon is unavailable or stale.
+
+Validation status:
+
+- Focused event tests passed for stable request-event output and incremental `--after-unix-ms` filtering.
+- Focused API contract tests passed and now cover event filters plus cursor fields.
+- Manual CLI check confirmed empty local `session events --after-unix-ms 0` returns `session.events.v0.1` with cursor fields.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `241` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session API Contract
 

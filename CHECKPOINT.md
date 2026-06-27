@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session events cursor
+
+### Current status
+
+- Added incremental cursor support to `session.events.v0.1`.
+- `session events` now accepts `--after-unix-ms <timestamp>` and returns only request-journal events completed after that timestamp.
+- `session request events` supports the same filter through the resident daemon request path.
+- Event payloads now include `after_unix_ms`, `cursor.latest_timestamp_unix_ms`, and `cursor.next_after_unix_ms`.
+- `session.api.v0.1` now documents event-view filters and cursor fields for local CLI and future trusted UI/API clients.
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a9333fe116cd5403f4b20b8e407bc7593787a4fa`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session events, daemon request handling, request journal projection, API contract, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_events`
+- `cargo test -p actingcommand-actinglab session_api`
+- `cargo run -q -p actingcommand-actinglab -- --json session events --state-dir target\session-events-cursor-smoke --limit 5 --after-unix-ms 0`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_events` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_api` passed with `2` tests.
+- Local `session events --after-unix-ms 0` returned `schema_version = session.events.v0.1`, `after_unix_ms = 0`, and cursor fields.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `241` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-events-cursor`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session API contract
 
 ### Current status
