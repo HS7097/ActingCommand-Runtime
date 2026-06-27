@@ -1464,11 +1464,12 @@ fn session_api_contract() -> Value {
                 "query": "session events",
                 "daemon_query": "session request events",
                 "schema_version": "session.events.v0.1",
-                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command"],
+                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind"],
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
                 "data_summary_kinds": ["stream", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kind_filter_repeats": true,
                 "cursor_fields": [
                     "latest_timestamp_unix_ms",
                     "next_after_unix_ms",
@@ -5270,12 +5271,14 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
     let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
     let command_filter = parse_optional_string_values(&flags, "--command")?;
+    let data_summary_kind_filter = parse_optional_string_values(&flags, "--data-summary-kind")?;
     session_events_payload(
         &state_dir,
         limit,
         after_unix_ms,
         after_request_id.as_deref(),
         &command_filter,
+        &data_summary_kind_filter,
     )
 }
 
@@ -5285,16 +5288,20 @@ fn session_events_payload(
     after_unix_ms: Option<u64>,
     after_request_id: Option<&str>,
     command_filter: &[String],
+    data_summary_kind_filter: &[String],
 ) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let read_limit =
-        if after_unix_ms.is_some() || after_request_id.is_some() || !command_filter.is_empty() {
-            1_000
-        } else {
-            limit
-        };
+    let read_limit = if after_unix_ms.is_some()
+        || after_request_id.is_some()
+        || !command_filter.is_empty()
+        || !data_summary_kind_filter.is_empty()
+    {
+        1_000
+    } else {
+        limit
+    };
     let mut entries = read_session_request_journal(state_dir, read_limit)?;
     if let Some(cursor_request_id) = after_request_id {
         let Some(position) = entries
@@ -5325,6 +5332,19 @@ fn session_events_payload(
                     .iter()
                     .any(|command| command == &entry.command)
         })
+        .filter(|entry| {
+            data_summary_kind_filter.is_empty()
+                || entry
+                    .data_summary
+                    .as_ref()
+                    .and_then(|summary| summary.get("kind"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| {
+                        data_summary_kind_filter
+                            .iter()
+                            .any(|filtered| filtered == kind)
+                    })
+        })
         .collect::<Vec<_>>();
     if entries.len() > limit {
         let keep_from = entries.len() - limit;
@@ -5348,6 +5368,11 @@ fn session_events_payload(
             Value::Null
         } else {
             json!(command_filter)
+        },
+        "data_summary_kind_filter": if data_summary_kind_filter.is_empty() {
+            Value::Null
+        } else {
+            json!(data_summary_kind_filter)
         },
         "event_count": events.len(),
         "cursor": {
@@ -7099,12 +7124,15 @@ fn execute_session_command_request_inner(
             let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
             let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
             let command_filter = parse_optional_string_values(&flags, "--command")?;
+            let data_summary_kind_filter =
+                parse_optional_string_values(&flags, "--data-summary-kind")?;
             session_events_payload(
                 state_dir,
                 limit,
                 after_unix_ms,
                 after_request_id.as_deref(),
                 &command_filter,
+                &data_summary_kind_filter,
             )
         }
         "contract" => {
@@ -19951,6 +19979,156 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_by_data_summary_kind_after_cursor() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for (request_id, command, data, completed_at_unix_ms) in [
+            ("status-a", "status", json!({"status": "ok"}), 10_u64),
+            (
+                "capture-diagnose-a",
+                "capture_diagnose",
+                json!({
+                    "status": "stale_suspected",
+                    "mode": "capture_diagnose",
+                    "requested_backend": "adb_screencap",
+                    "freshness": {
+                        "required": true,
+                        "fresh": false,
+                        "status": "stale_suspected"
+                    },
+                    "capture_backend_attempts": [
+                        {"backend": "adb_screencap", "ok": false}
+                    ],
+                    "frame": null,
+                    "recovery": {
+                        "needed": true,
+                        "available": true,
+                        "reason": "stale_capture_suspected",
+                        "recommendations": [
+                            {"type": "configure_backend", "backend": "nemu_ipc"}
+                        ]
+                    }
+                }),
+                20_u64,
+            ),
+            (
+                "stream-a",
+                "stream",
+                json!({
+                    "stream_id": "stream-a",
+                    "mode": "bounded_stream",
+                    "frames": [],
+                    "events": [],
+                    "input_relay": {"status": "disabled"}
+                }),
+                30_u64,
+            ),
+            (
+                "recover-stale-a",
+                "recover",
+                json!({
+                    "status": "diagnosed_stale",
+                    "mode": "stale_capture_recovery",
+                    "diagnosis_status": "diagnosed_stale",
+                    "diagnosis_executed": true,
+                    "requested_backend": "adb_screencap",
+                    "fresh_delay_ms": 250,
+                    "recovery": {
+                        "needed": true,
+                        "available": true,
+                        "reason": "stale_capture_suspected",
+                        "recommendations": [
+                            {"type": "configure_backend", "backend": "droidcast_raw"}
+                        ]
+                    }
+                }),
+                40_u64,
+            ),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                global: global.clone(),
+                args: Vec::new(),
+                lease: None,
+                created_at_unix_ms: completed_at_unix_ms.saturating_sub(2),
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                ok: true,
+                data: Some(data),
+                error: None,
+                started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "events-summary-kind-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-request-id".to_string(),
+                "status-a".to_string(),
+                "--data-summary-kind".to_string(),
+                "capture_diagnose".to_string(),
+                "--data-summary-kind".to_string(),
+                "stale_capture_recovery".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("capture-diagnose-a")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("capture_diagnose")
+        );
+        assert_eq!(
+            events[1].get("request_id").and_then(Value::as_str),
+            Some("recover-stale-a")
+        );
+        assert_eq!(
+            events[1]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("stale_capture_recovery")
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/next_after_request_id")
+                .and_then(Value::as_str),
+            Some("recover-stale-a")
+        );
+    }
+
+    #[test]
     fn session_events_after_request_id_missing_fails_visibly() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -20323,6 +20501,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/event_view/filters/4")
+                .and_then(Value::as_str),
+            Some("--data-summary-kind")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/event_view/data_summary_field")
                 .and_then(Value::as_str),
             Some("events[].data_summary")
@@ -20338,6 +20522,12 @@ mod tests {
                 .pointer("/envelopes/event_view/data_summary_kinds/2")
                 .and_then(Value::as_str),
             Some("stale_capture_recovery")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/data_summary_kind_filter_repeats")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload

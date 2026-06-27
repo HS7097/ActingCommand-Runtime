@@ -124,6 +124,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session events command filter: `session events` and `session request events` now support repeatable `--command <name>` filters so future UI/API clients can poll stream, lease, monitor, or control event slices without scanning the full request journal.
 - ActingLab Session request data summary: daemon request journal events now retain compact stream response summaries so future UI/API clients can observe stream ids, frame counts, event counts, and input relay status from `session events` without reading full response files.
 - ActingLab capture diagnosis event summaries: daemon request journal events now retain compact stale-capture and capture-diagnose summaries so future UI/scheduler clients can observe fresh-frame status and recommended capture-backend recovery without reading full response files.
+- ActingLab data-summary event filter: `session events` and `session request events` now support repeatable `--data-summary-kind <kind>` filters so future UI/scheduler clients can poll stream, capture-diagnose, or stale-capture recovery slices directly.
+
+## Current ActingLab Data-Summary Event Filter
+
+This increment makes the Session Layer event view easier for future UI/scheduler clients to consume without reading the full request journal.
+
+- `session events --data-summary-kind <kind>` filters daemon request events by `events[].data_summary.kind`.
+- The filter is repeatable for clients that need multiple summary classes in one poll.
+- Cursor handling is unchanged: `--after-request-id` is resolved against the complete recent journal before command or data-summary filters are applied.
+- `session request events` supports the same filter through the resident daemon request path.
+- `session api` advertises `--data-summary-kind` and records that the filter is repeatable.
+- The intended summary kinds are `stream`, `capture_diagnose`, and `stale_capture_recovery`.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, or access resource repositories.
+
+Validation for this phase:
+
+- Focused Session events data-summary-kind filter test.
+- Focused Session events test set.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Capture Diagnosis Event Summaries
 
