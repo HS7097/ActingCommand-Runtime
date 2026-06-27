@@ -103,6 +103,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab LabLease preempt alias: `lab preempt` now exposes the Session Layer preempt path from the Lab-facing CLI surface and preserves previous-holder provenance.
 - ActingLab LabLease status alias: `lab lease status` now exposes the same Session Layer lease status file from the Lab-facing CLI surface.
 - ActingLab bounded stream input relay scaffold: `stream --input-relay <tap|swipe|long-tap|key|text>` can now carry one input action through the bounded local stream contract, and daemon-routed input relay requires a matching Session Layer lease.
+- ActingLab bounded stream multi-event relay: repeated `--input-event <action,args>` can now carry multiple tap/swipe/long-tap/key/text events through one bounded stream request, with daemon-side lease enforcement unchanged.
+
+## Current ActingLab Bounded Stream Multi-Event Relay
+
+The current Runtime task moves the Session Layer stream relay closer to the future interactive UI/API shape by allowing a bounded stream request to carry multiple input events. This is still a local CLI/daemon scaffold, not a network UI stream, but it proves the internal command surface can serialize several relay events through the same Session Layer path.
+
+Scope:
+
+- Keep the previous `stream --input-relay <action> ...` single-action form working.
+- Add repeated `--input-event <action,args>` and `--relay-event <action,args>` for multiple relay events.
+- Support `tap`, `swipe`, `long-tap`, `key`, and `text` relay events.
+- Cap each bounded stream request at `16` relay events.
+- In dry-run mode, return the planned action list without opening MaaTouch.
+- In non-dry-run mode, execute all relay events in order through one MaaTouch session.
+- Keep daemon-routed stream relay behind the same Session Layer lease validation.
+
+Safety direction:
+
+- Multi-event relay is bounded and local; it does not add UI, WebSocket, TLS, remote API, scheduler, SQLite, OCR/OpenCV, resource repository writes, or game logic.
+- Ordinary bounded stream sampling remains read-only when no input events are present.
+- Daemon-routed stream relay remains task-level input and must pass `ensure_session_request_lease` before any action can run.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Replace the bounded local stream scaffold with a real trusted UI/API stream transport in a later milestone.
+- Define a long-lived interactive relay protocol after the scheduler/UI lease ownership model is finalized.
+- Continue live prepared-emulator validation after the Session Layer task sequence is ready.
 
 ## Current ActingLab Bounded Stream Input Relay Scaffold
 

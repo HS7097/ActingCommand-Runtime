@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab bounded stream multi-event relay
+
+### Current status
+
+- Added bounded multi-event stream input relay support.
+- Existing `stream --input-relay <tap|swipe|long-tap|key|text> ...` single-action form remains supported.
+- Added repeated `--input-event <action,args>` and `--relay-event <action,args>` forms.
+- Supported relay event actions are `tap`, `swipe`, `long-tap`, `key`, and `text`.
+- Each bounded stream request accepts at most `16` relay events.
+- Dry-run relay reports a planned `actions[]` list and does not open MaaTouch.
+- Non-dry-run relay executes all actions in order through one MaaTouch session.
+- Ordinary `stream` remains read-only when no relay action/event is requested.
+- Daemon-side stream input relay still requires a matching Session Layer lease before execution.
+- No UI, WebSocket, TLS, remote API, scheduler implementation, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, resource repository read/write, or trusted network API was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e7d9142f533703ab2115c3fd8c924997d73ba734`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` stream relay, session request, lease validation, flag parsing, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture`
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed with all workspace tests, including `212` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: real trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stream-multi-event-relay`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab bounded stream input relay scaffold
 
 ### Current status

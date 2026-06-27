@@ -1868,10 +1868,54 @@ enum StreamInputRelayAction {
 }
 
 impl StreamInputRelayAction {
-    fn parse(flags: &FlagArgs) -> CliOutcome<Option<Self>> {
-        let Some((action, action_args)) = stream_input_relay_action(flags)? else {
-            return Ok(None);
+    fn parse_many(flags: &FlagArgs) -> CliOutcome<Vec<Self>> {
+        let mut actions = Vec::new();
+        if let Some((action, action_args)) = stream_input_relay_action(flags)? {
+            actions.push(Self::parse_parts(action, action_args)?);
+        }
+        for spec in flags
+            .values("--input-event")
+            .into_iter()
+            .chain(flags.values("--relay-event"))
+        {
+            actions.push(Self::parse_event_spec(&spec)?);
+        }
+        if actions.len() > 16 {
+            return Err(CliError::usage(
+                "stream input relay accepts at most 16 input events per bounded stream request",
+            ));
+        }
+        Ok(actions)
+    }
+
+    fn parse_event_spec(spec: &str) -> CliOutcome<Self> {
+        let mut parts = spec.split(',').map(str::trim);
+        let action = parts
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CliError::usage(
+                    "--input-event expects action,args, for example tap,10,20 or key,back",
+                )
+            })?
+            .to_string();
+        let action_args = if action == "text" {
+            let text = parts.collect::<Vec<_>>().join(",");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![text]
+            }
+        } else {
+            parts
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
         };
+        Self::parse_parts(action, action_args)
+    }
+
+    fn parse_parts(action: String, action_args: Vec<String>) -> CliOutcome<Self> {
         let action_flags = FlagArgs {
             flags: BTreeMap::new(),
             positionals: action_args,
@@ -1885,7 +1929,6 @@ impl StreamInputRelayAction {
                 "unsupported stream input relay action: {other}"
             ))),
         }
-        .map(Some)
     }
 
     fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
@@ -1904,7 +1947,10 @@ impl StreamInputRelayAction {
 }
 
 fn stream_input_relay_requested(flags: &FlagArgs) -> bool {
-    flags.optional("--input-relay").is_some() || flags.optional("--interactive-input").is_some()
+    flags.optional("--input-relay").is_some()
+        || flags.optional("--interactive-input").is_some()
+        || !flags.values("--input-event").is_empty()
+        || !flags.values("--relay-event").is_empty()
 }
 
 fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec<String>)>> {
@@ -1929,14 +1975,20 @@ fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec
 fn run_stream_input_relay(
     global: &GlobalOptions,
     config: &UserConfig,
-    action: &StreamInputRelayAction,
+    actions: &[StreamInputRelayAction],
     dry_run: bool,
 ) -> CliOutcome<Value> {
+    let action_values = actions
+        .iter()
+        .map(StreamInputRelayAction::to_json)
+        .collect::<Vec<_>>();
     if dry_run {
         return Ok(json!({
             "status": "planned",
             "mode": "dry_run",
-            "action": action.to_json()
+            "action_count": actions.len(),
+            "action": action_values.first().cloned(),
+            "actions": action_values
         }));
     }
     let device_config = device_config(global, config)?;
@@ -1950,7 +2002,9 @@ fn run_stream_input_relay(
         .connect()
         .map_err(|err| CliError::device(err.to_string()))?;
     let handshake = backend.handshake_info().cloned();
-    let operation = action.run(&mut backend);
+    let operation = actions
+        .iter()
+        .try_for_each(|action| action.run(&mut backend));
     let close = backend.close();
     combine_operation_and_close(operation, close)
         .map_err(|err| CliError::device(err.to_string()))?;
@@ -1962,7 +2016,9 @@ fn run_stream_input_relay(
         "device_state": device.state,
         "screen_size": device.screen_size,
         "handshake": handshake.map(handshake_json),
-        "action": action.to_json()
+        "action_count": actions.len(),
+        "action": action_values.first().cloned(),
+        "actions": action_values
     }))
 }
 
@@ -3529,11 +3585,11 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    let relay_action = StreamInputRelayAction::parse(&flags)?;
-    if relay_action.is_some() && should_route_control_via_session_daemon(global, &flags)? {
+    let relay_actions = StreamInputRelayAction::parse_many(&flags)?;
+    if !relay_actions.is_empty() && should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "stream", args);
     }
-    if relay_action.is_none() && should_route_readonly_via_session_daemon(global, &flags)? {
+    if relay_actions.is_empty() && should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "stream", args);
     }
     let config = read_user_config()?;
@@ -3545,16 +3601,14 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let interval = parse_optional_duration_ms(&flags, "--interval-ms", 250)?;
     let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
-    let input_relay = relay_action
-        .as_ref()
-        .map(|action| run_stream_input_relay(global, &config, action, dry_run))
-        .transpose()?
-        .unwrap_or_else(|| {
-            json!({
-                "status": "disabled",
-                "reason": "no input relay action requested"
-            })
-        });
+    let input_relay = if relay_actions.is_empty() {
+        json!({
+            "status": "disabled",
+            "reason": "no input relay action requested"
+        })
+    } else {
+        run_stream_input_relay(global, &config, &relay_actions, dry_run)?
+    };
     let frames = if dry_run {
         stream_dry_run_frames(max_frames)
     } else {
@@ -7976,6 +8030,10 @@ impl FlagArgs {
             .cloned()
     }
 
+    fn values(&self, name: &str) -> Vec<String> {
+        self.flags.get(name).cloned().unwrap_or_default()
+    }
+
     fn required(&self, name: &str) -> CliOutcome<String> {
         self.optional(name)
             .filter(|value| value != "true")
@@ -11077,6 +11135,58 @@ mod tests {
             data.pointer("/input_relay/action/x")
                 .and_then(Value::as_i64),
             Some(10)
+        );
+    }
+
+    #[test]
+    fn stream_input_relay_dry_run_reports_multiple_events() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let stream = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "--dry-run",
+                "--max-frames",
+                "1",
+                "--input-event",
+                "tap,10,20",
+                "--input-event",
+                "key,back",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(stream.exit_code(), 0);
+        let data = stream.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/input_relay/action_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/input_relay/actions/0/type")
+                .and_then(Value::as_str),
+            Some("tap")
+        );
+        assert_eq!(
+            data.pointer("/input_relay/actions/1/type")
+                .and_then(Value::as_str),
+            Some("key")
+        );
+        assert_eq!(
+            data.pointer("/input_relay/actions/1/key")
+                .and_then(Value::as_str),
+            Some("4")
         );
     }
 
@@ -15636,10 +15746,10 @@ mod tests {
                 "--dry-run".to_string(),
                 "--max-frames".to_string(),
                 "1".to_string(),
-                "--input-relay".to_string(),
-                "tap".to_string(),
-                "10".to_string(),
-                "20".to_string(),
+                "--input-event".to_string(),
+                "tap,10,20".to_string(),
+                "--input-event".to_string(),
+                "key,back".to_string(),
             ],
             lease: Some(SessionCommandLease {
                 holder: "scheduler".to_string(),
@@ -15658,9 +15768,15 @@ mod tests {
         );
         assert_eq!(
             payload
-                .pointer("/input_relay/action/type")
+                .pointer("/input_relay/action_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .pointer("/input_relay/actions/1/key")
                 .and_then(Value::as_str),
-            Some("tap")
+            Some("4")
         );
     }
 
