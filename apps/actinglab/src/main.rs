@@ -1116,6 +1116,7 @@ fn session_access_contract() -> Value {
         },
         "daemon_queries": {
             "contract": "session request contract",
+            "api": "session request api",
             "capabilities": "session request capabilities",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
@@ -1167,6 +1168,126 @@ fn session_access_contract() -> Value {
             "requests_are_serialized_by_resident_daemon": true,
             "severe_errors_fail_loud": true,
             "transient_recovery_path_must_be_logged": true
+        },
+        "out_of_scope": [
+            "network listener",
+            "TLS implementation",
+            "token issuance",
+            "UI transport",
+            "scheduler runtime"
+        ]
+    })
+}
+
+fn session_api_contract() -> Value {
+    json!({
+        "schema_version": "session.api.v0.1",
+        "purpose": "machine-readable command and envelope contract for Session Layer clients",
+        "session_layer": {
+            "resident_daemon": true,
+            "only_control_throat": true,
+            "clients_must_not_directly_touch_adb_or_devices": true,
+            "requests_are_serialized_by_resident_daemon": true
+        },
+        "access_channels": {
+            "local_cli": {
+                "status": "available",
+                "command": "actinglab",
+                "encryption_required": false,
+                "authentication_required": false
+            },
+            "trusted_remote": {
+                "status": "reserved",
+                "network_listener_implemented": false,
+                "encryption_required": true,
+                "authentication_required": true,
+                "minimum_transport": "TLS or mutually authenticated local IPC",
+                "token_or_certificate_required": true
+            }
+        },
+        "daemon_request_queue": {
+            "status": "available",
+            "submit_command": "session request <command>",
+            "request_dir": "requests/",
+            "response_dir": "responses/",
+            "journal": "request-journal.jsonl",
+            "request_fields": [
+                "request_id",
+                "command",
+                "global",
+                "args",
+                "lease",
+                "created_at_unix_ms"
+            ],
+            "response_fields": [
+                "request_id",
+                "command",
+                "ok",
+                "data",
+                "error",
+                "started_at_unix_ms",
+                "completed_at_unix_ms"
+            ]
+        },
+        "envelopes": {
+            "cli": {
+                "schema_version": "0.2",
+                "success_fields": ["ok", "command", "data"],
+                "error_fields": ["ok", "command", "error"]
+            },
+            "event_view": {
+                "query": "session events",
+                "daemon_query": "session request events",
+                "schema_version": "session.events.v0.1"
+            }
+        },
+        "command_classes": {
+            "read_only": {
+                "requires_lease": false,
+                "examples": [
+                    "status",
+                    "journal",
+                    "events",
+                    "contract",
+                    "api",
+                    "capabilities",
+                    "devices",
+                    "capture",
+                    "capture-diagnose",
+                    "stream",
+                    "recognize",
+                    "detect-page",
+                    "current-page",
+                    "is-visible",
+                    "locate",
+                    "monitor-once"
+                ]
+            },
+            "control": {
+                "requires_lease": true,
+                "examples": [
+                    "lease",
+                    "record",
+                    "instance lifecycle control",
+                    "app",
+                    "lab-run",
+                    "package-run",
+                    "operation-run",
+                    "tap",
+                    "swipe",
+                    "long-tap",
+                    "key",
+                    "text",
+                    "tap-target",
+                    "navigate",
+                    "recover"
+                ]
+            }
+        },
+        "failure_contract": {
+            "missing_or_stale_daemon_code": "runtime_not_running",
+            "control_without_matching_lease_code": "lab_lease_required",
+            "severe_errors_fail_loud": true
         },
         "out_of_scope": [
             "network listener",
@@ -4433,6 +4554,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "daemon" => run_session_daemon(args),
         "request" => run_session_request(global, args),
         "contract" => run_session_contract(global, args),
+        "api" => run_session_api(global, args),
         "journal" => run_session_journal(global, args),
         "events" => run_session_events(global, args),
         "instance" => run_session_instance(global, args),
@@ -4452,6 +4574,15 @@ fn run_session_contract(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
     }
     flags.expect_positionals("session contract", 0)?;
     Ok(session_access_contract())
+}
+
+fn run_session_api(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "api", args);
+    }
+    flags.expect_positionals("session api", 0)?;
+    Ok(session_api_contract())
 }
 
 fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -4809,7 +4940,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, events, contract, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, events, contract, api, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -4818,6 +4949,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
+        "api" => submit_readonly_session_request(global, &flags, "api", &args[1..]),
         "capabilities" => {
             submit_readonly_session_request(global, &flags, "capabilities", &args[1..])
         }
@@ -5446,6 +5578,11 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request contract", 0)?;
             Ok(session_access_contract())
+        }
+        "api" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request api", 0)?;
+            Ok(session_api_contract())
         }
         "capabilities" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -10213,10 +10350,12 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session journal", ["offline"], "available"),
         command_cap("session events", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
+        command_cap("session api", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request events", ["running_runtime"], "available"),
         command_cap("session request contract", ["running_runtime"], "available"),
+        command_cap("session request api", ["running_runtime"], "available"),
         command_cap(
             "session request capabilities",
             ["running_runtime"],
@@ -17296,6 +17435,63 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            payload
+                .pointer("/daemon_queries/api")
+                .and_then(Value::as_str),
+            Some("session request api")
+        );
+    }
+
+    #[test]
+    fn session_api_request_returns_api_contract() {
+        let query = SessionCommandRequest {
+            request_id: "api-query".to_string(),
+            command: "api".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let temp = TempDir::new().unwrap();
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.api.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/session_layer/clients_must_not_directly_touch_adb_or_devices")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/access_channels/trusted_remote/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/daemon_request_queue/submit_command")
+                .and_then(Value::as_str),
+            Some("session request <command>")
+        );
+        assert_eq!(
+            payload
+                .pointer("/command_classes/control/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -18278,6 +18474,27 @@ mod tests {
     }
 
     #[test]
+    fn session_request_api_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "api",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_events_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -18856,6 +19073,14 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request api"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request events"))
         );
     }
@@ -18883,6 +19108,41 @@ mod tests {
             data.pointer("/safety/control_requests_require_matching_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/api").and_then(Value::as_str),
+            Some("session request api")
+        );
+    }
+
+    #[test]
+    fn session_api_is_offline_api_contract() {
+        let result = run_cli(["--json", "session", "api"], true);
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.api.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/access_channels/local_cli/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            data.pointer("/access_channels/trusted_remote/authentication_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/access_channels/trusted_remote/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.events.v0.1")
         );
     }
 
@@ -19142,6 +19402,7 @@ mod tests {
             "session journal",
             "session events",
             "session contract",
+            "session api",
             "session instance",
             "session instance list",
             "session instance health",
@@ -19156,6 +19417,7 @@ mod tests {
             "session request journal",
             "session request events",
             "session request contract",
+            "session request api",
             "session request devices",
             "session request lease",
             "session request record",

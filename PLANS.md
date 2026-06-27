@@ -115,6 +115,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed capabilities contract: `session request capabilities` now lets a running resident daemon report the same command list and a `session.capabilities.v0.1` Session Layer access/safety contract to future UI/API clients.
 - ActingLab Session access contract: `session contract` and `session request contract` expose a machine-readable `session.access.v0.1` access boundary for local CLI and future trusted UI/API clients.
 - ActingLab Session events view: `session events` and `session request events` expose daemon request journal outcomes as stable `session.events.v0.1` event data for future UI/API clients.
+- ActingLab Session API contract: `session api` and `session request api` expose `session.api.v0.1`, documenting local CLI access, reserved trusted remote access, daemon request queue fields, CLI/event envelopes, command classes, and required failure codes.
+
+## Current ActingLab Session API Contract
+
+The current Runtime task advances Session Layer requirement #10 by exposing the internal command/envelope contract as machine-readable data. This lets local CLI clients and future trusted UI/API clients discover the same API shape without starting a network listener or implementing UI transport.
+
+Scope:
+
+- Add `session api` as a local, read-only API contract query.
+- Add `session request api` as a resident daemon read-only query.
+- Define `session.api.v0.1` with local CLI and reserved trusted remote access channels.
+- Record that trusted remote access is not implemented yet and will require encryption plus authentication.
+- Describe daemon request queue fields, response fields, CLI envelope fields, and event-view schema.
+- Record read-only versus control command classes and lease requirements.
+- Register both commands in the capability table and expose the daemon query through the access contract.
+
+Safety direction:
+
+- This milestone does not start a network listener and does not implement TLS, token issuance, UI transport, scheduler behavior, device I/O, capture backend changes, recognition, resource access, SQLite, OCR/OpenCV, or game logic.
+- The contract states that clients must not directly touch ADB or devices.
+- Control requests remain lease-gated and serialized through the resident daemon request queue.
+
+Validation status:
+
+- Focused API tests passed for offline output, daemon-side handler output, no-daemon failure, capability registration, and access-contract discovery.
+- Manual CLI check confirmed `session api` returns `session.api.v0.1`.
+- Manual CLI check confirmed `session request api` fails visibly with `runtime_not_running` when no daemon exists.
+- Manual resident-daemon smoke check started a temporary daemon, queried `session request api`, and stopped the daemon successfully.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `240` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session Events View
 

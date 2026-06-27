@@ -1,5 +1,90 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session API contract
+
+### Current status
+
+- Added `session api` as a local, read-only Session Layer API contract query.
+- Added `session request api` as a resident daemon read-only query.
+- Added machine-readable `session.api.v0.1` output describing:
+  - local CLI access,
+  - reserved trusted remote access,
+  - required encryption and authentication for future trusted remote access,
+  - daemon request queue fields,
+  - daemon response fields,
+  - CLI envelope fields,
+  - event-view schema,
+  - read-only versus control command classes,
+  - control-request LabLease requirements,
+  - expected visible failure codes.
+- Added `api = session request api` to the Session access contract daemon query list.
+- Registered `session api` and `session request api` in `command_capabilities()`.
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `35f53eb7af19110104ffa9a42ac0789d003a29ad`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session access contract, API/event/session request routing, daemon request handling, capability table, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab api -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo run -q -p actingcommand-actinglab -- --json session request api --state-dir <empty-temp-state>`
+- Temporary daemon smoke:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session request api --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <temp-state>`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab api -- --nocapture` passed with `3` tests.
+- Capability and access-contract focused tests passed.
+- Local `session api` returned `schema_version = session.api.v0.1`.
+- Empty-state `session request api` failed visibly with `runtime_not_running`.
+- Temporary daemon smoke returned `status = started`, then `session request api` completed through daemon request mode and returned `session.api.v0.1`, then `session stop` returned `stopped`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `240` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-api-contract`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session events view
 
 ### Current status
