@@ -4813,11 +4813,25 @@ fn run_session_stop(args: &[String]) -> CliOutcome<Value> {
     let state_dir = session_state_dir_from_flags(&flags)?;
     let info_path = session_info_path(&state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
-    if info.is_none() {
+    let Some(info) = info else {
         return Ok(json!({
             "status": "not_running",
             "state_dir": state_dir.display().to_string()
         }));
+    };
+    let heartbeat_path = session_heartbeat_path(&state_dir);
+    let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+    let now_ms = current_unix_ms();
+    let liveness = session_liveness_snapshot(Some(&info), heartbeat.as_ref(), now_ms);
+    let liveness_json = session_liveness_diagnostics(Some(&info), heartbeat.as_ref(), now_ms);
+    if !liveness.status.can_accept_requests() {
+        return Err(CliError::runtime_not_running(format!(
+            "session stop refused because daemon is not accepting requests; liveness status={}, heartbeat_age_ms={}, stale_after_ms={}, state_dir={}",
+            liveness.status.as_str(),
+            optional_u64_text(liveness.heartbeat_age_ms),
+            SESSION_HEARTBEAT_STALE_MS,
+            state_dir.display()
+        )));
     }
     fs::create_dir_all(&state_dir).map_err(|err| {
         CliError::runtime_not_running(format!(
@@ -4842,6 +4856,8 @@ fn run_session_stop(args: &[String]) -> CliOutcome<Value> {
     Ok(json!({
         "status": "stop_requested",
         "state_dir": state_dir.display().to_string(),
+        "heartbeat": heartbeat,
+        "liveness": liveness_json,
         "info": info
     }))
 }
@@ -10639,6 +10655,87 @@ mod tests {
         assert_eq!(error.code, "runtime_not_running");
         assert!(error.message.contains("not accepting requests"));
         assert!(error.message.contains("liveness status=stale"));
+    }
+
+    #[test]
+    fn session_stop_existing_missing_heartbeat_fails_before_stop_request() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "stop",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("stop refused"));
+        assert!(error.message.contains("liveness status=heartbeat_missing"));
+        assert!(!session_stop_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_stop_existing_stale_heartbeat_fails_before_stop_request() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "stop",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("stop refused"));
+        assert!(error.message.contains("liveness status=stale"));
+        assert!(!session_stop_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_stop_existing_alive_state_writes_stop_request() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let info_path = session_info_path(temp.path());
+        let remover = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = fs::remove_file(info_path);
+        });
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "stop",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        remover.join().unwrap();
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("stopped"));
+        assert!(session_stop_path(temp.path()).exists());
     }
 
     #[test]

@@ -108,6 +108,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session liveness diagnostics: `session status --diagnostics` now classifies daemon heartbeat state for UI/scheduler health checks.
 - ActingLab daemon liveness-gated routing: automatic daemon-preferred routing now requires an alive heartbeat, and explicit daemon requests fail fast before queueing when the daemon state is stale, missing a heartbeat, or pid-mismatched.
 - ActingLab session start liveness gate: `session start` now treats stale or heartbeat-missing session state as a visible runtime error instead of reporting false `already_running`, and new daemon startup waits for an alive heartbeat before reporting `started`.
+- ActingLab session stop liveness gate: `session stop` now refuses stale, missing-heartbeat, or pid-mismatched daemon state before writing a stop request, while alive daemon state keeps the existing stop path.
+
+## Current ActingLab Session Stop Liveness Gate
+
+The current Runtime task extends Session Layer liveness checks into daemon shutdown. `session stop` no longer treats `session.json` alone as proof that a resident daemon can accept the stop request.
+
+Scope:
+
+- Reuse the same liveness states and threshold used by `session status --diagnostics`, daemon routing, and `session start`.
+- Write `stop.request` only when the existing daemon state is alive, pid-matched, and fresh.
+- Fail visibly when existing state is stale, heartbeat-missing, or pid-mismatched instead of reporting a misleading stop request.
+- Keep daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, resource access, and game logic unchanged.
+
+Safety direction:
+
+- Stale or inconsistent daemon state is reported as not accepting requests before any stop request is written.
+- A successful stop request now means the daemon state is alive enough to receive it, not merely that a stale info file exists.
+- This is a lifecycle consistency change and does not reconnect devices, click, capture, restart apps, or change scheduler ownership.
+
+Validation status:
+
+- Focused `cargo test -p actingcommand-actinglab session_stop_ -- --nocapture` passed after adding missing/stale/alive stop coverage.
+- `cargo fmt --all -- --check`, `git diff --check`, source diff prohibited-feature scan, and `cargo clippy --workspace -- -D warnings` passed.
+- The first `cargo test --workspace` run reported one isolated `current_page_resolves_semantic_page` failure; the focused rerun passed, and the second full `cargo test --workspace` passed.
+
+Out of scope:
+
+- No stale state cleanup command was added.
+- No OS process probing was added.
+- No live daemon was started for this milestone.
+- No UI/API transport, scheduler arbitration, device I/O, capture backend change, resource repository access, or game-specific logic was added.
 
 ## Current ActingLab Session Start Liveness Gate
 

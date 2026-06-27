@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session stop liveness gate
+
+### Current status
+
+- Connected Session Layer liveness checks to `session stop`.
+- Existing session state now writes `stop.request` only when `session.json` and `heartbeat.json` prove an alive, pid-matched, fresh daemon.
+- Existing stale, heartbeat-missing, or pid-mismatched session state now fails visibly with `runtime_not_running` before any stop request is written.
+- Existing alive stop behavior remains intact; the command still returns `stopped` when the daemon clears `session.json`.
+- No daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, app lifecycle behavior, stale-state cleanup command, or live device behavior was changed.
+- No live daemon or emulator operation was run for this lifecycle-consistency milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `aa75dfde512b1aa9e816262533a51a74b4c0104a`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session lifecycle, liveness diagnostics, stop request handling, and related tests.
+- `cargo test -p actingcommand-actinglab session_stop_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_stop_ -- --nocapture` passed with `3` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- The first `cargo test --workspace` run reported one isolated `current_page_resolves_semantic_page` failure.
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture` passed on focused rerun.
+- The second `cargo test --workspace` passed, including `223` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-stop-liveness-gate`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session start liveness gate
 
 ### Current status
