@@ -126,6 +126,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture diagnosis event summaries: daemon request journal events now retain compact stale-capture and capture-diagnose summaries so future UI/scheduler clients can observe fresh-frame status and recommended capture-backend recovery without reading full response files.
 - ActingLab data-summary event filter: `session events` and `session request events` now support repeatable `--data-summary-kind <kind>` filters so future UI/scheduler clients can poll stream, capture-diagnose, or stale-capture recovery slices directly.
 - ActingLab request-status event filter: `session events` and `session request events` now support repeatable `--status completed|failed` filters so future UI/scheduler clients can poll success and failure slices without scraping the full journal.
+- ActingLab target-scoped event stream: daemon request journal entries now preserve request target selectors, and `session events` / `session request events` can filter by instance/game/server selectors and repeatable lease holder.
+
+## Current ActingLab Target-Scoped Event Stream
+
+This increment moves the Session Layer event surface closer to the unique-throat model in `TASK-Lab-session-layer.md`: future UI and scheduler clients can read the event slice for the instance or lease they own instead of scanning every daemon request.
+
+- New request journal entries preserve the request `global` selector metadata: instance, game, server, resource root, capture backend, and dry-run state.
+- `session events` inherits global `--instance`, `--game`, and `--server` selectors as target filters.
+- `session request events` supports the same selector filters through the resident daemon request path because daemon requests already carry `SessionCommandGlobal`.
+- `session events --lease-holder <holder>` filters events by lease holder and is repeatable.
+- Event payloads include `events[].global` and `target_filter` so consumers can audit why an event matched.
+- Older journal entries without selector metadata remain readable; selector filters only match entries with matching recorded selectors.
+- Cursor handling is unchanged: `--after-request-id` is resolved against the complete recent journal before command, data-summary, status, or target filters are applied.
+- `session api` advertises global filters and lease-holder filtering.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused instance-selector event filter test.
+- Focused lease-holder event filter test.
+- Focused Session events test set.
+- Request journal compatibility/rotation tests.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Request-Status Event Filter
 

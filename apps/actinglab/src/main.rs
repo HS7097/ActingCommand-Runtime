@@ -426,6 +426,8 @@ struct SessionCommandResponse {
 struct SessionRequestJournalEntry {
     request_id: String,
     command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    global: Option<SessionCommandGlobal>,
     args: Vec<String>,
     #[serde(default)]
     lease: Option<SessionCommandLease>,
@@ -443,6 +445,22 @@ struct SessionCommandLease {
     holder: String,
     #[serde(default)]
     lease_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionEventTargetFilter {
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+    lease_holders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionEventFilters {
+    commands: Vec<String>,
+    data_summary_kinds: Vec<String>,
+    statuses: Vec<String>,
+    target: SessionEventTargetFilter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1464,7 +1482,8 @@ fn session_api_contract() -> Value {
                 "query": "session events",
                 "daemon_query": "session request events",
                 "schema_version": "session.events.v0.1",
-                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind", "--status"],
+                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind", "--status", "--lease-holder"],
+                "global_filters": ["--instance", "--game", "--server"],
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
@@ -1472,6 +1491,7 @@ fn session_api_contract() -> Value {
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
+                "lease_holder_filter_repeats": true,
                 "cursor_fields": [
                     "latest_timestamp_unix_ms",
                     "next_after_unix_ms",
@@ -5272,17 +5292,18 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
     let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
     let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
-    let command_filter = parse_optional_string_values(&flags, "--command")?;
-    let data_summary_kind_filter = parse_optional_string_values(&flags, "--data-summary-kind")?;
-    let status_filter = parse_session_event_status_filter(&flags)?;
+    let filters = parse_session_event_filters(
+        global.instance.clone(),
+        global.game.clone(),
+        global.server.clone(),
+        &flags,
+    )?;
     session_events_payload(
         &state_dir,
         limit,
         after_unix_ms,
         after_request_id.as_deref(),
-        &command_filter,
-        &data_summary_kind_filter,
-        &status_filter,
+        &filters,
     )
 }
 
@@ -5291,18 +5312,12 @@ fn session_events_payload(
     limit: usize,
     after_unix_ms: Option<u64>,
     after_request_id: Option<&str>,
-    command_filter: &[String],
-    data_summary_kind_filter: &[String],
-    status_filter: &[String],
+    filters: &SessionEventFilters,
 ) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let read_limit = if after_unix_ms.is_some()
-        || after_request_id.is_some()
-        || !command_filter.is_empty()
-        || !data_summary_kind_filter.is_empty()
-        || !status_filter.is_empty()
+    let read_limit = if after_unix_ms.is_some() || after_request_id.is_some() || filters.is_active()
     {
         1_000
     } else {
@@ -5333,30 +5348,34 @@ fn session_events_payload(
                 .unwrap_or(true)
         })
         .filter(|entry| {
-            command_filter.is_empty()
-                || command_filter
+            filters.commands.is_empty()
+                || filters
+                    .commands
                     .iter()
                     .any(|command| command == &entry.command)
         })
         .filter(|entry| {
-            data_summary_kind_filter.is_empty()
+            filters.data_summary_kinds.is_empty()
                 || entry
                     .data_summary
                     .as_ref()
                     .and_then(|summary| summary.get("kind"))
                     .and_then(Value::as_str)
                     .is_some_and(|kind| {
-                        data_summary_kind_filter
+                        filters
+                            .data_summary_kinds
                             .iter()
                             .any(|filtered| filtered == kind)
                     })
         })
         .filter(|entry| {
-            status_filter.is_empty()
-                || status_filter
+            filters.statuses.is_empty()
+                || filters
+                    .statuses
                     .iter()
                     .any(|status| status.as_str() == session_request_event_status(entry))
         })
+        .filter(|entry| filters.target.matches(entry))
         .collect::<Vec<_>>();
     if entries.len() > limit {
         let keep_from = entries.len() - limit;
@@ -5376,21 +5395,22 @@ fn session_events_payload(
         "limit": limit,
         "after_unix_ms": after_unix_ms,
         "after_request_id": after_request_id,
-        "command_filter": if command_filter.is_empty() {
+        "command_filter": if filters.commands.is_empty() {
             Value::Null
         } else {
-            json!(command_filter)
+            json!(&filters.commands)
         },
-        "data_summary_kind_filter": if data_summary_kind_filter.is_empty() {
+        "data_summary_kind_filter": if filters.data_summary_kinds.is_empty() {
             Value::Null
         } else {
-            json!(data_summary_kind_filter)
+            json!(&filters.data_summary_kinds)
         },
-        "status_filter": if status_filter.is_empty() {
+        "status_filter": if filters.statuses.is_empty() {
             Value::Null
         } else {
-            json!(status_filter)
+            json!(&filters.statuses)
         },
+        "target_filter": filters.target.to_json(),
         "event_count": events.len(),
         "cursor": {
             "latest_timestamp_unix_ms": latest_timestamp_unix_ms,
@@ -5412,6 +5432,107 @@ fn parse_session_event_status_filter(flags: &FlagArgs) -> CliOutcome<Vec<String>
         }
     }
     Ok(status_filter)
+}
+
+fn parse_session_event_filters(
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionEventFilters> {
+    Ok(SessionEventFilters {
+        commands: parse_optional_string_values(flags, "--command")?,
+        data_summary_kinds: parse_optional_string_values(flags, "--data-summary-kind")?,
+        statuses: parse_session_event_status_filter(flags)?,
+        target: parse_session_event_target_filter(instance, game, server, flags)?,
+    })
+}
+
+fn parse_session_event_target_filter(
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionEventTargetFilter> {
+    Ok(SessionEventTargetFilter {
+        instance,
+        game,
+        server,
+        lease_holders: parse_optional_string_values(flags, "--lease-holder")?,
+    })
+}
+
+impl SessionEventFilters {
+    fn is_active(&self) -> bool {
+        !self.commands.is_empty()
+            || !self.data_summary_kinds.is_empty()
+            || !self.statuses.is_empty()
+            || self.target.is_active()
+    }
+}
+
+impl SessionEventTargetFilter {
+    fn is_active(&self) -> bool {
+        self.instance.is_some()
+            || self.game.is_some()
+            || self.server.is_some()
+            || !self.lease_holders.is_empty()
+    }
+
+    fn matches(&self, entry: &SessionRequestJournalEntry) -> bool {
+        let global = entry.global.as_ref();
+        if !optional_selector_matches(
+            global.and_then(|global| global.instance.as_deref()),
+            self.instance.as_deref(),
+        ) {
+            return false;
+        }
+        if !optional_selector_matches(
+            global.and_then(|global| global.game.as_deref()),
+            self.game.as_deref(),
+        ) {
+            return false;
+        }
+        if !optional_selector_matches(
+            global.and_then(|global| global.server.as_deref()),
+            self.server.as_deref(),
+        ) {
+            return false;
+        }
+        if !self.lease_holders.is_empty()
+            && !entry.lease.as_ref().is_some_and(|lease| {
+                self.lease_holders
+                    .iter()
+                    .any(|holder| holder == &lease.holder)
+            })
+        {
+            return false;
+        }
+        true
+    }
+
+    fn to_json(&self) -> Value {
+        if !self.is_active() {
+            return Value::Null;
+        }
+        json!({
+            "instance": &self.instance,
+            "game": &self.game,
+            "server": &self.server,
+            "lease_holders": if self.lease_holders.is_empty() {
+                Value::Null
+            } else {
+                json!(&self.lease_holders)
+            }
+        })
+    }
+}
+
+fn optional_selector_matches(actual: Option<&str>, expected: Option<&str>) -> bool {
+    match expected {
+        Some(expected) => actual == Some(expected),
+        None => true,
+    }
 }
 
 fn session_request_event_status(entry: &SessionRequestJournalEntry) -> &'static str {
@@ -5444,6 +5565,7 @@ fn session_request_event_json(entry: &SessionRequestJournalEntry) -> Value {
         "timestamp_unix_ms": entry.completed_at_unix_ms,
         "request_id": &entry.request_id,
         "command": &entry.command,
+        "global": &entry.global,
         "status": status,
         "ok": entry.ok,
         "args_count": entry.args.len(),
@@ -6982,6 +7104,7 @@ fn append_session_request_journal(
     let entry = SessionRequestJournalEntry {
         request_id: request.request_id.clone(),
         command: request.command.clone(),
+        global: Some(request.global.clone()),
         args: request.args.clone(),
         lease: request.lease.clone(),
         ok: response.ok,
@@ -7156,18 +7279,18 @@ fn execute_session_command_request_inner(
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
             let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
-            let command_filter = parse_optional_string_values(&flags, "--command")?;
-            let data_summary_kind_filter =
-                parse_optional_string_values(&flags, "--data-summary-kind")?;
-            let status_filter = parse_session_event_status_filter(&flags)?;
+            let filters = parse_session_event_filters(
+                request.global.instance.clone(),
+                request.global.game.clone(),
+                request.global.server.clone(),
+                &flags,
+            )?;
             session_events_payload(
                 state_dir,
                 limit,
                 after_unix_ms,
                 after_request_id.as_deref(),
-                &command_filter,
-                &data_summary_kind_filter,
-                &status_filter,
+                &filters,
             )
         }
         "contract" => {
@@ -20258,6 +20381,177 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_by_instance_selector_after_cursor() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let ak_global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let ba_global = SessionCommandGlobal {
+            instance: Some("ba".to_string()),
+            game: Some("ba".to_string()),
+            server: Some("jp".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for (request_id, command, global, completed_at_unix_ms) in [
+            ("status-a", "status", ak_global.clone(), 10_u64),
+            ("stream-ak", "stream", ak_global.clone(), 20_u64),
+            ("stream-ba", "stream", ba_global, 30_u64),
+            ("recover-ak", "recover", ak_global.clone(), 40_u64),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                global,
+                args: Vec::new(),
+                lease: None,
+                created_at_unix_ms: completed_at_unix_ms.saturating_sub(2),
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                ok: true,
+                data: Some(json!({"status": "ok"})),
+                error: None,
+                started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "events-instance-filter-query".to_string(),
+            command: "events".to_string(),
+            global: ak_global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-request-id".to_string(),
+                "status-a".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            payload
+                .pointer("/target_filter/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("stream-ak")
+        );
+        assert_eq!(
+            events[1].get("request_id").and_then(Value::as_str),
+            Some("recover-ak")
+        );
+        assert!(
+            events.iter().all(
+                |event| event.pointer("/global/instance").and_then(Value::as_str) == Some("ak")
+            )
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/next_after_request_id")
+                .and_then(Value::as_str),
+            Some("recover-ak")
+        );
+    }
+
+    #[test]
+    fn session_events_filters_by_lease_holder_after_cursor() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for (request_id, lease_holder, completed_at_unix_ms) in [
+            ("status-a", None, 10_u64),
+            ("tap-lab-a", Some("lab"), 20_u64),
+            ("tap-scheduler-a", Some("scheduler"), 30_u64),
+            ("recover-lab-a", Some("lab"), 40_u64),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: "tap".to_string(),
+                global: global.clone(),
+                args: Vec::new(),
+                lease: lease_holder.map(|holder| SessionCommandLease {
+                    holder: holder.to_string(),
+                    lease_id: Some(format!("{holder}-lease")),
+                }),
+                created_at_unix_ms: completed_at_unix_ms.saturating_sub(2),
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: "tap".to_string(),
+                ok: true,
+                data: Some(json!({"status": "ok"})),
+                error: None,
+                started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "events-lease-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-request-id".to_string(),
+                "status-a".to_string(),
+                "--lease-holder".to_string(),
+                "lab".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            payload
+                .pointer("/target_filter/lease_holders/0")
+                .and_then(Value::as_str),
+            Some("lab")
+        );
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("tap-lab-a")
+        );
+        assert_eq!(
+            events[1].get("request_id").and_then(Value::as_str),
+            Some("recover-lab-a")
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.pointer("/lease/holder").and_then(Value::as_str) == Some("lab"))
+        );
+    }
+
+    #[test]
     fn session_events_rejects_unknown_status_filter() {
         let temp = TempDir::new().unwrap();
         let query = SessionCommandRequest {
@@ -20667,6 +20961,30 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/event_view/filters/6")
+                .and_then(Value::as_str),
+            Some("--lease-holder")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/global_filters/0")
+                .and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/global_filters/1")
+                .and_then(Value::as_str),
+            Some("--game")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/global_filters/2")
+                .and_then(Value::as_str),
+            Some("--server")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/event_view/data_summary_field")
                 .and_then(Value::as_str),
             Some("events[].data_summary")
@@ -20704,6 +21022,12 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/envelopes/event_view/status_filter_repeats")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/lease_holder_filter_repeats")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -22601,6 +22925,7 @@ mod tests {
         let old_entry = SessionRequestJournalEntry {
             request_id: "old-entry".to_string(),
             command: "stream".to_string(),
+            global: None,
             args: vec!["x".repeat(2048)],
             lease: None,
             ok: true,
