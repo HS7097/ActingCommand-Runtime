@@ -111,6 +111,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session stop liveness gate: `session stop` now refuses stale, missing-heartbeat, or pid-mismatched daemon state before writing a stop request, while alive daemon state keeps the existing stop path.
 - ActingLab stale session cleanup: `session cleanup --stale` now provides an explicit local cleanup path for stale daemon state without touching devices, apps, journals, resources, or game logic.
 - ActingLab session diagnostics recommended actions: `session status --diagnostics` now emits machine-readable next actions for stopped or stale daemon state so UI/scheduler consumers do not need to infer recovery commands from free text.
+- ActingLab bounded stream contract envelope: `stream` now reports a `session.stream.v0.1` contract and ordered stream events so future UI/API clients can consume bounded frame streams and input relay status without scraping command-specific fields.
+
+## Current ActingLab Bounded Stream Contract Envelope
+
+The current Runtime task advances the Session Layer interactive-stream surface without adding UI, network transport, scheduler behavior, device logic, resource access, or a long-lived video channel. The bounded local `stream` command now emits a stable contract object and event list for future UI/API consumers.
+
+Scope:
+
+- Add `contract.schema_version = session.stream.v0.1` to `stream` output.
+- Describe bounded frame delivery, capture timing parameters, input relay support, and safety boundaries in the stream contract.
+- Emit ordered `stream.started`, `stream.frame_sampled`, optional `stream.input_relay`, and `stream.completed` events beside existing frame summaries.
+- Keep dry-run stream behavior device-free.
+- Keep daemon-routed input relay lease enforcement unchanged.
+
+Safety direction:
+
+- The contract states that the Session Layer is the only control throat and future UI clients must not directly touch ADB or devices.
+- Trusted remote transport remains reserved; this task does not expose a network API.
+- Input relay support remains bounded and uses existing lease-gated daemon routing when routed through the resident daemon.
+
+Validation status:
+
+- Focused stream tests passed after adding contract and event assertions.
+- Dry-run CLI checks confirmed `stream` returns the new contract and event envelope without touching devices.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `230` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No real trusted UI/API stream transport was added.
+- No long-lived interactive relay protocol was added.
+- No device backend, capture backend, recognition, scheduler, resource repository, SQLite, UI, OCR/OpenCV, or game logic was changed.
 
 ## Current ActingLab Session Diagnostics Recommended Actions
 

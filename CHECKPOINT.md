@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab bounded stream contract envelope
+
+### Current status
+
+- Added a stable `session.stream.v0.1` contract object to `stream` output.
+- The contract describes bounded frame delivery, capture timing, input relay support, max input events, daemon-routed lease requirements, and the Session Layer safety boundary for future UI/API consumers.
+- Added ordered stream events: `stream.started`, `stream.frame_sampled`, optional `stream.input_relay`, and `stream.completed`.
+- Existing `frames`, `input_relay`, and dry-run fields remain available.
+- Dry-run stream checks do not touch devices or resource repositories.
+- No real trusted UI/API transport, long-lived interactive relay protocol, daemon behavior change, scheduler, UI, SQLite, OCR/OpenCV, resource access, game logic, capture backend change, or input backend change was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `70cb97facd6efe9a49580280c5b47602b018c17e`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` stream, input relay, daemon request routing, daemon-side stream request handling, and related tests.
+- `cargo test -p actingcommand-actinglab stream_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak stream --dry-run --max-frames 2`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak stream --dry-run --max-frames 1 --input-event tap,10,20 --input-event key,back`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream_ -- --nocapture` passed with `7` tests.
+- Dry-run `stream --max-frames 2` returned `contract.schema_version = session.stream.v0.1`, disabled input relay, four ordered stream events, and two dry-run frame entries.
+- Dry-run `stream --input-event tap,10,20 --input-event key,back` returned `contract.input_relay.requested = true`, `input_relay.status = planned`, and a `stream.input_relay` event.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `230` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: real trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stream-contract-envelope`.
+2. Continue Session Layer follow-ups: real trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session diagnostics recommended actions
 
 ### Current status

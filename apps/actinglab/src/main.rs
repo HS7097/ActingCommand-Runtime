@@ -3732,6 +3732,15 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             fresh_delay,
         )?
     };
+    let contract = stream_contract_json(
+        max_frames,
+        interval,
+        fresh_delay,
+        flags.bool("--require-fresh"),
+        relay_actions.len(),
+        dry_run,
+    );
+    let events = stream_events_json(&frames, &input_relay);
     Ok(json!({
         "mode": "bounded_stream",
         "instance": instance_id,
@@ -3746,9 +3755,81 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "status": "reserved",
             "reason": "local CLI bounded stream scaffold only"
         },
+        "contract": contract,
         "input_relay": input_relay,
+        "events": events,
         "frames": frames
     }))
+}
+
+fn stream_contract_json(
+    max_frames: usize,
+    interval: Duration,
+    fresh_delay: Duration,
+    require_fresh: bool,
+    input_event_count: usize,
+    dry_run: bool,
+) -> Value {
+    json!({
+        "schema_version": "session.stream.v0.1",
+        "stream_kind": "bounded_cli_frame_sequence",
+        "frame_delivery": "json_array",
+        "input_relay": {
+            "supported": true,
+            "requested": input_event_count > 0,
+            "event_count": input_event_count,
+            "max_events_per_request": 16,
+            "supported_actions": ["tap", "swipe", "long-tap", "key", "text"],
+            "requires_matching_lease_when_daemon_routed": true
+        },
+        "capture": {
+            "require_fresh": require_fresh,
+            "dry_run": dry_run,
+            "interval_ms": interval.as_millis(),
+            "fresh_delay_ms": fresh_delay.as_millis(),
+            "requested_max_frames": max_frames,
+            "max_frames_per_request": 60
+        },
+        "safety": {
+            "session_layer_only_throat": true,
+            "ui_must_not_directly_touch_adb_or_device": true,
+            "trusted_remote_channel": "reserved"
+        }
+    })
+}
+
+fn stream_events_json(frames: &[Value], input_relay: &Value) -> Vec<Value> {
+    let input_status = input_relay
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let mut events = Vec::with_capacity(frames.len() + 3);
+    events.push(json!({
+        "type": "stream.started",
+        "frame_count_planned": frames.len(),
+        "input_relay_status": input_status
+    }));
+    events.extend(frames.iter().map(|frame| {
+        json!({
+            "type": "stream.frame_sampled",
+            "index": frame.get("index").cloned().unwrap_or(Value::Null),
+            "captured": frame.get("captured").cloned().unwrap_or(Value::Bool(false)),
+            "captured_at_unix_ms": frame.get("captured_at_unix_ms").cloned()
+        })
+    }));
+    if input_status != "disabled" {
+        events.push(json!({
+            "type": "stream.input_relay",
+            "status": input_status,
+            "action_count": input_relay.get("action_count").cloned().unwrap_or(Value::Null)
+        }));
+    }
+    events.push(json!({
+        "type": "stream.completed",
+        "frame_count": frames.len(),
+        "input_relay_status": input_status
+    }));
+    events
 }
 
 fn stream_dry_run_frames(max_frames: usize) -> Vec<Value> {
@@ -11910,6 +11991,35 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/contract/schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/contract/safety/session_layer_only_throat")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/contract/input_relay/requested")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let events = data.get("events").and_then(Value::as_array).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(
+            events[0].get("type").and_then(Value::as_str),
+            Some("stream.started")
+        );
+        assert_eq!(
+            events[1].get("type").and_then(Value::as_str),
+            Some("stream.frame_sampled")
+        );
+        assert_eq!(
+            events[3].get("type").and_then(Value::as_str),
+            Some("stream.completed")
+        );
+        assert_eq!(
             data.get("frames").and_then(Value::as_array).unwrap().len(),
             2
         );
@@ -11959,6 +12069,19 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(10)
         );
+        assert_eq!(
+            data.pointer("/contract/input_relay/requested")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let event_types = data
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|event| event.get("type").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+        assert!(event_types.contains(&"stream.input_relay"));
     }
 
     #[test]
