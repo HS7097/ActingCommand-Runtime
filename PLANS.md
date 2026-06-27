@@ -138,6 +138,33 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session response wait view: `session response wait <request-id>` and `session request response wait <request-id>` provide a bounded wait/read/consume surface for a specific daemon response without custom polling in UI/scheduler clients.
 - ActingLab session events wait view: `session events wait` and `session request events wait` provide bounded long-polling over the request-journal event cursor for UI/scheduler clients without custom event polling loops.
 - ActingLab session request cancel view: `session request cancel <request-id>` removes queued daemon requests that have not produced a response, records a durable `request_cancelled` journal failure, and exposes the result through request-state and event views.
+- ActingLab session running request state view: resident daemon request processing now writes a `running/` marker while executing a request, and request-state/status diagnostics expose `running` lifecycle state between queued and response-available.
+
+## Current ActingLab Session Running Request State View
+
+This increment closes a Session Layer observability gap for future UI and scheduler clients: a daemon request that has been picked up for execution is now distinguishable from merely queued work.
+
+- Resident daemon request processing writes `running/<request-id>.json` before executing the request and removes it after response and journal materialization.
+- `session request-state get <request-id>` reports `running` when a running marker is present and no response is available yet.
+- `session request-state list [--status running]` includes running requests and counts them separately from queued, response-available, completed, and failed requests.
+- `session status --diagnostics` exposes running request count, running request preview, and running request queue health.
+- `session request cancel <request-id>` now refuses running requests instead of deleting their pending request file.
+- Corrupt running markers fail visibly like corrupt pending requests or pending responses.
+- `session api` advertises `running` as an official request-state lifecycle status.
+- This phase does not start trusted remote network transport, implement unbounded long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session request-state tests.
+- Focused Session request cancel tests.
+- Focused Session diagnostics tests.
+- Focused daemon journal cleanup test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Request Cancel View
 

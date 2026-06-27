@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session running request state view
+
+### Current status
+
+- Resident daemon request processing now writes `running/<request-id>.json` before executing a queued request and removes it after response and request-journal materialization.
+- `session request-state get <request-id>` reports `running` for picked-up requests that have not produced a response yet.
+- `session request-state list [--status running]` includes running requests and reports separate running counts.
+- `session status --diagnostics` now reports running request count, running request preview, and running request queue health.
+- `session request cancel <request-id>` now rejects running requests with `request_not_cancellable` instead of removing their pending request file.
+- Corrupt running request markers fail visibly like corrupt pending request and pending response files.
+- `session api` advertises `running` as an official request-state lifecycle status.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8545b2f9b370c1650e0b4acd0b89e3f0da4ef643`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Confirmed Runtime repository state: `git status --short --branch`; `git log -1 --oneline`; `git tag --points-at HEAD`.
+- Inspected Session Layer request processing, request-state, status diagnostics, queue health, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session request-state tests passed.
+- Focused Session request cancel tests passed.
+- Focused Session status diagnostics tests passed.
+- Focused request-journal processing cleanup test passed.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-running-request-state-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session request cancel view
 
 ### Current status

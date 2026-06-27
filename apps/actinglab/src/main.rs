@@ -41,6 +41,7 @@ const SESSION_INFO_FILE: &str = "session.json";
 const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
 const SESSION_REQUESTS_DIR: &str = "requests";
+const SESSION_RUNNING_DIR: &str = "running";
 const SESSION_RESPONSES_DIR: &str = "responses";
 const SESSION_REQUEST_JOURNAL_FILE: &str = "request-journal.jsonl";
 const SESSION_REQUEST_JOURNAL_ARCHIVE_FILE: &str = "request-journal.1.jsonl";
@@ -423,6 +424,18 @@ struct SessionCommandResponse {
     error: Option<EnvelopeError>,
     started_at_unix_ms: u64,
     completed_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRunningRequest {
+    request_id: String,
+    command: String,
+    global: SessionCommandGlobal,
+    args: Vec<String>,
+    #[serde(default)]
+    lease: Option<SessionCommandLease>,
+    created_at_unix_ms: u64,
+    started_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1533,8 +1546,8 @@ fn session_api_contract() -> Value {
                 "list_query": "session request-state list [--limit N] [--status <state>]",
                 "daemon_list_query": "session request request-state list [--limit N] [--status <state>]",
                 "list_schema_version": "session.request_state_list.v0.1",
-                "statuses": ["queued", "response_available", "completed", "failed", "unknown"],
-                "state_sources": ["requests", "responses", "request-journal"]
+                "statuses": ["queued", "running", "response_available", "completed", "failed", "unknown"],
+                "state_sources": ["requests", "running", "responses", "request-journal"]
             },
             "event_view": {
                 "query": "session events",
@@ -5622,10 +5635,10 @@ fn parse_session_request_state_list_status_filter(flags: &FlagArgs) -> CliOutcom
     for status in &statuses {
         if !matches!(
             status.as_str(),
-            "queued" | "response_available" | "completed" | "failed"
+            "queued" | "running" | "response_available" | "completed" | "failed"
         ) {
             return Err(CliError::usage(format!(
-                "unsupported session request-state list --status value: {status}; expected queued, response_available, completed, or failed"
+                "unsupported session request-state list --status value: {status}; expected queued, running, response_available, completed, or failed"
             )));
         }
     }
@@ -5638,9 +5651,11 @@ fn session_request_state_list_payload(
     status_filter: &[String],
 ) -> CliOutcome<Value> {
     let requests_dir = session_requests_dir(state_dir);
+    let running_dir = session_running_dir(state_dir);
     let responses_dir = session_responses_dir(state_dir);
     let mut items_by_id: BTreeMap<String, SessionRequestStateListItem> = BTreeMap::new();
     let mut disappeared_requests = 0usize;
+    let mut disappeared_running = 0usize;
     let mut disappeared_responses = 0usize;
 
     for path in sorted_json_paths(&requests_dir)? {
@@ -5656,7 +5671,7 @@ fn session_request_state_list_payload(
                 request_id: request_id.clone(),
                 status: "queued",
                 timestamp_unix_ms: request.created_at_unix_ms,
-                priority: 0,
+                priority: 2,
                 value: json!({
                     "request_id": request_id,
                     "status": "queued",
@@ -5669,6 +5684,42 @@ fn session_request_state_list_payload(
                     "created_at_unix_ms": request.created_at_unix_ms,
                     "paths": {
                         "request": path.display().to_string(),
+                        "response": response_path.display().to_string()
+                    }
+                }),
+            },
+        );
+    }
+
+    for path in sorted_json_paths(&running_dir)? {
+        let Some(request) = read_running_session_request(&path)? else {
+            disappeared_running += 1;
+            continue;
+        };
+        let request_id = request.request_id.clone();
+        let request_path = requests_dir.join(format!("{request_id}.json"));
+        let response_path = responses_dir.join(format!("{request_id}.json"));
+        insert_request_state_list_item(
+            &mut items_by_id,
+            SessionRequestStateListItem {
+                request_id: request_id.clone(),
+                status: "running",
+                timestamp_unix_ms: request.started_at_unix_ms,
+                priority: 1,
+                value: json!({
+                    "request_id": request_id,
+                    "status": "running",
+                    "known": true,
+                    "source": "running_request",
+                    "command": request.command,
+                    "global": request.global,
+                    "lease": request.lease,
+                    "args_count": request.args.len(),
+                    "created_at_unix_ms": request.created_at_unix_ms,
+                    "started_at_unix_ms": request.started_at_unix_ms,
+                    "paths": {
+                        "request": request_path.display().to_string(),
+                        "running": path.display().to_string(),
                         "response": response_path.display().to_string()
                     }
                 }),
@@ -5690,7 +5741,7 @@ fn session_request_state_list_payload(
                 request_id: request_id.clone(),
                 status: "response_available",
                 timestamp_unix_ms: response.completed_at_unix_ms,
-                priority: 1,
+                priority: 0,
                 value: json!({
                     "request_id": request_id,
                     "status": "response_available",
@@ -5723,7 +5774,7 @@ fn session_request_state_list_payload(
                 request_id: request_id.clone(),
                 status,
                 timestamp_unix_ms: entry.completed_at_unix_ms,
-                priority: 2,
+                priority: 3,
                 value: json!({
                     "request_id": request_id,
                     "status": status,
@@ -5787,10 +5838,12 @@ fn session_request_state_list_payload(
         "counts": status_counts,
         "sources": {
             "requests_dir": requests_dir.display().to_string(),
+            "running_dir": running_dir.display().to_string(),
             "responses_dir": responses_dir.display().to_string(),
             "journal": session_request_journal_path(state_dir).display().to_string(),
             "journal_entries_scanned": journal_entries_scanned,
             "disappeared_requests_during_read": disappeared_requests,
+            "disappeared_running_during_read": disappeared_running,
             "disappeared_responses_during_read": disappeared_responses
         },
         "items": items
@@ -5821,12 +5874,14 @@ fn insert_request_state_list_item(
 
 fn request_state_status_counts(items: &[SessionRequestStateListItem]) -> Value {
     let mut queued = 0usize;
+    let mut running = 0usize;
     let mut response_available = 0usize;
     let mut completed = 0usize;
     let mut failed = 0usize;
     for item in items {
         match item.status {
             "queued" => queued += 1,
+            "running" => running += 1,
             "response_available" => response_available += 1,
             "completed" => completed += 1,
             "failed" => failed += 1,
@@ -5836,6 +5891,7 @@ fn request_state_status_counts(items: &[SessionRequestStateListItem]) -> Value {
     json!({
         "total": items.len(),
         "queued": queued,
+        "running": running,
         "response_available": response_available,
         "completed": completed,
         "failed": failed
@@ -5844,17 +5900,21 @@ fn request_state_status_counts(items: &[SessionRequestStateListItem]) -> Value {
 
 fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutcome<Value> {
     let request_path = session_requests_dir(state_dir).join(format!("{request_id}.json"));
+    let running_path = session_running_request_path(state_dir, request_id);
     let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
     let pending_request = read_pending_session_request(&request_path)?;
+    let running_request = read_running_session_request(&running_path)?;
     let pending_response = read_pending_session_response(&response_path)?;
     let journal_entry = read_session_request_journal(state_dir, 1_000)?
         .into_iter()
         .rev()
         .find(|entry| entry.request_id == request_id);
-    let status = if pending_request.is_some() {
-        "queued"
-    } else if pending_response.is_some() {
+    let status = if pending_response.is_some() {
         "response_available"
+    } else if running_request.is_some() {
+        "running"
+    } else if pending_request.is_some() {
+        "queued"
     } else if let Some(entry) = journal_entry.as_ref() {
         session_request_event_status(entry)
     } else {
@@ -5874,10 +5934,12 @@ fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutco
         "known": known,
         "paths": {
             "request": request_path.display().to_string(),
+            "running": running_path.display().to_string(),
             "response": response_path.display().to_string(),
             "journal": session_request_journal_path(state_dir).display().to_string()
         },
         "pending_request": pending_request,
+        "running_request": running_request,
         "pending_response": pending_response,
         "response_data_summary": response_summary,
         "journal_entry": journal_entry,
@@ -6508,11 +6570,13 @@ fn session_status_diagnostics(
             "info": session_info_path(state_dir).display().to_string(),
             "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
             "requests": session_requests_dir(state_dir).display().to_string(),
+            "running": session_running_dir(state_dir).display().to_string(),
             "responses": session_responses_dir(state_dir).display().to_string(),
             "journal": session_request_journal_path(state_dir).display().to_string()
         },
         "queues": {
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
+            "running_requests": count_files_with_extension(&session_running_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?,
             "health": session_queue_health(
                 state_dir,
@@ -6520,6 +6584,10 @@ fn session_status_diagnostics(
                 SESSION_DAEMON_REQUEST_TIMEOUT_MS
             )?,
             "pending_request_preview": session_pending_request_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?,
+            "running_request_preview": session_running_request_preview(
                 state_dir,
                 SESSION_PENDING_REQUEST_PREVIEW_LIMIT
             )?,
@@ -6991,6 +7059,15 @@ fn session_request_cancel_payload(
             ErrorKind::RuntimeNotRunning,
             "request_not_cancellable",
             format!("session request {request_id} already has an available response"),
+            &["request_queue"],
+        ));
+    }
+    let running_path = session_running_request_path(state_dir, request_id);
+    if read_running_session_request(&running_path)?.is_some() {
+        return Err(CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "request_not_cancellable",
+            format!("session request {request_id} is already running"),
             &["request_queue"],
         ));
     }
@@ -7594,6 +7671,7 @@ fn session_stale_cleanup_candidates(state_dir: &Path) -> CliOutcome<Vec<PathBuf>
     ];
     for dir in [
         session_requests_dir(state_dir),
+        session_running_dir(state_dir),
         session_responses_dir(state_dir),
     ] {
         if !dir.exists() {
@@ -7647,6 +7725,7 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
                 path.display()
             ))
         })?;
+        write_session_running_request(state_dir, &request, current_unix_ms())?;
         let response = execute_session_command_request(request.clone(), state_dir);
         let response_path =
             session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
@@ -7658,6 +7737,7 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
             ))
         })?;
         append_session_request_journal(state_dir, &request, &response)?;
+        remove_session_running_request(state_dir, &request.request_id)?;
         processed += 1;
     }
     Ok(processed)
@@ -12059,6 +12139,97 @@ fn read_pending_session_request(path: &Path) -> CliOutcome<Option<SessionCommand
     Ok(Some(request))
 }
 
+fn session_running_request_preview(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+    let running_dir = session_running_dir(state_dir);
+    let mut paths = file_paths_with_extension(&running_dir, "json")?;
+    paths.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+
+    let total = paths.len();
+    let mut disappeared_during_read = 0usize;
+    let mut requests = Vec::new();
+    for path in paths.iter().take(limit) {
+        let Some(request) = read_running_session_request(path)? else {
+            disappeared_during_read += 1;
+            continue;
+        };
+        requests.push(json!({
+            "request_id": request.request_id,
+            "command": request.command,
+            "global": request.global,
+            "lease": request.lease,
+            "created_at_unix_ms": request.created_at_unix_ms,
+            "started_at_unix_ms": request.started_at_unix_ms,
+            "args_count": request.args.len()
+        }));
+    }
+    let preview_count = requests.len();
+
+    Ok(json!({
+        "schema_version": "session.running_requests.v0.1",
+        "dir": running_dir.display().to_string(),
+        "count": total,
+        "preview_limit": limit,
+        "preview_count": preview_count,
+        "disappeared_during_read": disappeared_during_read,
+        "requests": requests
+    }))
+}
+
+fn read_running_session_request(path: &Path) -> CliOutcome<Option<SessionRunningRequest>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(CliError::runtime_not_running(format!(
+                "failed to read running session request {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    let request = serde_json::from_str(&text).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to parse running session request {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(request))
+}
+
+fn write_session_running_request(
+    state_dir: &Path,
+    request: &SessionCommandRequest,
+    started_at_unix_ms: u64,
+) -> CliOutcome<SessionRunningRequest> {
+    let running = SessionRunningRequest {
+        request_id: request.request_id.clone(),
+        command: request.command.clone(),
+        global: request.global.clone(),
+        args: request.args.clone(),
+        lease: request.lease.clone(),
+        created_at_unix_ms: request.created_at_unix_ms,
+        started_at_unix_ms,
+    };
+    write_json_file_atomic(
+        &session_running_request_path(state_dir, &request.request_id),
+        &running,
+    )?;
+    Ok(running)
+}
+
+fn remove_session_running_request(state_dir: &Path, request_id: &str) -> CliOutcome<()> {
+    let path = session_running_request_path(state_dir, request_id);
+    fs::remove_file(&path).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to remove running session request {}: {err}",
+            path.display()
+        ))
+    })
+}
+
 fn session_pending_response_preview(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
     let responses_dir = session_responses_dir(state_dir);
     let mut paths = file_paths_with_extension(&responses_dir, "json")?;
@@ -12122,12 +12293,20 @@ fn read_pending_session_response(path: &Path) -> CliOutcome<Option<SessionComman
 
 fn session_queue_health(state_dir: &Path, now_ms: u64, stale_after_ms: u64) -> CliOutcome<Value> {
     let requests = session_pending_request_queue_health(state_dir, now_ms, stale_after_ms)?;
+    let running = session_running_request_queue_health(state_dir, now_ms, stale_after_ms)?;
     let responses = session_pending_response_queue_health(state_dir, now_ms, stale_after_ms)?;
     let request_status = requests.get("status").and_then(Value::as_str);
+    let running_status = running.get("status").and_then(Value::as_str);
     let response_status = responses.get("status").and_then(Value::as_str);
-    let status = if request_status == Some("blocked") || response_status == Some("unclaimed") {
+    let status = if request_status == Some("blocked")
+        || running_status == Some("blocked")
+        || response_status == Some("unclaimed")
+    {
         "needs_attention"
-    } else if request_status == Some("pending") || response_status == Some("available") {
+    } else if request_status == Some("pending")
+        || running_status == Some("running")
+        || response_status == Some("available")
+    {
         "active"
     } else {
         "clear"
@@ -12138,6 +12317,7 @@ fn session_queue_health(state_dir: &Path, now_ms: u64, stale_after_ms: u64) -> C
         "status": status,
         "stale_after_ms": stale_after_ms,
         "pending_requests": requests,
+        "running_requests": running,
         "pending_responses": responses
     }))
 }
@@ -12183,6 +12363,51 @@ fn session_pending_request_queue_health(
         "oldest_request_id": request_id,
         "oldest_command": command,
         "oldest_created_at_unix_ms": created_at_unix_ms,
+        "oldest_age_ms": oldest_age_ms
+    }))
+}
+
+fn session_running_request_queue_health(
+    state_dir: &Path,
+    now_ms: u64,
+    stale_after_ms: u64,
+) -> CliOutcome<Value> {
+    let mut oldest: Option<(String, String, u64)> = None;
+    for path in file_paths_with_extension(&session_running_dir(state_dir), "json")? {
+        let Some(request) = read_running_session_request(&path)? else {
+            continue;
+        };
+        if oldest
+            .as_ref()
+            .is_none_or(|(_, _, timestamp)| request.started_at_unix_ms < *timestamp)
+        {
+            oldest = Some((
+                request.request_id,
+                request.command,
+                request.started_at_unix_ms,
+            ));
+        }
+    }
+    let Some((request_id, command, started_at_unix_ms)) = oldest else {
+        return Ok(json!({
+            "status": "clear",
+            "oldest_request_id": Value::Null,
+            "oldest_command": Value::Null,
+            "oldest_started_at_unix_ms": Value::Null,
+            "oldest_age_ms": Value::Null
+        }));
+    };
+    let oldest_age_ms = now_ms.saturating_sub(started_at_unix_ms);
+    let status = if oldest_age_ms > stale_after_ms {
+        "blocked"
+    } else {
+        "running"
+    };
+    Ok(json!({
+        "status": status,
+        "oldest_request_id": request_id,
+        "oldest_command": command,
+        "oldest_started_at_unix_ms": started_at_unix_ms,
         "oldest_age_ms": oldest_age_ms
     }))
 }
@@ -12263,6 +12488,14 @@ fn session_stop_path(state_dir: &Path) -> PathBuf {
 
 fn session_requests_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SESSION_REQUESTS_DIR)
+}
+
+fn session_running_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_RUNNING_DIR)
+}
+
+fn session_running_request_path(state_dir: &Path, request_id: &str) -> PathBuf {
+    session_running_dir(state_dir).join(format!("{request_id}.json"))
 }
 
 fn session_responses_dir(state_dir: &Path) -> PathBuf {
@@ -24387,6 +24620,48 @@ mod tests {
     }
 
     #[test]
+    fn session_request_cancel_rejects_running_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "already-running".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("already-running.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+        write_session_running_request(temp.path(), &request, 11).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "already-running",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert!(request_path.exists());
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "request_not_cancellable");
+        assert!(error.message.contains("already running"));
+    }
+
+    #[test]
     fn session_request_cancel_rejects_unsafe_request_id() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -24406,6 +24681,63 @@ mod tests {
         let error = result.envelope.error.as_ref().unwrap();
         assert_eq!(error.code, "validation_failed");
         assert!(error.message.contains("request-id"));
+    }
+
+    #[test]
+    fn session_request_state_reports_running_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "running-1".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec!["--max-frames".to_string(), "1".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "ui".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("running-1.json"),
+            &request,
+        )
+        .unwrap();
+        write_session_running_request(temp.path(), &request, 20).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "running-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("running"));
+        assert_eq!(data.get("known").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/running_request/command")
+                .and_then(Value::as_str),
+            Some("stream")
+        );
+        assert_eq!(
+            data.pointer("/running_request/lease/holder")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
     }
 
     #[test]
@@ -24683,6 +25015,30 @@ mod tests {
             &queued,
         )
         .unwrap();
+        let running = SessionCommandRequest {
+            request_id: "running-list".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec!["--max-frames".to_string(), "1".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "ui".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 15,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("running-list.json"),
+            &running,
+        )
+        .unwrap();
+        write_session_running_request(temp.path(), &running, 25).unwrap();
         let response = SessionCommandResponse {
             request_id: "response-list".to_string(),
             command: "stream".to_string(),
@@ -24747,6 +25103,10 @@ mod tests {
             Some(1)
         );
         assert_eq!(
+            data.pointer("/counts/running").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
             data.pointer("/counts/response_available")
                 .and_then(Value::as_u64),
             Some(1)
@@ -24756,10 +25116,15 @@ mod tests {
             Some(1)
         );
         let items = data.get("items").and_then(Value::as_array).unwrap();
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert!(items.iter().any(|item| {
             item.get("request_id").and_then(Value::as_str) == Some("queued-list")
                 && item.get("status").and_then(Value::as_str) == Some("queued")
+        }));
+        assert!(items.iter().any(|item| {
+            item.get("request_id").and_then(Value::as_str) == Some("running-list")
+                && item.get("status").and_then(Value::as_str) == Some("running")
+                && item.get("source").and_then(Value::as_str) == Some("running_request")
         }));
         assert!(items.iter().any(|item| {
             item.get("request_id").and_then(Value::as_str) == Some("response-list")
@@ -24847,6 +25212,49 @@ mod tests {
         assert_eq!(
             data.pointer("/items/0/status").and_then(Value::as_str),
             Some("failed")
+        );
+
+        let running = SessionCommandRequest {
+            request_id: "running-filter".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 50,
+        };
+        write_session_running_request(temp.path(), &running, 51).unwrap();
+        let running_result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "list",
+                "--status",
+                "running",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(running_result.exit_code(), 0);
+        let running_data = running_result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            running_data.get("total_matching").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            running_data
+                .pointer("/items/0/request_id")
+                .and_then(Value::as_str),
+            Some("running-filter")
         );
     }
 
@@ -24992,6 +25400,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+        assert!(!session_running_request_path(&state_dir, "request-1").exists());
 
         let failed = SessionCommandRequest {
             request_id: "request-2".to_string(),
@@ -25007,6 +25416,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+        assert!(!session_running_request_path(&state_dir, "request-2").exists());
 
         let entries = read_session_request_journal(&state_dir, 10).unwrap();
         assert_eq!(entries.len(), 2);
@@ -25376,6 +25786,25 @@ mod tests {
             &pending,
         )
         .unwrap();
+        let running = SessionCommandRequest {
+            request_id: "running-1".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("nemu_ipc".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--max-frames".to_string(), "1".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "ui".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 5,
+        };
+        write_session_running_request(&state_dir, &running, 6).unwrap();
         let response = SessionCommandResponse {
             request_id: "response-1".to_string(),
             command: "stream".to_string(),
@@ -25422,6 +25851,12 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .pointer("/queues/running_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
                 .pointer("/queues/pending_responses")
                 .and_then(Value::as_u64),
             Some(2)
@@ -25461,6 +25896,18 @@ mod tests {
                 .pointer("/queues/health/pending_requests/oldest_age_ms")
                 .and_then(Value::as_u64)
                 .is_some_and(|value| value > SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/running_requests/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/health/running_requests/oldest_request_id")
+                .and_then(Value::as_str),
+            Some("running-1")
         );
         assert_eq!(
             diagnostics
@@ -25509,6 +25956,24 @@ mod tests {
                 .pointer("/queues/pending_request_preview/requests/0/args_count")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/running_request_preview/schema_version")
+                .and_then(Value::as_str),
+            Some("session.running_requests.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/running_request_preview/count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/running_request_preview/requests/0/request_id")
+                .and_then(Value::as_str),
+            Some("running-1")
         );
         assert_eq!(
             diagnostics
@@ -25812,6 +26277,34 @@ mod tests {
         fs::create_dir_all(session_responses_dir(temp.path())).unwrap();
         fs::write(
             session_responses_dir(temp.path()).join("response-corrupt.json"),
+            "not-json",
+        )
+        .unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_corrupt_running_request_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(session_running_dir(temp.path())).unwrap();
+        fs::write(
+            session_running_dir(temp.path()).join("running-corrupt.json"),
             "not-json",
         )
         .unwrap();
@@ -26299,10 +26792,15 @@ mod tests {
         assert_eq!(
             data.pointer("/envelopes/request_state_view/statuses/1")
                 .and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/statuses/2")
+                .and_then(Value::as_str),
             Some("response_available")
         );
         assert_eq!(
-            data.pointer("/envelopes/request_state_view/state_sources/2")
+            data.pointer("/envelopes/request_state_view/state_sources/3")
                 .and_then(Value::as_str),
             Some("request-journal")
         );
