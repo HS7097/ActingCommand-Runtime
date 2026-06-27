@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session instance capture health diagnostics
+
+### Current status
+
+- Added optional `session instance health --capture-diagnose`.
+- Instance health now reports `status=device_connected` when capture diagnosis is not requested.
+- Capture-diagnosed health reports `healthy`, `capture_stale_suspected`, or `capture_unavailable` from the existing fresh-frame probe result.
+- Capture health output includes requested backend, freshness data, backend attempts, optional frame digest, and recovery recommendations.
+- Session access and API contracts now advertise `session instance health --capture-diagnose` as a read-only diagnostic surface.
+- Explicit daemon-routed instance health still fails visibly with `runtime_not_running` when no resident daemon is alive.
+- No capture backend implementation, device input logic, resource repository, UI, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1cb2d248ae814c47e929b3802209a7a83e8f4764`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` capture freshness, capture diagnosis, session instance health, daemon routing, Session contracts, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab instance_health`
+- `cargo test -p actingcommand-actinglab capture_diagnosis`
+- `cargo run -q -p actingcommand-actinglab -- --json session instance health --capture-diagnose --via-daemon --state-dir target\instance-health-empty --request-timeout-ms 1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab instance_health` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab capture_diagnosis` passed with `2` tests.
+- Manual daemon-route smoke returned `runtime_not_running` with exit code `5` when no daemon was present, confirming it did not bypass into local ADB.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, shell screencap, fallback/reconnect/retry-loop additions, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `258` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-instance-capture-health`.
+2. Continue Session Layer follow-ups only after this capture-health milestone is verified.
+
 ## 2026-06-27 ActingLab strict Session throat policy
 
 ### Current status

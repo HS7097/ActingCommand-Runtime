@@ -122,6 +122,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session transport contract: `session transport` and `session request transport` expose `session.transport.v0.1`, describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream transport boundaries.
 - ActingLab trusted remote endpoint policy: runtime endpoint use now distinguishes local direct endpoints from trusted remote endpoints, blocks unencrypted remote endpoints, requires explicit trusted remote auth material, and reports the policy through `doctor` and Session contracts.
 - ActingLab strict Session throat policy: `--require-session` and `ACTINGLAB_REQUIRE_SESSION_DAEMON` force device/control commands through an alive resident Session daemon or fail visibly with `session_daemon_required`.
+- ActingLab session instance capture health diagnostics: `session instance health --capture-diagnose` reports fresh-frame status, backend attempts, frame digest, and stale-capture recovery recommendations through the Session Layer health surface.
+
+## Current ActingLab Session Instance Capture Health Diagnostics
+
+The current Runtime task extends the Session Layer instance-health surface so scheduler/UI/agent clients can ask the resident layer whether an instance is connected and whether capture freshness looks healthy. This directly addresses the AK stale `adb_screencap` finding without requiring callers to touch ADB or independently probe screenshots.
+
+Scope:
+
+- Add optional `session instance health --capture-diagnose`.
+- Reuse the existing fresh-frame probe and backend order: `nemu_ipc`, `droidcast_raw`, then `adb_screencap` when `--capture-backend auto` is in effect.
+- Report `status=device_connected` when capture diagnosis is not requested.
+- Report `status=healthy`, `capture_stale_suspected`, or `capture_unavailable` when capture diagnosis is requested.
+- Include capture freshness details, backend attempts, optional frame digest, and recovery recommendations in the health response.
+- Advertise `session instance health --capture-diagnose` as a read-only Session API/access example.
+
+Safety direction:
+
+- Capture diagnosis remains opt-in on instance health and performs no clicks or game progress actions.
+- The resident daemon path remains preferred when alive, and explicit daemon requests fail visibly when no daemon is running.
+- No capture backend implementation, device input logic, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was added.
+
+Validation status:
+
+- Focused tests passed for instance-health status mapping and capture-diagnosis JSON.
+- Focused capture-diagnosis tests still pass.
+- Manual CLI check confirmed `session instance health --capture-diagnose --via-daemon` without a daemon returns `runtime_not_running` instead of executing local ADB.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, shell screencap, fallback/reconnect/retry-loop additions, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `258` `actingcommand-actinglab` tests.
 
 ## Current ActingLab Strict Session Throat Policy
 

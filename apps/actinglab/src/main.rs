@@ -1167,6 +1167,7 @@ fn session_access_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
             },
@@ -1376,6 +1377,7 @@ fn session_api_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
             },
@@ -2039,6 +2041,30 @@ fn capture_frame_summary_json(frame: &Frame) -> Value {
         "backend": frame.backend_name.as_str(),
         "digest": frame_digest(frame)
     })
+}
+
+fn capture_fresh_probe_report_json(
+    report: &CaptureFreshProbeReport,
+    requested: CaptureBackendChoice,
+) -> Value {
+    json!({
+        "diagnose_requested": true,
+        "status": report.status.as_str(),
+        "requested_backend": requested.as_str(),
+        "freshness": report.freshness,
+        "capture_backend_attempts": report.attempts,
+        "frame": report.frame.as_ref().map(capture_frame_summary_json),
+        "recovery": capture_diagnosis_recovery_json(report.status, requested)
+    })
+}
+
+fn instance_health_status(capture_status: Option<CaptureFreshProbeStatus>) -> &'static str {
+    match capture_status {
+        Some(CaptureFreshProbeStatus::Fresh) => "healthy",
+        Some(CaptureFreshProbeStatus::StaleSuspected) => "capture_stale_suspected",
+        Some(CaptureFreshProbeStatus::Unavailable) => "capture_unavailable",
+        None => "device_connected",
+    }
 }
 
 fn capture_diagnosis_recovery_json(
@@ -6134,19 +6160,36 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
             let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
             let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
             let serial = device_config.target.resolved_serial();
-            let adb = Adb::new(device_config.adb);
+            let adb = Adb::new(device_config.adb.clone());
             let state = adb
                 .ensure_device(&serial, device_config.target.connect)
                 .map_err(|err| CliError::device(err.to_string()))?;
             let screen_size = adb
                 .screen_size(&serial)
                 .map_err(|err| CliError::device(err.to_string()))?;
+            let requested = global.capture_backend.unwrap_or_default();
+            let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
+            let capture_report = if action == "health" && flags.bool("--capture-diagnose") {
+                Some(capture_fresh_probe_report(
+                    &device_config,
+                    requested,
+                    fresh_delay,
+                )?)
+            } else {
+                None
+            };
+            let capture_status = capture_report.as_ref().map(|report| report.status);
+            let capture = capture_report
+                .as_ref()
+                .map(|report| capture_fresh_probe_report_json(report, requested));
             Ok(json!({
                 "instance": instance_id,
                 "serial": serial,
+                "status": instance_health_status(capture_status),
                 "state": state,
                 "screen_size": screen_size,
-                "action": action
+                "action": action,
+                "capture": capture
             }))
         }
         other => Err(CliError::usage(format!(
@@ -20498,6 +20541,62 @@ mod tests {
                 .pointer("/recommendations/0/command")
                 .and_then(Value::as_str),
             Some("session instance health")
+        );
+    }
+
+    #[test]
+    fn instance_health_status_reflects_capture_freshness() {
+        assert_eq!(instance_health_status(None), "device_connected");
+        assert_eq!(
+            instance_health_status(Some(CaptureFreshProbeStatus::Fresh)),
+            "healthy"
+        );
+        assert_eq!(
+            instance_health_status(Some(CaptureFreshProbeStatus::StaleSuspected)),
+            "capture_stale_suspected"
+        );
+        assert_eq!(
+            instance_health_status(Some(CaptureFreshProbeStatus::Unavailable)),
+            "capture_unavailable"
+        );
+    }
+
+    #[test]
+    fn instance_health_capture_diagnose_json_reports_recovery() {
+        let report = CaptureFreshProbeReport {
+            status: CaptureFreshProbeStatus::StaleSuspected,
+            frame: None,
+            attempts: vec![json!({
+                "backend": "adb_screencap",
+                "ok": false,
+                "stage": "fresh_probe",
+                "stale_suspected": true
+            })],
+            freshness: json!({
+                "required": true,
+                "fresh": false,
+                "status": "stale_suspected"
+            }),
+        };
+
+        let value = capture_fresh_probe_report_json(&report, CaptureBackendChoice::Adb);
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("stale_suspected")
+        );
+        assert_eq!(
+            value.get("requested_backend").and_then(Value::as_str),
+            Some("adb")
+        );
+        assert_eq!(
+            value.pointer("/recovery/reason").and_then(Value::as_str),
+            Some("stale_capture_suspected")
+        );
+        assert_eq!(
+            value
+                .pointer("/capture_backend_attempts/0/backend")
+                .and_then(Value::as_str),
+            Some("adb_screencap")
         );
     }
 
