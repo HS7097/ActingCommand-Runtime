@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-routed capabilities contract
+
+### Current status
+
+- Added `session request capabilities` as a read-only resident daemon request.
+- `capabilities` output now includes `session_layer.schema_version = session.capabilities.v0.1`.
+- The Session Layer capability contract describes:
+  - resident daemon query commands,
+  - local CLI and reserved trusted remote access channels,
+  - read-only versus control request classes,
+  - control-request lease requirements,
+  - the Session Layer-only throat boundary for future UI/API clients.
+- `session request capabilities` is registered in `command_capabilities()`.
+- Existing offline `capabilities` behavior remains available.
+- No trusted network API, TLS/auth transport, UI, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `710f37bd54d33d2ec943faa218b0335f97cdb20d`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` capabilities output, session request routing, daemon request handling, request journal handling, and related tests.
+- `cargo test -p actingcommand-actinglab capabilities -- --nocapture`
+- `cargo fmt --all`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo run -q -p actingcommand-actinglab -- --json session request capabilities --state-dir <empty-temp-state>`
+- Temporary daemon smoke:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session request capabilities --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <temp-state>`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab detect_page -- --nocapture`
+- `cargo test -p actingcommand-actinglab -- --test-threads=1`
+- `cargo fmt --all`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab capabilities -- --nocapture` passed with `4` tests.
+- Top-level `capabilities` returned `session_layer.schema_version = session.capabilities.v0.1` and registered `session request capabilities`.
+- Empty-state `session request capabilities` failed visibly with `runtime_not_running`.
+- Temporary daemon smoke returned `status = started`, then `session request capabilities` completed through daemon request mode, then `session stop` returned `stopped`.
+- Initial full workspace validation exposed two `detect-page` tests that missed the existing shared environment lock and could fail only under concurrent test execution.
+- `cargo test -p actingcommand-actinglab detect_page -- --nocapture` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab -- --test-threads=1` passed with `232` tests.
+- The two affected `detect-page` tests now use the existing `ENV_LOCK`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Final `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-capabilities-contract`.
+2. Continue Session Layer follow-ups: real trusted UI/API channel design, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab bounded stream contract envelope
 
 ### Current status

@@ -112,6 +112,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stale session cleanup: `session cleanup --stale` now provides an explicit local cleanup path for stale daemon state without touching devices, apps, journals, resources, or game logic.
 - ActingLab session diagnostics recommended actions: `session status --diagnostics` now emits machine-readable next actions for stopped or stale daemon state so UI/scheduler consumers do not need to infer recovery commands from free text.
 - ActingLab bounded stream contract envelope: `stream` now reports a `session.stream.v0.1` contract and ordered stream events so future UI/API clients can consume bounded frame streams and input relay status without scraping command-specific fields.
+- ActingLab daemon-routed capabilities contract: `session request capabilities` now lets a running resident daemon report the same command list and a `session.capabilities.v0.1` Session Layer access/safety contract to future UI/API clients.
+
+## Current ActingLab Daemon-Routed Capabilities Contract
+
+The current Runtime task advances the multi-channel Session Layer access model. Future UI/API clients can now query capabilities through the resident daemon request queue instead of relying only on the offline top-level CLI.
+
+Scope:
+
+- Add `session request capabilities` as a read-only resident daemon request.
+- Add `session.capabilities.v0.1` to `capabilities` output.
+- Describe local CLI versus future trusted remote access channels.
+- Describe read-only versus control request classes and lease requirements.
+- Register `session request capabilities` in the command capability table.
+
+Safety direction:
+
+- The new request is read-only and does not require a LabLease.
+- The trusted remote channel remains reserved and explicitly requires authentication and encryption before use.
+- The contract reiterates that UI clients must not directly touch ADB or devices; Session Layer remains the only control throat.
+
+Validation status:
+
+- Focused capabilities tests passed after adding daemon handler, CLI error-path, and offline contract coverage.
+- Manual CLI checks confirmed top-level `capabilities` includes `session.capabilities.v0.1`.
+- Manual CLI check confirmed `session request capabilities` fails visibly with `runtime_not_running` when no daemon exists.
+- Manual resident-daemon smoke check started a temporary daemon, queried `session request capabilities`, and stopped the daemon successfully.
+- Full workspace validation initially exposed two `detect-page` tests missing the shared environment lock; those tests now use the existing `ENV_LOCK` and pass under the default concurrent test runner.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `232` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API or TLS/auth transport was added.
+- No UI code was added.
+- No scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was changed.
 
 ## Current ActingLab Bounded Stream Contract Envelope
 

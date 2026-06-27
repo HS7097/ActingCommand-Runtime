@@ -1030,6 +1030,7 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
     };
     Ok(json!({
         "commands": command_capabilities(),
+        "session_layer": session_layer_capability_contract(),
         "exit_codes": exit_code_table(),
         "recognition_match_policy": [
             {"family": "BAAH", "game": "ba", "match_metric": "ccoeff_normed"},
@@ -1044,6 +1045,48 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
         ],
         "discovered_recognition_packs": discovered
     }))
+}
+
+fn session_layer_capability_contract() -> Value {
+    json!({
+        "schema_version": "session.capabilities.v0.1",
+        "resident_daemon": {
+            "request_command": "session request capabilities",
+            "status_command": "session status --diagnostics",
+            "journal_command": "session journal"
+        },
+        "access_channels": [
+            {
+                "id": "local_cli",
+                "status": "available",
+                "encryption_required": false,
+                "reason": "local operator command surface"
+            },
+            {
+                "id": "trusted_remote",
+                "status": "reserved",
+                "encryption_required": true,
+                "authentication_required": true,
+                "reason": "future UI/API channel must be authenticated and encrypted"
+            }
+        ],
+        "request_classes": {
+            "read_only": {
+                "requires_lease": false,
+                "examples": ["status", "journal", "capabilities", "devices", "capture", "stream"]
+            },
+            "control": {
+                "requires_lease": true,
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "tap-target", "navigate", "recover"]
+            }
+        },
+        "safety": {
+            "session_layer_only_throat": true,
+            "ui_must_not_directly_touch_adb_or_device": true,
+            "control_requests_require_matching_lease": true,
+            "severe_errors_fail_loud": true
+        }
+    })
 }
 
 fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -4594,13 +4637,16 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
+        "capabilities" => {
+            submit_readonly_session_request(global, &flags, "capabilities", &args[1..])
+        }
         "devices" => submit_readonly_session_request(global, &flags, "devices", &args[1..]),
         "lease" => submit_session_lease_request(global, &flags, &args[1..]),
         "record" => submit_session_record_request(global, &flags, &args[1..]),
@@ -5215,6 +5261,12 @@ fn execute_session_command_request_inner(
             flags.expect_positionals("session request journal", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             session_journal_payload(state_dir, limit)
+        }
+        "capabilities" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request capabilities", 0)?;
+            let global = request.global.to_global()?;
+            run_capabilities(&global)
         }
         "devices" => {
             let global = request.global.to_global()?;
@@ -9976,6 +10028,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session journal", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
+        command_cap(
+            "session request capabilities",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request devices", ["running_runtime"], "available"),
         command_cap("session request lease", ["running_runtime"], "available"),
         command_cap("session request record", ["running_runtime"], "available"),
@@ -16868,6 +16925,64 @@ mod tests {
     }
 
     #[test]
+    fn session_capabilities_request_returns_daemon_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let query = SessionCommandRequest {
+            request_id: "capabilities-query".to_string(),
+            command: "capabilities".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(
+            payload
+                .pointer("/session_layer/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capabilities.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/session_layer/resident_daemon/request_command")
+                .and_then(Value::as_str),
+            Some("session request capabilities")
+        );
+        assert_eq!(
+            payload
+                .pointer("/session_layer/safety/session_layer_only_throat")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            payload
+                .get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request capabilities"))
+        );
+    }
+
+    #[test]
     fn session_lease_request_acquires_and_releases_in_daemon_state_dir() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -17803,6 +17918,28 @@ mod tests {
     }
 
     #[test]
+    fn session_request_capabilities_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "capabilities",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_payload_strips_client_only_flags() {
         let args = [
             "--target".to_string(),
@@ -18296,6 +18433,25 @@ mod tests {
                 .get("commands")
                 .is_some()
         );
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/session_layer/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capabilities.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/session_layer/access_channels/1/id")
+                .and_then(Value::as_str),
+            Some("trusted_remote")
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request capabilities"))
+        );
     }
 
     #[test]
@@ -18784,6 +18940,7 @@ mod tests {
 
     #[test]
     fn detect_page_returns_standby_when_no_page_matches() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let pack = temp.path().join("pack.json");
         let pages = temp.path().join("pages.json");
@@ -18833,6 +18990,7 @@ mod tests {
 
     #[test]
     fn detect_page_resolves_pack_from_resource_root_and_game_alias() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let recognition = temp.path().join("recognition");
         fs::create_dir(&recognition).unwrap();
