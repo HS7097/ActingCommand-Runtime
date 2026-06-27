@@ -55,6 +55,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon monitor-once routing: `monitor --once --via-daemon` and `session request monitor-once` now run read-only health diagnosis through the resident daemon while `--recover` remains blocked until lease arbitration exists.
 - ActingLab session lease arbitration interface hardening: `session lease acquire|release|preempt|status` now uses structured lease records with holder checks, optional lease ids, force release, and preempt provenance.
 - ActingLab daemon lease-gated control request routing: `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover` can now be submitted to the resident daemon only with matching session lease metadata.
+- ActingLab daemon monitor recovery routing: bounded `monitor --via-daemon --recover` and `session request monitor --recover` can now run through the resident daemon only after a matching session lease is validated.
+
+## Current ActingLab Daemon Monitor Recovery Routing
+
+The current Runtime task advances Phase C by allowing bounded monitor recovery to run through the resident session daemon when the request has a valid session lease.
+
+Scope:
+
+- Add `monitor` as a daemon request command.
+- Allow `monitor --via-daemon` without requiring `--once`.
+- Keep `monitor --via-daemon` without `--recover` read-only and lease-free.
+- Allow `monitor --via-daemon --recover` only when the daemon request includes matching lease metadata.
+- Add `session request monitor` as the explicit request form.
+- Keep `session request monitor-once` and `monitor-once` daemon requests read-only; `--recover` on `monitor-once` is still rejected with a visible safety error.
+- Reuse the existing bounded monitor loop and existing `session recover` maintenance path instead of adding a second recovery implementation.
+- Preserve the existing `--max-iterations`, `--interval-ms`, `--capture`, `--scene`, `--require-fresh`, `--fresh-delay-ms`, `--max-actions`, `--step-timeout-ms`, `--poll-ms`, and startup-login arguments through the daemon request payload.
+
+Safety direction:
+
+- Recovery through the daemon requires a matching lease holder and optional lease id before any diagnosis or maintenance action runs.
+- Wrong holder and wrong lease id fail before capture, MaaTouch, or recovery logic is opened.
+- `monitor-once` remains a read-only diagnosis command; bounded `monitor` is the recovery-capable command.
+- The implementation does not add ADB input fallback, reconnect loops, retries, OCR, SQLite, UI, scheduler body, recording, capture backend changes, recognition algorithm changes, or game logic.
+
+Validation status:
+
+- Runtime was fetched and confirmed aligned with `origin/main` before the task.
+- `cargo test -p actingcommand-actinglab session_monitor` passed.
+- `cargo test -p actingcommand-actinglab monitor_via_daemon` passed.
+- The first full `cargo test -p actingcommand-actinglab` run hit a transient existing parallel-test configuration race; the rerun passed with `108` tests.
+- Local daemon smoke with an `ak` scheduler lease and mismatched recovery holder returned a lease-holder safety block before capture or input.
+- Local daemon smoke with a matching `ak` scheduler lease reached normal validation after lease acceptance, proving the request was no longer rejected by the old daemon recovery gate.
+
+Known follow-ups:
+
+- Full live recovery on an emulator with real resources still needs a safe simulator state.
+- Scheduler ownership and automatic daemon-resident background monitoring remain outside this milestone.
+- Package run, operation run, API/event streaming, UI integration, recording, and mandatory daemon-only policy for non-manual callers are still open.
 
 ## Current ActingLab Session Daemon Lease-Gated Control Requests
 

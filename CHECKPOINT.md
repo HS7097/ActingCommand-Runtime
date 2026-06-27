@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon monitor recovery routing
+
+### Current status
+
+- Added `monitor` as a resident daemon request command.
+- `monitor --via-daemon` no longer requires `--once`.
+- `monitor --via-daemon` without `--recover` remains read-only and does not require a lease.
+- `monitor --via-daemon --recover` now submits a bounded monitor request to the daemon and requires matching lease metadata before recovery can run.
+- Added explicit `session request monitor`.
+- `monitor-once` daemon requests remain read-only; `--recover` on `monitor-once` is still rejected with a visible safety error.
+- The daemon `monitor` request reuses the existing bounded `run_monitor_loop` and existing `session recover` maintenance path.
+- Recovery-related flags remain part of the inner monitor payload after client-only flags are stripped.
+- Wrong holder and wrong lease id fail before capture, MaaTouch, or recovery logic runs.
+- No ADB input fallback, reconnect loop, retry loop, OCR, SQLite, UI, scheduler body, recording, capture backend change, recognition algorithm change, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a4257b73205060329f670274fbd88cfe6c4ce991`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_monitor`
+- `cargo test -p actingcommand-actinglab monitor_via_daemon`
+- First `cargo test -p actingcommand-actinglab`
+- Rerun `cargo test -p actingcommand-actinglab`
+- Local daemon smoke with an `ak` scheduler lease and mismatched recovery holder:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <target session-monitor-recover-smoke dir>`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease acquire --state-dir <target session-monitor-recover-smoke dir> --holder scheduler --lease-id smoke-lease`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak monitor --via-daemon --recover --capture --state-dir <target session-monitor-recover-smoke dir> --lease-holder lab --lease-id smoke-lease --request-timeout-ms 20000`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <target session-monitor-recover-smoke dir>`
+- Local daemon smoke with an `ak` scheduler lease and matching recovery holder but intentionally missing resources:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <target session-monitor-recover-smoke dir>`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak session lease acquire --state-dir <target session-monitor-recover-smoke dir> --holder scheduler --lease-id smoke-lease`
+  - `cargo run -q -p actingcommand-actinglab -- --json --instance ak monitor --via-daemon --recover --state-dir <target session-monitor-recover-smoke dir> --lease-holder scheduler --lease-id smoke-lease --request-timeout-ms 20000`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <target session-monitor-recover-smoke dir>`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Code diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_monitor` passed with `3` tests.
+- `cargo test -p actingcommand-actinglab monitor_via_daemon` passed with `2` tests.
+- The first `cargo test -p actingcommand-actinglab` run failed two existing resource/config tests with exit code `2`, matching the known parallel environment race pattern.
+- Rerun `cargo test -p actingcommand-actinglab` passed with `108` tests.
+- Local daemon smoke with mismatched holder returned exit code `3` and safety-blocked `daemon_request_blocked` with message `lease for ak is held by scheduler, not lab`; no capture, recovery, or input was sent.
+- Local daemon smoke with matching holder returned exit code `2` and normal `validation_failed` because resources/scene were intentionally absent, proving the request passed the lease gate and reached regular monitor validation.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Code diff prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for daemon monitor recovery request routing and lease enforcement.
+- Full live recovery on a real emulator still requires a safe current simulator state and current resource inputs.
+- Full Session Layer remains incomplete: scheduler body, always-on background monitor ownership, package run, operation run, API/event streaming, UI integration, recording, mandatory daemon-only policy for non-manual callers, and live successful recovery validation remain open.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable daemon monitor recovery routing rollback point.
+3. Next implementation milestone should either live-validate matching-lease daemon recovery on a safe emulator/resource state or begin the recording/session record interface skeleton.
+
 ## 2026-06-27 ActingLab daemon lease-gated control request routing
 
 ### Current status

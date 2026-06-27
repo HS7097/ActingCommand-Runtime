@@ -3022,12 +3022,13 @@ fn poll_for_matched_page(
 fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if flags.bool("--via-daemon") {
-        if !flags.bool("--once") {
-            return Err(CliError::usage(
-                "monitor --via-daemon currently requires --once",
-            ));
+        if flags.bool("--recover") {
+            return submit_monitor_session_request(global, &flags, args);
         }
-        return submit_monitor_once_session_request(global, &flags, args);
+        if flags.bool("--once") {
+            return submit_monitor_once_session_request(global, &flags, args);
+        }
+        return submit_monitor_session_request(global, &flags, args);
     }
     if flags.bool("--once") {
         return run_monitor_once(global, &flags);
@@ -3040,18 +3041,19 @@ fn submit_monitor_once_session_request(
     flags: &FlagArgs,
     args: &[String],
 ) -> CliOutcome<Value> {
-    if flags.bool("--recover") {
-        return Err(CliError::safety_blocked(
-            "daemon_recovery_requires_lease",
-            "monitor --via-daemon does not support --recover until scheduler lease arbitration is connected",
-            &["lab_lease", "scheduler_arbitration"],
-        ));
-    }
     let mut payload = session_request_payload_args(args);
     if !payload.iter().any(|arg| arg == "--once") {
         payload.push("--once".to_string());
     }
     submit_session_command_request(global, flags, "monitor_once", payload)
+}
+
+fn submit_monitor_session_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    args: &[String],
+) -> CliOutcome<Value> {
+    submit_session_command_request(global, flags, "monitor", session_request_payload_args(args))
 }
 
 fn run_monitor_loop(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -3440,7 +3442,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor-once, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3457,6 +3459,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         }
         "is-visible" => submit_readonly_session_request(global, &flags, "is_visible", &args[1..]),
         "locate" => submit_readonly_session_request(global, &flags, "locate", &args[1..]),
+        "monitor" => submit_monitor_session_request(global, &flags, &args[1..]),
         "monitor-once" => submit_monitor_once_session_request(global, &flags, &args[1..]),
         "tap" | "swipe" | "long-tap" | "key" | "text" => {
             submit_control_session_request(global, &flags, command, &args[1..])
@@ -3872,11 +3875,19 @@ fn execute_session_command_request_inner(
             if flags.bool("--recover") {
                 return Err(CliError::safety_blocked(
                     "daemon_recovery_requires_lease",
-                    "monitor daemon requests do not support recovery until scheduler lease arbitration is connected",
-                    &["lab_lease", "scheduler_arbitration"],
+                    "monitor-once daemon requests are read-only; use monitor --recover with a session lease",
+                    &["lab_lease", "monitor_recovery"],
                 ));
             }
             run_monitor_once(&global, &flags)
+        }
+        "monitor" => {
+            let global = request.global.to_global()?;
+            let flags = FlagArgs::parse(&request.args)?;
+            if flags.bool("--recover") {
+                ensure_session_request_lease(state_dir, request)?;
+            }
+            run_monitor_loop(&global, &flags)
         }
         "tap" | "swipe" | "long-tap" => {
             ensure_session_request_lease(state_dir, request)?;
@@ -5747,6 +5758,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request monitor",
+            ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
             "session request monitor-once",
             ["running_runtime", "device"],
             "available",
@@ -6305,6 +6321,92 @@ mod tests {
     }
 
     #[test]
+    fn session_monitor_recover_request_requires_lease_metadata() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "monitor".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--recover".to_string(), "--capture".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn session_monitor_recover_request_rejects_wrong_holder_before_recovery() {
+        let temp = TempDir::new().unwrap();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "monitor".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--recover".to_string(), "--capture".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "lab".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lease_holder_mismatch");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn session_monitor_once_recover_request_stays_read_only() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "monitor_once".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--recover".to_string(), "--capture".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "daemon_recovery_requires_lease");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -6419,27 +6521,49 @@ mod tests {
     }
 
     #[test]
-    fn monitor_via_daemon_requires_once() {
-        let result = run_cli(["--json", "monitor", "--via-daemon"], true);
+    fn monitor_via_daemon_without_once_submits_request() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "monitor",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
 
-        assert_eq!(result.exit_code(), 2);
+        assert_eq!(result.exit_code(), 5);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "validation_failed"
+            "runtime_not_running"
         );
     }
 
     #[test]
-    fn monitor_via_daemon_recover_is_safety_blocked() {
+    fn monitor_via_daemon_recover_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
         let result = run_cli(
-            ["--json", "monitor", "--once", "--via-daemon", "--recover"],
+            [
+                "--json",
+                "monitor",
+                "--via-daemon",
+                "--recover",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
             true,
         );
 
-        assert_eq!(result.exit_code(), 3);
+        assert_eq!(result.exit_code(), 5);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "daemon_recovery_requires_lease"
+            "runtime_not_running"
         );
     }
 
