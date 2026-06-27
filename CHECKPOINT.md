@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session events wait view
+
+### Current status
+
+- `session events wait [--timeout-ms N] [--poll-ms N]` now performs bounded long-polling over the local Session Layer request-journal event view.
+- `session request events wait [--timeout-ms N] [--poll-ms N]` exposes the same bounded wait behavior through the resident daemon request queue.
+- Existing event filters, target selectors, and cursors remain available for wait mode.
+- The wait view reuses schema `session.events.v0.1` and adds a `wait` object containing completion, timeout, elapsed, and poll metadata.
+- Wait timeout returns an explicit empty event result with `wait.timed_out=true`; it does not return fake events or hide missing data.
+- Invalid poll intervals, unknown event subcommands, corrupt request-journal entries, and missing request-id cursors remain visible failures.
+- `session api` documents events wait query forms and defaults.
+- `capabilities` advertises local and daemon-routed events wait commands.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `46b9bb7a5601fa0f9cc1ef45720b1422de190301`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed Runtime-local `LICENSE_POLICY.md` is absent.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session events routing, daemon request routing, API contract, command capabilities, and event tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_events_wait -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session events wait tests passed.
+- Focused Session API contract test passed.
+- Focused command capabilities test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-events-wait-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session response wait view
 
 ### Current status

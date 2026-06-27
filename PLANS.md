@@ -136,6 +136,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session request-state view: `session request-state get <request-id>` and `session request request-state get <request-id>` summarize queued, response-available, completed, failed, and unknown daemon request lifecycle states for UI/scheduler clients.
 - ActingLab session request-state list view: `session request-state list` and `session request request-state list` expose a bounded aggregate request lifecycle view across pending requests, pending responses, and recent request journal entries.
 - ActingLab session response wait view: `session response wait <request-id>` and `session request response wait <request-id>` provide a bounded wait/read/consume surface for a specific daemon response without custom polling in UI/scheduler clients.
+- ActingLab session events wait view: `session events wait` and `session request events wait` provide bounded long-polling over the request-journal event cursor for UI/scheduler clients without custom event polling loops.
+
+## Current ActingLab Session Events Wait View
+
+This increment adds a bounded events wait surface for future UI and scheduler clients that need to observe Session Layer changes through the existing request-journal event view without implementing their own polling loop.
+
+- `session events wait [--timeout-ms N] [--poll-ms N]` waits within the selected local Session Layer state directory until the filtered event view returns at least one event or the timeout expires.
+- `session request events wait [--timeout-ms N] [--poll-ms N]` exposes the same bounded wait behavior through the resident daemon request queue.
+- Existing event filters, target selectors, and cursors are preserved: `--limit`, `--after-unix-ms`, `--after-request-id`, `--command`, `--data-summary-kind`, `--status`, `--lease-holder`, plus global `--instance`, `--game`, and `--server`.
+- The wait view reuses schema `session.events.v0.1` and adds a `wait` object with completion, timeout, elapsed, and poll metadata.
+- A wait timeout is an explicit empty event result with `wait.timed_out=true`, not a fake success with hidden missing data.
+- Invalid polling intervals, unknown event subcommands, corrupt request-journal entries, and missing request-id cursors continue to fail visibly.
+- `session api` advertises the events wait contract, and `capabilities` advertises local and daemon-routed wait commands.
+- This phase does not start trusted remote network transport, implement unbounded long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session events wait tests.
+- Focused Session API contract test.
+- Focused command capabilities test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Response Wait View
 

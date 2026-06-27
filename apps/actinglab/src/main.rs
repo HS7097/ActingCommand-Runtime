@@ -1536,9 +1536,14 @@ fn session_api_contract() -> Value {
             "event_view": {
                 "query": "session events",
                 "daemon_query": "session request events",
+                "wait_query": "session events wait [--timeout-ms N] [--poll-ms N]",
+                "daemon_wait_query": "session request events wait [--timeout-ms N] [--poll-ms N]",
                 "schema_version": "session.events.v0.1",
                 "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind", "--status", "--lease-holder"],
                 "global_filters": ["--instance", "--game", "--server"],
+                "wait_timeout_default_ms": SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+                "wait_poll_default_ms": 100,
+                "wait_timeout_returns_empty_events": true,
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
@@ -5346,24 +5351,103 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "events", args);
     }
-    flags.expect_positionals("session events", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
-    let limit = parse_optional_usize(&flags, "--limit", 20)?;
-    let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
-    let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
-    let filters = parse_session_event_filters(
+    run_session_events_in_state_dir(
         global.instance.clone(),
         global.game.clone(),
         global.server.clone(),
         &flags,
-    )?;
-    session_events_payload(
         &state_dir,
+    )
+}
+
+fn run_session_events_in_state_dir(
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+    flags: &FlagArgs,
+    state_dir: &Path,
+) -> CliOutcome<Value> {
+    match flags.positionals.first().map(String::as_str) {
+        None => session_events_query_payload(state_dir, flags, instance, game, server),
+        Some("wait") => run_session_events_wait(flags, state_dir, instance, game, server),
+        Some(other) => Err(CliError::usage(format!(
+            "unknown session events command: {other}"
+        ))),
+    }
+}
+
+fn session_events_query_payload(
+    state_dir: &Path,
+    flags: &FlagArgs,
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+) -> CliOutcome<Value> {
+    flags.expect_positionals("session events", 0)?;
+    let limit = parse_optional_usize(flags, "--limit", 20)?;
+    let after_unix_ms = parse_optional_u64(flags, "--after-unix-ms")?;
+    let after_request_id = parse_optional_string_value(flags, "--after-request-id")?;
+    let filters = parse_session_event_filters(instance, game, server, flags)?;
+    session_events_payload(
+        state_dir,
         limit,
         after_unix_ms,
         after_request_id.as_deref(),
         &filters,
     )
+}
+
+fn run_session_events_wait(
+    flags: &FlagArgs,
+    state_dir: &Path,
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+) -> CliOutcome<Value> {
+    flags.expect_positionals("session events wait", 1)?;
+    let timeout =
+        parse_optional_duration_ms(flags, "--timeout-ms", SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
+    let poll = parse_optional_duration_ms(flags, "--poll-ms", 100)?;
+    if poll.is_zero() || poll > Duration::from_millis(5_000) {
+        return Err(CliError::usage("--poll-ms must be between 1 and 5000"));
+    }
+    let list_flags = flags.without_first_positional();
+    let started = Instant::now();
+    loop {
+        let mut payload = session_events_query_payload(
+            state_dir,
+            &list_flags,
+            instance.clone(),
+            game.clone(),
+            server.clone(),
+        )?;
+        let event_count = payload
+            .get("event_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if event_count > 0 {
+            payload["wait"] = json!({
+                "completed": true,
+                "timed_out": false,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        if started.elapsed() >= timeout {
+            payload["wait"] = json!({
+                "completed": false,
+                "timed_out": true,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64,
+                "poll_ms": poll.as_millis() as u64
+            });
+            return Ok(payload);
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
 }
 
 fn run_session_response(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -7854,22 +7938,12 @@ fn execute_session_command_request_inner(
         }
         "events" => {
             let flags = FlagArgs::parse(&request.args)?;
-            flags.expect_positionals("session request events", 0)?;
-            let limit = parse_optional_usize(&flags, "--limit", 20)?;
-            let after_unix_ms = parse_optional_u64(&flags, "--after-unix-ms")?;
-            let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
-            let filters = parse_session_event_filters(
+            run_session_events_in_state_dir(
                 request.global.instance.clone(),
                 request.global.game.clone(),
                 request.global.server.clone(),
                 &flags,
-            )?;
-            session_events_payload(
                 state_dir,
-                limit,
-                after_unix_ms,
-                after_request_id.as_deref(),
-                &filters,
             )
         }
         "response" => {
@@ -11191,7 +11265,7 @@ fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct FlagArgs {
     flags: BTreeMap<String, Vec<String>>,
     positionals: Vec<String>,
@@ -11243,6 +11317,14 @@ impl FlagArgs {
 
     fn values(&self, name: &str) -> Vec<String> {
         self.flags.get(name).cloned().unwrap_or_default()
+    }
+
+    fn without_first_positional(&self) -> Self {
+        let mut next = self.clone();
+        if !next.positionals.is_empty() {
+            next.positionals.remove(0);
+        }
+        next
     }
 
     fn required(&self, name: &str) -> CliOutcome<String> {
@@ -13170,6 +13252,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session cleanup", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
         command_cap("session events", ["offline"], "available"),
+        command_cap("session events wait", ["offline"], "available"),
         command_cap("session response", ["offline"], "available"),
         command_cap("session response get", ["offline"], "available"),
         command_cap("session response wait", ["offline"], "available"),
@@ -13188,6 +13271,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request events", ["running_runtime"], "available"),
+        command_cap(
+            "session request events wait",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request response", ["running_runtime"], "available"),
         command_cap(
             "session request response get",
@@ -21304,6 +21392,201 @@ mod tests {
     }
 
     #[test]
+    fn session_events_wait_returns_available_event() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let journaled = SessionCommandRequest {
+            request_id: "wait-event".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let response = SessionCommandResponse {
+            request_id: "wait-event".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &journaled, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.events.v0.1")
+        );
+        assert_eq!(data.get("event_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/events/0/request_id").and_then(Value::as_str),
+            Some("wait-event")
+        );
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/timed_out").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_events_wait_timeout_returns_empty_events() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("event_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            data.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/wait/timed_out").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/wait/timeout_ms").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/wait/poll_ms").and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn session_events_wait_rejects_zero_poll_ms() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "wait",
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "0",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("--poll-ms"));
+    }
+
+    #[test]
+    fn session_events_wait_request_returns_daemon_state_events() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let journaled = SessionCommandRequest {
+            request_id: "daemon-wait-event".to_string(),
+            command: "capture_diagnose".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 20,
+        };
+        let response = SessionCommandResponse {
+            request_id: "daemon-wait-event".to_string(),
+            command: "capture_diagnose".to_string(),
+            ok: true,
+            data: Some(json!({"status": "fresh", "mode": "capture_diagnose"})),
+            error: None,
+            started_at_unix_ms: 21,
+            completed_at_unix_ms: 22,
+        };
+        append_session_request_journal(state_dir, &journaled, &response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-wait-query".to_string(),
+            command: "events".to_string(),
+            global: journaled.global.clone(),
+            args: vec![
+                "wait".to_string(),
+                "--timeout-ms".to_string(),
+                "1".to_string(),
+                "--poll-ms".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 30,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.events.v0.1")
+        );
+        assert_eq!(payload.get("event_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload
+                .pointer("/events/0/request_id")
+                .and_then(Value::as_str),
+            Some("daemon-wait-event")
+        );
+        assert_eq!(
+            payload.pointer("/wait/completed").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_events_after_unix_ms_returns_incremental_cursor_window() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -22374,6 +22657,18 @@ mod tests {
                 .pointer("/envelopes/event_view/filters/1")
                 .and_then(Value::as_str),
             Some("--after-unix-ms")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/wait_query")
+                .and_then(Value::as_str),
+            Some("session events wait [--timeout-ms N] [--poll-ms N]")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/wait_timeout_returns_empty_events")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload
@@ -25659,6 +25954,26 @@ mod tests {
             Some("session.events.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/event_view/wait_query")
+                .and_then(Value::as_str),
+            Some("session events wait [--timeout-ms N] [--poll-ms N]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/wait_timeout_default_ms")
+                .and_then(Value::as_u64),
+            Some(SESSION_DAEMON_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/wait_poll_default_ms")
+                .and_then(Value::as_u64),
+            Some(100)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/event_view/wait_timeout_returns_empty_events")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/event_view/filters/1")
                 .and_then(Value::as_str),
             Some("--after-unix-ms")
@@ -26189,6 +26504,7 @@ mod tests {
             "session status",
             "session journal",
             "session events",
+            "session events wait",
             "session contract",
             "session api",
             "session instance",
@@ -26213,6 +26529,7 @@ mod tests {
             "session request status",
             "session request journal",
             "session request events",
+            "session request events wait",
             "session request contract",
             "session request api",
             "session request devices",
