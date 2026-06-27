@@ -3715,7 +3715,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, app, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3734,6 +3734,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "locate" => submit_readonly_session_request(global, &flags, "locate", &args[1..]),
         "monitor" => submit_monitor_session_request(global, &flags, &args[1..]),
         "monitor-once" => submit_monitor_once_session_request(global, &flags, &args[1..]),
+        "app" => submit_control_session_request(global, &flags, "app", &args[1..]),
         "tap" | "swipe" | "long-tap" | "key" | "text" => {
             submit_control_session_request(global, &flags, command, &args[1..])
         }
@@ -4162,6 +4163,11 @@ fn execute_session_command_request_inner(
             }
             run_monitor_loop(&global, &flags)
         }
+        "app" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_session_app(&global, &request.args)
+        }
         "tap" | "swipe" | "long-tap" => {
             ensure_session_request_lease(state_dir, request)?;
             let global = request.global.to_global()?;
@@ -4311,6 +4317,9 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session app requires launch|stop|restart"))?;
     let flags = FlagArgs::parse(&args[1..])?;
+    if flags.bool("--via-daemon") {
+        return submit_control_session_request(global, &flags, "app", args);
+    }
     let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let package = resolve_app_package(global, &config, &flags, &instance_id)?;
@@ -8497,6 +8506,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request app",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
             "session request tap",
             ["running_runtime", "device", "lab_lease"],
             "available",
@@ -8538,6 +8552,9 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
+        command_cap("session app launch", ["device"], "available"),
+        command_cap("session app stop", ["device"], "available"),
+        command_cap("session app restart", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
@@ -13412,6 +13429,34 @@ mod tests {
     }
 
     #[test]
+    fn session_app_request_requires_lease_before_device_io() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "app".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "launch".to_string(),
+                "--package".to_string(),
+                "com.example.game".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_control_request_rejects_wrong_holder_before_device_io() {
         let temp = TempDir::new().unwrap();
         let lease = new_session_lease(
@@ -13648,6 +13693,68 @@ mod tests {
                 "lease-1",
                 "100",
                 "200",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_app_via_daemon_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "app",
+                "launch",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--package",
+                "com.example.game",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_app_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "app",
+                "launch",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--package",
+                "com.example.game",
             ],
             true,
         );
@@ -14033,6 +14140,9 @@ mod tests {
             "session status",
             "session instance",
             "session app",
+            "session app launch",
+            "session app stop",
+            "session app restart",
             "session capture",
             "session capture diagnose",
             "session request capture-diagnose",
@@ -14042,6 +14152,7 @@ mod tests {
             "session request is-visible",
             "session request locate",
             "session request monitor-once",
+            "session request app",
             "session lease",
             "capture diagnose",
         ] {

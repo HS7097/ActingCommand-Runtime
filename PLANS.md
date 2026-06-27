@@ -78,8 +78,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording top-level CLI contract alias: `record ...` now routes to the same implementation as `session record ...`, matching the Session Layer interface draft while preserving existing behavior.
 - ActingLab session recording build-task capability close-out: top-level and session-scoped record capabilities now advertise `build-task`, and top-level `record build-task` is covered by route tests.
 - ActingLab session interface surface alignment: record lifecycle capabilities now advertise start/status/stop, and the future interactive `stream` command is explicitly reserved instead of being an unknown command.
+- ActingLab daemon app lifecycle routing: `session app launch|stop|restart` can now be submitted through the resident daemon request queue with lease metadata, and daemon-side app requests are lease-gated before device I/O.
 
-## Current ActingLab Session Interface Surface Alignment
+## Current ActingLab Daemon App Lifecycle Routing
+
+The current Runtime task moves one more Phase A lifecycle operation behind the resident Session Layer request boundary. `session app launch|stop|restart` remains available as a direct local Session Layer command, and it can now also be submitted to the running daemon with `--via-daemon` or `session request app ...`.
+
+Scope:
+
+- Add `session app <launch|stop|restart> --via-daemon` routing.
+- Add `session request app <launch|stop|restart>` routing.
+- Require matching session lease metadata before daemon-side app lifecycle requests reach device I/O.
+- Advertise `session request app` and the concrete `session app launch|stop|restart` capabilities.
+
+Safety direction:
+
+- Daemon app lifecycle requests are task-level control requests and require `--lease-holder` metadata plus an active matching lease.
+- This milestone does not change the direct `session app` execution behavior.
+- This milestone adds no scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, direct MaaTouch startup, capture algorithm changes, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_app -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_request_app_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for fallback, reconnect/retry loops, direct capture/input execution in the new daemon app routing, SQLite, OCR/OpenCV, or ADB shell input/screencap.
+
+Known follow-ups:
+
+- Continue moving lifecycle and device-control workflows through the resident daemon request boundary.
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+
+## Previous ActingLab Session Interface Surface Alignment
 
 The current Runtime task aligns the visible ActingLab CLI surface with the Session Layer interface draft without implementing the future UI/interactive stream itself.
 
