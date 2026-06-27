@@ -1118,7 +1118,8 @@ fn session_access_contract() -> Value {
             "contract": "session request contract",
             "capabilities": "session request capabilities",
             "status": "session request status --diagnostics",
-            "journal": "session request journal"
+            "journal": "session request journal",
+            "events": "session request events"
         },
         "request_classes": {
             "read_only": {
@@ -4433,6 +4434,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "request" => run_session_request(global, args),
         "contract" => run_session_contract(global, args),
         "journal" => run_session_journal(global, args),
+        "events" => run_session_events(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
@@ -4450,6 +4452,78 @@ fn run_session_contract(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
     }
     flags.expect_positionals("session contract", 0)?;
     Ok(session_access_contract())
+}
+
+fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "events", args);
+    }
+    flags.expect_positionals("session events", 0)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let limit = parse_optional_usize(&flags, "--limit", 20)?;
+    session_events_payload(&state_dir, limit)
+}
+
+fn session_events_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+    if limit == 0 || limit > 1_000 {
+        return Err(CliError::usage("--limit must be between 1 and 1000"));
+    }
+    let entries = read_session_request_journal(state_dir, limit)?;
+    let events = entries
+        .iter()
+        .map(session_request_event_json)
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "schema_version": "session.events.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "source": "request_journal",
+        "journal": session_request_journal_path(state_dir).display().to_string(),
+        "limit": limit,
+        "event_count": events.len(),
+        "events": events
+    }))
+}
+
+fn session_request_event_json(entry: &SessionRequestJournalEntry) -> Value {
+    let status = if entry.ok { "completed" } else { "failed" };
+    let event_type = if entry.ok {
+        "session.request.completed"
+    } else {
+        "session.request.failed"
+    };
+    let lease = entry.lease.as_ref().map(|lease| {
+        json!({
+            "holder": &lease.holder,
+            "lease_id": &lease.lease_id
+        })
+    });
+    let error = entry.error.as_ref().map(|error| {
+        json!({
+            "code": &error.code,
+            "message": &error.message,
+            "blocked_by": &error.blocked_by
+        })
+    });
+    json!({
+        "schema_version": "session.event.v0.1",
+        "type": event_type,
+        "timestamp_unix_ms": entry.completed_at_unix_ms,
+        "request_id": &entry.request_id,
+        "command": &entry.command,
+        "status": status,
+        "ok": entry.ok,
+        "args_count": entry.args.len(),
+        "lease": lease,
+        "error": error,
+        "timing": {
+            "created_at_unix_ms": entry.created_at_unix_ms,
+            "started_at_unix_ms": entry.started_at_unix_ms,
+            "completed_at_unix_ms": entry.completed_at_unix_ms,
+            "queue_wait_ms": entry.started_at_unix_ms.saturating_sub(entry.created_at_unix_ms),
+            "duration_ms": entry.completed_at_unix_ms.saturating_sub(entry.started_at_unix_ms)
+        }
+    })
 }
 
 fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -4735,13 +4809,14 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, contract, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, events, contract, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
+        "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
         "capabilities" => {
             submit_readonly_session_request(global, &flags, "capabilities", &args[1..])
@@ -5360,6 +5435,12 @@ fn execute_session_command_request_inner(
             flags.expect_positionals("session request journal", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             session_journal_payload(state_dir, limit)
+        }
+        "events" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request events", 0)?;
+            let limit = parse_optional_usize(&flags, "--limit", 20)?;
+            session_events_payload(state_dir, limit)
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -10130,9 +10211,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
+        command_cap("session events", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
+        command_cap("session request events", ["running_runtime"], "available"),
         command_cap("session request contract", ["running_runtime"], "available"),
         command_cap(
             "session request capabilities",
@@ -17031,6 +17114,88 @@ mod tests {
     }
 
     #[test]
+    fn session_events_request_returns_stable_request_events() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let journaled = SessionCommandRequest {
+            request_id: "evented-request".to_string(),
+            command: "contract".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: Some(SessionCommandLease {
+                holder: "tester".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let response = SessionCommandResponse {
+            request_id: "evented-request".to_string(),
+            command: "contract".to_string(),
+            ok: true,
+            data: Some(json!({"status": "done"})),
+            error: None,
+            started_at_unix_ms: 15,
+            completed_at_unix_ms: 45,
+        };
+        append_session_request_journal(state_dir, &journaled, &response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-query".to_string(),
+            command: "events".to_string(),
+            global: journaled.global.clone(),
+            args: vec!["--limit".to_string(), "1".to_string()],
+            lease: None,
+            created_at_unix_ms: 50,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.events.v0.1")
+        );
+        assert_eq!(payload.get("event_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload.pointer("/events/0/type").and_then(Value::as_str),
+            Some("session.request.completed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/events/0/request_id")
+                .and_then(Value::as_str),
+            Some("evented-request")
+        );
+        assert_eq!(
+            payload.pointer("/events/0/command").and_then(Value::as_str),
+            Some("contract")
+        );
+        assert_eq!(
+            payload
+                .pointer("/events/0/timing/queue_wait_ms")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            payload
+                .pointer("/events/0/timing/duration_ms")
+                .and_then(Value::as_u64),
+            Some(30)
+        );
+        assert_eq!(
+            payload
+                .pointer("/events/0/lease/holder")
+                .and_then(Value::as_str),
+            Some("tester")
+        );
+    }
+
+    #[test]
     fn session_capabilities_request_returns_daemon_contract() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -18113,6 +18278,27 @@ mod tests {
     }
 
     #[test]
+    fn session_request_events_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "events",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_payload_strips_client_only_flags() {
         let args = [
             "--target".to_string(),
@@ -18240,6 +18426,18 @@ mod tests {
             ],
             true,
         );
+        let evented = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--limit",
+                "2",
+            ],
+            true,
+        );
         unsafe {
             env::remove_var(CONFIG_ENV);
         }
@@ -18257,6 +18455,25 @@ mod tests {
         assert_eq!(
             entries[0].get("request_id").and_then(Value::as_str),
             Some("request-2")
+        );
+
+        assert_eq!(evented.exit_code(), 0);
+        let events = evented
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[1].get("type").and_then(Value::as_str),
+            Some("session.request.failed")
+        );
+        assert_eq!(
+            events[1].pointer("/error/code").and_then(Value::as_str),
+            Some("lab_lease_required")
         );
     }
 
@@ -18633,6 +18850,14 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request contract"))
         );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request events"))
+        );
     }
 
     #[test]
@@ -18915,6 +19140,7 @@ mod tests {
         for command in [
             "session status",
             "session journal",
+            "session events",
             "session contract",
             "session instance",
             "session instance list",
@@ -18928,6 +19154,7 @@ mod tests {
             "session capture diagnose",
             "session request status",
             "session request journal",
+            "session request events",
             "session request contract",
             "session request devices",
             "session request lease",

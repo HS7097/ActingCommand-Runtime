@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session events view
+
+### Current status
+
+- Added `session events` as a local, read-only event query over the resident daemon request journal.
+- Added `session request events` as a resident daemon read-only query.
+- Added machine-readable `session.events.v0.1` output containing recent `session.event.v0.1` records.
+- Each event reports request id, command, completed/failed status, lease metadata if present, error metadata if present, and timing fields.
+- Registered `session events` and `session request events` in `command_capabilities()`.
+- Added `events = session request events` to the Session access contract daemon query list.
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `6027d5a862a87e9eafed44827f37baf9439a7462`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session command routing, daemon request handling, request journal handling, access contract, capability table, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_events -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_events_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session events --state-dir <empty-temp-state>`
+- `cargo run -q -p actingcommand-actinglab -- --json session request events --state-dir <empty-temp-state>`
+- Temporary daemon smoke:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session request contract --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session request events --state-dir <temp-state> --limit 1`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <temp-state>`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_events -- --nocapture` passed with `1` test.
+- `session_request_events_without_daemon_is_runtime_error` passed and confirmed exit code `5` with `runtime_not_running`.
+- `session_request_journal_records_success_and_error` passed and confirmed local `session events` exposes a failed request event with `lab_lease_required`.
+- Capability registration tests passed for `session events` and `session request events`.
+- Empty local `session events` returned `schema_version = session.events.v0.1` and `event_count = 0`.
+- Empty-state `session request events` failed visibly with `runtime_not_running`.
+- Temporary daemon smoke returned `status = started`, then `session request contract` completed, then `session request events --limit 1` returned a `session.request.completed` event for the contract request, then `session stop` returned `stopped`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `237` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-events-view`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session access contract
 
 ### Current status

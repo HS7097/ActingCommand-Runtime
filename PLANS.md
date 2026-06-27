@@ -114,6 +114,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream contract envelope: `stream` now reports a `session.stream.v0.1` contract and ordered stream events so future UI/API clients can consume bounded frame streams and input relay status without scraping command-specific fields.
 - ActingLab daemon-routed capabilities contract: `session request capabilities` now lets a running resident daemon report the same command list and a `session.capabilities.v0.1` Session Layer access/safety contract to future UI/API clients.
 - ActingLab Session access contract: `session contract` and `session request contract` expose a machine-readable `session.access.v0.1` access boundary for local CLI and future trusted UI/API clients.
+- ActingLab Session events view: `session events` and `session request events` expose daemon request journal outcomes as stable `session.events.v0.1` event data for future UI/API clients.
+
+## Current ActingLab Session Events View
+
+The current Runtime task advances the Session Layer observable-event surface without adding UI, network transport, scheduler behavior, device logic, resources, SQLite, OCR/OpenCV, or game logic. The durable daemon request journal can now be projected into a stable event view for future UI/API consumers.
+
+Scope:
+
+- Add `session events` as a local, read-only event query over the request journal.
+- Add `session request events` as a resident daemon read-only query.
+- Define `session.events.v0.1` as a list envelope for recent request events.
+- Define per-entry `session.event.v0.1` data with event type, request id, command, status, lease metadata, error metadata, and timing fields.
+- Register both commands in the capability table and the Session access contract.
+
+Safety direction:
+
+- This milestone is read-only and does not touch devices, resources, screenshots, scheduler state, UI, or game automation.
+- The event view is derived from the existing request journal and does not create a second mutable runtime history.
+- A missing or stale resident daemon still fails visibly with `runtime_not_running` for daemon-routed requests.
+
+Validation status:
+
+- Focused event tests passed for daemon-side handler output, local event projection over success/failure journal entries, no-daemon failure, and capability registration.
+- Manual CLI check confirmed empty local `session events` returns `session.events.v0.1` with `event_count = 0`.
+- Manual CLI check confirmed `session request events` fails visibly with `runtime_not_running` when no daemon exists.
+- Manual resident-daemon smoke check started a temporary daemon, queried `session request contract`, queried `session request events --limit 1`, and stopped the daemon successfully.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `237` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session Access Contract
 
