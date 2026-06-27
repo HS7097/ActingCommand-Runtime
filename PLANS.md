@@ -113,6 +113,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session diagnostics recommended actions: `session status --diagnostics` now emits machine-readable next actions for stopped or stale daemon state so UI/scheduler consumers do not need to infer recovery commands from free text.
 - ActingLab bounded stream contract envelope: `stream` now reports a `session.stream.v0.1` contract and ordered stream events so future UI/API clients can consume bounded frame streams and input relay status without scraping command-specific fields.
 - ActingLab daemon-routed capabilities contract: `session request capabilities` now lets a running resident daemon report the same command list and a `session.capabilities.v0.1` Session Layer access/safety contract to future UI/API clients.
+- ActingLab Session access contract: `session contract` and `session request contract` expose a machine-readable `session.access.v0.1` access boundary for local CLI and future trusted UI/API clients.
+
+## Current ActingLab Session Access Contract
+
+The current Runtime task advances Session Layer requirement #10 by making the access boundary queryable as data. Local CLI clients and future trusted UI/API clients can read the same contract either offline or through the resident daemon request queue.
+
+Scope:
+
+- Add `session contract` as a local, read-only access-boundary query.
+- Add `session request contract` as a resident daemon read-only query.
+- Define `session.access.v0.1` with local CLI and reserved trusted remote entrypoints.
+- Record that future trusted remote access requires authentication and encryption before use.
+- Record that clients, including UI, must not directly touch ADB or devices.
+- Record read-only versus control request classes and lease requirements.
+- Register both commands in the capability table.
+
+Safety direction:
+
+- This milestone does not start a network listener and does not implement TLS, token issuance, UI transport, scheduler behavior, device I/O, or game logic.
+- The trusted remote channel remains reserved until authentication and encryption are implemented.
+- Control requests remain lease-gated and serialized through the resident daemon request queue.
+
+Validation status:
+
+- Focused contract tests passed for offline output, daemon-side handler output, no-daemon failure, and capability registration.
+- Manual CLI check confirmed `session contract` returns `session.access.v0.1`.
+- Manual CLI check confirmed `session request contract` fails visibly with `runtime_not_running` when no daemon exists.
+- Manual resident-daemon smoke check started a temporary daemon, queried `session request contract`, and stopped the daemon successfully.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `235` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, token store, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Daemon-Routed Capabilities Contract
 

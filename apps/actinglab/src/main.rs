@@ -1089,6 +1089,94 @@ fn session_layer_capability_contract() -> Value {
     })
 }
 
+fn session_access_contract() -> Value {
+    json!({
+        "schema_version": "session.access.v0.1",
+        "purpose": "machine-readable access boundary for Session Layer clients",
+        "session_layer": {
+            "resident_daemon": true,
+            "only_control_throat": true,
+            "ui_direct_device_access_allowed": false,
+            "direct_adb_access_allowed_for_clients": false
+        },
+        "entrypoints": {
+            "local_cli": {
+                "status": "available",
+                "encryption_required": false,
+                "authentication_required": false,
+                "command": "actinglab"
+            },
+            "trusted_remote": {
+                "status": "reserved",
+                "encryption_required": true,
+                "authentication_required": true,
+                "minimum_transport": "TLS or mutually authenticated local IPC",
+                "token_or_certificate_required": true
+            }
+        },
+        "daemon_queries": {
+            "contract": "session request contract",
+            "capabilities": "session request capabilities",
+            "status": "session request status --diagnostics",
+            "journal": "session request journal"
+        },
+        "request_classes": {
+            "read_only": {
+                "requires_lease": false,
+                "examples": [
+                    "status",
+                    "journal",
+                    "contract",
+                    "capabilities",
+                    "devices",
+                    "capture",
+                    "capture-diagnose",
+                    "stream",
+                    "recognize",
+                    "detect-page",
+                    "current-page",
+                    "is-visible",
+                    "locate",
+                    "monitor-once"
+                ]
+            },
+            "control": {
+                "requires_lease": true,
+                "examples": [
+                    "lease",
+                    "record",
+                    "instance lifecycle control",
+                    "app",
+                    "lab-run",
+                    "package-run",
+                    "operation-run",
+                    "tap",
+                    "swipe",
+                    "long-tap",
+                    "key",
+                    "text",
+                    "tap-target",
+                    "navigate",
+                    "recover"
+                ]
+            }
+        },
+        "safety": {
+            "control_requests_require_matching_lease": true,
+            "requests_are_serialized_by_resident_daemon": true,
+            "severe_errors_fail_loud": true,
+            "transient_recovery_path_must_be_logged": true
+        },
+        "out_of_scope": [
+            "network listener",
+            "TLS implementation",
+            "token issuance",
+            "UI transport",
+            "scheduler runtime"
+        ]
+    })
+}
+
 fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if should_route_readonly_via_session_daemon(global, &flags)? {
@@ -4343,6 +4431,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "cleanup" => run_session_cleanup(global, args),
         "daemon" => run_session_daemon(args),
         "request" => run_session_request(global, args),
+        "contract" => run_session_contract(global, args),
         "journal" => run_session_journal(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
@@ -4352,6 +4441,15 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "record" => run_session_record(global, args),
         _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
     }
+}
+
+fn run_session_contract(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "contract", args);
+    }
+    flags.expect_positionals("session contract", 0)?;
+    Ok(session_access_contract())
 }
 
 fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -4637,13 +4735,14 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, contract, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
+        "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
         "capabilities" => {
             submit_readonly_session_request(global, &flags, "capabilities", &args[1..])
         }
@@ -5261,6 +5360,11 @@ fn execute_session_command_request_inner(
             flags.expect_positionals("session request journal", 0)?;
             let limit = parse_optional_usize(&flags, "--limit", 20)?;
             session_journal_payload(state_dir, limit)
+        }
+        "contract" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request contract", 0)?;
+            Ok(session_access_contract())
         }
         "capabilities" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -10026,8 +10130,10 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
+        command_cap("session contract", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
+        command_cap("session request contract", ["running_runtime"], "available"),
         command_cap(
             "session request capabilities",
             ["running_runtime"],
@@ -16983,6 +17089,51 @@ mod tests {
     }
 
     #[test]
+    fn session_contract_request_returns_access_contract() {
+        let query = SessionCommandRequest {
+            request_id: "contract-query".to_string(),
+            command: "contract".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let temp = TempDir::new().unwrap();
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.access.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/entrypoints/trusted_remote/encryption_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/session_layer/ui_direct_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/request_classes/control/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_lease_request_acquires_and_releases_in_daemon_state_dir() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -17940,6 +18091,28 @@ mod tests {
     }
 
     #[test]
+    fn session_request_contract_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "contract",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_payload_strips_client_only_flags() {
         let args = [
             "--target".to_string(),
@@ -18452,6 +18625,40 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request capabilities"))
         );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request contract"))
+        );
+    }
+
+    #[test]
+    fn session_contract_is_offline_access_contract() {
+        let result = run_cli(["--json", "session", "contract"], true);
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.access.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/entrypoints/local_cli/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            data.pointer("/entrypoints/trusted_remote/authentication_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/safety/control_requests_require_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -18708,6 +18915,7 @@ mod tests {
         for command in [
             "session status",
             "session journal",
+            "session contract",
             "session instance",
             "session instance list",
             "session instance health",
@@ -18720,6 +18928,7 @@ mod tests {
             "session capture diagnose",
             "session request status",
             "session request journal",
+            "session request contract",
             "session request devices",
             "session request lease",
             "session request record",

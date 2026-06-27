@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session access contract
+
+### Current status
+
+- Added `session contract` as a local, read-only Session Layer access-boundary query.
+- Added `session request contract` as a resident daemon read-only query.
+- Added machine-readable `session.access.v0.1` output describing:
+  - the resident daemon as the only control throat,
+  - local CLI access,
+  - reserved trusted remote access,
+  - authentication and encryption requirements for future UI/API channels,
+  - read-only versus control request classes,
+  - control-request LabLease requirements,
+  - explicit client prohibition on direct ADB/device access.
+- Registered `session contract` and `session request contract` in `command_capabilities()`.
+- No trusted network API, TLS/auth transport, token store, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `ff23167d64f9f331da90b103530a6400fc391d82`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session command routing, daemon request handling, capability table, stream contract, and access-channel markers.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session contract`
+- `cargo run -q -p actingcommand-actinglab -- --json session request contract --state-dir <empty-temp-state>`
+- Temporary daemon smoke:
+  - `cargo run -q -p actingcommand-actinglab -- --json session start --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session request contract --state-dir <temp-state>`
+  - `cargo run -q -p actingcommand-actinglab -- --json session stop --state-dir <temp-state>`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab contract -- --nocapture` passed with `5` tests.
+- Local `session contract` returned `schema_version = session.access.v0.1`.
+- Empty-state `session request contract` failed visibly with `runtime_not_running`.
+- Temporary daemon smoke returned `status = started`, then `session request contract` completed through daemon request mode, then `session stop` returned `stopped`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `235` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-access-contract`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon-routed capabilities contract
 
 ### Current status
