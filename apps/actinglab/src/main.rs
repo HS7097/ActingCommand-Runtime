@@ -4733,12 +4733,29 @@ fn run_session_start(args: &[String]) -> CliOutcome<Value> {
     })?;
 
     let info_path = session_info_path(&state_dir);
+    let heartbeat_path = session_heartbeat_path(&state_dir);
     if let Some(info) = read_json_file::<SessionInfo>(&info_path)? {
-        return Ok(json!({
-            "status": "already_running",
-            "state_dir": state_dir.display().to_string(),
-            "info": info
-        }));
+        let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+        let now_ms = current_unix_ms();
+        let liveness = session_liveness_snapshot(Some(&info), heartbeat.as_ref(), now_ms);
+        if liveness.status.can_accept_requests() {
+            let liveness_json =
+                session_liveness_diagnostics(Some(&info), heartbeat.as_ref(), now_ms);
+            return Ok(json!({
+                "status": "already_running",
+                "state_dir": state_dir.display().to_string(),
+                "info": info,
+                "heartbeat": heartbeat,
+                "liveness": liveness_json
+            }));
+        }
+        return Err(CliError::runtime_not_running(format!(
+            "session state exists but daemon is not accepting requests; liveness status={}, heartbeat_age_ms={}, stale_after_ms={}, state_dir={}",
+            liveness.status.as_str(),
+            optional_u64_text(liveness.heartbeat_age_ms),
+            SESSION_HEARTBEAT_STALE_MS,
+            state_dir.display()
+        )));
     }
 
     let stop_path = session_stop_path(&state_dir);
@@ -4757,21 +4774,37 @@ fn run_session_start(args: &[String]) -> CliOutcome<Value> {
     spawn_session_daemon(&exe, &state_dir)?;
 
     let started = Instant::now();
+    let mut last_liveness_status = "missing_info".to_string();
     while started.elapsed() < Duration::from_secs(2) {
-        if let Some(info) = read_json_file::<SessionInfo>(&info_path)? {
+        let info = read_json_file::<SessionInfo>(&info_path)?;
+        let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+        if let Some(info) = info {
+            let now_ms = current_unix_ms();
+            let liveness = session_liveness_snapshot(Some(&info), heartbeat.as_ref(), now_ms);
+            last_liveness_status = liveness.status.as_str().to_string();
+            if !liveness.status.can_accept_requests() {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            let liveness_json =
+                session_liveness_diagnostics(Some(&info), heartbeat.as_ref(), now_ms);
             return Ok(json!({
                 "status": "started",
                 "state_dir": state_dir.display().to_string(),
                 "spawned_pid": info.pid,
-                "info": info
+                "info": info,
+                "heartbeat": heartbeat,
+                "liveness": liveness_json
             }));
         }
         thread::sleep(Duration::from_millis(100));
     }
 
     Err(CliError::runtime_not_running(format!(
-        "session daemon did not write {} within startup deadline",
-        info_path.display()
+        "session daemon did not become alive within startup deadline; last_liveness_status={}; info={}; heartbeat={}",
+        last_liveness_status,
+        info_path.display(),
+        heartbeat_path.display()
     )))
 }
 
@@ -10527,6 +10560,85 @@ mod tests {
         assert_eq!(error.code, "runtime_not_running");
         assert!(error.message.contains("liveness status=stale"));
         assert!(!session_requests_dir(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_start_existing_alive_state_is_already_running() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "start",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("already_running")
+        );
+        assert_eq!(
+            data.pointer("/liveness/status").and_then(Value::as_str),
+            Some("alive")
+        );
+    }
+
+    #[test]
+    fn session_start_existing_missing_heartbeat_fails_visibly() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "start",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("not accepting requests"));
+        assert!(error.message.contains("liveness status=heartbeat_missing"));
+    }
+
+    #[test]
+    fn session_start_existing_stale_heartbeat_fails_visibly() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "start",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("not accepting requests"));
+        assert!(error.message.contains("liveness status=stale"));
     }
 
     #[test]

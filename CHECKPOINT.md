@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session start liveness gate
+
+### Current status
+
+- Connected Session Layer liveness checks to `session start`.
+- Existing session state now returns `already_running` only when `session.json` and `heartbeat.json` prove an alive, pid-matched, fresh daemon.
+- Existing stale, heartbeat-missing, or pid-mismatched session state now fails visibly with `runtime_not_running` instead of pretending the daemon is running.
+- Newly spawned daemon startup now waits for an alive heartbeat before reporting `started`.
+- No daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, app lifecycle behavior, or live device behavior was changed.
+- No live daemon or emulator operation was run for this lifecycle-consistency milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `2b9bce4aff5e8ad8916c65ac4accbfaa7fdb6fbe`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` capture freshness, daemon routing, session lifecycle, heartbeat, and related tests.
+- `cargo test -p actingcommand-actinglab session_start_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Diff-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_start_ -- --nocapture` passed with `3` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Diff-only prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `220` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-start-liveness-gate`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon liveness-gated routing
 
 ### Current status

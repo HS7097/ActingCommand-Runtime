@@ -107,29 +107,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stale capture recovery plan: `session recover --stale-capture` now exposes a read-only recovery plan that diagnoses stale frames and recommends capture-backend recovery before heavy app restart.
 - ActingLab session liveness diagnostics: `session status --diagnostics` now classifies daemon heartbeat state for UI/scheduler health checks.
 - ActingLab daemon liveness-gated routing: automatic daemon-preferred routing now requires an alive heartbeat, and explicit daemon requests fail fast before queueing when the daemon state is stale, missing a heartbeat, or pid-mismatched.
+- ActingLab session start liveness gate: `session start` now treats stale or heartbeat-missing session state as a visible runtime error instead of reporting false `already_running`, and new daemon startup waits for an alive heartbeat before reporting `started`.
 
-## Current ActingLab Session Daemon Liveness-Gated Routing
+## Current ActingLab Session Start Liveness Gate
 
-The current Runtime task connects Session Layer liveness diagnostics to daemon request routing. `session.json` alone is no longer enough for automatic daemon-preferred routing; the daemon must also have an alive, pid-matched, fresh heartbeat.
+The current Runtime task extends Session Layer liveness from request routing into daemon lifecycle startup. `session start` no longer treats `session.json` alone as proof that the resident daemon is healthy.
 
 Scope:
 
-- Reuse the liveness states `stopped`, `heartbeat_missing`, `pid_mismatch`, `stale`, and `alive`.
-- Make automatic read-only/control daemon preference require `alive`.
-- Make explicit daemon requests fail before writing request files when heartbeat state is missing, stale, or pid-mismatched.
-- Preserve existing alive-daemon request behavior and queue semantics.
+- Reuse the same liveness states and threshold used by `session status --diagnostics`.
+- Return `already_running` only when an existing state directory has an alive, pid-matched, fresh heartbeat.
+- Fail visibly when existing state is stale, heartbeat-missing, or pid-mismatched instead of pretending the daemon is running.
+- Wait for a freshly spawned daemon to write an alive heartbeat before returning `started`.
 - Keep daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, resource access, and game logic unchanged.
 
 Safety direction:
 
 - Corrupt status, heartbeat, lease, or journal files still fail visibly through existing status paths.
 - Stale or inconsistent daemon state is reported as not accepting requests instead of silently treating any `session.json` file as healthy.
-- Stale daemon requests fail with `runtime_not_running` before queueing work that no resident daemon can process.
-- This is a routing and diagnostics consistency change and does not start, stop, reconnect, click, capture, or restart anything.
+- Startup success now means the daemon is alive enough to accept requests, not merely that a stale info file exists.
+- This is a lifecycle consistency change and does not reconnect devices, click, capture, restart apps, or change scheduler ownership.
 
 Validation status:
 
-- Focused `cargo test -p actingcommand-actinglab session_ -- --nocapture` passed after adding routing and stale-request coverage.
+- Focused `cargo test -p actingcommand-actinglab session_start_ -- --nocapture` passed after adding stale/alive startup coverage.
 - `cargo fmt --all -- --check`, `git diff --check`, diff-only prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 Out of scope:
