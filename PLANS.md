@@ -82,8 +82,51 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon instance lifecycle routing: `session instance list|health|reconnect` can now be submitted through the resident daemon request queue, with `reconnect` lease-gated before device I/O.
 - ActingLab daemon capture routing: `capture --via-daemon` and `session request capture` can now submit normal one-shot capture through the resident daemon request queue while preserving `--out` and freshness flags.
 - ActingLab daemon Lab run routing: `lab run --via-daemon` and `session request lab-run` can now submit trusted Lab package execution through the resident daemon request queue, with daemon-side lease validation before zip or device I/O.
+- ActingLab daemon package/operation run routing: `package run --via-daemon`, `operation run --via-daemon`, `session request package-run`, and `session request operation-run` now submit through the resident daemon request queue with daemon-side lease validation before package, operation, or device I/O.
 
-## Current ActingLab Daemon Lab Run Routing
+## Current ActingLab Daemon Package/Operation Run Routing
+
+The current Runtime task moves the remaining package/operation execution surfaces behind the resident Session Layer request boundary. `package run --via-daemon` and `operation run --via-daemon` now submit daemon control requests, with explicit `session request package-run` and `session request operation-run` forms.
+
+Scope:
+
+- Add `package run --via-daemon` routing.
+- Add `operation run --via-daemon` routing.
+- Add `session request package-run` routing.
+- Add `session request operation-run` routing.
+- Require matching session lease metadata before daemon-side package/operation run requests can read package or operation inputs or reach device I/O.
+- Preserve existing direct local `package run` and `operation run` safety-blocked behavior.
+- Advertise `session request package-run` and `session request operation-run` as available lease-gated capabilities.
+
+Safety direction:
+
+- Daemon-routed package/operation run requests are task-level control requests and require `--lease-holder` metadata plus an active matching lease.
+- The lease gate runs before package zip validation, operation directory validation, capture backend creation, or MaaTouch/input setup.
+- This milestone does not implement the reserved operation adapter or change the existing `package run` safety-blocked result behavior.
+- This milestone adds no scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_package_run_request_requires_lease_before_zip_or_device_io -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_operation_run_request_requires_lease_before_device_io -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab package_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab operation_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_package_run_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_operation_run_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for fallback, reconnect/retry loops, direct capture/input execution in the new daemon package/operation routing, SQLite, OCR/OpenCV, or ADB shell input/screencap.
+
+Known follow-ups:
+
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Review whether direct local task-level execution should remain available for trusted manual use after scheduler/API integration lands.
+
+## Previous ActingLab Daemon Lab Run Routing
 
 The current Runtime task moves the trusted Lab package execution entry point behind the resident Session Layer request boundary. `lab run --via-daemon` now submits a daemon control request, and `session request lab-run` provides the explicit request form.
 

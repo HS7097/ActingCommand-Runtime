@@ -3567,6 +3567,9 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
             Ok(package_validation_json(&validate_package_zip(&zip)?, true))
         }
         "run" => {
+            if flags.bool("--via-daemon") {
+                return submit_control_session_request(global, &flags, "package_run", args);
+            }
             let zip = flags.required_path("--zip")?;
             let out = flags.optional_path("--out");
             let validation = validate_package_zip(&zip)?;
@@ -3616,11 +3619,17 @@ fn run_operation(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutco
                 "operation dry-run is reserved until Runtime operation adapter is connected",
             ))
         }
-        "run" => Err(CliError::safety_blocked(
-            "lab_lease_required",
-            "operation run requires navigation_only operations and an exclusive_drain LabLease",
-            &["lab_lease", "exclusive_drain"],
-        )),
+        "run" => {
+            if flags.bool("--via-daemon") {
+                submit_control_session_request(global, &flags, "operation_run", args)
+            } else {
+                Err(CliError::safety_blocked(
+                    "lab_lease_required",
+                    "operation run requires navigation_only operations and an exclusive_drain LabLease",
+                    &["lab_lease", "exclusive_drain"],
+                ))
+            }
+        }
         _ => Err(CliError::usage(format!("unknown operation command: {sub}"))),
     }
 }
@@ -3736,7 +3745,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3759,6 +3768,10 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "instance" => submit_session_instance_request(global, &flags, &args[1..]),
         "app" => submit_control_session_request(global, &flags, "app", &args[1..]),
         "lab-run" => submit_control_session_request(global, &flags, "lab_run", &args[1..]),
+        "package-run" => submit_control_session_request(global, &flags, "package_run", &args[1..]),
+        "operation-run" => {
+            submit_control_session_request(global, &flags, "operation_run", &args[1..])
+        }
         "tap" | "swipe" | "long-tap" | "key" | "text" => {
             submit_control_session_request(global, &flags, command, &args[1..])
         }
@@ -4207,6 +4220,16 @@ fn execute_session_command_request_inner(
             ensure_session_request_lease(state_dir, request)?;
             let global = request.global.to_global()?;
             run_lab("run", &global, &request.args)
+        }
+        "package_run" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_package("run", &global, &request.args)
+        }
+        "operation_run" => {
+            ensure_session_request_lease(state_dir, request)?;
+            let global = request.global.to_global()?;
+            run_operation("run", &global, &request.args)
         }
         "tap" | "swipe" | "long-tap" => {
             ensure_session_request_lease(state_dir, request)?;
@@ -8575,6 +8598,16 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request lab-run",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request package-run",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "session request operation-run",
             ["running_runtime", "device", "lab_lease"],
             "available",
         ),
@@ -13557,6 +13590,62 @@ mod tests {
     }
 
     #[test]
+    fn session_package_run_request_requires_lease_before_zip_or_device_io() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "package_run".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--zip".to_string(),
+                temp.path().join("missing.zip").display().to_string(),
+                "--out".to_string(),
+                temp.path().join("out.zip").display().to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn session_operation_run_request_requires_lease_before_device_io() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "operation_run".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--operation-dir".to_string(),
+                temp.path().join("missing-operation").display().to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lab_lease_required");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_instance_reconnect_request_requires_lease_before_device_io() {
         let temp = TempDir::new().unwrap();
         let request = SessionCommandRequest {
@@ -13972,6 +14061,71 @@ mod tests {
     }
 
     #[test]
+    fn package_run_via_daemon_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.path().join("input.zip");
+        let out = temp.path().join("out.zip");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "package",
+                "run",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn operation_run_via_daemon_accepts_lease_flags_before_daemon_lookup() {
+        let temp = TempDir::new().unwrap();
+        let operation_dir = temp.path().join("operation");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "operation",
+                "run",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--operation-dir",
+                operation_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_instance_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14044,6 +14198,71 @@ mod tests {
                 input.to_str().unwrap(),
                 "--out",
                 out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_package_run_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.path().join("input.zip");
+        let out = temp.path().join("out.zip");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "package-run",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--zip",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_operation_run_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let operation_dir = temp.path().join("operation");
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "operation-run",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--operation-dir",
+                operation_dir.to_str().unwrap(),
             ],
             true,
         );
@@ -14481,6 +14700,8 @@ mod tests {
             "session request instance reconnect",
             "session request app",
             "session request lab-run",
+            "session request package-run",
+            "session request operation-run",
             "session lease",
             "capture diagnose",
         ] {

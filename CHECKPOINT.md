@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon package/operation run routing
+
+### Current status
+
+- Moved package/operation run surfaces one step closer to the resident Session Layer boundary.
+- `package run --via-daemon` now submits a daemon control request before any local package validation.
+- `operation run --via-daemon` now submits a daemon control request before any local operation/device work.
+- `session request package-run` and `session request operation-run` are now accepted by the daemon request client surface.
+- Daemon-side package/operation run requests require matching session lease metadata before package zip validation, operation directory validation, or device I/O can occur.
+- Capabilities now advertise `session request package-run` and `session request operation-run`.
+- Existing direct `package run` and `operation run` behavior remains safety-blocked/unchanged.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `77b9b215f03016ab8ef816603568d00a75478779`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git diff --stat`
+- `git diff -- apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_package_run_request_requires_lease_before_zip_or_device_io -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_operation_run_request_requires_lease_before_device_io -- --nocapture`
+- `cargo test -p actingcommand-actinglab package_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture`
+- `cargo test -p actingcommand-actinglab operation_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_package_run_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_operation_run_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct capture/input execution in the new daemon package/operation routing, SQLite, OCR/OpenCV, and ADB shell input/screencap.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_package_run_request_requires_lease_before_zip_or_device_io -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_operation_run_request_requires_lease_before_device_io -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab package_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab operation_run_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_package_run_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_operation_run_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon package/operation run routing milestone.
+- Full Session Layer remains incomplete: actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-package-operation-routing`.
+2. Continue full Session Layer follow-ups: actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon Lab run routing
 
 ### Current status
