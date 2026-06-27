@@ -1989,8 +1989,11 @@ impl CaptureFreshProbeStatus {
 }
 
 struct MonitorSceneInput {
-    scene: Scene,
+    scene: Option<Scene>,
     source: Value,
+    capture_status: Option<CaptureFreshProbeStatus>,
+    requested_backend: Option<CaptureBackendChoice>,
+    fresh_delay: Option<Duration>,
 }
 
 fn capture_for_command(
@@ -4635,8 +4638,18 @@ fn run_monitor_loop(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
         let diagnosis = run_monitor_once(global, flags)?;
         let recovery =
             if recover && diagnosis.get("status").and_then(Value::as_str) != Some("healthy") {
-                let recover_args = monitor_recover_args(flags);
-                Some(run_session_recover(global, &recover_args)?)
+                match monitor_recover_args(&diagnosis, flags) {
+                    Some(recover_args) => Some(run_session_recover(global, &recover_args)?),
+                    None => Some(json!({
+                        "status": "not_executed",
+                        "executed": false,
+                        "reason": diagnosis
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unavailable_recovery"),
+                        "message": "monitor recovery is not executable for this diagnosis"
+                    })),
+                }
             } else {
                 None
             };
@@ -4659,7 +4672,15 @@ fn run_monitor_loop(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
     }))
 }
 
-fn monitor_recover_args(flags: &FlagArgs) -> Vec<String> {
+fn monitor_recover_args(diagnosis: &Value, flags: &FlagArgs) -> Option<Vec<String>> {
+    if diagnosis.get("status").and_then(Value::as_str) == Some("capture_stale_suspected") {
+        let mut args = vec!["--stale-capture".to_string(), "--capture".to_string()];
+        push_optional_flag_value(&mut args, flags, "--fresh-delay-ms");
+        return Some(args);
+    }
+    if diagnosis.get("status").and_then(Value::as_str) == Some("capture_unavailable") {
+        return None;
+    }
     let mut args = Vec::new();
     let target = flags
         .optional("--to")
@@ -4684,7 +4705,7 @@ fn monitor_recover_args(flags: &FlagArgs) -> Vec<String> {
     push_optional_flag_value(&mut args, flags, "--max-actions");
     push_optional_flag_value(&mut args, flags, "--step-timeout-ms");
     push_optional_flag_value(&mut args, flags, "--poll-ms");
-    args
+    Some(args)
 }
 
 fn push_optional_flag_value(args: &mut Vec<String>, flags: &FlagArgs, name: &str) {
@@ -4698,7 +4719,6 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
     let (evaluator, detector) = load_semantic_detector(global, &config, flags)?;
     let graph = load_navigation_graph(global, &config, flags)?;
     let input = load_monitor_scene_from_flags(global, flags)?;
-    let outcome = detect_current_page(&evaluator, &detector, &input.scene)?;
     let expected_page = canonical_navigation_page(
         &graph,
         &flags
@@ -4707,6 +4727,37 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
             .filter(|value| value != "true")
             .unwrap_or_else(|| "home".to_string()),
     );
+    if let Some(
+        capture_status @ (CaptureFreshProbeStatus::StaleSuspected
+        | CaptureFreshProbeStatus::Unavailable),
+    ) = input.capture_status
+    {
+        let diagnosis = match capture_status {
+            CaptureFreshProbeStatus::StaleSuspected => MonitorDiagnosis::CaptureStaleSuspected,
+            CaptureFreshProbeStatus::Unavailable => MonitorDiagnosis::CaptureUnavailable,
+            CaptureFreshProbeStatus::Fresh => unreachable!(),
+        };
+        return Ok(json!({
+            "status": diagnosis.status(),
+            "mode": "monitor_once",
+            "click_allowed": false,
+            "expected_page": expected_page,
+            "current_page": Value::Null,
+            "scene_source": input.source,
+            "recovery": monitor_recovery_json(
+                &diagnosis,
+                &graph,
+                None,
+                &expected_page,
+                input.requested_backend,
+                input.fresh_delay
+            )
+        }));
+    }
+    let scene = input.scene.as_ref().ok_or_else(|| {
+        CliError::device("monitor capture did not return a frame for page detection")
+    })?;
+    let outcome = detect_current_page(&evaluator, &detector, scene)?;
     let diagnosis = if outcome.matched && outcome.page == expected_page {
         MonitorDiagnosis::Healthy
     } else if outcome.standby {
@@ -4721,7 +4772,14 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
         "expected_page": expected_page,
         "current_page": page_detection_json(&outcome),
         "scene_source": input.source,
-        "recovery": monitor_recovery_json(&diagnosis, &graph, &outcome, &expected_page)
+        "recovery": monitor_recovery_json(
+            &diagnosis,
+            &graph,
+            Some(&outcome),
+            &expected_page,
+            input.requested_backend,
+            input.fresh_delay
+        )
     }))
 }
 
@@ -4729,6 +4787,8 @@ enum MonitorDiagnosis {
     Healthy,
     Standby,
     UnexpectedPage,
+    CaptureStaleSuspected,
+    CaptureUnavailable,
 }
 
 impl MonitorDiagnosis {
@@ -4737,6 +4797,8 @@ impl MonitorDiagnosis {
             Self::Healthy => "healthy",
             Self::Standby => "standby",
             Self::UnexpectedPage => "unexpected_page",
+            Self::CaptureStaleSuspected => "capture_stale_suspected",
+            Self::CaptureUnavailable => "capture_unavailable",
         }
     }
 }
@@ -4744,14 +4806,50 @@ impl MonitorDiagnosis {
 fn monitor_recovery_json(
     diagnosis: &MonitorDiagnosis,
     graph: &NavigationGraph,
-    outcome: &PageDetectionOutcome,
+    outcome: Option<&PageDetectionOutcome>,
     expected_page: &str,
+    requested_backend: Option<CaptureBackendChoice>,
+    fresh_delay: Option<Duration>,
 ) -> Value {
     match diagnosis {
         MonitorDiagnosis::Healthy => json!({
             "needed": false,
             "available": false,
             "reason": "already_at_expected_page"
+        }),
+        MonitorDiagnosis::CaptureStaleSuspected => {
+            let requested = requested_backend.unwrap_or(CaptureBackendChoice::Auto);
+            let delay = fresh_delay.unwrap_or_else(|| Duration::from_millis(160));
+            json!({
+                "needed": true,
+                "available": true,
+                "reason": "stale_capture_suspected",
+                "recommended_command": format!(
+                    "session recover --stale-capture --capture --fresh-delay-ms {}",
+                    delay.as_millis()
+                ),
+                "requested_backend": requested.as_str(),
+                "read_only": true,
+                "requires_lease": false,
+                "safety_gate": "diagnose_capture_backend_before_restart",
+                "recovery": capture_diagnosis_recovery_json(
+                    CaptureFreshProbeStatus::StaleSuspected,
+                    requested
+                )
+            })
+        }
+        MonitorDiagnosis::CaptureUnavailable => json!({
+            "needed": true,
+            "available": false,
+            "reason": "capture_backend_unavailable",
+            "blocked_by": ["capture_backend", "device"],
+            "recommended_command": "session instance health --capture-diagnose",
+            "read_only": true,
+            "requires_lease": false,
+            "recovery": capture_diagnosis_recovery_json(
+                CaptureFreshProbeStatus::Unavailable,
+                requested_backend.unwrap_or(CaptureBackendChoice::Auto)
+            )
         }),
         MonitorDiagnosis::Standby => {
             if let Some(wake) = graph.control_points.get("wake") {
@@ -4776,6 +4874,15 @@ fn monitor_recovery_json(
             }
         }
         MonitorDiagnosis::UnexpectedPage => {
+            let Some(outcome) = outcome else {
+                return json!({
+                    "needed": true,
+                    "available": false,
+                    "reason": "unexpected_page",
+                    "blocked_by": ["current_page"],
+                    "message": "unexpected page recovery requires a detected current page"
+                });
+            };
             match safe_recovery_route(graph, &outcome.page, expected_page) {
                 Ok(route) => json!({
                     "needed": true,
@@ -11080,11 +11187,14 @@ fn load_monitor_scene_from_flags(
         })?;
         let scene = Scene::from_png(&png).map_err(|err| CliError::device(err.to_string()))?;
         return Ok(MonitorSceneInput {
-            scene,
+            scene: Some(scene),
             source: json!({
                 "kind": "scene",
                 "path": scene_path.display().to_string()
             }),
+            capture_status: None,
+            requested_backend: None,
+            fresh_delay: None,
         });
     }
     if flags.bool("--capture") {
@@ -11092,12 +11202,35 @@ fn load_monitor_scene_from_flags(
         let device_config = device_config(global, &config)?;
         let requested = device_config.capture_backend;
         let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
-        let captured = capture_for_command(
-            &device_config,
-            requested,
-            flags.bool("--require-fresh"),
-            fresh_delay,
-        )?;
+        if flags.bool("--require-fresh") {
+            let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+            let source = json!({
+                "kind": "capture",
+                "capture_backend_requested": requested.as_str(),
+                "capture_status": report.status.as_str(),
+                "capture_backend_attempts": report.attempts,
+                "freshness": report.freshness,
+                "recovery": capture_diagnosis_recovery_json(report.status, requested)
+            });
+            if let Some(frame) = report.frame {
+                let scene = scene_from_frame(&frame)?;
+                return Ok(MonitorSceneInput {
+                    scene: Some(scene),
+                    source,
+                    capture_status: Some(CaptureFreshProbeStatus::Fresh),
+                    requested_backend: Some(requested),
+                    fresh_delay: Some(fresh_delay),
+                });
+            }
+            return Ok(MonitorSceneInput {
+                scene: None,
+                source,
+                capture_status: Some(report.status),
+                requested_backend: Some(requested),
+                fresh_delay: Some(fresh_delay),
+            });
+        }
+        let captured = capture_for_command(&device_config, requested, false, fresh_delay)?;
         let frame = captured.frame;
         let source = json!({
             "kind": "capture",
@@ -11108,7 +11241,13 @@ fn load_monitor_scene_from_flags(
             "freshness": captured.freshness
         });
         let scene = scene_from_frame(&frame)?;
-        return Ok(MonitorSceneInput { scene, source });
+        return Ok(MonitorSceneInput {
+            scene: Some(scene),
+            source,
+            capture_status: None,
+            requested_backend: Some(requested),
+            fresh_delay: Some(fresh_delay),
+        });
     }
     Err(CliError::usage(
         "monitor --once requires --scene <png> or --capture",
@@ -22931,6 +23070,97 @@ mod tests {
         assert_eq!(
             route[0].get("id").and_then(Value::as_str),
             Some("target_to_home")
+        );
+    }
+
+    #[test]
+    fn monitor_recovery_json_reports_capture_stale_suspected_entrypoint() {
+        let graph = NavigationGraph {
+            game: Some("arknights".to_string()),
+            edges: Vec::new(),
+            destructive_clicks: Vec::new(),
+            control_points: BTreeMap::new(),
+        };
+
+        let recovery = monitor_recovery_json(
+            &MonitorDiagnosis::CaptureStaleSuspected,
+            &graph,
+            None,
+            "arknights/home",
+            Some(CaptureBackendChoice::Adb),
+            Some(Duration::from_millis(250)),
+        );
+
+        assert_eq!(
+            recovery.get("reason").and_then(Value::as_str),
+            Some("stale_capture_suspected")
+        );
+        assert_eq!(
+            recovery.get("recommended_command").and_then(Value::as_str),
+            Some("session recover --stale-capture --capture --fresh-delay-ms 250")
+        );
+        assert_eq!(
+            recovery.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            recovery.pointer("/recovery/reason").and_then(Value::as_str),
+            Some("stale_capture_suspected")
+        );
+    }
+
+    #[test]
+    fn monitor_recovery_json_reports_capture_unavailable_blocker() {
+        let graph = NavigationGraph {
+            game: Some("arknights".to_string()),
+            edges: Vec::new(),
+            destructive_clicks: Vec::new(),
+            control_points: BTreeMap::new(),
+        };
+
+        let recovery = monitor_recovery_json(
+            &MonitorDiagnosis::CaptureUnavailable,
+            &graph,
+            None,
+            "arknights/home",
+            Some(CaptureBackendChoice::Auto),
+            Some(Duration::from_millis(250)),
+        );
+
+        assert_eq!(
+            recovery.get("available").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            recovery.get("recommended_command").and_then(Value::as_str),
+            Some("session instance health --capture-diagnose")
+        );
+        assert_eq!(
+            recovery.pointer("/recovery/reason").and_then(Value::as_str),
+            Some("capture_backend_unavailable")
+        );
+    }
+
+    #[test]
+    fn monitor_recover_args_use_stale_capture_recovery_for_stale_status() {
+        let flags = FlagArgs::parse(&[
+            "--fresh-delay-ms".to_string(),
+            "250".to_string(),
+            "--capture".to_string(),
+            "--to".to_string(),
+            "arknights/home".to_string(),
+        ])
+        .unwrap();
+        let diagnosis = json!({"status": "capture_stale_suspected"});
+
+        assert_eq!(
+            monitor_recover_args(&diagnosis, &flags).unwrap(),
+            vec![
+                "--stale-capture".to_string(),
+                "--capture".to_string(),
+                "--fresh-delay-ms".to_string(),
+                "250".to_string()
+            ]
         );
     }
 

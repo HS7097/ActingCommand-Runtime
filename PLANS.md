@@ -137,8 +137,35 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stream transport/API contract truthfulness: `session transport`, `session api`, and `stream` now distinguish available bounded local stream/per-request input relay surfaces from the still-reserved trusted remote long-lived stream.
 - ActingLab stale capture recovery diagnostic execution: `session recover --stale-capture --capture` can now run the fresh-frame probe and return evidence-backed recovery advice without clicking, restarting, or opening MaaTouch.
 - ActingLab stale capture recovery read-only routing: stale-capture recovery is now classified as a read-only Session Layer diagnostic surface in contracts, capabilities, top-level routing, and `session request recover --stale-capture`; ordinary `session recover` remains lease-gated control.
+- ActingLab monitor stale-capture diagnosis integration: `monitor --capture --require-fresh` can now report `capture_stale_suspected` or `capture_unavailable` as structured monitor states, with stale capture pointing to the read-only `session recover --stale-capture --capture` path.
 
-## Current ActingLab Stale Capture Recovery Read-only Routing
+## Current ActingLab Monitor Stale-Capture Diagnosis Integration
+
+The current Runtime task connects the AK stale-frame finding into the Session Layer monitor surface. Fresh-frame failure during monitor capture is no longer only a capture-stage fatal path for the monitor caller; it becomes a structured monitor diagnosis that future scheduler/UI clients can consume.
+
+Scope:
+
+- Let `monitor --capture --require-fresh` preserve fresh-frame probe results inside `scene_source`.
+- Return `status=capture_stale_suspected` when the probe sees unchanged frames and no fresh frame is available for page detection.
+- Return `status=capture_unavailable` when requested capture backends cannot provide probe frames.
+- For stale capture, expose a read-only recovery recommendation for `session recover --stale-capture --capture`.
+- For capture unavailable, expose `session instance health --capture-diagnose` as the next diagnostic path instead of pretending recovery executed.
+- Keep normal page-based monitor statuses and maintenance recovery behavior unchanged.
+
+Safety direction:
+
+- This is monitor diagnosis and recovery-routing work only.
+- It does not click, launch MaaTouch, change capture backend configuration, reconnect, restart apps, implement a scheduler loop, touch resources, add UI, add SQLite, add OCR/OpenCV, or add game logic.
+- `monitor --recover` uses the stale-capture recovery entry only when the monitor diagnosis is `capture_stale_suspected`; `capture_unavailable` remains a visible non-executed recovery blocker.
+
+Validation status:
+
+- Focused monitor recovery JSON and stale-capture recover-argument tests passed.
+- Existing `monitor_` test family passed.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+- The first workspace test attempt surfaced one transient `current_page_resolves_semantic_page` failure; single-test rerun and the second full workspace run passed.
+
+## ActingLab Stale Capture Recovery Read-only Routing
 
 The current Runtime task tightens the Session Layer contract around AK stale-frame recovery. Stale capture recovery is a diagnosis/planning surface and must not be treated like maintenance navigation recovery unless it is explicitly changed to execute input or app lifecycle actions in a later milestone.
 

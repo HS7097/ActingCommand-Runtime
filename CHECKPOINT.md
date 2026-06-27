@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab monitor stale-capture diagnosis integration
+
+### Current status
+
+- `monitor --capture --require-fresh` now treats fresh-frame probe stale/unavailable outcomes as structured monitor diagnoses.
+- Stale capture diagnosis returns `status=capture_stale_suspected`, no current page, and a read-only recovery recommendation for `session recover --stale-capture --capture`.
+- Capture unavailable diagnosis returns `status=capture_unavailable` and a visible non-executable recovery blocker pointing to `session instance health --capture-diagnose`.
+- `monitor --recover` now delegates `capture_stale_suspected` to stale-capture recovery arguments and does not attempt executable recovery for `capture_unavailable`.
+- Normal page-based `healthy`, `standby`, and `unexpected_page` monitor behavior remains unchanged.
+- No click, MaaTouch/input behavior, capture backend implementation, backend configuration mutation, reconnect, app restart, scheduler loop, resource access, UI, SQLite, OCR/OpenCV, or game logic was added.
+- Final pre-commit validation passed; this increment is the `checkpoint/20260628-monitor-stale-capture-diagnosis` milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `3bce9725a8e5f585680cca3e54432259c0abdad1`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `NOTICE.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` monitor, capture freshness, stale-capture recovery, daemon request handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_recovery_json_reports_capture_stale_suspected_entrypoint`
+- `cargo test -p actingcommand-actinglab monitor_recovery_json_reports_capture_unavailable_blocker`
+- `cargo test -p actingcommand-actinglab monitor_recover_args_use_stale_capture_recovery_for_stale_status`
+- `cargo test -p actingcommand-actinglab monitor_`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture`
+- `cargo test --workspace`
+- Final pre-commit rerun: `git diff --check`, `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`
+
+### Test results
+
+- Focused stale-capture monitor recovery tests passed.
+- Existing `monitor_` test family passed with `15` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, SQLite, OCR/OpenCV, MaaTouch backend changes, capture backend changes, retry/background-loop additions, or game logic in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- The first `cargo test --workspace` attempt failed one `actingcommand-actinglab` test: `current_page_resolves_semantic_page` returned exit code `2` instead of `0`.
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture` passed immediately afterward.
+- A second `cargo test --workspace` passed, including `276` `actingcommand-actinglab` tests.
+- Final pre-commit validation rerun passed: `git diff --check`, `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: daemon-owned automatic recovery loop, trusted remote transport, long-lived stream, scheduler arbitration integration, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Continue Session Layer follow-ups from daemon-owned automatic recovery loop, trusted remote transport, long-lived stream, scheduler arbitration integration, trusted UI exposure, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab stale capture recovery read-only routing
 
 ### Current status
