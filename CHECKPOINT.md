@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Session request data summary
+
+### Current status
+
+- Successful daemon-routed `stream` requests now append a compact `data_summary` to the request journal.
+- `session events` and `session request events` expose `events[].data_summary` for journaled stream requests.
+- Stream summaries include stream id, mode, event count, frame count, input relay status, capture dry-run/require-fresh flags, and trusted-channel status.
+- Failed requests and non-stream requests do not write response data summaries.
+- `session api` advertises `events[].data_summary` as the event-view summary field.
+- Full response payloads are not stored in the request journal.
+- No trusted remote network transport, long-lived stream transport, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8051093ddd7899fd791131753bc54c6f3cb83d42`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Checked `LICENSE_POLICY.md`; it is not present in this split Runtime repository.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` stream, Session events, Session API, Session transport, request queue, and request journal tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused request journal test passed.
+- Focused `session_events` tests passed with `5` tests.
+- Session API contract focused test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/background-loop text, force-stop, or monkey additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-request-data-summary`.
+2. Continue Session Layer follow-ups from trusted UI/API event consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab Session events command filter
 
 ### Current status

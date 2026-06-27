@@ -122,6 +122,28 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab lease-deferred daemon monitor recovery coordination: daemon monitor recovery now defers visibly with `deferred_by_lease` when the active lease is missing or held by another client, so self-heal does not fight scheduler or Lab ownership.
 - ActingLab monitor-policy lease recommendation surface: `session status --diagnostics` now translates `deferred_by_lease` monitor recovery into scheduler/UI-facing recommended actions for lease inspect, acquire, or preempt decisions without executing them.
 - ActingLab Session events command filter: `session events` and `session request events` now support repeatable `--command <name>` filters so future UI/API clients can poll stream, lease, monitor, or control event slices without scanning the full request journal.
+- ActingLab Session request data summary: daemon request journal events now retain compact stream response summaries so future UI/API clients can observe stream ids, frame counts, event counts, and input relay status from `session events` without reading full response files.
+
+## Current ActingLab Session Request Data Summary
+
+This increment makes daemon request events more useful for future UI/API stream consumers while keeping journal storage bounded.
+
+- Successful daemon-routed `stream` requests now write a compact `data_summary` into the request journal.
+- `session events` and `session request events` expose `events[].data_summary` for journaled stream requests.
+- The stream summary includes `stream_id`, mode, event count, frame count, input relay status, capture dry-run/require-fresh flags, and trusted-channel status.
+- Failed requests and non-stream requests do not write response data summaries.
+- `session api` advertises `events[].data_summary` as the event-view summary field.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add new capture/input backends, use direct ADB input fallback, run live devices, or access resource repositories.
+
+Validation for this phase:
+
+- Focused request journal and Session events tests.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Events Command Filter
 

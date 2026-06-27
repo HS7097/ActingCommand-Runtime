@@ -431,6 +431,8 @@ struct SessionRequestJournalEntry {
     lease: Option<SessionCommandLease>,
     ok: bool,
     error: Option<EnvelopeError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data_summary: Option<Value>,
     created_at_unix_ms: u64,
     started_at_unix_ms: u64,
     completed_at_unix_ms: u64,
@@ -1464,6 +1466,8 @@ fn session_api_contract() -> Value {
                 "schema_version": "session.events.v0.1",
                 "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command"],
                 "command_filter_repeats": true,
+                "data_summary_field": "events[].data_summary",
+                "stream_data_summary_kind": "stream",
                 "cursor_fields": [
                     "latest_timestamp_unix_ms",
                     "next_after_unix_ms",
@@ -5386,6 +5390,7 @@ fn session_request_event_json(entry: &SessionRequestJournalEntry) -> Value {
         "args_count": entry.args.len(),
         "lease": lease,
         "error": error,
+        "data_summary": entry.data_summary,
         "timing": {
             "created_at_unix_ms": entry.created_at_unix_ms,
             "started_at_unix_ms": entry.started_at_unix_ms,
@@ -6922,6 +6927,7 @@ fn append_session_request_journal(
         lease: request.lease.clone(),
         ok: response.ok,
         error: response.error.clone(),
+        data_summary: session_request_data_summary(response),
         created_at_unix_ms: request.created_at_unix_ms,
         started_at_unix_ms: response.started_at_unix_ms,
         completed_at_unix_ms: response.completed_at_unix_ms,
@@ -6929,6 +6935,30 @@ fn append_session_request_journal(
     let journal_path = session_request_journal_path(state_dir);
     rotate_session_request_journal_if_needed(state_dir, &journal_path)?;
     write_json_line(&journal_path, &entry)
+}
+
+fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Value> {
+    if response.command != "stream" || !response.ok {
+        return None;
+    }
+    let data = response.data.as_ref()?;
+    Some(json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "stream",
+        "stream_id": data.get("stream_id").cloned().unwrap_or(Value::Null),
+        "mode": data.get("mode").cloned().unwrap_or(Value::Null),
+        "event_count": data.get("events").and_then(Value::as_array).map(Vec::len),
+        "frame_count": data.get("frames").and_then(Value::as_array).map(Vec::len),
+        "input_relay_status": data.pointer("/input_relay/status").cloned().unwrap_or(Value::Null),
+        "capture": {
+            "dry_run": data.pointer("/capture/dry_run").cloned().unwrap_or(Value::Null),
+            "require_fresh": data.pointer("/capture/require_fresh").cloned().unwrap_or(Value::Null)
+        },
+        "trusted_channel": {
+            "status": data.pointer("/trusted_channel/status").cloned().unwrap_or(Value::Null),
+            "long_lived_stream_implemented": data.pointer("/trusted_channel/long_lived_stream_implemented").cloned().unwrap_or(Value::Null)
+        }
+    }))
 }
 
 fn execute_session_command_request(
@@ -20211,6 +20241,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/event_view/filters/3")
+                .and_then(Value::as_str),
+            Some("--command")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/data_summary_field")
+                .and_then(Value::as_str),
+            Some("events[].data_summary")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/event_view/cursor_fields/2")
                 .and_then(Value::as_str),
             Some("latest_request_id")
@@ -21608,8 +21650,33 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].request_id, "request-1");
         assert!(entries[0].ok);
+        assert_eq!(
+            entries[0]
+                .data_summary
+                .as_ref()
+                .and_then(|summary| summary.get("kind"))
+                .and_then(Value::as_str),
+            Some("stream")
+        );
+        assert_eq!(
+            entries[0]
+                .data_summary
+                .as_ref()
+                .and_then(|summary| summary.get("frame_count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            entries[0]
+                .data_summary
+                .as_ref()
+                .and_then(|summary| summary.pointer("/input_relay_status"))
+                .and_then(Value::as_str),
+            Some("disabled")
+        );
         assert_eq!(entries[1].request_id, "request-2");
         assert!(!entries[1].ok);
+        assert!(entries[1].data_summary.is_none());
         assert_eq!(
             entries[1].error.as_ref().unwrap().code,
             "lab_lease_required"
@@ -21668,6 +21735,18 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("stream")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/frame_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
         assert_eq!(
             events[1].get("type").and_then(Value::as_str),
             Some("session.request.failed")
@@ -21942,6 +22021,7 @@ mod tests {
             lease: None,
             ok: true,
             error: None,
+            data_summary: None,
             created_at_unix_ms: 1,
             started_at_unix_ms: 2,
             completed_at_unix_ms: 3,
