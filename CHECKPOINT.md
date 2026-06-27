@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab daemon-routed instance registry contract advertisement
+
+### Current status
+
+- `session request instance registry` is now advertised in `capabilities`.
+- `session contract` now exposes `daemon_queries.instance_registry = session request instance registry`.
+- `session api` now exposes `envelopes.instance_registry_view` with `schema_version = session.instance_registry.v0.1`.
+- Session Layer read-only command examples now include `session instance registry`.
+- Added daemon-side test coverage proving `SessionCommandRequest { command: "instance", args: ["registry"] }` returns the instance registry contract.
+- No device backend, capture backend implementation, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, daemon queue behavior, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `55d2fc79d9cce12dcd01463395eb181ddec01766`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session contracts, capabilities, daemon request dispatch, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_instance_registry_request_returns_contract`
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_instance_registry_request_returns_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract` passed with `1` test.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `268` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-daemon-instance-registry-contract`.
+2. Continue Session Layer follow-ups only after this daemon-registry contract advertisement milestone is verified.
+
 ## 2026-06-27 ActingLab session instance registry contract
 
 ### Current status

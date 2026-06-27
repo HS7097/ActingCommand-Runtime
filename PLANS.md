@@ -126,6 +126,35 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session status instance registry diagnostics: `session status --diagnostics` and daemon-routed status diagnostics now expose configured instance summaries for future UI/scheduler health views.
 - ActingLab instance registry backend fields: instance config now stores `adb_path` and `capture_backend`; status/list diagnostics expose them; capture commands use instance default backend unless CLI `--capture-backend` overrides it.
 - ActingLab session instance registry contract: `session instance registry` now exposes a machine-readable `session.instance_registry.v0.1` config contract with required/recommended fields, effective capture backend, configured flags, and validation diagnostics for future UI/scheduler consumers.
+- ActingLab daemon-routed instance registry contract advertisement: Session capabilities, access contract, and API contract now explicitly advertise `session request instance registry`, and daemon request tests verify the resident queue can return the registry contract.
+
+## Current ActingLab Daemon-Routed Instance Registry Contract Advertisement
+
+The current Runtime task closes the gap between the instance registry contract and the daemon/API surfaces future UI or scheduler clients will use.
+
+Scope:
+
+- Advertise `session request instance registry` in capabilities.
+- Include the registry view in `session api`.
+- Include the daemon registry query in `session contract`.
+- Include `session instance registry` in read-only Session Layer examples.
+- Verify daemon-side `SessionCommandRequest { command: "instance", args: ["registry"] }` returns `session.instance_registry.v0.1`.
+
+Safety direction:
+
+- This is a contract and discoverability change for an already implemented read-only command.
+- It does not touch devices, start MaaTouch, capture frames, read resource repositories, change daemon queue semantics, call the scheduler, or add game logic.
+- Control request lease gates are unchanged.
+
+Validation status:
+
+- Focused daemon registry request test passed.
+- Focused capabilities, access contract, and API contract tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `268` `actingcommand-actinglab` tests.
 
 ## Current ActingLab Session Instance Registry Contract
 

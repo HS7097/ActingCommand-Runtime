@@ -1094,7 +1094,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "capture", "stream"]
+                "examples": ["status", "journal", "capabilities", "devices", "session instance registry", "capture", "stream"]
             },
             "control": {
                 "requires_lease": true,
@@ -1151,7 +1151,8 @@ fn session_access_contract() -> Value {
             "capabilities": "session request capabilities",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
-            "events": "session request events"
+            "events": "session request events",
+            "instance_registry": "session request instance registry"
         },
         "request_classes": {
             "read_only": {
@@ -1170,6 +1171,7 @@ fn session_access_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session instance registry",
                     "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
@@ -1367,6 +1369,12 @@ fn session_api_contract() -> Value {
                     "next_after_request_id"
                 ],
                 "cursor_error": "event_cursor_not_found"
+            },
+            "instance_registry_view": {
+                "query": "session instance registry",
+                "daemon_query": "session request instance registry",
+                "schema_version": "session.instance_registry.v0.1",
+                "ready_field": "instances[].validation.ready_for_device_control"
             }
         },
         "command_classes": {
@@ -1388,6 +1396,7 @@ fn session_api_contract() -> Value {
                     "current-page",
                     "is-visible",
                     "locate",
+                    "session instance registry",
                     "session instance health --capture-diagnose",
                     "monitor-once"
                 ]
@@ -11135,6 +11144,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request instance registry",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
             "session request instance health",
             ["running_runtime", "device"],
             "available",
@@ -18782,6 +18796,70 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request transport"))
         );
+        assert!(
+            payload
+                .get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request instance registry"))
+        );
+    }
+
+    #[test]
+    fn session_instance_registry_request_returns_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: None,
+                capture_backend: Some("nemu_ipc".to_string()),
+            },
+        );
+        write_user_config(&config).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "instance-registry-query".to_string(),
+            command: "instance".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak-b".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["registry".to_string()],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.instance_registry.v0.1")
+        );
+        assert_eq!(payload.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload
+                .pointer("/instances/0/effective/capture_backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
     }
 
     #[test]
@@ -18838,6 +18916,12 @@ mod tests {
                 .pointer("/daemon_queries/transport")
                 .and_then(Value::as_str),
             Some("session request transport")
+        );
+        assert_eq!(
+            payload
+                .pointer("/daemon_queries/instance_registry")
+                .and_then(Value::as_str),
+            Some("session request instance registry")
         );
     }
 
@@ -18919,6 +19003,18 @@ mod tests {
                 .pointer("/envelopes/transport_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.transport.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/instance_registry_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.instance_registry.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/instance_registry_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request instance registry")
         );
     }
 
@@ -21324,6 +21420,7 @@ mod tests {
             "session request locate",
             "session request monitor-once",
             "session request instance list",
+            "session request instance registry",
             "session request instance health",
             "session request instance reconnect",
             "session request app",
