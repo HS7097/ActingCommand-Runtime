@@ -73,8 +73,51 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording resource promotion: `session record promote` can now publish a validated recording draft into an existing resource repository/root with overwrite protection and package dry-run compatibility.
 - ActingLab session recording anchor color-check output: frame-backed anchors recorded with `--color-check` now emit bundle `color_check` data derived from the authorized source-frame region instead of only storing the request as provenance.
 - ActingLab session recording standalone color-probe output: `session record step --kind color-probe` can now sample an authorized frame region into `color_probes[]`, and `resource convert` emits those probes as recognition-pack `type=color` targets.
+- ActingLab session recording standalone verify-template output: `session record step --kind verify-template` can now materialize an authorized template crop into `verify_templates[]`, and `resource convert` emits those templates as recognition-pack template targets.
 
-## Current ActingLab Session Recording Standalone Color-Probe Output
+## Current ActingLab Session Recording Standalone Verify-Template Output
+
+The current Runtime task advances Phase D's "authorized resource generation" path by adding a standalone verify-template step kind. This records a reusable visual template target from an operator-authorized region and passes it through the same draft bundle and recognition-pack conversion pipeline as other generated resources.
+
+Scope:
+
+- Add `session record step --kind verify-template` and alias `--kind verify_template`.
+- Support metadata-only verify-template steps as visibly `deferred` when no source frame is provided.
+- Support frame-backed verify-template materialization through the existing local `--frame` / `--source-frame` path and explicit `--capture` / `--current-frame` inlet.
+- Reuse the existing template crop, frame provenance, and offline self-backtest path used by anchors.
+- Make `session record build-task` emit `verify_templates[]` in generated Operation Bundle 0.3 drafts.
+- Copy generated verify-template assets into the draft task asset directory.
+- Make build-task fail visibly when a verify-template is deferred and therefore has no frame artifact.
+- Make `resource convert` validate verify-template asset paths and translate `verify_templates[]` into recognition-pack `type=template` targets.
+
+Safety direction:
+
+- This milestone is still limited to authoring and packaging data paths.
+- This milestone adds no UI, SQLite, OCR/OpenCV, game logic, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+- Real device capture remains available only through the already explicit `--capture` / `--current-frame` recording inlet.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_step_verify_template -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record_build_task_rejects_deferred_verify_template -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab build_pack_includes_verify_template_targets -- --nocapture` passed with `1` test after the test fixture was corrected to use an absolute repository root.
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test and verified package dry-run compatibility.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `36` tests.
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture` passed with `7` tests.
+- `cargo test -p actingcommand-actinglab` passed with `146` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed after rerunning a transient full-suite failure that did not reproduce in the isolated test or the rerun.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Define amend semantics for color-probe and verify-template steps before enabling `record amend` on those step kinds.
+- Add a UI/API surface for candidate review, color-check review, color-probe review, verify-template review, and promotion after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Standalone Color-Probe Output
 
 The current Runtime task advances Phase D's "authorized resource generation" path by adding a standalone color-probe step kind. This is separate from anchor `--color-check`: color-probe records an explicit color target resource from an authorized region and sends it through the operation-bundle and recognition-pack conversion path.
 
@@ -112,7 +155,6 @@ Validation status:
 Known follow-ups:
 
 - Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
-- Add `verify-template` as a later explicit recording resource kind after color-probe output is accepted.
 - Add amend support for color-probe steps only after the desired correction semantics are defined.
 - Add a UI/API surface for candidate review, color-check review, color-probe review, and promotion after the CLI shape is accepted.
 

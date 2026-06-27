@@ -1,5 +1,82 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording standalone verify-template output
+
+### Current status
+
+- Advanced Phase D recording by adding a standalone `verify-template` step kind.
+- `session record step --kind verify-template` and `--kind verify_template` now append an authorized reusable template target to an active recording context.
+- Metadata-only verify-template steps remain explicit and deferred with reason `frame_not_provided`.
+- Frame-backed verify-template steps reuse the existing crop/artifact/provenance/self-backtest path.
+- `session record build-task` now emits `verify_templates[]` in generated Operation Bundle 0.3 drafts.
+- Deferred verify-template steps without frame artifacts fail visibly during build-task instead of producing fake template targets.
+- `resource convert` now validates verify-template asset paths and emits bundle `verify_templates[]` as recognition-pack `type=template` targets.
+- No UI, SQLite, OCR/OpenCV, game logic, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `9b5da76e9ac04c9b54aaabad67329b3d7efcf977`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_verify_template -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_build_task_rejects_deferred_verify_template -- --nocapture`
+- `cargo test -p actingcommand-actinglab build_pack_includes_verify_template_targets -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab navigate_dry_run_uses_navigation_graph -- --nocapture`
+- Reran `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` and `apps/actinglab/src/resource_convert.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_step_verify_template -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record_build_task_rejects_deferred_verify_template -- --nocapture` passed with `1` test.
+- First `cargo test -p actingcommand-actinglab build_pack_includes_verify_template_targets -- --nocapture` failed because the converter unit-test fixture used relative repo root `.` and hit the existing `repo_rel` prefix guard; the fixture now uses an absolute current directory.
+- Rerun `cargo test -p actingcommand-actinglab build_pack_includes_verify_template_targets -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record_build_task_writes_draft_bundle -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `36` tests.
+- `cargo test -p actingcommand-actinglab resource_convert -- --nocapture` passed with `7` tests.
+- `cargo test -p actingcommand-actinglab` passed with `146` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace` failed once in `tests::navigate_dry_run_uses_navigation_graph` with exit code `2` instead of `0`.
+- Isolated `cargo test -p actingcommand-actinglab navigate_dry_run_uses_navigation_graph -- --nocapture` passed with `1` test.
+- Rerun `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the standalone verify-template implementation.
+- Full Phase D remains incomplete: live prepared-emulator validation, color-probe/verify-template amend semantics, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-verify-template`.
+3. Continue Phase D with live prepared-emulator validation or explicit amend semantics after this verify-template path is accepted.
+
 ## 2026-06-27 ActingLab session recording standalone color-probe output
 
 ### Current status

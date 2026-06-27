@@ -423,6 +423,17 @@ enum SessionRecordStepData {
         frame_provenance: Option<Box<SessionRecordFrameProvenance>>,
         evaluation: Box<SessionRecordStepEvaluation>,
     },
+    VerifyTemplate {
+        id: String,
+        region: SessionRecordRegion,
+        #[serde(default)]
+        threshold: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_provenance: Option<Box<SessionRecordFrameProvenance>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<Box<SessionRecordAnchorArtifact>>,
+        evaluation: Box<SessionRecordStepEvaluation>,
+    },
     Operation {
         from: String,
         #[serde(default)]
@@ -4759,6 +4770,7 @@ fn build_session_record_task(
         "resources_path": draft.resources_path.display().to_string(),
         "anchor_count": draft.bundle.get("anchors").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "color_probe_count": draft.bundle.get("color_probes").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "verify_template_count": draft.bundle.get("verify_templates").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "operation_count": draft.bundle.get("operations").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "asset_count": draft.assets.len(),
         "assets": draft.assets.iter().map(|asset| {
@@ -4838,6 +4850,7 @@ fn promote_session_record_task(
         "resources_action": resources_action,
         "anchor_count": draft.bundle.get("anchors").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "color_probe_count": draft.bundle.get("color_probes").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+        "verify_template_count": draft.bundle.get("verify_templates").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "operation_count": draft.bundle.get("operations").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "asset_count": draft.assets.len(),
         "assets": draft.assets.iter().map(|asset| {
@@ -4982,6 +4995,75 @@ fn session_record_build_draft(
         }
     }
 
+    let mut verify_templates = Vec::new();
+    for step in &record.steps {
+        if let SessionRecordStepData::VerifyTemplate {
+            id,
+            region,
+            threshold,
+            frame_provenance,
+            artifact,
+            evaluation,
+        } = &step.data
+        {
+            let artifact = artifact.as_deref().ok_or_else(|| {
+                CliError::usage(format!(
+                    "record build-task cannot build verify-template '{}' without a frame artifact",
+                    step.step_id
+                ))
+            })?;
+            if evaluation.status != "passed" {
+                return Err(CliError::usage(format!(
+                    "record build-task requires verify-template '{}' to pass backtest; status is {}",
+                    step.step_id, evaluation.status
+                )));
+            }
+            if resolution.is_none()
+                && let Some(provenance) = frame_provenance.as_deref()
+            {
+                resolution = Some((provenance.width, provenance.height));
+            }
+            let source = PathBuf::from(&artifact.path);
+            if !source.is_file() {
+                return Err(CliError::usage(format!(
+                    "record build-task verify-template '{}' artifact is missing: {}",
+                    step.step_id,
+                    source.display()
+                )));
+            }
+            let asset_name = format!(
+                "verify-template-{}-{}.png",
+                safe_file_stem(&step.step_id),
+                safe_file_stem(id)
+            );
+            let destination = assets_dir.join(&asset_name);
+            let template = format!("assets/{asset_name}");
+            assets.push(SessionRecordBuildAsset {
+                source,
+                destination,
+                template: template.clone(),
+            });
+            verify_templates.push(json!({
+                "id": id,
+                "template": template,
+                "region": region,
+                "threshold": threshold.unwrap_or_else(|| {
+                    evaluation
+                        .backtest
+                        .as_ref()
+                        .map(|backtest| f64::from(backtest.threshold))
+                        .unwrap_or(0.95)
+                }),
+                "provenance": {
+                    "record_step_id": step.step_id,
+                    "frame_provenance": frame_provenance,
+                    "artifact": artifact,
+                    "evaluation": evaluation
+                }
+            }));
+        }
+    }
+
     let mut operations = Vec::new();
     for step in &record.steps {
         if let SessionRecordStepData::Operation {
@@ -5080,6 +5162,7 @@ fn session_record_build_draft(
         },
         "anchors": anchors,
         "color_probes": color_probes,
+        "verify_templates": verify_templates,
         "entry_page": entry_page,
         "target_page": target_page,
         "operations": operations,
@@ -5421,6 +5504,9 @@ fn new_session_record_step(
         "color-probe" | "color_probe" => {
             new_session_record_color_probe_step(context, &step_id, flags)?
         }
+        "verify-template" | "verify_template" => {
+            new_session_record_verify_template_step(context, &step_id, flags)?
+        }
         "operation" => new_session_record_operation_step(flags)?,
         other => {
             return Err(CliError::usage(format!(
@@ -5465,6 +5551,42 @@ fn new_session_record_anchor_step(
         id,
         region: stored_region,
         color_check: flags.bool("--color-check"),
+        threshold,
+        frame_provenance: materialized
+            .as_ref()
+            .map(|materialized| Box::new(materialized.frame_provenance.clone())),
+        artifact: materialized.map(|materialized| Box::new(materialized.artifact)),
+        evaluation: Box::new(evaluation),
+    })
+}
+
+fn new_session_record_verify_template_step(
+    context: &SessionRecordStepContext<'_>,
+    step_id: &str,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordStepData> {
+    let id = required_non_empty_flag(flags, "--id")?;
+    let region = parse_session_record_region(&flags.required("--region")?)?;
+    let threshold = parse_optional_unit_f64(flags, "--threshold")?;
+    let materialized =
+        materialize_anchor_artifact(context, step_id, &id, &region, threshold, flags)?;
+    let evaluation = materialized
+        .as_ref()
+        .map(|materialized| materialized.evaluation.clone())
+        .unwrap_or_else(|| SessionRecordStepEvaluation {
+            status: "deferred".to_string(),
+            reason: "frame_not_provided".to_string(),
+            auto_region: None,
+            backtest: None,
+            contrast_backtest: None,
+        });
+    let stored_region = materialized
+        .as_ref()
+        .map(|materialized| materialized.region.clone())
+        .unwrap_or(region);
+    Ok(SessionRecordStepData::VerifyTemplate {
+        id,
+        region: stored_region,
         threshold,
         frame_provenance: materialized
             .as_ref()
@@ -6371,6 +6493,11 @@ fn amend_session_record_step(
         SessionRecordStepData::ColorProbe { .. } => {
             return Err(CliError::usage(
                 "record amend does not support color-probe steps in this milestone",
+            ));
+        }
+        SessionRecordStepData::VerifyTemplate { .. } => {
+            return Err(CliError::usage(
+                "record amend does not support verify-template steps in this milestone",
             ));
         }
         SessionRecordStepData::Operation {
@@ -9143,6 +9270,181 @@ mod tests {
     }
 
     #[test]
+    fn session_record_step_verify_template_records_deferred_schema() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "verify-template",
+                "--step-id",
+                "mail-ready",
+                "--id",
+                "template/mail-ready",
+                "--region",
+                "10,20,30,40",
+                "--threshold",
+                "0.97",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("verify_template")
+        );
+        assert_eq!(
+            data.pointer("/step/id").and_then(Value::as_str),
+            Some("template/mail-ready")
+        );
+        assert_eq!(
+            data.pointer("/step/region/mode").and_then(Value::as_str),
+            Some("rect")
+        );
+        assert_eq!(
+            data.pointer("/step/threshold").and_then(Value::as_f64),
+            Some(0.97)
+        );
+        assert!(data.pointer("/step/artifact").is_none());
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("frame_not_provided")
+        );
+    }
+
+    #[test]
+    fn session_record_step_verify_template_materializes_frame_crop() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "verify-template",
+                "--step-id",
+                "mail-ready",
+                "--id",
+                "template/mail-ready",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(
+            step.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&step.envelope).unwrap()
+        );
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("verify_template")
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/width").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/height")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let artifact_path = data
+            .pointer("/step/artifact/path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .expect("artifact path");
+        assert!(artifact_path.exists());
+    }
+
+    #[test]
     fn session_record_step_anchor_materializes_frame_crop() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -10327,6 +10629,29 @@ mod tests {
             ],
             true,
         );
+        let verify_template = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "verify-template",
+                "--step-id",
+                "mail-ready",
+                "--id",
+                "template/mail-ready",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
         let operation = run_cli(
             [
                 "--json",
@@ -10383,6 +10708,12 @@ mod tests {
             serde_json::to_string_pretty(&color_probe.envelope).unwrap()
         );
         assert_eq!(
+            verify_template.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&verify_template.envelope).unwrap()
+        );
+        assert_eq!(
             operation.exit_code(),
             0,
             "{}",
@@ -10399,6 +10730,10 @@ mod tests {
         assert_eq!(data.get("anchor_count").and_then(Value::as_u64), Some(2));
         assert_eq!(
             data.get("color_probe_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.get("verify_template_count").and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(1));
@@ -10471,6 +10806,21 @@ mod tests {
             Some(128)
         );
         assert_eq!(
+            data.pointer("/bundle/verify_templates/0/id")
+                .and_then(Value::as_str),
+            Some("template/mail-ready")
+        );
+        assert_eq!(
+            data.pointer("/bundle/verify_templates/0/template")
+                .and_then(Value::as_str),
+            Some("assets/verify-template-mail-ready-template_mail-ready.png")
+        );
+        assert_eq!(
+            data.pointer("/bundle/verify_templates/0/region/rect/x")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
             data.pointer("/bundle/operations/0/click/kind")
                 .and_then(Value::as_str),
             Some("point")
@@ -10489,6 +10839,12 @@ mod tests {
         assert!(
             out.join("operations/daily-check/assets/anchor-mail-anchor-page_mail.png")
                 .is_file()
+        );
+        assert!(
+            out.join(
+                "operations/daily-check/assets/verify-template-mail-ready-template_mail-ready.png"
+            )
+            .is_file()
         );
         let written: Value = serde_json::from_str(
             &fs::read_to_string(out.join("operations/daily-check/task.json")).unwrap(),
@@ -10509,6 +10865,12 @@ mod tests {
                 .pointer("/color_probes/0/expected/0")
                 .and_then(Value::as_u64),
             Some(3)
+        );
+        assert_eq!(
+            written
+                .pointer("/verify_templates/0/template")
+                .and_then(Value::as_str),
+            Some("assets/verify-template-mail-ready-template_mail-ready.png")
         );
 
         let packaged = run_cli(
@@ -10692,6 +11054,160 @@ mod tests {
         let error = build.envelope.error.as_ref().expect("build error");
         assert!(
             error.message.contains("without expected color"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn session_record_build_task_rejects_deferred_verify_template() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let out = temp.path().join("draft");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let home_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let mail_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "mail-anchor",
+                "--id",
+                "page/mail",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let verify_template = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "verify-template",
+                "--step-id",
+                "mail-ready",
+                "--id",
+                "template/mail-ready",
+                "--region",
+                "2,3,4,5",
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-to-mail",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "5,6",
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(home_anchor.exit_code(), 0);
+        assert_eq!(mail_anchor.exit_code(), 0);
+        assert_eq!(verify_template.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_ne!(build.exit_code(), 0);
+        let error = build.envelope.error.as_ref().expect("build error");
+        assert!(
+            error.message.contains("without a frame artifact"),
             "{}",
             error.message
         );

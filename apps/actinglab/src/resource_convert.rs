@@ -241,6 +241,17 @@ impl OperationConverter {
                     ));
                 }
             }
+            for verify_template in array_field(&bundle.data, "verify_templates") {
+                let template = string_field(verify_template, "template").unwrap_or_default();
+                if !bundle.dir.join(&template).is_file() {
+                    errors.push(format!(
+                        "{}: verify_template {:?} template missing on disk: {}",
+                        bundle.task_json_path().display(),
+                        verify_template.get("id").and_then(Value::as_str),
+                        bundle.dir.join(&template).display()
+                    ));
+                }
+            }
             for operation in array_field(&bundle.data, "operations") {
                 validate_click_shape(&bundle.task_json_path(), operation, &mut errors);
                 if let Some(template) = operation.get("verify_template").and_then(Value::as_str)
@@ -317,6 +328,26 @@ impl OperationConverter {
                     &target_id,
                     region_to_pack(required_field(color_probe, "region")?)?,
                     required_field(color_probe, "expected")?.clone(),
+                    None,
+                );
+                add_first_target(&mut targets, &mut order, target_id, target);
+            }
+            for verify_template in array_field(&bundle.data, "verify_templates") {
+                let target_id = required_string(verify_template, "id")?;
+                let template = required_string(verify_template, "template")?;
+                let target = pack_target(
+                    &target_id,
+                    &repo_rel(&self.root, &bundle.dir.join(&template))?,
+                    region_to_pack(required_field(verify_template, "region")?)?,
+                    verify_template
+                        .get("threshold")
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            required_field(&self.defaults, "template_threshold")
+                                .cloned()
+                                .unwrap_or(Value::Null)
+                        }),
+                    None,
                     None,
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
@@ -1254,6 +1285,60 @@ mod tests {
         assert_eq!(
             target_value.pointer("/expected/2").and_then(Value::as_u64),
             Some(30)
+        );
+    }
+
+    #[test]
+    fn build_pack_includes_verify_template_targets() {
+        let root = std::env::current_dir().unwrap();
+        let converter = OperationConverter {
+            root: root.clone(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "daily-check".to_string(),
+                dir: root.join("operations/daily-check"),
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "anchors": [],
+                    "verify_templates": [{
+                        "id": "template/mail-ready",
+                        "template": "assets/VERIFY_MAIL_READY.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "threshold": 0.97
+                    }],
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let pack = converter.build_pack().unwrap();
+        let target_value = pack
+            .pointer("/targets/0")
+            .expect("verify-template target value");
+        let target = target_value.as_object().expect("verify-template target");
+        assert_eq!(target.get("type").and_then(Value::as_str), Some("template"));
+        assert_eq!(
+            target.get("id").and_then(Value::as_str),
+            Some("template/mail-ready")
+        );
+        assert_eq!(
+            target.get("template_path").and_then(Value::as_str),
+            Some("operations/daily-check/assets/VERIFY_MAIL_READY.png")
+        );
+        assert_eq!(
+            target_value.pointer("/region/y").and_then(Value::as_i64),
+            Some(20)
+        );
+        assert_eq!(
+            target_value.pointer("/threshold").and_then(Value::as_f64),
+            Some(0.97)
         );
     }
 
