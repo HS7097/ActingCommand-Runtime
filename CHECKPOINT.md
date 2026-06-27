@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session instance connect lifecycle surface
+
+### Current status
+
+- `session instance connect` is now an explicit discoverable instance lifecycle command.
+- The command reuses the existing device reachability path to verify device state and screen size.
+- Session capabilities now advertise both `session instance connect` and `session request instance connect`.
+- `session contract` now exposes `daemon_controls.instance_connect = session request instance connect`.
+- `session api` now exposes `envelopes.instance_connect_view`.
+- Daemon-routed `connect` is lease-gated before device I/O, matching `reconnect`.
+- Strict Session throat coverage now includes `session instance connect`.
+- Explicit daemon-routed connect requests fail visibly with `runtime_not_running` when no alive daemon exists; they do not silently fall back to local ADB.
+- No new ADB API, device backend, capture backend, app lifecycle execution, resource repository behavior, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `b66cb919a6ff73d9458789ec9094bf9c9e4a93ba`.
+- Runtime was confirmed clean and up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Inspected `apps/actinglab/src/main.rs` Session access/API contracts, capabilities, daemon request dispatch, instance command handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_instance_connectivity_requests_require_lease_before_device_io`
+- `cargo test -p actingcommand-actinglab session_instance_connectivity_via_daemon_accepts_lease_flags_before_daemon_lookup`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo test -p actingcommand-actinglab strict_session_throat_covers_instance_keep_alive`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session instance connect --via-daemon --state-dir target\connect-empty-session --lease-holder scheduler --lease-id lease-1 --request-timeout-ms 1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused lease-gate, daemon-route, API, access contract, capability, and strict-throat tests passed.
+- CLI smoke confirmed capabilities expose `session instance connect` and `session request instance connect`.
+- CLI smoke confirmed `session api` exposes `envelopes.instance_connect_view` with `requires_lease = true`.
+- CLI smoke confirmed explicit daemon routing returns `runtime_not_running` with exit code `5` when no daemon is present.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `269` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-instance-connect`.
+2. Continue Session Layer follow-ups only after this connect lifecycle milestone is verified.
+
 ## 2026-06-28 ActingLab session app lifecycle contract surface
 
 ### Current status

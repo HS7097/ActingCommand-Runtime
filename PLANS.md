@@ -130,6 +130,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance keep-alive surface: `session instance keep-alive` now exposes an explicit no-click instance reachability probe, and Session capabilities, access contract, API contract, and daemon request naming advertise `session request instance keep-alive` for future UI/scheduler consumers.
 - ActingLab session instance health contract surface: Session access and API contracts now expose `session request instance health` and an `instance_health_view` so UI/scheduler clients can discover the existing health and optional capture-diagnosis payload.
 - ActingLab session app lifecycle contract surface: Session access and API contracts now expose `session request app <launch|stop|restart>` as a lease-gated app lifecycle control surface for future UI/scheduler consumers.
+- ActingLab session instance connect lifecycle surface: `session instance connect` now completes the explicit connect/reconnect/keep-alive Phase A instance lifecycle surface, advertises `session request instance connect`, and routes daemon usage through the same lease-gated control path as reconnect.
+
+## Current ActingLab Session Instance Connect Lifecycle Surface
+
+The current Runtime task closes the remaining Phase A naming gap for explicit instance connection control.
+
+Scope:
+
+- Add `session instance connect` as a discoverable instance lifecycle command.
+- Reuse the existing device reachability path that verifies ADB device state and screen size.
+- Advertise `session request instance connect` in capabilities.
+- Add `daemon_controls.instance_connect = session request instance connect` to `session contract`.
+- Add `envelopes.instance_connect_view` to `session api`.
+- Treat connect as a lease-gated control when routed via the daemon or strict Session throat.
+- Preserve existing `session instance reconnect`, `session instance health`, and `session instance keep-alive` behavior.
+
+Safety direction:
+
+- This is a narrow Session Layer API and discoverability change for an existing reachability path.
+- It does not add a new ADB API, device backend, capture backend, app launch/stop/restart behavior, resource repository behavior, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+- Explicit `--via-daemon` requests still fail with `runtime_not_running` when no alive resident daemon exists instead of falling back to local ADB.
+
+Validation status:
+
+- Focused lease-gate, daemon-route, contract, API, capability, and strict-throat tests passed.
+- CLI smoke confirmed capabilities and `session api` expose the connect contract.
+- CLI smoke confirmed `session instance connect --via-daemon` fails visibly with `runtime_not_running` when no daemon is present.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session App Lifecycle Contract Surface
 
