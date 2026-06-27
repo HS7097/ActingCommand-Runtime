@@ -6,7 +6,7 @@ use actingcommand_device::{
     combine_operation_and_close, create_capture_backend, resolve_adb_path,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
-use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
+use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
@@ -449,6 +449,21 @@ enum SessionRecordClick {
 struct SessionRecordStepEvaluation {
     status: String,
     reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backtest: Option<SessionRecordAnchorBacktest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordAnchorBacktest {
+    source: String,
+    metric: String,
+    region: SessionRecordRect,
+    x: i32,
+    y: i32,
+    raw_score: f32,
+    score: f32,
+    threshold: f32,
+    passed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -474,6 +489,7 @@ struct SessionRecordAnchorArtifact {
 struct MaterializedAnchorArtifact {
     frame_provenance: SessionRecordFrameProvenance,
     artifact: SessionRecordAnchorArtifact,
+    evaluation: SessionRecordStepEvaluation,
 }
 
 #[derive(Debug, Clone)]
@@ -4595,21 +4611,27 @@ fn new_session_record_anchor_step(
 ) -> CliOutcome<SessionRecordStepData> {
     let id = required_non_empty_flag(flags, "--id")?;
     let region = parse_session_record_region(&flags.required("--region")?)?;
+    let threshold = parse_optional_unit_f64(flags, "--threshold")?;
     let materialized =
-        materialize_anchor_artifact(record, state_dir, step_id, &id, &region, flags)?;
+        materialize_anchor_artifact(record, state_dir, step_id, &id, &region, threshold, flags)?;
+    let evaluation = materialized
+        .as_ref()
+        .map(|materialized| materialized.evaluation.clone())
+        .unwrap_or_else(|| SessionRecordStepEvaluation {
+            status: "deferred".to_string(),
+            reason: "frame_not_provided".to_string(),
+            backtest: None,
+        });
     Ok(SessionRecordStepData::Anchor {
         id,
         region,
         color_check: flags.bool("--color-check"),
-        threshold: parse_optional_unit_f64(flags, "--threshold")?,
+        threshold,
         frame_provenance: materialized
             .as_ref()
             .map(|materialized| Box::new(materialized.frame_provenance.clone())),
         artifact: materialized.map(|materialized| Box::new(materialized.artifact)),
-        evaluation: SessionRecordStepEvaluation {
-            status: "deferred".to_string(),
-            reason: "backtest_not_implemented".to_string(),
-        },
+        evaluation,
     })
 }
 
@@ -4630,6 +4652,7 @@ fn materialize_anchor_artifact(
     step_id: &str,
     anchor_id: &str,
     region: &SessionRecordRegion,
+    threshold: Option<f64>,
     flags: &FlagArgs,
 ) -> CliOutcome<Option<MaterializedAnchorArtifact>> {
     let Some(frame_path) = flags
@@ -4656,6 +4679,7 @@ fn materialize_anchor_artifact(
     let crop_png = crop
         .png_for_artifact()
         .map_err(|err| CliError::usage(format!("failed to encode record anchor crop: {err}")))?;
+    let evaluation = backtest_anchor_crop(&frame, rect, &crop_png, threshold, flags)?;
     let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
         state_dir
             .join("record-artifacts")
@@ -4695,7 +4719,53 @@ fn materialize_anchor_artifact(
             height: crop.height,
             region: rect.clone(),
         },
+        evaluation,
     }))
+}
+
+fn backtest_anchor_crop(
+    frame: &Frame,
+    rect: &SessionRecordRect,
+    crop_png: &[u8],
+    threshold: Option<f64>,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordStepEvaluation> {
+    let scene = scene_from_frame(frame)?;
+    let metric = parse_match_metric_flag(flags)?;
+    let matched = scene
+        .match_template_with_metric(
+            crop_png,
+            Some(RecognitionRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            }),
+            metric,
+        )
+        .map_err(|err| CliError::usage(format!("failed to backtest record anchor crop: {err}")))?;
+    let threshold = threshold.unwrap_or(0.95) as f32;
+    let passed = matched.score >= threshold;
+    Ok(SessionRecordStepEvaluation {
+        status: if passed { "passed" } else { "failed" }.to_string(),
+        reason: if passed {
+            "self_backtest_passed"
+        } else {
+            "self_backtest_below_threshold"
+        }
+        .to_string(),
+        backtest: Some(SessionRecordAnchorBacktest {
+            source: "local_png_self_test".to_string(),
+            metric: match_metric_name(metric).to_string(),
+            region: rect.clone(),
+            x: matched.x,
+            y: matched.y,
+            raw_score: matched.raw_score,
+            score: matched.score,
+            threshold,
+            passed,
+        }),
+    })
 }
 
 fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame> {
@@ -4912,6 +4982,7 @@ fn amend_anchor_record_step(
         *evaluation = SessionRecordStepEvaluation {
             status: "deferred".to_string(),
             reason: "amended_needs_backtest".to_string(),
+            backtest: None,
         };
     }
     Ok(changed)
@@ -7236,6 +7307,12 @@ mod tests {
             Some("deferred")
         );
         assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("frame_not_provided")
+        );
+        assert!(data.pointer("/step/evaluation/backtest").is_none());
+        assert_eq!(
             data.pointer("/record/steps/0/step_id")
                 .and_then(Value::as_str),
             Some("home-anchor")
@@ -7323,6 +7400,51 @@ mod tests {
             data.pointer("/step/artifact/height")
                 .and_then(Value::as_u64),
             Some(5)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("self_backtest_passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/source")
+                .and_then(Value::as_str),
+            Some("local_png_self_test")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/metric")
+                .and_then(Value::as_str),
+            Some("ccorr_normed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/x")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/y")
+                .and_then(Value::as_i64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/step/evaluation/backtest/score")
+                .and_then(Value::as_f64)
+                .is_some_and(|score| score >= 0.99)
+        );
+        assert!(
+            data.pointer("/step/evaluation/backtest/threshold")
+                .and_then(Value::as_f64)
+                .is_some_and(|threshold| (threshold - 0.95).abs() < 0.00001)
         );
         let artifact_path = data
             .pointer("/step/artifact/path")

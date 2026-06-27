@@ -60,6 +60,53 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording step schema: `session record step --kind anchor|operation` now appends explicit authorized step metadata to an active recording context without capturing frames or writing resources.
 - ActingLab session recording amend schema: `session record amend` can update existing authorized anchor/operation step metadata without capturing frames, backtesting, or writing resources.
 - ActingLab session recording anchor frame materialization: authorized anchor steps can optionally attach a local PNG source frame, crop a rect-only template draft artifact, and record frame/artifact hashes without device I/O or resource writes.
+- ActingLab session recording anchor self-backtest: frame-backed anchor crops now run an offline source-frame template self-test and persist score, threshold, metric, match point, and pass/fail evaluation metadata.
+
+## Current ActingLab Session Recording Anchor Self-Backtest
+
+The current Runtime task advances Phase D by changing frame-backed anchor recording from draft-only materialization to draft materialization plus immediate offline self-backtest. The check reuses the existing recognition primitive: it matches the generated crop against the supplied source frame inside the authorized rect and records the result on the anchor evaluation.
+
+Scope:
+
+- For `session record step --kind anchor --frame <png> --region x,y,width,height`, run a local self-backtest after crop artifact generation.
+- Record evaluation status `passed` or `failed` with reason `self_backtest_passed` or `self_backtest_below_threshold`.
+- Persist backtest metadata:
+  - source
+  - metric
+  - region
+  - match point
+  - raw score
+  - normalized score
+  - effective threshold
+  - pass/fail boolean
+- Reuse existing `--metric` parsing where a frame-backed anchor is supplied.
+- Use explicit `--threshold` when provided; otherwise use a conservative `0.95` anchor self-test threshold.
+- Preserve metadata-only anchor steps as `deferred` with reason `frame_not_provided`.
+- Reset evaluation back to `deferred` with no backtest when an anchor is amended.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not live-capture frames, run contrast-frame validation, write resource packs, generate task bundles, touch SQLite, implement UI, or add game logic.
+- Backtest failures are recorded visibly in the step evaluation; decode, crop, and matching errors fail the command.
+
+Validation status:
+
+- Runtime was already aligned with `origin/main` before this task.
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `14` tests.
+- `cargo test -p actingcommand-actinglab` passed with `122` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed when run by itself; an earlier parallel run with clippy produced one transient `lab_validate_accepts_minimal_self_contained_package` failure, and the failing test passed immediately when rerun alone.
+- `git diff --check` passed.
+- Added-code prohibited-feature scan over source changes returned no matches for device input fallback, `adb shell screencap`, MaaTouch startup, SQLite, OCR/OpenCV, fallback, reconnect, retry, or live capture routing.
+
+Known follow-ups:
+
+- Add capture/current-frame integration only after the session daemon and stale-frame policy are wired into the recording path.
+- Add contrast-frame or cross-frame validation before promoting draft artifacts into resource repositories.
+- Implement `session record build-task` and resource-write integration in a later milestone.
 
 ## Current ActingLab Session Recording Anchor Frame Materialization
 

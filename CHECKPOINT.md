@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording anchor self-backtest
+
+### Current status
+
+- Added offline self-backtest for frame-backed `session record step --kind anchor`.
+- Frame-backed anchor crops now match the generated crop PNG against the supplied source frame inside the authorized rect.
+- Anchor evaluation now records `passed` or `failed`, reason, source, metric, rect, match point, raw score, normalized score, effective threshold, and pass/fail boolean.
+- Metadata-only anchor steps now remain `deferred` with reason `frame_not_provided`.
+- Anchor amend resets evaluation to `deferred` and clears any prior backtest metadata.
+- Reused existing recognition primitives and existing metric parsing; no new recognition algorithm was added.
+- `session record build-task` remains explicit `record_authoring_not_implemented`.
+- No device I/O, MaaTouch startup, live screenshot capture, contrast-frame validation, resource write, task bundle generation, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `24edd8b5c655f7bae6d322791c8624926561a61b`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-list --left-right --count HEAD...origin/main`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- First `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test -p actingcommand-actinglab lab_run::tests::lab_validate_accepts_minimal_self_contained_package -- --nocapture`
+- Rerun `cargo test --workspace`
+- Added-code prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, MaaTouch startup, SQLite, OCR/OpenCV, fallback, reconnect, retry, and live capture routing.
+
+### Test results
+
+- First targeted compile failed because a duplicate `match_metric_name` helper was added; the duplicate was removed and the existing helper is reused.
+- First targeted test run failed because the test compared an f32 threshold serialized as JSON to exact `0.95`; the test was changed to a bounded float comparison.
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `14` tests.
+- `cargo test -p actingcommand-actinglab` passed with `122` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- First `cargo test --workspace` was run in parallel with clippy and failed one `lab_validate_accepts_minimal_self_contained_package` test that had already passed in the package run.
+- The failing test passed immediately when rerun alone.
+- Rerun `cargo test --workspace` by itself passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Source-only added-code prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for offline anchor self-backtest.
+- Full recording remains incomplete: live frame capture/current-frame integration, contrast-frame validation, build-task/package output, and resource writes are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-anchor-self-backtest rollback point.
+3. Next implementation milestone should add capture/current-frame integration, contrast-frame validation, or `record build-task` semantics before resource writes.
+
 ## 2026-06-27 ActingLab session recording anchor frame materialization
 
 ### Current status
