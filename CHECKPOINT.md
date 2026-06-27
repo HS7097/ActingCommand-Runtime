@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon request journal
+
+### Current status
+
+- Added a durable resident daemon request journal under the session state directory.
+- Each processed daemon request now writes a `request-journal.jsonl` entry containing request id, command, args, lease metadata, success/error outcome, and created/started/completed timestamps.
+- Journal append happens after the daemon response is published and the request file is removed, avoiding duplicate command execution if journal writing fails.
+- Added `session journal --state-dir <dir> [--limit N]` to read recent request journal entries.
+- `session journal` validates `--limit` as `1..=1000`.
+- Corrupt journal lines fail visibly with a runtime error instead of returning incomplete/fake success.
+- Capabilities now advertise `session journal`.
+- No command execution semantics, lease enforcement, capture/input paths, request ordering, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `41125cce5ffe08891b0defe9ae948aa7f09efe21`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_journal_corrupt_line_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_journal_corrupt_line_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon request journal milestone.
+- Full Session Layer remains incomplete: journal retention/rotation, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, UI/API review surfaces, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-request-journal`.
+2. Continue Session Layer follow-ups: journal retention/rotation policy, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab bounded stream scaffold
 
 ### Current status

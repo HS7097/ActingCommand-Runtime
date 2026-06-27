@@ -84,8 +84,50 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon Lab run routing: `lab run --via-daemon` and `session request lab-run` can now submit trusted Lab package execution through the resident daemon request queue, with daemon-side lease validation before zip or device I/O.
 - ActingLab daemon package/operation run routing: `package run --via-daemon`, `operation run --via-daemon`, `session request package-run`, and `session request operation-run` now submit through the resident daemon request queue with daemon-side lease validation before package, operation, or device I/O.
 - ActingLab bounded stream scaffold: `stream --max-frames N` now exposes a local bounded frame-sampling contract, `stream --via-daemon` and `session request stream` route through the resident Session Layer request queue, and interactive input relay remains explicitly reserved.
+- ActingLab daemon request journal: processed resident daemon requests now append a durable JSONL journal, and `session journal` exposes recent request outcomes for diagnostics after response files are consumed.
 
-## Current ActingLab Bounded Stream Scaffold
+## Current ActingLab Daemon Request Journal
+
+The current Runtime task adds persistent diagnostics to the resident Session Layer request queue. A daemon-processed request now leaves a JSONL journal entry after the response is written and the request file is removed, so later UI, scheduler, or operator diagnostics can inspect what the single control throat actually accepted and returned.
+
+Scope:
+
+- Add `request-journal.jsonl` under the session state directory.
+- Record request id, command, sanitized command args, lease metadata, success/error outcome, and created/started/completed timestamps.
+- Write the daemon response first and remove the request file before appending the journal entry, avoiding duplicate command execution if journal writing fails.
+- Add `session journal --state-dir <dir> [--limit N]` for recent journal inspection.
+- Validate `--limit` as `1..=1000`.
+- Treat corrupt journal lines as visible runtime errors instead of returning incomplete or fake success.
+- Advertise `session journal` as an available offline diagnostic capability.
+
+Safety direction:
+
+- Journal append happens only after the request response is published and the request file is removed.
+- A journal read failure or corrupt line fails loudly with a runtime error.
+- This milestone does not change command execution semantics, lease enforcement, capture/input paths, or daemon request ordering.
+- This milestone adds no UI, scheduler implementation, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_journal_corrupt_line_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Surface journal summaries in future daemon health/status outputs when the UI/API contract is ready.
+- Decide retention/rotation policy for long-running daemon journals.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Bounded Stream Scaffold
 
 The current Runtime task turns the future `stream` command from an unknown/reserved placeholder into a small, bounded, read-only Session Layer surface. It samples capture frames through the existing capture backend path, reports frame metadata, and keeps the future trusted input relay explicitly unimplemented.
 

@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
@@ -39,6 +39,7 @@ const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
 const SESSION_REQUESTS_DIR: &str = "requests";
 const SESSION_RESPONSES_DIR: &str = "responses";
+const SESSION_REQUEST_JOURNAL_FILE: &str = "request-journal.jsonl";
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
     "--request-timeout-ms",
@@ -338,6 +339,20 @@ struct SessionCommandResponse {
     ok: bool,
     data: Option<Value>,
     error: Option<EnvelopeError>,
+    started_at_unix_ms: u64,
+    completed_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRequestJournalEntry {
+    request_id: String,
+    command: String,
+    args: Vec<String>,
+    #[serde(default)]
+    lease: Option<SessionCommandLease>,
+    ok: bool,
+    error: Option<EnvelopeError>,
+    created_at_unix_ms: u64,
     started_at_unix_ms: u64,
     completed_at_unix_ms: u64,
 }
@@ -3801,6 +3816,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "stop" => run_session_stop(args),
         "daemon" => run_session_daemon(args),
         "request" => run_session_request(global, args),
+        "journal" => run_session_journal(args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
@@ -3809,6 +3825,23 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "record" => run_session_record(global, args),
         _ => Err(CliError::usage(format!("unknown session command: {sub}"))),
     }
+}
+
+fn run_session_journal(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    flags.expect_positionals("session journal", 0)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let limit = parse_optional_usize(&flags, "--limit", 20)?;
+    if limit == 0 || limit > 1_000 {
+        return Err(CliError::usage("--limit must be between 1 and 1000"));
+    }
+    let entries = read_session_request_journal(&state_dir, limit)?;
+    Ok(json!({
+        "state_dir": state_dir.display().to_string(),
+        "journal": session_request_journal_path(&state_dir).display().to_string(),
+        "limit": limit,
+        "entries": entries
+    }))
 }
 
 fn run_session_status(args: &[String]) -> CliOutcome<Value> {
@@ -4190,7 +4223,7 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
                 path.display()
             ))
         })?;
-        let response = execute_session_command_request(request, state_dir);
+        let response = execute_session_command_request(request.clone(), state_dir);
         let response_path =
             session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
         write_json_file_atomic(&response_path, &response)?;
@@ -4200,9 +4233,29 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
                 path.display()
             ))
         })?;
+        append_session_request_journal(state_dir, &request, &response)?;
         processed += 1;
     }
     Ok(processed)
+}
+
+fn append_session_request_journal(
+    state_dir: &Path,
+    request: &SessionCommandRequest,
+    response: &SessionCommandResponse,
+) -> CliOutcome<()> {
+    let entry = SessionRequestJournalEntry {
+        request_id: request.request_id.clone(),
+        command: request.command.clone(),
+        args: request.args.clone(),
+        lease: request.lease.clone(),
+        ok: response.ok,
+        error: response.error.clone(),
+        created_at_unix_ms: request.created_at_unix_ms,
+        started_at_unix_ms: response.started_at_unix_ms,
+        completed_at_unix_ms: response.completed_at_unix_ms,
+    };
+    write_json_line(&session_request_journal_path(state_dir), &entry)
 }
 
 fn execute_session_command_request(
@@ -7591,6 +7644,70 @@ fn config_path() -> CliOutcome<PathBuf> {
     Ok(app_state_root()?.join("config.json"))
 }
 
+fn write_json_line<T>(path: &Path, value: &T) -> CliOutcome<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to create journal directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to open journal {}: {err}",
+                path.display()
+            ))
+        })?;
+    serde_json::to_writer(&mut file, value)
+        .map_err(|err| CliError::runtime_not_running(format!("failed to encode journal: {err}")))?;
+    file.write_all(b"\n").map_err(|err| {
+        CliError::runtime_not_running(format!("failed to write journal {}: {err}", path.display()))
+    })?;
+    file.flush().map_err(|err| {
+        CliError::runtime_not_running(format!("failed to flush journal {}: {err}", path.display()))
+    })
+}
+
+fn read_session_request_journal(
+    state_dir: &Path,
+    limit: usize,
+) -> CliOutcome<Vec<SessionRequestJournalEntry>> {
+    let path = session_request_journal_path(state_dir);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(&path).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to read journal {}: {err}", path.display()))
+    })?;
+    let lines = text
+        .lines()
+        .enumerate()
+        .filter(|(_line_no, line)| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    let skip = lines.len().saturating_sub(limit);
+    lines
+        .into_iter()
+        .skip(skip)
+        .map(|(line_no, line)| {
+            serde_json::from_str::<SessionRequestJournalEntry>(line).map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to parse journal {} line {}: {err}",
+                    path.display(),
+                    line_no + 1
+                ))
+            })
+        })
+        .collect()
+}
+
 fn app_state_root() -> CliOutcome<PathBuf> {
     let root = env::var("LOCALAPPDATA")
         .or_else(|_| env::var("APPDATA"))
@@ -7626,6 +7743,10 @@ fn session_requests_dir(state_dir: &Path) -> PathBuf {
 
 fn session_responses_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SESSION_RESPONSES_DIR)
+}
+
+fn session_request_journal_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_REQUEST_JOURNAL_FILE)
 }
 
 fn current_unix_ms() -> u64 {
@@ -8623,6 +8744,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session status", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
+        command_cap("session journal", ["offline"], "available"),
         command_cap(
             "session request capture",
             ["running_runtime", "device"],
@@ -14608,6 +14730,121 @@ mod tests {
     }
 
     #[test]
+    fn session_request_journal_records_success_and_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let success = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--max-frames".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(&state_dir).join("request-1.json"),
+            &success,
+        )
+        .unwrap();
+        assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+
+        let failed = SessionCommandRequest {
+            request_id: "request-2".to_string(),
+            command: "tap".to_string(),
+            global: success.global.clone(),
+            args: vec!["10".to_string(), "20".to_string()],
+            lease: None,
+            created_at_unix_ms: 2,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(&state_dir).join("request-2.json"),
+            &failed,
+        )
+        .unwrap();
+        assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+
+        let entries = read_session_request_journal(&state_dir, 10).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].request_id, "request-1");
+        assert!(entries[0].ok);
+        assert_eq!(entries[1].request_id, "request-2");
+        assert!(!entries[1].ok);
+        assert_eq!(
+            entries[1].error.as_ref().unwrap().code,
+            "lab_lease_required"
+        );
+
+        let recent = run_cli(
+            [
+                "--json",
+                "session",
+                "journal",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--limit",
+                "1",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(recent.exit_code(), 0);
+        let entries = recent
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("entries")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("request_id").and_then(Value::as_str),
+            Some("request-2")
+        );
+    }
+
+    #[test]
+    fn session_journal_corrupt_line_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "journal",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_instance_list_reads_config() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -14859,6 +15096,7 @@ mod tests {
         }
         for command in [
             "session status",
+            "session journal",
             "session instance",
             "session instance list",
             "session instance health",
