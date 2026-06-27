@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab instance registry backend fields
+
+### Current status
+
+- Added `adb_path` and `capture_backend` fields to `InstanceConfig`.
+- Added `config get/set instance.<id>.adb_path`.
+- Added `config get/set instance.<id>.capture_backend` with write-time backend validation.
+- `session instance list` now reports per-instance `adb_path` and `capture_backend`.
+- `session status --diagnostics` and daemon-routed status diagnostics now report these fields plus configured flags under `diagnostics.instances`.
+- Capture-capable commands now use the instance default capture backend when CLI `--capture-backend` is not provided.
+- CLI `--capture-backend` remains the highest-priority override.
+- Existing ADB path resolution priority remains unchanged: environment and reviewed MuMu discovery still precede configured paths.
+- No device backend, capture backend implementation, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `f1182aaba0d8c488512bb49ebd04b139d276af4c`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` config parsing, instance registry diagnostics, device config, capture backend routing, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab config_set`
+- `cargo test -p actingcommand-actinglab device_config`
+- `cargo test -p actingcommand-actinglab session_instance_list_reads_config`
+- `cargo test -p actingcommand-actinglab session_status`
+- Temporary-config CLI smoke using `actinglab config set instance.ak-b.*` followed by `actinglab --json session status --diagnostics`.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab config_set` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab device_config` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_instance_list_reads_config` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status` passed with `15` tests.
+- Temporary-config CLI smoke returned `diagnostics.instances.instances[0].adb_path = C:\Tools\adb.exe` and `capture_backend = nemu_ipc`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback/reconnect additions, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `265` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-instance-registry-backend-fields`.
+2. Continue Session Layer follow-ups only after this registry-backend milestone is verified.
+
 ## 2026-06-27 ActingLab session status instance registry diagnostics
 
 ### Current status

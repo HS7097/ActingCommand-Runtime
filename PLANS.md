@@ -124,6 +124,38 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab strict Session throat policy: `--require-session` and `ACTINGLAB_REQUIRE_SESSION_DAEMON` force device/control commands through an alive resident Session daemon or fail visibly with `session_daemon_required`.
 - ActingLab session instance capture health diagnostics: `session instance health --capture-diagnose` reports fresh-frame status, backend attempts, frame digest, and stale-capture recovery recommendations through the Session Layer health surface.
 - ActingLab session status instance registry diagnostics: `session status --diagnostics` and daemon-routed status diagnostics now expose configured instance summaries for future UI/scheduler health views.
+- ActingLab instance registry backend fields: instance config now stores `adb_path` and `capture_backend`; status/list diagnostics expose them; capture commands use instance default backend unless CLI `--capture-backend` overrides it.
+
+## Current ActingLab Instance Registry Backend Fields
+
+The current Runtime task fills a Phase A registry gap: configured instances can now carry their own ADB path and capture backend preference, in addition to serial, game, server, and package.
+
+Scope:
+
+- Add `instance.<id>.adb_path` and `instance.<id>.capture_backend` to `config get/set`.
+- Validate configured instance capture backend values at write time.
+- Expose `adb_path` and `capture_backend` in `session instance list`.
+- Expose the same fields and configured flags in `session status --diagnostics` / daemon-routed status diagnostics.
+- Let capture-capable commands use the instance capture backend as the default when no CLI `--capture-backend` is provided.
+- Preserve CLI `--capture-backend` as the highest-priority override.
+
+Safety direction:
+
+- This is a configuration and routing-default change only.
+- Existing ADB path resolution priority is preserved: environment and reviewed MuMu discovery still precede configured paths.
+- No device backend, capture backend implementation, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+Validation status:
+
+- Focused config get/set tests passed.
+- Focused device-config capture backend priority tests passed.
+- `session instance list` and `session_status` tests passed.
+- Manual CLI smoke confirmed `diagnostics.instances` reports configured `adb_path` and `capture_backend`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no direct ADB input, fallback/reconnect additions, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `265` `actingcommand-actinglab` tests.
 
 ## Current ActingLab Session Status Instance Registry Diagnostics
 

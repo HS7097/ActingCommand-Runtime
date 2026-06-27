@@ -304,6 +304,8 @@ struct InstanceConfig {
     game: Option<String>,
     server: Option<String>,
     package: Option<String>,
+    adb_path: Option<String>,
+    capture_backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1544,7 +1546,7 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let out = flags.required_path("--out")?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
-    let requested = global.capture_backend.unwrap_or_default();
+    let requested = device_config.capture_backend;
     let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
     let captured = capture_for_command(
         &device_config,
@@ -1581,7 +1583,7 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
     }
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
-    let requested = global.capture_backend.unwrap_or_default();
+    let requested = device_config.capture_backend;
     let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
     let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
     Ok(json!({
@@ -1882,7 +1884,7 @@ fn capture_for_command(
         return capture_require_fresh(device_config, requested, fresh_delay);
     }
 
-    let selected = create_capture_backend(device_config.capture_backend_config(requested))
+    let selected = create_capture_backend(device_config.capture_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
     let attempts = capture_attempts_json(&selected.diagnostics.attempts);
     let mut backend = selected.backend;
@@ -1924,7 +1926,11 @@ fn capture_fresh_probe_report(
     let mut attempts = Vec::new();
     let mut stale_suspected = false;
     for choice in fresh_probe_choices(requested) {
-        let selected = match create_capture_backend(device_config.capture_backend_config(choice)) {
+        let selected = match create_capture_backend(
+            device_config
+                .capture_backend_config()
+                .with_requested(choice),
+        ) {
             Ok(selected) => selected,
             Err(err) => {
                 attempts.push(json!({
@@ -3055,7 +3061,16 @@ fn run_session_stale_capture_recover(
     flags: &FlagArgs,
 ) -> CliOutcome<Value> {
     flags.expect_positionals("session recover --stale-capture", 0)?;
-    let requested = global.capture_backend.unwrap_or_default();
+    let config = read_user_config()?;
+    let instance = global
+        .instance
+        .as_ref()
+        .and_then(|instance_id| config.instances.get(instance_id));
+    let requested = effective_capture_backend_choice(
+        global,
+        global.instance.as_deref().unwrap_or("default"),
+        instance,
+    )?;
     let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
     Ok(json!({
         "status": "planned",
@@ -3067,7 +3082,8 @@ fn run_session_stale_capture_recover(
         "fresh_delay_ms": fresh_delay.as_millis(),
         "diagnosis": {
             "command": format!(
-                "capture diagnose --capture-backend auto --fresh-delay-ms {}",
+                "capture diagnose --capture-backend {} --fresh-delay-ms {}",
+                requested.as_str(),
                 fresh_delay.as_millis()
             ),
             "read_only": true,
@@ -3082,7 +3098,8 @@ fn run_session_stale_capture_recover(
                 "order": 1,
                 "type": "fresh_probe",
                 "command": format!(
-                    "capture diagnose --capture-backend auto --fresh-delay-ms {}",
+                    "capture diagnose --capture-backend {} --fresh-delay-ms {}",
+                    requested.as_str(),
                     fresh_delay.as_millis()
                 ),
                 "read_only": true
@@ -3115,7 +3132,7 @@ fn run_session_stale_capture_recover(
             }
         ],
         "safety_gate": "diagnose_capture_backend_before_restart",
-        "next": "run capture diagnose with auto backend selection; only restart the app if lighter capture-backend recovery cannot restore fresh frames"
+        "next": "run capture diagnose with the effective backend selection; only restart the app if lighter capture-backend recovery cannot restore fresh frames"
     }))
 }
 
@@ -4375,14 +4392,14 @@ fn stream_dry_run_frames(max_frames: usize) -> Vec<Value> {
 }
 
 fn stream_capture_frames(
-    global: &GlobalOptions,
+    _global: &GlobalOptions,
     flags: &FlagArgs,
     device_config: &DeviceRuntimeConfig,
     max_frames: usize,
     interval: Duration,
     fresh_delay: Duration,
 ) -> CliOutcome<Vec<Value>> {
-    let requested = global.capture_backend.unwrap_or_default();
+    let requested = device_config.capture_backend;
     let mut frames = Vec::with_capacity(max_frames);
     for index in 0..max_frames {
         let captured = capture_for_command(
@@ -5144,10 +5161,14 @@ fn session_instance_registry_diagnostics(config: Option<&UserConfig>) -> Value {
                 "game": instance.game,
                 "server": instance.server,
                 "package": instance.package,
+                "adb_path": instance.adb_path,
+                "capture_backend": instance.capture_backend,
                 "serial_configured": instance.serial.is_some(),
                 "game_configured": instance.game.is_some(),
                 "server_configured": instance.server.is_some(),
-                "package_configured": instance.package.is_some()
+                "package_configured": instance.package.is_some(),
+                "adb_path_configured": instance.adb_path.is_some(),
+                "capture_backend_configured": instance.capture_backend.is_some()
             })
         })
         .collect::<Vec<_>>();
@@ -6218,7 +6239,9 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
                 "serial": instance.serial,
                 "game": instance.game,
                 "server": instance.server,
-                "package": instance.package
+                "package": instance.package,
+                "adb_path": instance.adb_path,
+                "capture_backend": instance.capture_backend
             })).collect::<Vec<_>>()
         })),
         "health" | "reconnect" => {
@@ -6232,7 +6255,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
             let screen_size = adb
                 .screen_size(&serial)
                 .map_err(|err| CliError::device(err.to_string()))?;
-            let requested = global.capture_backend.unwrap_or_default();
+            let requested = device_config.capture_backend;
             let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
             let capture_report = if action == "health" && flags.bool("--capture-diagnose") {
                 Some(capture_fresh_probe_report(
@@ -7958,7 +7981,7 @@ fn capture_session_record_source_frame(
     anchor_id: &str,
 ) -> CliOutcome<SessionRecordSourceFrame> {
     let device_config = device_config(global, config)?;
-    let requested = global.capture_backend.unwrap_or_default();
+    let requested = device_config.capture_backend;
     let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
     let captured = capture_for_command(
         &device_config,
@@ -9570,22 +9593,47 @@ fn device_config_for_instance(
         target.serial = Some(instance_id.clone());
     }
     let adb = AdbConfig {
-        adb_path: effective_adb_path(config)?.path,
+        adb_path: effective_adb_path_for_instance(config, instance)?.path,
         ..Default::default()
     };
-    Ok(DeviceRuntimeConfig { adb, target })
+    let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
+    Ok(DeviceRuntimeConfig {
+        adb,
+        target,
+        capture_backend,
+    })
 }
 
 #[derive(Debug)]
 struct DeviceRuntimeConfig {
     adb: AdbConfig,
     target: DeviceTarget,
+    capture_backend: CaptureBackendChoice,
 }
 
 impl DeviceRuntimeConfig {
-    fn capture_backend_config(&self, requested: CaptureBackendChoice) -> CaptureBackendConfig {
-        CaptureBackendConfig::new(self.adb.clone(), self.target.clone()).with_requested(requested)
+    fn capture_backend_config(&self) -> CaptureBackendConfig {
+        CaptureBackendConfig::new(self.adb.clone(), self.target.clone())
+            .with_requested(self.capture_backend)
     }
+}
+
+fn effective_capture_backend_choice(
+    global: &GlobalOptions,
+    instance_id: &str,
+    instance: Option<&InstanceConfig>,
+) -> CliOutcome<CaptureBackendChoice> {
+    if let Some(choice) = global.capture_backend {
+        return Ok(choice);
+    }
+    let Some(value) = instance.and_then(|instance| instance.capture_backend.as_deref()) else {
+        return Ok(CaptureBackendChoice::Auto);
+    };
+    CaptureBackendChoice::parse(value).map_err(|err| {
+        CliError::usage(format!(
+            "invalid instance.{instance_id}.capture_backend '{value}': {err}"
+        ))
+    })
 }
 
 fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<String> {
@@ -10017,7 +10065,7 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package",
+            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend",
         ));
     }
     let instance = config.instances.get(parts[1]);
@@ -10026,6 +10074,8 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
         "game" => instance.and_then(|instance| instance.game.clone()),
         "server" => instance.and_then(|instance| instance.server.clone()),
         "package" => instance.and_then(|instance| instance.package.clone()),
+        "adb_path" => instance.and_then(|instance| instance.adb_path.clone()),
+        "capture_backend" => instance.and_then(|instance| instance.capture_backend.clone()),
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     };
     Ok(json!(value))
@@ -10035,7 +10085,7 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package",
+            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend",
         ));
     }
     let instance = config.instances.entry(parts[1].to_string()).or_default();
@@ -10044,6 +10094,11 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
         "game" => instance.game = Some(value.to_string()),
         "server" => instance.server = Some(value.to_string()),
         "package" => instance.package = Some(value.to_string()),
+        "adb_path" => instance.adb_path = Some(value.to_string()),
+        "capture_backend" => {
+            CaptureBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;
+            instance.capture_backend = Some(value.to_string());
+        }
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     }
     Ok(())
@@ -10051,6 +10106,16 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
 
 fn effective_adb_path(config: &UserConfig) -> CliOutcome<actingcommand_device::ResolvedAdbPath> {
     resolve_adb_path(config.adb_path.as_deref()).map_err(|err| CliError::device(err.to_string()))
+}
+
+fn effective_adb_path_for_instance(
+    config: &UserConfig,
+    instance: Option<&InstanceConfig>,
+) -> CliOutcome<actingcommand_device::ResolvedAdbPath> {
+    let configured = instance
+        .and_then(|instance| instance.adb_path.as_deref())
+        .or(config.adb_path.as_deref());
+    resolve_adb_path(configured).map_err(|err| CliError::device(err.to_string()))
 }
 
 fn resolved_adb_json(config: &UserConfig) -> Value {
@@ -10724,7 +10789,7 @@ fn load_scene_from_flags(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
     if flags.bool("--capture") {
         let config = read_user_config()?;
         let device_config = device_config(global, &config)?;
-        let requested = global.capture_backend.unwrap_or_default();
+        let requested = device_config.capture_backend;
         let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
         let captured = capture_for_command(
             &device_config,
@@ -10760,7 +10825,7 @@ fn load_monitor_scene_from_flags(
     if flags.bool("--capture") {
         let config = read_user_config()?;
         let device_config = device_config(global, &config)?;
-        let requested = global.capture_backend.unwrap_or_default();
+        let requested = device_config.capture_backend;
         let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
         let captured = capture_for_command(
             &device_config,
@@ -11704,6 +11769,96 @@ mod tests {
                 .get("value")
                 .and_then(Value::as_str),
             Some("com.hypergryph.arknights.bilibili")
+        );
+    }
+
+    #[test]
+    fn config_set_and_get_instance_adb_and_capture_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let adb = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.adb_path",
+                "C:\\Tools\\adb.exe",
+            ],
+            true,
+        );
+        let backend = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.capture_backend",
+                "nemu_ipc",
+            ],
+            true,
+        );
+        let get_adb = run_cli(["--json", "config", "get", "instance.ak-b.adb_path"], true);
+        let get_backend = run_cli(
+            ["--json", "config", "get", "instance.ak-b.capture_backend"],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(adb.exit_code(), 0);
+        assert_eq!(backend.exit_code(), 0);
+        assert_eq!(
+            get_adb
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("C:\\Tools\\adb.exe")
+        );
+        assert_eq!(
+            get_backend
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+    }
+
+    #[test]
+    fn config_set_rejects_invalid_instance_capture_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.capture_backend",
+                "not-a-backend",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
         );
     }
 
@@ -17898,6 +18053,8 @@ mod tests {
                 game: Some("ark".to_string()),
                 server: Some("cn-bilibili".to_string()),
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: Some("C:\\Tools\\adb.exe".to_string()),
+                capture_backend: Some("nemu_ipc".to_string()),
             },
         );
 
@@ -17925,6 +18082,18 @@ mod tests {
                 .pointer("/instances/0/package_configured")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/0/adb_path")
+                .and_then(Value::as_str),
+            Some("C:\\Tools\\adb.exe")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/0/capture_backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
         );
     }
 
@@ -20110,6 +20279,8 @@ mod tests {
                 game: Some("ark".to_string()),
                 server: Some("cn-bilibili".to_string()),
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: Some("C:\\Tools\\adb.exe".to_string()),
+                capture_backend: Some("nemu_ipc".to_string()),
             },
         );
         write_user_config(&config).unwrap();
@@ -20160,6 +20331,12 @@ mod tests {
                 .pointer("/instances/instances/0/server")
                 .and_then(Value::as_str),
             Some("cn-bilibili")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/instances/0/capture_backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
         );
     }
 
@@ -20333,6 +20510,26 @@ mod tests {
             ["--json", "config", "set", "instance.azur.server", "jp"],
             true,
         );
+        let _ = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.azur.adb_path",
+                "C:\\Tools\\adb.exe",
+            ],
+            true,
+        );
+        let _ = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.azur.capture_backend",
+                "droidcast_raw",
+            ],
+            true,
+        );
         let result = run_cli(["--json", "session", "instance", "list"], true);
         unsafe {
             env::remove_var(CONFIG_ENV);
@@ -20348,6 +20545,14 @@ mod tests {
             .unwrap();
         assert_eq!(instances.len(), 1);
         assert_eq!(instances[0].get("id").and_then(Value::as_str), Some("azur"));
+        assert_eq!(
+            instances[0].get("adb_path").and_then(Value::as_str),
+            Some("C:\\Tools\\adb.exe")
+        );
+        assert_eq!(
+            instances[0].get("capture_backend").and_then(Value::as_str),
+            Some("droidcast_raw")
+        );
     }
 
     #[test]
@@ -21293,6 +21498,50 @@ mod tests {
         let config = UserConfig::default();
         let resolved = device_config(&global, &config).expect("device config");
         assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
+    }
+
+    #[test]
+    fn device_config_uses_instance_capture_backend_default() {
+        let global = GlobalOptions {
+            instance: Some("ak-b".to_string()),
+            ..Default::default()
+        };
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                capture_backend: Some("nemu_ipc".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolved = device_config(&global, &config).expect("device config");
+
+        assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
+        assert_eq!(resolved.capture_backend, CaptureBackendChoice::NemuIpc);
+    }
+
+    #[test]
+    fn device_config_cli_capture_backend_overrides_instance_default() {
+        let global = GlobalOptions {
+            instance: Some("ak-b".to_string()),
+            capture_backend: Some(CaptureBackendChoice::Adb),
+            ..Default::default()
+        };
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                capture_backend: Some("nemu_ipc".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolved = device_config(&global, &config).expect("device config");
+
+        assert_eq!(resolved.capture_backend, CaptureBackendChoice::Adb);
     }
 
     #[test]
