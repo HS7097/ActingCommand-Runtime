@@ -131,6 +131,32 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session instance health contract surface: Session access and API contracts now expose `session request instance health` and an `instance_health_view` so UI/scheduler clients can discover the existing health and optional capture-diagnosis payload.
 - ActingLab session app lifecycle contract surface: Session access and API contracts now expose `session request app <launch|stop|restart>` as a lease-gated app lifecycle control surface for future UI/scheduler consumers.
 - ActingLab session instance connect lifecycle surface: `session instance connect` now completes the explicit connect/reconnect/keep-alive Phase A instance lifecycle surface, advertises `session request instance connect`, and routes daemon usage through the same lease-gated control path as reconnect.
+- ActingLab session instance app lifecycle alias: `session instance app <launch|stop|restart>` now matches the Session Layer task contract while reusing the existing lease-gated `session app <launch|stop|restart>` implementation.
+
+## Current ActingLab Session Instance App Lifecycle Alias
+
+The current Runtime task closes a CLI surface mismatch with the Session Layer task draft, which groups app lifecycle under instance lifecycle management.
+
+Scope:
+
+- Add `session instance app <launch|stop|restart>` as a thin alias for existing app lifecycle control.
+- Add `session request instance app <launch|stop|restart>` as the daemon request alias.
+- Reuse the existing `session app <launch|stop|restart>` implementation without duplicating app launch/stop/restart logic.
+- Require the same Session Layer lease for daemon-routed `session request instance app ...` requests.
+- Advertise the alias in capabilities, `session contract`, `session api`, and Session Layer control examples.
+
+Safety direction:
+
+- This is an API/CLI compatibility alias only.
+- It does not change app launch/stop/restart execution, package resolution, ADB commands, device backend behavior, capture backend behavior, daemon queue semantics, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+- Explicit `--via-daemon` requests still fail with `runtime_not_running` when no alive resident daemon exists instead of falling back to local execution.
+
+Validation status:
+
+- Focused strict-throat, lease-gate, daemon-route, access contract, API contract, and capability tests passed.
+- CLI smoke confirmed capabilities expose `session request instance app` and concrete `session instance app ...` commands.
+- CLI smoke confirmed `session instance app launch --via-daemon` fails visibly with `runtime_not_running` when no daemon is present.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session Instance Connect Lifecycle Surface
 

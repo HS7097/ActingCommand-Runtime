@@ -1098,7 +1098,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app restart", "tap-target", "navigate", "recover"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app restart", "tap-target", "navigate", "recover"]
             }
         },
         "safety": {
@@ -1158,6 +1158,7 @@ fn session_access_contract() -> Value {
         },
         "daemon_controls": {
             "app_lifecycle": "session request app <launch|stop|restart>",
+            "instance_app_lifecycle": "session request instance app <launch|stop|restart>",
             "instance_connect": "session request instance connect",
             "instance_reconnect": "session request instance reconnect"
         },
@@ -1195,6 +1196,9 @@ fn session_access_contract() -> Value {
                     "session app launch",
                     "session app stop",
                     "session app restart",
+                    "session instance app launch",
+                    "session instance app stop",
+                    "session instance app restart",
                     "lab-run",
                     "package-run",
                     "operation-run",
@@ -1410,6 +1414,7 @@ fn session_api_contract() -> Value {
             "app_lifecycle_view": {
                 "query": "session app <launch|stop|restart>",
                 "daemon_query": "session request app <launch|stop|restart>",
+                "aliases": ["session instance app <launch|stop|restart>", "session request instance app <launch|stop|restart>"],
                 "requires_lease": true,
                 "actions": ["launch", "stop", "restart"],
                 "action_field": "action",
@@ -1452,6 +1457,9 @@ fn session_api_contract() -> Value {
                     "session app launch",
                     "session app stop",
                     "session app restart",
+                    "session instance app launch",
+                    "session instance app stop",
+                    "session instance app restart",
                     "lab-run",
                     "package-run",
                     "operation-run",
@@ -1758,7 +1766,7 @@ fn session_subcommand_requires_throat(sub: &str, args: &[String]) -> bool {
         "capture" | "recover" | "app" => true,
         "instance" => matches!(
             args.first().map(String::as_str),
-            Some("connect" | "health" | "keep-alive" | "reconnect")
+            Some("app" | "connect" | "health" | "keep-alive" | "reconnect")
         ),
         "record" | "lease" | "request" | "status" | "start" | "stop" | "cleanup" | "daemon"
         | "contract" | "api" | "transport" | "journal" | "events" => false,
@@ -6229,7 +6237,7 @@ fn execute_session_command_request_inner(
         "instance" => {
             if matches!(
                 request.args.first().map(String::as_str),
-                Some("connect" | "reconnect")
+                Some("app" | "connect" | "reconnect")
             ) {
                 ensure_session_request_lease(state_dir, request)?;
             }
@@ -6363,9 +6371,17 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
 fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let action = args.first().map(String::as_str).ok_or_else(|| {
         CliError::usage(
-            "session instance requires list|registry|connect|health|keep-alive|reconnect",
+            "session instance requires list|registry|connect|health|keep-alive|reconnect|app",
         )
     })?;
+    if action == "app" {
+        if args.get(1).is_none() {
+            return Err(CliError::usage(
+                "session instance app requires launch|stop|restart",
+            ));
+        }
+        return run_session_app(global, &args[1..]);
+    }
     let flags = FlagArgs::parse(&args[1..])?;
     let should_route = if matches!(action, "connect" | "reconnect") {
         should_route_control_via_session_daemon(global, &flags)?
@@ -11223,6 +11239,11 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap(
+            "session request instance app",
+            ["running_runtime", "device", "lab_lease"],
+            "available",
+        ),
+        command_cap(
             "session request app",
             ["running_runtime", "device", "lab_lease"],
             "available",
@@ -11289,6 +11310,10 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance keep-alive", ["device"], "available"),
         command_cap("session instance connect", ["device"], "available"),
         command_cap("session instance reconnect", ["device"], "available"),
+        command_cap("session instance app", ["device"], "available"),
+        command_cap("session instance app launch", ["device"], "available"),
+        command_cap("session instance app stop", ["device"], "available"),
+        command_cap("session instance app restart", ["device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session app launch", ["device"], "available"),
         command_cap("session app stop", ["device"], "available"),
@@ -12282,6 +12307,10 @@ mod tests {
         assert!(session_subcommand_requires_throat(
             "instance",
             &["connect".to_string()]
+        ));
+        assert!(session_subcommand_requires_throat(
+            "instance",
+            &["app".to_string(), "launch".to_string()]
         ));
         assert!(session_subcommand_requires_throat(
             "instance",
@@ -17792,30 +17821,46 @@ mod tests {
 
     #[test]
     fn session_app_request_requires_lease_before_device_io() {
-        let temp = TempDir::new().unwrap();
-        let request = SessionCommandRequest {
-            request_id: "request-1".to_string(),
-            command: "app".to_string(),
-            global: SessionCommandGlobal {
-                instance: Some("ak".to_string()),
-                game: None,
-                server: None,
-                resource_root: None,
-                capture_backend: None,
-                dry_run: false,
-            },
-            args: vec![
-                "launch".to_string(),
-                "--package".to_string(),
-                "com.example.game".to_string(),
-            ],
-            lease: None,
-            created_at_unix_ms: 1,
-        };
+        for (command, args) in [
+            (
+                "app",
+                vec![
+                    "launch".to_string(),
+                    "--package".to_string(),
+                    "com.example.game".to_string(),
+                ],
+            ),
+            (
+                "instance",
+                vec![
+                    "app".to_string(),
+                    "launch".to_string(),
+                    "--package".to_string(),
+                    "com.example.game".to_string(),
+                ],
+            ),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let request = SessionCommandRequest {
+                request_id: format!("{command}-request"),
+                command: command.to_string(),
+                global: SessionCommandGlobal {
+                    instance: Some("ak".to_string()),
+                    game: None,
+                    server: None,
+                    resource_root: None,
+                    capture_backend: None,
+                    dry_run: false,
+                },
+                args,
+                lease: None,
+                created_at_unix_ms: 1,
+            };
 
-        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
-        assert_eq!(err.code, "lab_lease_required");
-        assert_eq!(err.exit_code(), 3);
+            let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+            assert_eq!(err.code, "lab_lease_required");
+            assert_eq!(err.exit_code(), 3);
+        }
     }
 
     #[test]
@@ -19041,6 +19086,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/daemon_controls/instance_app_lifecycle")
+                .and_then(Value::as_str),
+            Some("session request instance app <launch|stop|restart>")
+        );
+        assert_eq!(
+            payload
                 .pointer("/daemon_controls/instance_connect")
                 .and_then(Value::as_str),
             Some("session request instance connect")
@@ -19167,6 +19218,18 @@ mod tests {
                 .pointer("/envelopes/app_lifecycle_view/daemon_query")
                 .and_then(Value::as_str),
             Some("session request app <launch|stop|restart>")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/app_lifecycle_view/aliases/0")
+                .and_then(Value::as_str),
+            Some("session instance app <launch|stop|restart>")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/app_lifecycle_view/aliases/1")
+                .and_then(Value::as_str),
+            Some("session request instance app <launch|stop|restart>")
         );
         assert_eq!(
             payload
@@ -19687,15 +19750,14 @@ mod tests {
 
     #[test]
     fn session_app_via_daemon_accepts_lease_flags_before_daemon_lookup() {
-        let temp = TempDir::new().unwrap();
-        let result = run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "app",
-                "launch",
+        for args in [
+            vec!["session", "app", "launch"],
+            vec!["session", "instance", "app", "launch"],
+        ] {
+            let temp = TempDir::new().unwrap();
+            let mut command = vec!["--json", "--instance", "ak"];
+            command.extend(args);
+            command.extend([
                 "--via-daemon",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
@@ -19705,15 +19767,15 @@ mod tests {
                 "lease-1",
                 "--package",
                 "com.example.game",
-            ],
-            true,
-        );
+            ]);
+            let result = run_cli(command, true);
 
-        assert_eq!(result.exit_code(), 5);
-        assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "runtime_not_running"
-        );
+            assert_eq!(result.exit_code(), 5);
+            assert_eq!(
+                result.envelope.error.as_ref().unwrap().code,
+                "runtime_not_running"
+            );
+        }
     }
 
     #[test]
@@ -21566,6 +21628,10 @@ mod tests {
             "session instance keep-alive",
             "session instance connect",
             "session instance reconnect",
+            "session instance app",
+            "session instance app launch",
+            "session instance app stop",
+            "session instance app restart",
             "session app",
             "session app launch",
             "session app stop",
@@ -21595,6 +21661,7 @@ mod tests {
             "session request instance keep-alive",
             "session request instance connect",
             "session request instance reconnect",
+            "session request instance app",
             "session request app",
             "session request lab-run",
             "session request package-run",

@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session instance app lifecycle alias
+
+### Current status
+
+- Added `session instance app <launch|stop|restart>` as a compatibility alias matching the Session Layer task draft.
+- Added `session request instance app <launch|stop|restart>` as the daemon request alias.
+- The alias reuses the existing `session app <launch|stop|restart>` implementation.
+- Daemon-routed `session request instance app ...` is lease-gated before app/device I/O, matching the existing `session request app ...` control path.
+- Strict Session throat coverage now includes `session instance app ...`.
+- Session capabilities now advertise `session request instance app`, `session instance app`, and concrete `session instance app launch|stop|restart` commands.
+- `session contract` now exposes `daemon_controls.instance_app_lifecycle`.
+- `session api` now lists `session instance app ...` aliases on `app_lifecycle_view`.
+- No app lifecycle execution logic, package resolution, ADB command, device backend behavior, capture backend behavior, daemon queue semantics, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `de780f052ff95e10e7c02f0afe8eb3b6c8ed2a65`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session contracts, capabilities, strict Session throat classification, daemon request dispatch, instance command handling, app lifecycle handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab strict_session_throat_covers_instance_keep_alive`
+- `cargo test -p actingcommand-actinglab session_app_request_requires_lease_before_device_io`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract`
+- `cargo test -p actingcommand-actinglab session_app_via_daemon_accepts_lease_flags_before_daemon_lookup`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session instance app launch --via-daemon --state-dir target\instance-app-empty-session --lease-holder scheduler --lease-id lease-1 --package com.example.game --request-timeout-ms 1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused strict Session throat, lease-gate, access contract, API contract, daemon-route, and capability registration tests passed.
+- CLI smoke confirmed `capabilities` exposes `session request instance app`, `session instance app`, and concrete `session instance app launch|stop|restart` commands.
+- CLI smoke confirmed explicit daemon routing returns `runtime_not_running` with exit code `5` when no daemon is present.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `269` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-instance-app-alias`.
+2. Continue Session Layer follow-ups only after this instance app lifecycle alias milestone is verified.
+
 ## 2026-06-28 ActingLab session instance connect lifecycle surface
 
 ### Current status
