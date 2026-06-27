@@ -5945,6 +5945,7 @@ fn amend_anchor_record_step(
     flags: &FlagArgs,
 ) -> CliOutcome<bool> {
     let mut changed = false;
+    let mut auto_region_override = None;
     if let Some(value) = flags.optional("--id").filter(|value| value != "true") {
         if value.trim().is_empty() {
             return Err(CliError::usage("--id must not be empty"));
@@ -5952,8 +5953,17 @@ fn amend_anchor_record_step(
         *target.id = value;
         changed = true;
     }
+    if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {
+        let selection = select_recorded_auto_region_candidate(target.evaluation, candidate_index)?;
+        *target.region = SessionRecordRegion::Rect {
+            rect: selection.selected.clone(),
+        };
+        auto_region_override = Some(selection);
+        changed = true;
+    }
     if let Some(value) = flags.optional("--region").filter(|value| value != "true") {
         *target.region = parse_session_record_region(&value)?;
+        auto_region_override = None;
         changed = true;
     }
     if flags.bool("--color-check") {
@@ -5973,9 +5983,56 @@ fn amend_anchor_record_step(
         changed = true;
     }
     if changed {
-        refresh_amended_anchor_artifact(context, step_id, target, flags)?;
+        refresh_amended_anchor_artifact(context, step_id, target, flags, auto_region_override)?;
     }
     Ok(changed)
+}
+
+fn parse_session_record_candidate_index(flags: &FlagArgs) -> CliOutcome<Option<usize>> {
+    let candidate_index = flags.optional("--candidate-index");
+    let auto_candidate = flags.optional("--auto-candidate");
+    if candidate_index.is_some() && auto_candidate.is_some() {
+        return Err(CliError::usage(
+            "record amend accepts only one of --candidate-index or --auto-candidate",
+        ));
+    }
+    let Some(value) = candidate_index.or(auto_candidate) else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "record amend candidate selection requires an index value",
+        ));
+    }
+    value.parse::<usize>().map(Some).map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse record amend candidate index '{value}': {err}"
+        ))
+    })
+}
+
+fn select_recorded_auto_region_candidate(
+    evaluation: &SessionRecordStepEvaluation,
+    candidate_index: usize,
+) -> CliOutcome<SessionRecordAutoRegionSelection> {
+    let Some(auto_region) = &evaluation.auto_region else {
+        return Err(CliError::usage(
+            "record amend --candidate-index requires an existing auto-region candidate report",
+        ));
+    };
+    let Some(candidate) = auto_region.candidates.get(candidate_index) else {
+        return Err(CliError::usage(format!(
+            "record amend candidate index {candidate_index} is out of range for {} candidates",
+            auto_region.candidates.len()
+        )));
+    };
+    let mut selection = auto_region.clone();
+    selection.selected = candidate.region.clone();
+    selection.selected_reason = "operator_selected_candidate".to_string();
+    for (index, candidate) in selection.candidates.iter_mut().enumerate() {
+        candidate.selected = index == candidate_index;
+    }
+    Ok(selection)
 }
 
 fn refresh_amended_anchor_artifact(
@@ -5983,6 +6040,7 @@ fn refresh_amended_anchor_artifact(
     step_id: &str,
     target: &mut SessionRecordAnchorAmendTarget<'_>,
     flags: &FlagArgs,
+    auto_region_override: Option<SessionRecordAutoRegionSelection>,
 ) -> CliOutcome<()> {
     let Some(provenance) = target.frame_provenance.as_deref() else {
         *target.evaluation = SessionRecordStepEvaluation {
@@ -5995,12 +6053,19 @@ fn refresh_amended_anchor_artifact(
         return Ok(());
     };
     let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
-    let resolution = resolve_session_record_anchor_rect(
-        &source_frame.frame,
-        target.region,
-        *target.threshold,
-        flags,
-    )?;
+    let resolution = if let Some(auto_region) = auto_region_override {
+        SessionRecordAnchorRegionResolution {
+            rect: auto_region.selected.clone(),
+            auto_region: Some(auto_region),
+        }
+    } else {
+        resolve_session_record_anchor_rect(
+            &source_frame.frame,
+            target.region,
+            *target.threshold,
+            flags,
+        )?
+    };
     let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
     let materialized = materialize_anchor_artifact_from_source(
         source_frame,
@@ -10232,6 +10297,240 @@ mod tests {
             .map(PathBuf::from)
             .expect("artifact path");
         assert!(artifact_path.is_file());
+    }
+
+    #[test]
+    fn session_record_amend_selects_auto_region_candidate_and_rebacktests() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let contrast_path = temp.path().join("contrast.png");
+        fs::write(
+            &frame_path,
+            test_auto_region_discrimination_frame_png(false),
+        )
+        .unwrap();
+        fs::write(
+            &contrast_path,
+            test_auto_region_discrimination_frame_png(true),
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--contrast-frame",
+                contrast_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "home-anchor",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--candidate-index",
+                "0",
+                "--contrast-frame",
+                contrast_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(amend.exit_code(), 0);
+        let data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/region/rect/x").and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/y").and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected_reason")
+                .and_then(Value::as_str),
+            Some("operator_selected_candidate")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected/x")
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/auto_region/selected/y")
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+        let candidates = data
+            .pointer("/step/evaluation/auto_region/candidates")
+            .and_then(Value::as_array)
+            .expect("auto-region candidates");
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(
+                    |candidate| candidate.get("selected").and_then(Value::as_bool) == Some(true)
+                )
+                .count(),
+            1
+        );
+        assert_eq!(
+            candidates
+                .first()
+                .and_then(|candidate| candidate.get("selected"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("contrast_backtest_matched")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/contrast_backtest/passed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_record_amend_candidate_index_requires_auto_region_report() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "home-anchor",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--candidate-index",
+                "0",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(amend.exit_code(), 2);
+        assert_eq!(
+            amend.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            amend
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("auto-region candidate report")
+        );
     }
 
     #[test]
