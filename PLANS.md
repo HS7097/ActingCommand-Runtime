@@ -119,6 +119,27 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
 - ActingLab lease-gated daemon monitor recovery policy: daemon monitor policies can opt into maintenance recovery only when stored lease metadata matches the active Session Layer lease; daemon ticks persist recovery results or visible recovery errors in monitor state.
+- ActingLab lease-deferred daemon monitor recovery coordination: daemon monitor recovery now defers visibly with `deferred_by_lease` when the active lease is missing or held by another client, so self-heal does not fight scheduler or Lab ownership.
+
+## Current ActingLab Lease-Deferred Daemon Monitor Recovery Coordination
+
+This increment tightens Session Layer Phase C coordination with scheduler-owned arbitration without implementing the scheduler itself.
+
+- Recovery-capable monitor policies still require stored lease metadata at configuration time.
+- When daemon-owned monitoring diagnoses a non-healthy state, recovery is attempted only if the current active lease matches the stored policy lease.
+- If the active lease is missing, held by another holder, or has a mismatched lease id, monitor state records `last_recovery.status = deferred_by_lease` and `executed = false`.
+- A lease deferral is visible machine-readable state, not a fake recovery success and not an attempt to click without ownership.
+- Matching leases still allow the existing maintenance-only `session recover` path to run, including dry-run planning.
+- This phase does not add scheduler implementation, UI, SQLite, OCR, game logic, new capture/input backends, direct ADB input fallback, app restart behavior, or resource repository access.
+
+Validation for this phase:
+
+- Focused monitor policy, Session API/access, and capability tests.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Lease-Gated Daemon Monitor Recovery Policy
 

@@ -1135,6 +1135,7 @@ fn session_layer_capability_contract() -> Value {
             "daemon_state": {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
+                "recovery_policy_defers_without_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             },
             "control": {
@@ -1262,6 +1263,7 @@ fn session_access_contract() -> Value {
             "daemon_state": {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
+                "recovery_policy_defers_without_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             }
         },
@@ -1471,7 +1473,8 @@ fn session_api_contract() -> Value {
                 "policy_field": "policy",
                 "execution_model": "daemon_owned_monitor_once",
                 "default_read_only": true,
-                "recovery_requires_matching_lease": true
+                "recovery_requires_matching_lease": true,
+                "recovery_without_matching_lease_status": "deferred_by_lease"
             },
             "instance_registry_view": {
                 "query": "session instance registry",
@@ -1589,6 +1592,7 @@ fn session_api_contract() -> Value {
             "daemon_state": {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
+                "recovery_policy_defers_without_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             }
         },
@@ -5510,6 +5514,7 @@ fn session_monitor_policy_payload(state_dir: &Path) -> CliOutcome<Value> {
             "runs_monitor_once": true,
             "recover_enabled": recover_enabled,
             "recovery_requires_matching_lease": recover_enabled,
+            "recovery_without_matching_lease_status": if recover_enabled { "deferred_by_lease" } else { "not_applicable" },
             "executes_input": recover_enabled,
             "executes_app_restart": false
         }
@@ -6658,7 +6663,9 @@ fn run_due_session_monitor_policy_recovery(
             "reason": "already_healthy"
         }));
     }
-    validate_session_monitor_policy_lease(state_dir, policy)?;
+    if let Some(deferred) = session_monitor_policy_lease_deferral(state_dir, policy)? {
+        return Ok(deferred);
+    }
     let Some(recover_args) = monitor_recover_args(diagnosis, flags) else {
         return Ok(json!({
             "status": "not_executed",
@@ -6673,10 +6680,10 @@ fn run_due_session_monitor_policy_recovery(
     run_session_recover(global, &recover_args)
 }
 
-fn validate_session_monitor_policy_lease(
+fn session_monitor_policy_lease_deferral(
     state_dir: &Path,
     policy: &SessionMonitorPolicy,
-) -> CliOutcome<SessionLease> {
+) -> CliOutcome<Option<Value>> {
     let requested = policy.lease.as_ref().ok_or_else(|| {
         CliError::safety_blocked(
             "monitor_policy_recovery_requires_lease",
@@ -6687,14 +6694,44 @@ fn validate_session_monitor_policy_lease(
     let instance_id = session_command_instance_id(&policy.global);
     let lease_path = session_lease_path(state_dir, &instance_id);
     let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
-        return Err(CliError::safety_blocked(
-            "lab_lease_missing",
-            format!("daemon monitor policy recovery requires an active lease for {instance_id}"),
-            &["lab_lease"],
-        ));
+        return Ok(Some(json!({
+            "status": "deferred_by_lease",
+            "executed": false,
+            "reason": "lab_lease_missing",
+            "message": format!("daemon monitor policy recovery is waiting for an active lease for {instance_id}"),
+            "instance": instance_id,
+            "lease_path": lease_path.display().to_string(),
+            "requested_lease": requested,
+            "current_lease": Value::Null,
+            "error": {
+                "code": "lab_lease_missing",
+                "message": format!("daemon monitor policy recovery requires an active lease for {instance_id}"),
+                "blocked_by": ["lab_lease"]
+            }
+        })));
     };
-    validate_lease_request(&current, requested)?;
-    Ok(current)
+    match validate_lease_request(&current, requested) {
+        Ok(()) => Ok(None),
+        Err(err) if session_monitor_policy_lease_can_defer(&err.code) => {
+            let error = envelope_error_from_cli_error(err);
+            Ok(Some(json!({
+                "status": "deferred_by_lease",
+                "executed": false,
+                "reason": error.code,
+                "message": error.message,
+                "instance": instance_id,
+                "lease_path": lease_path.display().to_string(),
+                "requested_lease": requested,
+                "current_lease": current,
+                "error": error
+            })))
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn session_monitor_policy_lease_can_defer(code: &str) -> bool {
+    matches!(code, "lease_holder_mismatch" | "lease_id_mismatch")
 }
 
 fn envelope_error_from_cli_error(err: CliError) -> EnvelopeError {
@@ -19792,6 +19829,14 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer(
+                    "/request_classes/daemon_state/recovery_policy_defers_without_matching_lease"
+                )
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
                 .pointer("/request_classes/read_only/examples/13")
                 .and_then(Value::as_str),
             Some("session recover --stale-capture")
@@ -19918,6 +19963,12 @@ mod tests {
                 .pointer("/envelopes/event_view/cursor_error")
                 .and_then(Value::as_str),
             Some("event_cursor_not_found")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/monitor_policy_view/recovery_without_matching_lease_status")
+                .and_then(Value::as_str),
+            Some("deferred_by_lease")
         );
         assert_eq!(
             payload
@@ -23816,7 +23867,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_monitor_policy_recovery_records_missing_lease() {
+    fn daemon_monitor_policy_recovery_defers_without_active_lease() {
         let temp = semantic_resource_root(false);
         let state_dir = temp.path().join("session-state");
         let scene = temp.path().join("target.png");
@@ -23854,14 +23905,27 @@ mod tests {
         let state = read_json_file::<SessionMonitorState>(&session_monitor_state_path(&state_dir))
             .unwrap()
             .unwrap();
-        assert_eq!(state.last_ok, Some(false));
-        assert_eq!(state.last_status.as_deref(), Some("recovery_failed"));
+        assert_eq!(state.last_ok, Some(true));
+        assert_eq!(state.last_status.as_deref(), Some("unexpected_page"));
         assert_eq!(
             state
                 .last_recovery_error
                 .as_ref()
                 .map(|error| error.code.as_str()),
+            None
+        );
+        let recovery = state.last_recovery.as_ref().unwrap();
+        assert_eq!(
+            recovery.get("status").and_then(Value::as_str),
+            Some("deferred_by_lease")
+        );
+        assert_eq!(
+            recovery.get("reason").and_then(Value::as_str),
             Some("lab_lease_missing")
+        );
+        assert_eq!(
+            recovery.get("executed").and_then(Value::as_bool),
+            Some(false)
         );
     }
 
@@ -23930,6 +23994,79 @@ mod tests {
             Some("planned")
         );
         assert!(state.last_recovery_error.is_none());
+    }
+
+    #[test]
+    fn daemon_monitor_policy_recovery_defers_on_lease_holder_mismatch() {
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session-state");
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            dry_run: true,
+            inside_session_daemon: true,
+            json: true,
+            ..Default::default()
+        };
+        let lease = new_session_lease(
+            "default".to_string(),
+            "lab".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "default"), &lease).unwrap();
+        run_session_monitor_policy_in_state_dir(
+            &global,
+            &[
+                "set".to_string(),
+                "--interval-ms".to_string(),
+                "500".to_string(),
+                "--scene".to_string(),
+                scene.display().to_string(),
+                "--expect".to_string(),
+                "home".to_string(),
+                "--recover".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            &state_dir,
+            true,
+        )
+        .unwrap();
+
+        assert!(run_due_session_monitor_policy(&state_dir).unwrap());
+        let state = read_json_file::<SessionMonitorState>(&session_monitor_state_path(&state_dir))
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.last_ok, Some(true));
+        assert_eq!(state.last_status.as_deref(), Some("unexpected_page"));
+        assert!(state.last_recovery_error.is_none());
+        let recovery = state.last_recovery.as_ref().unwrap();
+        assert_eq!(
+            recovery.get("status").and_then(Value::as_str),
+            Some("deferred_by_lease")
+        );
+        assert_eq!(
+            recovery.get("reason").and_then(Value::as_str),
+            Some("lease_holder_mismatch")
+        );
+        assert_eq!(
+            recovery
+                .pointer("/current_lease/holder")
+                .and_then(Value::as_str),
+            Some("lab")
+        );
+        assert_eq!(
+            recovery
+                .pointer("/requested_lease/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
     }
 
     #[test]
