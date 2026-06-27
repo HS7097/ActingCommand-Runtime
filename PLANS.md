@@ -119,6 +119,42 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
 - ActingLab bounded stream event envelope: `stream` now emits a `stream_id`, `session.stream.event.v0.1` event records, and stable event indexes for future UI/API stream consumers.
+- ActingLab Session transport contract: `session transport` and `session request transport` expose `session.transport.v0.1`, describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream transport boundaries.
+
+## Current ActingLab Session Transport Contract
+
+The current Runtime task makes the Session Layer transport boundary machine-readable for local CLI clients, the resident daemon request channel, and future trusted UI/API clients. This is a contract-only milestone and does not start a network listener.
+
+Scope:
+
+- Add `session transport` as an offline, read-only contract query.
+- Add `session request transport` as a resident daemon read-only query.
+- Expose `session.transport.v0.1` with local CLI, daemon file-IPC, reserved trusted remote, and interactive stream channel descriptions.
+- Link the transport view from `session.access.v0.1`, `session.api.v0.1`, and command capabilities.
+- Keep trusted remote transport reserved with required encryption and authentication.
+- Keep interactive stream transport reserved while referencing the existing bounded stream event envelope.
+
+Safety direction:
+
+- This milestone only documents and routes existing Session Layer access boundaries.
+- `session request transport` fails visibly when the resident daemon is unavailable.
+- No trusted network API, TLS/auth transport implementation, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+Validation status:
+
+- Focused transport tests passed for offline and daemon contract paths.
+- Focused API, access contract, capabilities, and no-daemon tests passed.
+- Manual CLI check confirmed `session transport` returns `session.transport.v0.1`.
+- Manual CLI check confirmed `session request transport` without a daemon returns `runtime_not_running`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `246` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport implementation, UI code, scheduler implementation, device I/O, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Bounded Stream Event Envelope
 

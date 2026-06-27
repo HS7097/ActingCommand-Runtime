@@ -1117,6 +1117,7 @@ fn session_access_contract() -> Value {
         "daemon_queries": {
             "contract": "session request contract",
             "api": "session request api",
+            "transport": "session request transport",
             "capabilities": "session request capabilities",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
@@ -1168,6 +1169,63 @@ fn session_access_contract() -> Value {
             "requests_are_serialized_by_resident_daemon": true,
             "severe_errors_fail_loud": true,
             "transient_recovery_path_must_be_logged": true
+        },
+        "out_of_scope": [
+            "network listener",
+            "TLS implementation",
+            "token issuance",
+            "UI transport",
+            "scheduler runtime"
+        ]
+    })
+}
+
+fn session_transport_contract() -> Value {
+    json!({
+        "schema_version": "session.transport.v0.1",
+        "purpose": "machine-readable transport boundary for Session Layer clients",
+        "channels": {
+            "local_cli": {
+                "status": "available",
+                "transport": "process_stdio",
+                "command": "actinglab",
+                "encryption_required": false,
+                "authentication_required": false,
+                "intended_clients": ["local_operator", "local_agent"]
+            },
+            "daemon_file_ipc": {
+                "status": "available",
+                "transport": "session_state_directory_file_queue",
+                "submit_command": "session request <command>",
+                "request_dir": "requests/",
+                "response_dir": "responses/",
+                "journal": "request-journal.jsonl",
+                "serialized_by_daemon": true,
+                "read_only_requests_require_lease": false,
+                "control_requests_require_matching_lease": true
+            },
+            "trusted_remote": {
+                "status": "reserved",
+                "network_listener_implemented": false,
+                "encryption_required": true,
+                "authentication_required": true,
+                "minimum_transport": "TLS or mutually authenticated local IPC",
+                "token_or_certificate_required": true
+            },
+            "interactive_stream": {
+                "status": "reserved",
+                "current_scaffold": "bounded local CLI stream",
+                "future_transport": "trusted bidirectional channel",
+                "frame_event_schema": "session.stream.event.v0.1",
+                "input_relay_requires_matching_lease": true
+            }
+        },
+        "safety": {
+            "clients_must_not_directly_touch_adb_or_devices": true,
+            "remote_transport_must_not_start_without_authentication": true,
+            "remote_transport_must_not_start_without_encryption": true,
+            "control_requests_are_lease_gated": true,
+            "requests_are_serialized_by_resident_daemon": true
         },
         "out_of_scope": [
             "network listener",
@@ -1234,6 +1292,11 @@ fn session_api_contract() -> Value {
                 "schema_version": "0.2",
                 "success_fields": ["ok", "command", "data"],
                 "error_fields": ["ok", "command", "error"]
+            },
+            "transport_view": {
+                "query": "session transport",
+                "daemon_query": "session request transport",
+                "schema_version": "session.transport.v0.1"
             },
             "event_view": {
                 "query": "session events",
@@ -4601,6 +4664,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "request" => run_session_request(global, args),
         "contract" => run_session_contract(global, args),
         "api" => run_session_api(global, args),
+        "transport" => run_session_transport(global, args),
         "journal" => run_session_journal(global, args),
         "events" => run_session_events(global, args),
         "instance" => run_session_instance(global, args),
@@ -4629,6 +4693,15 @@ fn run_session_api(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     }
     flags.expect_positionals("session api", 0)?;
     Ok(session_api_contract())
+}
+
+fn run_session_transport(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "transport", args);
+    }
+    flags.expect_positionals("session transport", 0)?;
+    Ok(session_transport_contract())
 }
 
 fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -5041,7 +5114,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, journal, events, contract, api, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, events, contract, api, transport, capabilities, devices, lease, record, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -5051,6 +5124,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "contract" => submit_readonly_session_request(global, &flags, "contract", &args[1..]),
         "api" => submit_readonly_session_request(global, &flags, "api", &args[1..]),
+        "transport" => submit_readonly_session_request(global, &flags, "transport", &args[1..]),
         "capabilities" => {
             submit_readonly_session_request(global, &flags, "capabilities", &args[1..])
         }
@@ -5686,6 +5760,11 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request api", 0)?;
             Ok(session_api_contract())
+        }
+        "transport" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request transport", 0)?;
+            Ok(session_transport_contract())
         }
         "capabilities" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -10454,11 +10533,17 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session events", ["offline"], "available"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
+        command_cap("session transport", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request events", ["running_runtime"], "available"),
         command_cap("session request contract", ["running_runtime"], "available"),
         command_cap("session request api", ["running_runtime"], "available"),
+        command_cap(
+            "session request transport",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap(
             "session request capabilities",
             ["running_runtime"],
@@ -17758,6 +17843,15 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request capabilities"))
         );
+        assert!(
+            payload
+                .get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request transport"))
+        );
     }
 
     #[test]
@@ -17808,6 +17902,12 @@ mod tests {
                 .pointer("/daemon_queries/api")
                 .and_then(Value::as_str),
             Some("session request api")
+        );
+        assert_eq!(
+            payload
+                .pointer("/daemon_queries/transport")
+                .and_then(Value::as_str),
+            Some("session request transport")
         );
     }
 
@@ -17883,6 +17983,69 @@ mod tests {
                 .pointer("/envelopes/event_view/cursor_error")
                 .and_then(Value::as_str),
             Some("event_cursor_not_found")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/transport_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.transport.v0.1")
+        );
+    }
+
+    #[test]
+    fn session_transport_request_returns_transport_contract() {
+        let query = SessionCommandRequest {
+            request_id: "transport-query".to_string(),
+            command: "transport".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let temp = TempDir::new().unwrap();
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.transport.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/local_cli/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/daemon_file_ipc/serialized_by_daemon")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/trusted_remote/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/frame_event_schema")
+                .and_then(Value::as_str),
+            Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/safety/clients_must_not_directly_touch_adb_or_devices")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -18887,6 +19050,27 @@ mod tests {
     }
 
     #[test]
+    fn session_request_transport_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "transport",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_request_events_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -19475,6 +19659,22 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request events"))
         );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session transport"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request transport"))
+        );
     }
 
     #[test]
@@ -19504,6 +19704,11 @@ mod tests {
         assert_eq!(
             data.pointer("/daemon_queries/api").and_then(Value::as_str),
             Some("session request api")
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/transport")
+                .and_then(Value::as_str),
+            Some("session request transport")
         );
     }
 
@@ -19550,6 +19755,37 @@ mod tests {
             data.pointer("/envelopes/event_view/cursor_fields/3")
                 .and_then(Value::as_str),
             Some("next_after_request_id")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/transport_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.transport.v0.1")
+        );
+    }
+
+    #[test]
+    fn session_transport_is_offline_transport_contract() {
+        let result = run_cli(["--json", "session", "transport"], true);
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.transport.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/channels/daemon_file_ipc/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            data.pointer("/channels/trusted_remote/encryption_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/safety/remote_transport_must_not_start_without_authentication")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

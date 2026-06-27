@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab Session transport contract
+
+### Current status
+
+- Added `session transport` as a local offline Session Layer transport contract query.
+- Added `session request transport` as a resident daemon read-only request.
+- Added machine-readable `session.transport.v0.1` describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream channels.
+- Linked the transport view from the access contract, API contract, and command capabilities.
+- Reserved trusted remote transport still requires encryption and authentication and does not implement a network listener.
+- No trusted network API, TLS/auth transport implementation, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e3789a51e9de87ad2cf9c37736b82bc906e2b0bb`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session contract, API contract, request routing, command capabilities, daemon request handling, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_transport`
+- `cargo run -q -p actingcommand-actinglab -- --json session transport`
+- `cargo run -q -p actingcommand-actinglab -- --json session request transport --state-dir target\session-transport-empty`
+- `cargo test -p actingcommand-actinglab session_request_transport`
+- `cargo test -p actingcommand-actinglab session_api`
+- `cargo test -p actingcommand-actinglab session_contract`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_transport` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_request_transport` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_api` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_contract` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline` passed with `1` test.
+- Local `session transport` smoke returned `schema_version = session.transport.v0.1`.
+- Local `session request transport` without a daemon failed visibly with `runtime_not_running`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `246` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-transport-contract`.
+2. Continue Session Layer follow-ups: trusted network API transport implementation, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab bounded stream event envelope
 
 ### Current status
