@@ -137,6 +137,29 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session request-state list view: `session request-state list` and `session request request-state list` expose a bounded aggregate request lifecycle view across pending requests, pending responses, and recent request journal entries.
 - ActingLab session response wait view: `session response wait <request-id>` and `session request response wait <request-id>` provide a bounded wait/read/consume surface for a specific daemon response without custom polling in UI/scheduler clients.
 - ActingLab session events wait view: `session events wait` and `session request events wait` provide bounded long-polling over the request-journal event cursor for UI/scheduler clients without custom event polling loops.
+- ActingLab session request cancel view: `session request cancel <request-id>` removes queued daemon requests that have not produced a response, records a durable `request_cancelled` journal failure, and exposes the result through request-state and event views.
+
+## Current ActingLab Session Request Cancel View
+
+This increment adds an explicit queue-management surface for future UI and scheduler clients that submit Session Layer daemon work with `--no-wait` and later need to discard still-pending queued work.
+
+- `session request cancel <request-id> [--reason text]` validates the request id, removes only the matching pending request file, and writes a durable request-journal entry with `ok=false` and error code `request_cancelled`.
+- Cancelled requests become observable through the existing `session request-state get/list` and `session events` views as failed journaled requests instead of disappearing silently.
+- Requests that already have a pending response, are already completed in the journal, are missing from the queue, or use unsafe request ids fail visibly with `request_not_cancellable` or validation errors.
+- Cancel is local queue management and is advertised as an offline `session request cancel` capability; it does not require the resident daemon to be alive and does not submit work back into the daemon queue.
+- `session api` advertises the cancel query, `request_cancelled` error code, and journal-recording behavior.
+- This phase does not start trusted remote network transport, implement unbounded long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session request cancel tests.
+- Focused Session API contract test.
+- Focused command capabilities test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Events Wait View
 

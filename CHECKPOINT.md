@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session request cancel view
+
+### Current status
+
+- `session request cancel <request-id> [--reason text]` now removes a still-queued daemon request from the Session Layer request queue.
+- Cancellation records a durable request-journal failure with error code `request_cancelled`, so cancelled work remains visible through `session request-state get/list` and `session events`.
+- Requests that already have a pending response, are already completed, are missing from the queue, or use unsafe request ids fail visibly with `request_not_cancellable` or validation errors.
+- `session api` documents the cancel query, cancellation error code, and journal-recording behavior.
+- `capabilities` advertises `session request cancel` as an offline queue-management command.
+- No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e7fa2caf5ce4d7b0e24adfb4f68308f1bdf6d989`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Confirmed Runtime repository state: `git status --short --branch`; `git log -1 --oneline`; `git tag --points-at HEAD`.
+- Inspected current diff and Session Layer queue/request-state/event/API/capabilities code in `apps/actinglab/src/main.rs`.
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- Attempted one invalid multi-filter `cargo test` command; Cargo rejected it because `cargo test` accepts a single test filter. The same checks were rerun individually.
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session request cancel tests passed.
+- Focused Session API contract test passed.
+- Focused command capabilities test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-request-cancel-view`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session events wait view
 
 ### Current status

@@ -1460,6 +1460,9 @@ fn session_api_contract() -> Value {
                     "consume_query": "session response get <request-id> --consume"
                 }
             },
+            "cancel_query": "session request cancel <request-id> [--reason text]",
+            "cancel_error_code": "request_cancelled",
+            "cancel_records_journal": true,
             "response_fields": [
                 "request_id",
                 "command",
@@ -6967,17 +6970,114 @@ fn session_lease_paths(state_dir: &Path) -> CliOutcome<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn run_session_request_cancel(flags: &FlagArgs) -> CliOutcome<Value> {
+    flags.expect_positionals("session request cancel", 1)?;
+    let request_id = flags.required_positional(0, "request-id")?;
+    validate_session_request_id(request_id)?;
+    let reason = parse_optional_string_value(flags, "--reason")?;
+    let state_dir = session_state_dir_from_flags(flags)?;
+    session_request_cancel_payload(&state_dir, request_id, reason.as_deref())
+}
+
+fn session_request_cancel_payload(
+    state_dir: &Path,
+    request_id: &str,
+    reason: Option<&str>,
+) -> CliOutcome<Value> {
+    let request_path = session_requests_dir(state_dir).join(format!("{request_id}.json"));
+    let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
+    if response_path.exists() {
+        return Err(CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "request_not_cancellable",
+            format!("session request {request_id} already has an available response"),
+            &["request_queue"],
+        ));
+    }
+    let Some(request) = read_pending_session_request(&request_path)? else {
+        return Err(session_request_cancel_not_found_error(
+            state_dir, request_id,
+        )?);
+    };
+    fs::remove_file(&request_path).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "request_not_cancellable",
+                format!("session request {request_id} disappeared before cancellation"),
+                &["request_queue"],
+            )
+        } else {
+            CliError::runtime_not_running(format!(
+                "failed to remove pending session request {}: {err}",
+                request_path.display()
+            ))
+        }
+    })?;
+    let cancelled_at = current_unix_ms();
+    let message = reason
+        .map(|value| format!("session request {request_id} cancelled: {value}"))
+        .unwrap_or_else(|| format!("session request {request_id} cancelled"));
+    let response = SessionCommandResponse {
+        request_id: request_id.to_string(),
+        command: request.command.clone(),
+        ok: false,
+        data: None,
+        error: Some(EnvelopeError {
+            code: "request_cancelled".to_string(),
+            message,
+            blocked_by: vec!["request_queue".to_string()],
+        }),
+        started_at_unix_ms: cancelled_at,
+        completed_at_unix_ms: cancelled_at,
+    };
+    append_session_request_journal(state_dir, &request, &response)?;
+    Ok(json!({
+        "schema_version": "session.request_cancel.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "status": "cancelled",
+        "request_id": request_id,
+        "command": request.command,
+        "reason": reason,
+        "cancelled_at_unix_ms": cancelled_at,
+        "request_path": request_path.display().to_string(),
+        "response_path": response_path.display().to_string(),
+        "journal": session_request_journal_path(state_dir).display().to_string()
+    }))
+}
+
+fn session_request_cancel_not_found_error(
+    state_dir: &Path,
+    request_id: &str,
+) -> CliOutcome<CliError> {
+    let journaled = read_session_request_journal(state_dir, 1_000)?
+        .into_iter()
+        .any(|entry| entry.request_id == request_id);
+    let message = if journaled {
+        format!("session request {request_id} is already completed in the request journal")
+    } else {
+        format!("session request {request_id} is not queued and cannot be cancelled")
+    };
+    Ok(CliError::new(
+        ErrorKind::RuntimeNotRunning,
+        "request_not_cancellable",
+        message,
+        &["request_queue"],
+    ))
+}
+
 fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let command = args
         .first()
         .map(String::as_str)
         .ok_or_else(|| {
-        CliError::usage(
-                "session request requires status, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+            CliError::usage(
+                "session request requires cancel, status, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
+        "cancel" => run_session_request_cancel(&flags),
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
@@ -13263,6 +13363,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
         command_cap("session monitor-policy", ["offline"], "available"),
+        command_cap("session request cancel", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap(
             "session request --no-wait",
@@ -24151,6 +24252,163 @@ mod tests {
     }
 
     #[test]
+    fn session_request_cancel_removes_queued_request_and_journals_cancellation() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-me".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--diagnostics".to_string()],
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-me.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-me",
+                "--reason",
+                "stale",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert!(!request_path.exists());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.request_cancel.v0.1")
+        );
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(data.get("reason").and_then(Value::as_str), Some("stale"));
+
+        let state = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "cancel-me",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(state.exit_code(), 0);
+        let state_data = state.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            state_data.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            state_data
+                .pointer("/journal_event/error/code")
+                .and_then(Value::as_str),
+            Some("request_cancelled")
+        );
+
+        let events = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "--status",
+                "failed",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(events.exit_code(), 0);
+        let events_data = events.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            events_data.get("event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            events_data
+                .pointer("/events/0/error/code")
+                .and_then(Value::as_str),
+            Some("request_cancelled")
+        );
+    }
+
+    #[test]
+    fn session_request_cancel_rejects_response_available() {
+        let temp = TempDir::new().unwrap();
+        let response_path = session_responses_dir(temp.path()).join("already-done.json");
+        let response = SessionCommandResponse {
+            request_id: "already-done".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 20,
+            completed_at_unix_ms: 21,
+        };
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "already-done",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert!(response_path.exists());
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "request_not_cancellable");
+        assert_eq!(error.blocked_by, vec!["request_queue".to_string()]);
+    }
+
+    #[test]
+    fn session_request_cancel_rejects_unsafe_request_id() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "../escape",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("request-id"));
+    }
+
+    #[test]
     fn session_request_state_reports_queued_request() {
         let temp = TempDir::new().unwrap();
         let request = SessionCommandRequest {
@@ -25942,6 +26200,16 @@ mod tests {
             Some("--no-wait")
         );
         assert_eq!(
+            data.pointer("/daemon_request_queue/cancel_query")
+                .and_then(Value::as_str),
+            Some("session request cancel <request-id> [--reason text]")
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/cancel_records_journal")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer(
                 "/daemon_request_queue/submit_modes/sync_wait/consumes_response_on_success"
             )
@@ -26171,6 +26439,25 @@ mod tests {
         assert_eq!(
             command.get("status").and_then(Value::as_str),
             Some("available")
+        );
+    }
+
+    #[test]
+    fn session_request_cancel_capability_is_available() {
+        let commands = command_capabilities();
+        let command = commands
+            .iter()
+            .find(|command| {
+                command.get("command").and_then(Value::as_str) == Some("session request cancel")
+            })
+            .expect("session request cancel capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            command.get("needs").and_then(Value::as_array).unwrap(),
+            &vec![Value::String("offline".to_string())]
         );
     }
 
@@ -26530,6 +26817,7 @@ mod tests {
             "session request journal",
             "session request events",
             "session request events wait",
+            "session request cancel",
             "session request contract",
             "session request api",
             "session request devices",
