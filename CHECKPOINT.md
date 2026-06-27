@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab request-status event filter
+
+### Current status
+
+- `session events` now supports repeatable `--status completed|failed` filters over stable request-event status.
+- `session request events` supports the same status filter through the resident daemon request path.
+- Unsupported `--status` values fail visibly with validation errors.
+- `--after-request-id` is still resolved against the complete recent request journal before command, data-summary, or status filters are applied.
+- Event payloads now include `status_filter` when filtering is active.
+- `session api` advertises `--status`, allowed status values, and repeatable status filtering.
+- No trusted remote network transport, long-lived stream transport, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8c7120bee34ae23a30cf334e67a4e5002d854f77`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session events, status/data-summary/command filters, Session API, and request journal tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_events_filters_by_status_after_cursor -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_rejects_unknown_status_filter -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused status filter test passed.
+- Focused invalid status filter test passed after aligning the assertion with the existing `validation_failed` error code.
+- Focused `session_events` tests passed with `8` tests.
+- Session API contract focused test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, live-device, or direct-click additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-request-status-event-filter`.
+2. Continue Session Layer follow-ups from trusted UI/API event consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab data-summary event filter
 
 ### Current status

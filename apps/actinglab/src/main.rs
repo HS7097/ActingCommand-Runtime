@@ -1464,12 +1464,14 @@ fn session_api_contract() -> Value {
                 "query": "session events",
                 "daemon_query": "session request events",
                 "schema_version": "session.events.v0.1",
-                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind"],
+                "filters": ["--limit", "--after-unix-ms", "--after-request-id", "--command", "--data-summary-kind", "--status"],
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
                 "data_summary_kinds": ["stream", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
+                "status_filter_values": ["completed", "failed"],
+                "status_filter_repeats": true,
                 "cursor_fields": [
                     "latest_timestamp_unix_ms",
                     "next_after_unix_ms",
@@ -5272,6 +5274,7 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     let after_request_id = parse_optional_string_value(&flags, "--after-request-id")?;
     let command_filter = parse_optional_string_values(&flags, "--command")?;
     let data_summary_kind_filter = parse_optional_string_values(&flags, "--data-summary-kind")?;
+    let status_filter = parse_session_event_status_filter(&flags)?;
     session_events_payload(
         &state_dir,
         limit,
@@ -5279,6 +5282,7 @@ fn run_session_events(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         after_request_id.as_deref(),
         &command_filter,
         &data_summary_kind_filter,
+        &status_filter,
     )
 }
 
@@ -5289,6 +5293,7 @@ fn session_events_payload(
     after_request_id: Option<&str>,
     command_filter: &[String],
     data_summary_kind_filter: &[String],
+    status_filter: &[String],
 ) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
@@ -5297,6 +5302,7 @@ fn session_events_payload(
         || after_request_id.is_some()
         || !command_filter.is_empty()
         || !data_summary_kind_filter.is_empty()
+        || !status_filter.is_empty()
     {
         1_000
     } else {
@@ -5345,6 +5351,12 @@ fn session_events_payload(
                             .any(|filtered| filtered == kind)
                     })
         })
+        .filter(|entry| {
+            status_filter.is_empty()
+                || status_filter
+                    .iter()
+                    .any(|status| status.as_str() == session_request_event_status(entry))
+        })
         .collect::<Vec<_>>();
     if entries.len() > limit {
         let keep_from = entries.len() - limit;
@@ -5374,6 +5386,11 @@ fn session_events_payload(
         } else {
             json!(data_summary_kind_filter)
         },
+        "status_filter": if status_filter.is_empty() {
+            Value::Null
+        } else {
+            json!(status_filter)
+        },
         "event_count": events.len(),
         "cursor": {
             "latest_timestamp_unix_ms": latest_timestamp_unix_ms,
@@ -5385,8 +5402,24 @@ fn session_events_payload(
     }))
 }
 
+fn parse_session_event_status_filter(flags: &FlagArgs) -> CliOutcome<Vec<String>> {
+    let status_filter = parse_optional_string_values(flags, "--status")?;
+    for status in &status_filter {
+        if !matches!(status.as_str(), "completed" | "failed") {
+            return Err(CliError::usage(format!(
+                "unsupported session events --status value: {status}; expected completed or failed"
+            )));
+        }
+    }
+    Ok(status_filter)
+}
+
+fn session_request_event_status(entry: &SessionRequestJournalEntry) -> &'static str {
+    if entry.ok { "completed" } else { "failed" }
+}
+
 fn session_request_event_json(entry: &SessionRequestJournalEntry) -> Value {
-    let status = if entry.ok { "completed" } else { "failed" };
+    let status = session_request_event_status(entry);
     let event_type = if entry.ok {
         "session.request.completed"
     } else {
@@ -7126,6 +7159,7 @@ fn execute_session_command_request_inner(
             let command_filter = parse_optional_string_values(&flags, "--command")?;
             let data_summary_kind_filter =
                 parse_optional_string_values(&flags, "--data-summary-kind")?;
+            let status_filter = parse_session_event_status_filter(&flags)?;
             session_events_payload(
                 state_dir,
                 limit,
@@ -7133,6 +7167,7 @@ fn execute_session_command_request_inner(
                 after_request_id.as_deref(),
                 &command_filter,
                 &data_summary_kind_filter,
+                &status_filter,
             )
         }
         "contract" => {
@@ -20129,6 +20164,125 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_by_status_after_cursor() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        for (request_id, command, ok, completed_at_unix_ms) in [
+            ("status-a", "status", true, 10_u64),
+            ("tap-failed-a", "tap", false, 20_u64),
+            ("stream-a", "stream", true, 30_u64),
+            ("recover-failed-a", "recover", false, 40_u64),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                global: global.clone(),
+                args: Vec::new(),
+                lease: None,
+                created_at_unix_ms: completed_at_unix_ms.saturating_sub(2),
+            };
+            let response = SessionCommandResponse {
+                request_id: request_id.to_string(),
+                command: command.to_string(),
+                ok,
+                data: if ok {
+                    Some(json!({"status": "ok"}))
+                } else {
+                    None
+                },
+                error: if ok {
+                    None
+                } else {
+                    Some(EnvelopeError {
+                        code: "session_request_failed".to_string(),
+                        message: "session request failed".to_string(),
+                        blocked_by: vec!["session_request".to_string()],
+                    })
+                },
+                started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
+                completed_at_unix_ms,
+            };
+            append_session_request_journal(state_dir, &request, &response).unwrap();
+        }
+        let query = SessionCommandRequest {
+            request_id: "events-status-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--after-request-id".to_string(),
+                "status-a".to_string(),
+                "--status".to_string(),
+                "failed".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            payload.pointer("/status_filter/0").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("tap-failed-a")
+        );
+        assert_eq!(
+            events[1].get("request_id").and_then(Value::as_str),
+            Some("recover-failed-a")
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.get("status").and_then(Value::as_str) == Some("failed"))
+        );
+        assert_eq!(
+            payload
+                .pointer("/cursor/next_after_request_id")
+                .and_then(Value::as_str),
+            Some("recover-failed-a")
+        );
+    }
+
+    #[test]
+    fn session_events_rejects_unknown_status_filter() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-invalid-status-query".to_string(),
+            command: "events".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--status".to_string(), "waiting".to_string()],
+            lease: None,
+            created_at_unix_ms: 80,
+        };
+
+        let err = execute_session_command_request_inner(&query, temp.path()).unwrap_err();
+
+        assert_eq!(err.code, "validation_failed");
+        assert!(err.message.contains("expected completed or failed"));
+    }
+
+    #[test]
     fn session_events_after_request_id_missing_fails_visibly() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -20507,6 +20661,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/event_view/filters/5")
+                .and_then(Value::as_str),
+            Some("--status")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/event_view/data_summary_field")
                 .and_then(Value::as_str),
             Some("events[].data_summary")
@@ -20526,6 +20686,24 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/envelopes/event_view/data_summary_kind_filter_repeats")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/status_filter_values/0")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/status_filter_values/1")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/event_view/status_filter_repeats")
                 .and_then(Value::as_bool),
             Some(true)
         );

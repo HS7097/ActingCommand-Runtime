@@ -125,6 +125,31 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session request data summary: daemon request journal events now retain compact stream response summaries so future UI/API clients can observe stream ids, frame counts, event counts, and input relay status from `session events` without reading full response files.
 - ActingLab capture diagnosis event summaries: daemon request journal events now retain compact stale-capture and capture-diagnose summaries so future UI/scheduler clients can observe fresh-frame status and recommended capture-backend recovery without reading full response files.
 - ActingLab data-summary event filter: `session events` and `session request events` now support repeatable `--data-summary-kind <kind>` filters so future UI/scheduler clients can poll stream, capture-diagnose, or stale-capture recovery slices directly.
+- ActingLab request-status event filter: `session events` and `session request events` now support repeatable `--status completed|failed` filters so future UI/scheduler clients can poll success and failure slices without scraping the full journal.
+
+## Current ActingLab Request-Status Event Filter
+
+This increment narrows the Session Layer event view for future UI/scheduler clients that need failure-first polling or success-only confirmation windows.
+
+- `session events --status completed|failed` filters daemon request events by stable event status.
+- The filter is repeatable for clients that need both explicit status classes in one request.
+- Unsupported status values fail visibly with validation errors instead of returning fake empty results.
+- Cursor handling is unchanged: `--after-request-id` is resolved against the complete recent journal before command, data-summary, or status filters are applied.
+- `session request events` supports the same filter through the resident daemon request path.
+- `session api` advertises `--status`, the allowed status values, and repeatable filter support.
+- This phase does not store full response payloads in the request journal, start trusted remote network transport, implement long-lived stream transport, add scheduler behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused Session events status filter test.
+- Focused invalid status filter test.
+- Focused Session events test set.
+- Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Data-Summary Event Filter
 
