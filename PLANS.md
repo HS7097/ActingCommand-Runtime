@@ -150,6 +150,19 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab queue health recommended action surface: `session status --diagnostics` now turns blocked queued/running requests and unclaimed responses into read-only inspect/read actions for UI/scheduler clients.
 - ActingLab failed request recommended action surface: `session status --diagnostics` now turns the latest failed daemon journal entry into a read-only `failed_request_inspect` action for UI/scheduler clients.
 - ActingLab trusted transport preflight surface: `session transport check --endpoint <url>` now exposes the existing local/trusted-remote endpoint policy as a machine-readable Session Layer preflight without starting a listener.
+- ActingLab bounded stream preflight surface: `stream check` and `session request stream check` now expose a machine-readable safety preflight for bounded frame streams and per-request input relay without capturing frames, starting MaaTouch, or starting a listener.
+
+## Current ActingLab Bounded Stream Preflight Surface
+
+This increment advances the interactive stream requirement without implementing the future trusted remote long-lived stream. UI/scheduler clients can now ask whether a bounded stream request is safe to start before capture or input relay execution.
+
+- `stream check` returns `session.stream_check.v0.1`.
+- `session stream check` routes to the same local preflight surface.
+- `session request stream check` routes through the resident daemon request queue as a read-only request.
+- The preflight reports routing, daemon liveness, frame count settings, fresh-frame settings, input-relay actions, and lease-gate status.
+- Read-only stream checks do not require a lease.
+- Input-relay checks report `safe_to_start=false` when the caller has not supplied a matching Session Layer lease.
+- `stream check` does not capture frames, start MaaTouch, execute input, start a network listener, implement TLS/auth, or create a long-lived trusted remote stream.
 
 ## Current ActingLab Trusted Transport Preflight Surface
 

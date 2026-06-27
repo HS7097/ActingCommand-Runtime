@@ -1,5 +1,80 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab bounded stream preflight surface
+
+### Current status
+
+- Added `stream check` as a bounded stream safety preflight.
+- Added `session stream check` through the Session Layer command namespace.
+- Added `session request stream check` through the resident daemon request queue.
+- The preflight returns `session.stream_check.v0.1`.
+- Read-only stream checks report `safe_to_start=true` without capture.
+- Input-relay checks parse requested relay actions and report missing or mismatched Session Layer leases as `safe_to_start=false` instead of starting MaaTouch.
+- Daemon-routed `stream check` remains read-only even when it includes input-relay arguments; real `stream` input relay remains lease-gated.
+- `session api`, `session transport`, and `capabilities` now advertise the stream preflight surface.
+- No frame capture, MaaTouch startup, input execution, trusted remote listener, TLS implementation, token issuance, UI transport, unbounded long-lived stream transport, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `9014d895484708957124d559b2e5d655926adce1`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand workspace constraints.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer stream, transport, API, capability, request queue, and lease-gate code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream_check -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_stream_check_request_reports_missing_lease_without_executing_input -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_is_offline_transport_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused stream preflight tests passed.
+- Focused daemon-routed stream check test passed.
+- Focused Session API contract test passed.
+- Focused Session transport contract test passed.
+- Focused capability contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed with `366` ActingLab tests plus the rest of the workspace suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: actual trusted remote listener/TLS/auth service, unbounded long-lived stream transport, scheduler ownership, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Run full validation for the Runtime workspace.
+2. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-stream-preflight`.
+3. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab trusted transport preflight surface
 
 ### Current status

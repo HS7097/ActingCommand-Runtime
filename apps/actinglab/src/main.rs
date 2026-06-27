@@ -1377,6 +1377,9 @@ fn session_transport_contract() -> Value {
             },
             "interactive_stream": {
                 "status": "partial",
+                "preflight_command": "stream check",
+                "daemon_preflight_command": "session request stream check",
+                "preflight_schema_version": "session.stream_check.v0.1",
                 "implemented_surfaces": {
                     "bounded_local_cli_stream": {
                         "status": "available",
@@ -1688,11 +1691,15 @@ fn session_api_contract() -> Value {
             "stream_view": {
                 "query": "stream --max-frames <N>",
                 "daemon_query": "session request stream",
+                "check_query": "stream check",
+                "daemon_check_query": "session request stream check",
                 "schema_version": "session.stream.v0.1",
+                "check_schema_version": "session.stream_check.v0.1",
                 "event_schema_version": "session.stream.event.v0.1",
                 "bounded_local_cli_status": "available",
                 "read_only_without_input_relay_requires_lease": false,
                 "input_relay_requires_lease": true,
+                "safe_to_start_field": "safe_to_start",
                 "input_relay_actions": ["tap", "swipe", "long-tap", "key", "text"],
                 "trusted_remote_long_lived_stream_status": "reserved"
             },
@@ -4651,6 +4658,9 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if stream_check_requested(&flags) {
+        return run_stream_check(global, &flags.without_first_positional());
+    }
     let relay_actions = StreamInputRelayAction::parse_many(&flags)?;
     if !relay_actions.is_empty() && should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "stream", args);
@@ -4719,6 +4729,128 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "events": events,
         "frames": frames
     }))
+}
+
+fn stream_check_requested(flags: &FlagArgs) -> bool {
+    flags.positionals.first().map(String::as_str) == Some("check")
+}
+
+fn run_stream_check(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let relay_actions = StreamInputRelayAction::parse_many(flags)?;
+    if !stream_input_relay_requested(flags) {
+        flags.expect_positionals("stream check", 0)?;
+    }
+    let config = read_user_config()?;
+    let instance_id = resolve_instance_id_for_flags(global, &config, flags)?;
+    let max_frames = parse_optional_usize(flags, "--max-frames", 1)?;
+    if max_frames == 0 || max_frames > 60 {
+        return Err(CliError::usage("--max-frames must be between 1 and 60"));
+    }
+    let interval = parse_optional_duration_ms(flags, "--interval-ms", 250)?;
+    let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
+    let input_relay_requested = !relay_actions.is_empty();
+    let would_route_via_daemon = if input_relay_requested {
+        should_route_control_via_session_daemon(global, flags)?
+    } else {
+        should_route_readonly_via_session_daemon(global, flags)?
+    };
+    let daemon_alive = session_daemon_info_exists(flags)?;
+    let daemon_gate_ok = !would_route_via_daemon || daemon_alive;
+    let lease_gate = stream_check_lease_gate(flags, &instance_id, input_relay_requested)?;
+    let lease_gate_ok = lease_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(json!({
+        "schema_version": "session.stream_check.v0.1",
+        "instance": instance_id,
+        "safe_to_start": daemon_gate_ok && lease_gate_ok,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true,
+        "does_not_start_listener": true,
+        "mode": "bounded_stream_preflight",
+        "routing": {
+            "would_route_via_daemon": would_route_via_daemon,
+            "daemon_alive": daemon_alive,
+            "daemon_required_satisfied": daemon_gate_ok,
+            "local_override": flags.bool("--local"),
+            "explicit_daemon": flags.bool("--via-daemon")
+        },
+        "capture": {
+            "require_fresh": flags.bool("--require-fresh"),
+            "dry_run": global.dry_run || flags.bool("--dry-run"),
+            "interval_ms": interval.as_millis(),
+            "fresh_delay_ms": fresh_delay.as_millis(),
+            "requested_max_frames": max_frames,
+            "max_frames_per_request": 60
+        },
+        "input_relay": {
+            "requested": input_relay_requested,
+            "action_count": relay_actions.len(),
+            "actions": relay_actions.iter().map(StreamInputRelayAction::to_json).collect::<Vec<_>>(),
+            "daemon_routed_input_requires_matching_lease": true,
+            "lease_gate": lease_gate
+        },
+        "trusted_channel": {
+            "status": "reserved",
+            "long_lived_stream_implemented": false
+        }
+    }))
+}
+
+fn stream_check_lease_gate(
+    flags: &FlagArgs,
+    instance_id: &str,
+    input_relay_requested: bool,
+) -> CliOutcome<Value> {
+    if !input_relay_requested {
+        return Ok(json!({
+            "ok": true,
+            "status": "not_required",
+            "reason": "read-only stream check does not request input relay"
+        }));
+    }
+    let state_dir = session_state_dir_from_flags(flags)?;
+    let lease_path = session_lease_path(&state_dir, instance_id);
+    let requested = session_command_lease_from_flags(flags);
+    let Some(requested) = requested.as_ref().filter(|lease| !lease.holder.is_empty()) else {
+        return Ok(json!({
+            "ok": false,
+            "status": "blocked",
+            "code": "lab_lease_required",
+            "message": "stream input relay requires --lease-holder <id> before daemon-routed execution",
+            "lease_path": lease_path.display().to_string()
+        }));
+    };
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Ok(json!({
+            "ok": false,
+            "status": "blocked",
+            "code": "lab_lease_missing",
+            "message": format!("stream input relay requires an active lease for {instance_id}"),
+            "requested_lease": requested,
+            "lease_path": lease_path.display().to_string()
+        }));
+    };
+    match validate_lease_request(&current, requested) {
+        Ok(()) => Ok(json!({
+            "ok": true,
+            "status": "ready",
+            "requested_lease": requested,
+            "current_lease": current,
+            "lease_path": lease_path.display().to_string()
+        })),
+        Err(err) => Ok(json!({
+            "ok": false,
+            "status": "blocked",
+            "code": err.code,
+            "message": err.message,
+            "blocked_by": err.blocked_by,
+            "requested_lease": requested,
+            "current_lease": current,
+            "lease_path": lease_path.display().to_string()
+        })),
+    }
 }
 
 fn stream_contract_json(
@@ -5394,6 +5526,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
+        "stream" => run_stream(global, args),
         "recover" => run_session_recover(global, args),
         "lease" => run_session_lease(global, args),
         "record" => run_session_record(global, args),
@@ -7652,7 +7785,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             submit_session_command_request(global, &flags, "capture_diagnose", request_args)
         }
         "stream" => {
-            if stream_input_relay_requested(&flags) {
+            if stream_input_relay_requested(&flags) && !stream_check_requested(&flags) {
                 submit_control_session_request(global, &flags, "stream", &args[1..])
             } else {
                 submit_readonly_session_request(global, &flags, "stream", &args[1..])
@@ -8649,7 +8782,7 @@ fn execute_session_command_request_inner(
         }
         "stream" => {
             let flags = FlagArgs::parse(&request.args)?;
-            if stream_input_relay_requested(&flags) {
+            if stream_input_relay_requested(&flags) && !stream_check_requested(&flags) {
                 ensure_session_request_lease(state_dir, request)?;
             }
             let global = request.global.to_global()?;
@@ -14278,6 +14411,8 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
         command_cap("session transport check", ["offline"], "available"),
+        command_cap("session stream", ["offline"], "available"),
+        command_cap("session stream check", ["offline"], "available"),
         command_cap("session monitor-policy", ["offline"], "available"),
         command_cap("session request cancel", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
@@ -14377,6 +14512,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap(
             "session request stream",
             ["running_runtime", "device"],
+            "available",
+        ),
+        command_cap(
+            "session request stream check",
+            ["running_runtime"],
             "available",
         ),
         command_cap(
@@ -17907,6 +18047,110 @@ mod tests {
         assert_eq!(
             relay_event.get("stream_id").and_then(Value::as_str),
             data.get("stream_id").and_then(Value::as_str)
+        );
+    }
+
+    #[test]
+    fn stream_check_reports_read_only_preflight() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let check = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "check",
+                "--dry-run",
+                "--max-frames",
+                "2",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(check.exit_code(), 0);
+        let data = check.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.stream_check.v0.1")
+        );
+        assert_eq!(
+            data.get("safe_to_start").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("does_not_capture").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("does_not_start_maatouch").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/input_relay/requested")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/input_relay/lease_gate/status")
+                .and_then(Value::as_str),
+            Some("not_required")
+        );
+        assert!(data.get("frames").is_none());
+        assert!(data.get("stream_id").is_none());
+    }
+
+    #[test]
+    fn stream_check_reports_input_relay_missing_lease() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let check = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "check",
+                "--dry-run",
+                "--input-event",
+                "tap,10,20",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(check.exit_code(), 0);
+        let data = check.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_start").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/input_relay/action_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/input_relay/lease_gate/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert_eq!(
+            data.get("does_not_start_maatouch").and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -22958,6 +23202,54 @@ mod tests {
     }
 
     #[test]
+    fn session_stream_check_request_reports_missing_lease_without_executing_input() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "stream-check-input-relay".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec![
+                "check".to_string(),
+                "--dry-run".to_string(),
+                "--input-event".to_string(),
+                "tap,10,20".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let payload = execute_session_command_request_inner(&request, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.stream_check.v0.1")
+        );
+        assert_eq!(
+            payload.get("safe_to_start").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/input_relay/lease_gate/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert_eq!(
+            payload
+                .get("does_not_start_maatouch")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_stream_input_relay_request_accepts_matching_lease() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -25228,6 +25520,24 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/stream_view/check_query")
+                .and_then(Value::as_str),
+            Some("stream check")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/daemon_check_query")
+                .and_then(Value::as_str),
+            Some("session request stream check")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/stream_view/check_schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream_check.v0.1")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/stream_view/event_schema_version")
                 .and_then(Value::as_str),
             Some("session.stream.event.v0.1")
@@ -25324,6 +25634,24 @@ mod tests {
                 .pointer("/channels/interactive_stream/status")
                 .and_then(Value::as_str),
             Some("partial")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/preflight_command")
+                .and_then(Value::as_str),
+            Some("stream check")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/daemon_preflight_command")
+                .and_then(Value::as_str),
+            Some("session request stream check")
+        );
+        assert_eq!(
+            payload
+                .pointer("/channels/interactive_stream/preflight_schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream_check.v0.1")
         );
         assert_eq!(
             payload
@@ -29483,6 +29811,9 @@ mod tests {
             "session record status",
             "session record stop",
             "session record build-task",
+            "session stream",
+            "session stream check",
+            "session request stream check",
         ] {
             let command = commands
                 .iter()
