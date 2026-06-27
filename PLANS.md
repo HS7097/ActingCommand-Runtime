@@ -148,6 +148,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stale lease recommended action surface: `session status --diagnostics` now emits `stale_lease_inspect` recommendations for stale leases, marked as scheduler decisions rather than automatic recovery.
 - ActingLab capture health recommended action surface: `session status --diagnostics` now turns recent stale/unavailable capture journal summaries into read-only scheduler/UI recommendations before anyone treats a game as frozen.
 - ActingLab queue health recommended action surface: `session status --diagnostics` now turns blocked queued/running requests and unclaimed responses into read-only inspect/read actions for UI/scheduler clients.
+- ActingLab failed request recommended action surface: `session status --diagnostics` now turns the latest failed daemon journal entry into a read-only `failed_request_inspect` action for UI/scheduler clients.
+
+## Current ActingLab Failed Request Recommended Action Surface
+
+This increment closes another diagnostics gap for future UI and scheduler clients: the latest failed daemon request is no longer only exposed as raw `journal.last_error`, but also as an explicit next diagnostic action.
+
+- `session status --diagnostics` finds the most recent failed daemon request in the recent request journal.
+- A recent failed request emits `failed_request_inspect`, pointing to `session request-state get <request-id>`.
+- The recommendation includes the failed request id, source command, completion timestamp, original error payload, and `read_only=true`.
+- `session api` advertises the journal-error recommendation action in the status-view contract.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Queue Health Recommended Action Surface
 

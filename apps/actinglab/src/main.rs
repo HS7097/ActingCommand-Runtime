@@ -1536,6 +1536,9 @@ fn session_api_contract() -> Value {
                     "blocked_request_inspect",
                     "blocked_running_request_inspect",
                     "unclaimed_response_read"
+                ],
+                "journal_error_actions": [
+                    "failed_request_inspect"
                 ]
             },
             "lease_view": {
@@ -6935,6 +6938,10 @@ fn session_status_recommended_actions(
         state_dir,
         recent_entries,
     ));
+    actions.extend(session_last_error_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_monitor_policy_recommended_actions(
         state_dir,
         monitor_policy,
@@ -7149,6 +7156,34 @@ fn session_capture_health_signal(summary: &Value) -> Option<&'static str> {
         return Some("capture_backend_unavailable");
     }
     None
+}
+
+fn session_last_error_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let Some(entry) = recent_entries.iter().rev().find(|entry| !entry.ok) else {
+        return Vec::new();
+    };
+    let mut action = session_recommended_action_owned(
+        40,
+        "failed_request_inspect",
+        "Inspect the latest failed daemon request through the request-state view before retrying or escalating.",
+        vec![
+            "session".to_string(),
+            "request-state".to_string(),
+            "get".to_string(),
+            entry.request_id.clone(),
+            "--state-dir".to_string(),
+            state_dir.display().to_string(),
+        ],
+    );
+    action["read_only"] = json!(true);
+    action["request_id"] = json!(entry.request_id);
+    action["source_command"] = json!(entry.command);
+    action["completed_at_unix_ms"] = json!(entry.completed_at_unix_ms);
+    action["error"] = json!(&entry.error);
+    vec![action]
 }
 
 fn session_stale_lease_recommended_actions(state_dir: &Path) -> CliOutcome<Vec<Value>> {
@@ -24972,6 +25007,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/journal_error_actions/0")
+                .and_then(Value::as_str),
+            Some("failed_request_inspect")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/pending_request_preview_field")
                 .and_then(Value::as_str),
             Some("diagnostics.queues.pending_request_preview")
@@ -28215,6 +28256,94 @@ mod tests {
                 .pointer("/journal/last_entry/request_id")
                 .and_then(Value::as_str),
             Some("completed-1")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_recommends_failed_request_inspect() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        let entry = SessionRequestJournalEntry {
+            request_id: "failed-request".to_string(),
+            command: "tap".to_string(),
+            global: Some(SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            }),
+            args: vec!["10".to_string(), "20".to_string()],
+            lease: None,
+            ok: false,
+            error: Some(EnvelopeError {
+                code: "lab_lease_required".to_string(),
+                message: "matching Session Layer lease is required".to_string(),
+                blocked_by: vec!["lab_lease".to_string()],
+            }),
+            data_summary: None,
+            created_at_unix_ms: 1,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        write_json_line(&session_request_journal_path(&state_dir), &entry).unwrap();
+
+        let status = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+
+        assert_eq!(status.exit_code(), 0);
+        let diagnostics = status
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("diagnostics")
+            .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/last_error/request_id")
+                .and_then(Value::as_str),
+            Some("failed-request")
+        );
+        let action = diagnostics
+            .pointer("/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("failed_request_inspect")
+            })
+            .unwrap();
+        assert_eq!(action.get("read_only").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            action.get("request_id").and_then(Value::as_str),
+            Some("failed-request")
+        );
+        assert_eq!(
+            action.get("source_command").and_then(Value::as_str),
+            Some("tap")
+        );
+        assert_eq!(
+            action.pointer("/error/code").and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert_eq!(
+            action.pointer("/args/1").and_then(Value::as_str),
+            Some("request-state")
+        );
+        assert_eq!(
+            action.pointer("/args/3").and_then(Value::as_str),
+            Some("failed-request")
         );
     }
 
