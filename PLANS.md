@@ -102,6 +102,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab LabLease aliases: `lab status`, `lab lease`, and `lab release` now expose the Lab-facing lease/status surface as thin aliases over the Session Layer status and lease files.
 - ActingLab LabLease preempt alias: `lab preempt` now exposes the Session Layer preempt path from the Lab-facing CLI surface and preserves previous-holder provenance.
 - ActingLab LabLease status alias: `lab lease status` now exposes the same Session Layer lease status file from the Lab-facing CLI surface.
+- ActingLab bounded stream input relay scaffold: `stream --input-relay <tap|swipe|long-tap|key|text>` can now carry one input action through the bounded local stream contract, and daemon-routed input relay requires a matching Session Layer lease.
+
+## Current ActingLab Bounded Stream Input Relay Scaffold
+
+The current Runtime task advances the Session Layer interactive-stream requirement without adding UI, network transport, or a full long-lived video channel. The bounded local `stream` command can now include one input relay action using the same MaaTouch-backed action model as existing direct control commands.
+
+Scope:
+
+- Keep ordinary `stream` read-only and daemon-routed through the existing read-only request path.
+- Add `stream --input-relay <tap|swipe|long-tap|key|text> ...` and the `--interactive-input` alias as a bounded local relay scaffold.
+- Route stream requests with input relay through the daemon control request path when a resident daemon is visible.
+- Require a matching Session Layer lease before daemon-side stream input relay can run.
+- Reuse existing MaaTouch input methods for tap, swipe, long-tap, key, and text.
+- Keep dry-run input relay visible as a planned action without opening MaaTouch.
+
+Safety direction:
+
+- Stream input relay is not a UI, WebSocket, TLS, remote API, scheduler, SQLite, OCR/OpenCV, or game-logic implementation.
+- Ordinary bounded frame sampling remains read-only.
+- A daemon-routed stream request with input relay is task-level input and must pass `ensure_session_request_lease` before any action can run.
+- Direct local input relay is still manual/local only when no resident daemon is visible, matching existing direct input command behavior.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports_planned_action -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture` passed with `2` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Replace the bounded local stream scaffold with a real trusted UI/API stream transport in a later milestone.
+- Add interactive multi-event input relay once the trusted channel and scheduler/UI ownership model are defined.
+- Continue live prepared-emulator validation after the Session Layer task sequence is ready.
 
 ## Current ActingLab LabLease Status Alias
 

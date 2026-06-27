@@ -1861,6 +1861,111 @@ fn canonical_key(key: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamInputRelayAction {
+    Touch(DirectTouchCommand),
+    Input(DirectInputCommand),
+}
+
+impl StreamInputRelayAction {
+    fn parse(flags: &FlagArgs) -> CliOutcome<Option<Self>> {
+        let Some((action, action_args)) = stream_input_relay_action(flags)? else {
+            return Ok(None);
+        };
+        let action_flags = FlagArgs {
+            flags: BTreeMap::new(),
+            positionals: action_args,
+        };
+        match action.as_str() {
+            "tap" | "swipe" | "long-tap" => {
+                DirectTouchCommand::parse(&action, &action_flags).map(Self::Touch)
+            }
+            "key" | "text" => DirectInputCommand::parse(&action, &action_flags).map(Self::Input),
+            other => Err(CliError::usage(format!(
+                "unsupported stream input relay action: {other}"
+            ))),
+        }
+        .map(Some)
+    }
+
+    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+        match self {
+            Self::Touch(command) => command.run(backend),
+            Self::Input(command) => command.run(backend),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match self {
+            Self::Touch(command) => command.to_json(),
+            Self::Input(command) => command.to_json(),
+        }
+    }
+}
+
+fn stream_input_relay_requested(flags: &FlagArgs) -> bool {
+    flags.optional("--input-relay").is_some() || flags.optional("--interactive-input").is_some()
+}
+
+fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec<String>)>> {
+    let Some(value) = flags
+        .optional("--input-relay")
+        .or_else(|| flags.optional("--interactive-input"))
+    else {
+        return Ok(None);
+    };
+    if value == "true" {
+        let action = flags.positionals.first().cloned().ok_or_else(|| {
+            CliError::usage("stream --input-relay expects an action: tap|swipe|long-tap|key|text")
+        })?;
+        return Ok(Some((
+            action,
+            flags.positionals.iter().skip(1).cloned().collect(),
+        )));
+    }
+    Ok(Some((value, flags.positionals.clone())))
+}
+
+fn run_stream_input_relay(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    action: &StreamInputRelayAction,
+    dry_run: bool,
+) -> CliOutcome<Value> {
+    if dry_run {
+        return Ok(json!({
+            "status": "planned",
+            "mode": "dry_run",
+            "action": action.to_json()
+        }));
+    }
+    let device_config = device_config(global, config)?;
+    let mut backend = MaaTouchBackend::new(
+        device_config.adb,
+        device_config.target,
+        MaaTouchConfig::default(),
+    );
+    let serial = backend.serial().to_string();
+    let device = backend
+        .connect()
+        .map_err(|err| CliError::device(err.to_string()))?;
+    let handshake = backend.handshake_info().cloned();
+    let operation = action.run(&mut backend);
+    let close = backend.close();
+    combine_operation_and_close(operation, close)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "status": "sent",
+        "backend": "maatouch",
+        "control_mode": "stream_input_relay",
+        "serial": serial,
+        "device_state": device.state,
+        "screen_size": device.screen_size,
+        "handshake": handshake.map(handshake_json),
+        "action": action.to_json()
+    }))
+}
+
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if should_route_readonly_via_session_daemon(global, &flags)? {
@@ -3424,14 +3529,12 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "stream", args);
+    let relay_action = StreamInputRelayAction::parse(&flags)?;
+    if relay_action.is_some() && should_route_control_via_session_daemon(global, &flags)? {
+        return submit_control_session_request(global, &flags, "stream", args);
     }
-    if flags.bool("--input-relay") || flags.bool("--interactive-input") {
-        return Err(CliError::not_implemented(
-            "stream_input_relay_not_implemented",
-            "stream input relay is reserved for the future trusted interactive channel; this milestone only exposes bounded frame sampling",
-        ));
+    if relay_action.is_none() && should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "stream", args);
     }
     let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
@@ -3442,6 +3545,16 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let interval = parse_optional_duration_ms(&flags, "--interval-ms", 250)?;
     let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
+    let input_relay = relay_action
+        .as_ref()
+        .map(|action| run_stream_input_relay(global, &config, action, dry_run))
+        .transpose()?
+        .unwrap_or_else(|| {
+            json!({
+                "status": "disabled",
+                "reason": "no input relay action requested"
+            })
+        });
     let frames = if dry_run {
         stream_dry_run_frames(max_frames)
     } else {
@@ -3469,10 +3582,7 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "status": "reserved",
             "reason": "local CLI bounded stream scaffold only"
         },
-        "input_relay": {
-            "status": "not_implemented",
-            "reason": "input relay requires the future trusted interactive channel"
-        },
+        "input_relay": input_relay,
         "frames": frames
     }))
 }
@@ -4129,7 +4239,13 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             push_optional_flag_value(&mut request_args, &flags, "--fresh-delay-ms");
             submit_session_command_request(global, &flags, "capture_diagnose", request_args)
         }
-        "stream" => submit_readonly_session_request(global, &flags, "stream", &args[1..]),
+        "stream" => {
+            if stream_input_relay_requested(&flags) {
+                submit_control_session_request(global, &flags, "stream", &args[1..])
+            } else {
+                submit_readonly_session_request(global, &flags, "stream", &args[1..])
+            }
+        }
         "recognize" => submit_readonly_session_request(global, &flags, "recognize", &args[1..]),
         "detect-page" => submit_readonly_session_request(global, &flags, "detect_page", &args[1..]),
         "current-page" => {
@@ -4585,6 +4701,10 @@ fn execute_session_command_request_inner(
             run_capture(&global, &request.args)
         }
         "stream" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            if stream_input_relay_requested(&flags) {
+                ensure_session_request_lease(state_dir, request)?;
+            }
             let global = request.global.to_global()?;
             run_stream(&global, &request.args)
         }
@@ -10902,7 +11022,7 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/input_relay/status").and_then(Value::as_str),
-            Some("not_implemented")
+            Some("disabled")
         );
         assert_eq!(
             data.pointer("/capture/dry_run").and_then(Value::as_bool),
@@ -10915,16 +11035,48 @@ mod tests {
     }
 
     #[test]
-    fn stream_input_relay_is_explicitly_not_implemented() {
+    fn stream_input_relay_dry_run_reports_planned_action() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
         let stream = run_cli(
-            ["--json", "--instance", "ak", "stream", "--input-relay"],
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "--dry-run",
+                "--max-frames",
+                "1",
+                "--input-relay",
+                "tap",
+                "10",
+                "20",
+            ],
             true,
         );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
 
-        assert_eq!(stream.exit_code(), 6);
+        assert_eq!(stream.exit_code(), 0);
+        let data = stream.envelope.data.as_ref().unwrap();
         assert_eq!(
-            stream.envelope.error.as_ref().unwrap().code,
-            "stream_input_relay_not_implemented"
+            data.pointer("/input_relay/status").and_then(Value::as_str),
+            Some("planned")
+        );
+        assert_eq!(
+            data.pointer("/input_relay/action/type")
+                .and_then(Value::as_str),
+            Some("tap")
+        );
+        assert_eq!(
+            data.pointer("/input_relay/action/x")
+                .and_then(Value::as_i64),
+            Some(10)
         );
     }
 
@@ -15425,6 +15577,91 @@ mod tests {
         assert_eq!(err.code, "validation_failed");
         assert!(err.message.contains("failed to parse"));
         assert!(err.message.contains("lease-ak.json"));
+    }
+
+    #[test]
+    fn session_stream_input_relay_request_requires_lease_metadata() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "stream-input-relay".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--input-relay".to_string(),
+                "tap".to_string(),
+                "10".to_string(),
+                "20".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+
+        assert_eq!(err.code, "lab_lease_required");
+    }
+
+    #[test]
+    fn session_stream_input_relay_request_accepts_matching_lease() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(state_dir, "ak"), &lease).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "stream-input-relay".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--max-frames".to_string(),
+                "1".to_string(),
+                "--input-relay".to_string(),
+                "tap".to_string(),
+                "10".to_string(),
+                "20".to_string(),
+            ],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let payload = execute_session_command_request_inner(&request, state_dir).unwrap();
+
+        assert_eq!(
+            payload
+                .pointer("/input_relay/status")
+                .and_then(Value::as_str),
+            Some("planned")
+        );
+        assert_eq!(
+            payload
+                .pointer("/input_relay/action/type")
+                .and_then(Value::as_str),
+            Some("tap")
+        );
     }
 
     #[test]

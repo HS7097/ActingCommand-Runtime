@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab bounded stream input relay scaffold
+
+### Current status
+
+- Added a bounded local stream input relay scaffold.
+- Ordinary `stream` remains read-only and reports `input_relay.status = disabled` when no relay action is requested.
+- `stream --input-relay <tap|swipe|long-tap|key|text> ...` now parses one input relay action.
+- `--interactive-input` is accepted as an alias for the same bounded relay scaffold.
+- Dry-run relay reports `input_relay.status = planned` and does not open MaaTouch.
+- Non-dry-run relay reuses the existing MaaTouch-backed tap, swipe, long-tap, key, and text methods.
+- Stream requests with input relay are submitted through the daemon control request path when a resident daemon is visible.
+- Daemon-side stream input relay requires a matching Session Layer lease before execution.
+- No UI, WebSocket, TLS, remote API, scheduler implementation, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, resource repository read/write, or trusted network API was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `f46b93d00c4511c79f89c96dbcfc5901ce40b4a4`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` stream, session request, lease validation, direct touch/input, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports_planned_action -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream_command_reports_bounded_dry_run_contract -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab stream_input_relay_dry_run_reports_planned_action -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_stream_input_relay_request -- --nocapture` passed with `2` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed with all workspace tests, including `211` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: real trusted UI/API stream transport, multi-event interactive relay, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stream-input-relay-scaffold`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, multi-event interactive relay, scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab LabLease status alias
 
 ### Current status
