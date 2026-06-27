@@ -109,6 +109,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon liveness-gated routing: automatic daemon-preferred routing now requires an alive heartbeat, and explicit daemon requests fail fast before queueing when the daemon state is stale, missing a heartbeat, or pid-mismatched.
 - ActingLab session start liveness gate: `session start` now treats stale or heartbeat-missing session state as a visible runtime error instead of reporting false `already_running`, and new daemon startup waits for an alive heartbeat before reporting `started`.
 - ActingLab session stop liveness gate: `session stop` now refuses stale, missing-heartbeat, or pid-mismatched daemon state before writing a stop request, while alive daemon state keeps the existing stop path.
+- ActingLab stale session cleanup: `session cleanup --stale` now provides an explicit local cleanup path for stale daemon state without touching devices, apps, journals, resources, or game logic.
+
+## Current ActingLab Stale Session Cleanup
+
+The current Runtime task adds a conservative operator-facing cleanup path for stale Session Layer state. `session cleanup --stale` gives `session start`/`session stop` users a safe next command after liveness gates report stale, missing-heartbeat, or pid-mismatched daemon state.
+
+Scope:
+
+- Add `session cleanup --stale` as an explicit local command.
+- Refuse cleanup when liveness is `alive`; operators should use `session stop` for a healthy daemon.
+- Remove only local stale session files: `session.json`, `heartbeat.json`, `stop.request`, and pending request/response JSON files.
+- Preserve request journals and archives for provenance.
+- Support global `--dry-run` so operators can inspect planned cleanup before deletion.
+- Advertise `session cleanup` through `capabilities`.
+- Keep daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, resource access, and game logic unchanged.
+
+Safety direction:
+
+- Cleanup is never automatic; it requires the explicit `--stale` flag.
+- Alive daemon state is protected from accidental cleanup.
+- Pending stale request and response JSON files are removed with the stale state so a future daemon does not process old requests.
+- Journals remain available for diagnostics after cleanup.
+
+Validation status:
+
+- Focused `cargo test -p actingcommand-actinglab session_cleanup_ -- --nocapture` passed after adding required-flag, alive-refusal, stale-cleanup, and dry-run coverage.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture` passed.
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities` lists `session cleanup`.
+- `cargo fmt --all -- --check`, `git diff --check`, source diff prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+
+Out of scope:
+
+- No automatic stale cleanup was added.
+- No corrupt-state cleanup path was added.
+- No OS process probing was added.
+- No live daemon was started for this milestone.
+- No UI/API transport, scheduler arbitration, device I/O, capture backend change, resource repository access, or game-specific logic was added.
 
 ## Current ActingLab Session Stop Liveness Gate
 

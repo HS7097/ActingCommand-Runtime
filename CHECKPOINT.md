@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab stale session cleanup
+
+### Current status
+
+- Added explicit `session cleanup --stale` for stale Session Layer local state.
+- Cleanup is refused when daemon liveness is `alive`; healthy daemons must be stopped through `session stop`.
+- Cleanup removes only local stale session files: `session.json`, `heartbeat.json`, `stop.request`, and pending request/response JSON files.
+- Cleanup preserves request journals and archives for provenance.
+- Global `--dry-run` is supported for planned cleanup inspection.
+- `session cleanup` is advertised in `capabilities`.
+- No automatic cleanup, corrupt-state cleanup, daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, app lifecycle behavior, or live device behavior was changed.
+- No live daemon or emulator operation was run for this lifecycle-consistency milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e110d1f8060f77424bf24b22207b0ec2c0fa6121`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session lifecycle, liveness diagnostics, status paths, cleanup absence, capability list, and related tests.
+- `cargo test -p actingcommand-actinglab session_cleanup_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_cleanup_ -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture` passed with `1` test.
+- `cargo run -q -p actingcommand-actinglab -- --json capabilities` lists `session cleanup`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `227` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stale-session-cleanup`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab session stop liveness gate
 
 ### Current status

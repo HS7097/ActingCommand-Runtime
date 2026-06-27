@@ -4216,6 +4216,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "status" => run_session_status(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
+        "cleanup" => run_session_cleanup(global, args),
         "daemon" => run_session_daemon(args),
         "request" => run_session_request(global, args),
         "journal" => run_session_journal(global, args),
@@ -4860,6 +4861,111 @@ fn run_session_stop(args: &[String]) -> CliOutcome<Value> {
         "liveness": liveness_json,
         "info": info
     }))
+}
+
+fn run_session_cleanup(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    flags.expect_positionals("session cleanup", 0)?;
+    if !flags.bool("--stale") {
+        return Err(CliError::usage(
+            "session cleanup requires --stale to make local stale-state cleanup explicit",
+        ));
+    }
+    let dry_run = global.dry_run || flags.bool("--dry-run");
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let info = read_json_file::<SessionInfo>(&session_info_path(&state_dir))?;
+    let heartbeat = read_json_file::<SessionHeartbeat>(&session_heartbeat_path(&state_dir))?;
+    let now_ms = current_unix_ms();
+    let liveness = session_liveness_snapshot(info.as_ref(), heartbeat.as_ref(), now_ms);
+    let liveness_json = session_liveness_diagnostics(info.as_ref(), heartbeat.as_ref(), now_ms);
+    if liveness.status.can_accept_requests() {
+        return Err(CliError::runtime_not_running(format!(
+            "session cleanup refused because daemon is alive; use session stop first; liveness status={}, state_dir={}",
+            liveness.status.as_str(),
+            state_dir.display()
+        )));
+    }
+
+    let mut files = Vec::new();
+    let mut removed_count = 0usize;
+    for path in session_stale_cleanup_candidates(&state_dir)? {
+        let existed = path.exists();
+        let removed = existed && !dry_run;
+        if removed {
+            let metadata = fs::metadata(&path).map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to inspect stale session file {}: {err}",
+                    path.display()
+                ))
+            })?;
+            if !metadata.is_file() {
+                return Err(CliError::runtime_not_running(format!(
+                    "refusing to remove non-file stale session path {}",
+                    path.display()
+                )));
+            }
+            fs::remove_file(&path).map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to remove stale session file {}: {err}",
+                    path.display()
+                ))
+            })?;
+            removed_count += 1;
+        }
+        files.push(json!({
+            "path": path.display().to_string(),
+            "existed": existed,
+            "removed": removed
+        }));
+    }
+
+    Ok(json!({
+        "status": if dry_run { "planned" } else { "cleaned" },
+        "mode": "stale_session_cleanup",
+        "dry_run": dry_run,
+        "state_dir": state_dir.display().to_string(),
+        "liveness": liveness_json,
+        "removed_count": removed_count,
+        "files": files,
+        "journal_preserved": true
+    }))
+}
+
+fn session_stale_cleanup_candidates(state_dir: &Path) -> CliOutcome<Vec<PathBuf>> {
+    let mut paths = vec![
+        session_info_path(state_dir),
+        session_heartbeat_path(state_dir),
+        session_stop_path(state_dir),
+    ];
+    for dir in [
+        session_requests_dir(state_dir),
+        session_responses_dir(state_dir),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+        let entries = fs::read_dir(&dir).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to read stale session queue directory {}: {err}",
+                dir.display()
+            ))
+        })?;
+        for entry in entries {
+            let path = entry
+                .map_err(|err| {
+                    CliError::runtime_not_running(format!(
+                        "failed to read stale session queue entry {}: {err}",
+                        dir.display()
+                    ))
+                })?
+                .path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
@@ -9728,6 +9834,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session status", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
+        command_cap("session cleanup", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
         command_cap("session request journal", ["running_runtime"], "available"),
@@ -10736,6 +10843,128 @@ mod tests {
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(data.get("status").and_then(Value::as_str), Some("stopped"));
         assert!(session_stop_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_cleanup_requires_stale_flag() {
+        let temp = TempDir::new().unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "cleanup",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("requires --stale"));
+    }
+
+    #[test]
+    fn session_cleanup_refuses_alive_daemon_and_preserves_files() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "cleanup",
+                "--stale",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("cleanup refused"));
+        assert!(session_info_path(temp.path()).exists());
+        assert!(session_heartbeat_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_cleanup_stale_state_removes_files_and_preserves_journal() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+        fs::write(session_stop_path(temp.path()), "stop").unwrap();
+        fs::create_dir_all(session_requests_dir(temp.path())).unwrap();
+        fs::create_dir_all(session_responses_dir(temp.path())).unwrap();
+        let request_path = session_requests_dir(temp.path()).join("stale-request.json");
+        let response_path = session_responses_dir(temp.path()).join("stale-response.json");
+        let ignored_path = session_requests_dir(temp.path()).join("note.txt");
+        fs::write(&request_path, "{}").unwrap();
+        fs::write(&response_path, "{}").unwrap();
+        fs::write(&ignored_path, "keep").unwrap();
+        fs::write(session_request_journal_path(temp.path()), "{\"ok\":true}\n").unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "cleanup",
+                "--stale",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("cleaned"));
+        assert_eq!(data.get("removed_count").and_then(Value::as_u64), Some(5));
+        assert!(!session_info_path(temp.path()).exists());
+        assert!(!session_heartbeat_path(temp.path()).exists());
+        assert!(!session_stop_path(temp.path()).exists());
+        assert!(!request_path.exists());
+        assert!(!response_path.exists());
+        assert!(ignored_path.exists());
+        assert!(session_request_journal_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_cleanup_stale_state_dry_run_does_not_remove_files() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_info_only(temp.path());
+        write_test_session_heartbeat(
+            temp.path(),
+            321,
+            current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "cleanup",
+                "--stale",
+                "--dry-run",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("planned"));
+        assert_eq!(data.get("removed_count").and_then(Value::as_u64), Some(0));
+        assert!(session_info_path(temp.path()).exists());
+        assert!(session_heartbeat_path(temp.path()).exists());
     }
 
     #[test]
