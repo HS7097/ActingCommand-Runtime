@@ -1065,6 +1065,7 @@ fn session_layer_capability_contract() -> Value {
         "resident_daemon": {
             "request_command": "session request capabilities",
             "status_command": "session status --diagnostics",
+            "status_instance_registry_field": "diagnostics.instances",
             "journal_command": "session journal"
         },
         "access_channels": [
@@ -1343,6 +1344,14 @@ fn session_api_contract() -> Value {
                 "query": "session transport",
                 "daemon_query": "session request transport",
                 "schema_version": "session.transport.v0.1"
+            },
+            "status_view": {
+                "query": "session status --diagnostics",
+                "daemon_query": "session request status --diagnostics",
+                "liveness_field": "diagnostics.liveness",
+                "instance_registry_field": "diagnostics.instances",
+                "lease_field": "diagnostics.leases",
+                "journal_field": "diagnostics.journal"
             },
             "event_view": {
                 "query": "session events",
@@ -5021,10 +5030,25 @@ fn run_session_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     }
     flags.expect_positionals("session status", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
-    session_status_payload(&state_dir, flags.bool("--diagnostics"))
+    let diagnostics = flags.bool("--diagnostics");
+    let config = if diagnostics {
+        Some(read_user_config()?)
+    } else {
+        None
+    };
+    session_status_payload_with_config(&state_dir, diagnostics, config.as_ref())
 }
 
+#[cfg(test)]
 fn session_status_payload(state_dir: &Path, diagnostics: bool) -> CliOutcome<Value> {
+    session_status_payload_with_config(state_dir, diagnostics, None)
+}
+
+fn session_status_payload_with_config(
+    state_dir: &Path,
+    diagnostics: bool,
+    config: Option<&UserConfig>,
+) -> CliOutcome<Value> {
     let info_path = session_info_path(state_dir);
     let heartbeat_path = session_heartbeat_path(state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
@@ -5035,6 +5059,7 @@ fn session_status_payload(state_dir: &Path, diagnostics: bool) -> CliOutcome<Val
             info.as_ref(),
             heartbeat.as_ref(),
             current_unix_ms(),
+            config,
         )?)
     } else {
         None
@@ -5056,6 +5081,7 @@ fn session_status_diagnostics(
     info: Option<&SessionInfo>,
     heartbeat: Option<&SessionHeartbeat>,
     now_ms: u64,
+    config: Option<&UserConfig>,
 ) -> CliOutcome<Value> {
     let recent_entries = read_session_request_journal(state_dir, 5)?;
     let last_entry = recent_entries.last();
@@ -5075,6 +5101,7 @@ fn session_status_diagnostics(
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?
         },
+        "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
@@ -5097,6 +5124,38 @@ fn session_status_diagnostics(
             }
         }
     }))
+}
+
+fn session_instance_registry_diagnostics(config: Option<&UserConfig>) -> Value {
+    let Some(config) = config else {
+        return json!({
+            "available": false,
+            "count": 0,
+            "instances": []
+        });
+    };
+    let instances = config
+        .instances
+        .iter()
+        .map(|(id, instance)| {
+            json!({
+                "id": id,
+                "serial": instance.serial,
+                "game": instance.game,
+                "server": instance.server,
+                "package": instance.package,
+                "serial_configured": instance.serial.is_some(),
+                "game_configured": instance.game.is_some(),
+                "server_configured": instance.server.is_some(),
+                "package_configured": instance.package.is_some()
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "available": true,
+        "count": instances.len(),
+        "instances": instances
+    })
 }
 
 fn session_liveness_recommended_actions(
@@ -5894,7 +5953,13 @@ fn execute_session_command_request_inner(
         "status" => {
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request status", 0)?;
-            session_status_payload(state_dir, flags.bool("--diagnostics"))
+            let diagnostics = flags.bool("--diagnostics");
+            let config = if diagnostics {
+                Some(read_user_config()?)
+            } else {
+                None
+            };
+            session_status_payload_with_config(state_dir, diagnostics, config.as_ref())
         }
         "journal" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -17689,8 +17754,14 @@ mod tests {
 
     #[test]
     fn session_status_request_returns_daemon_diagnostics() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
         let state_dir = temp.path();
+        write_user_config(&UserConfig::default()).unwrap();
         let info = SessionInfo {
             pid: 123,
             started_at_unix_ms: 10,
@@ -17721,6 +17792,9 @@ mod tests {
         };
 
         let status = execute_session_command_request_inner(&request, state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
 
         assert_eq!(status.get("running").and_then(Value::as_bool), Some(true));
         assert_eq!(
@@ -17744,6 +17818,12 @@ mod tests {
                 .pointer("/diagnostics/journal/retention/max_bytes")
                 .and_then(Value::as_u64),
             Some(SESSION_REQUEST_JOURNAL_MAX_BYTES)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/instances/available")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -17785,6 +17865,66 @@ mod tests {
                 .pointer("/diagnostics/leases/leases/0/lease_id")
                 .and_then(Value::as_str),
             Some("lease-1")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_marks_instance_registry_unavailable_without_config() {
+        let temp = TempDir::new().unwrap();
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+
+        assert_eq!(
+            status
+                .pointer("/diagnostics/instances/available")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/instances/count")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn session_instance_registry_diagnostics_lists_configured_instances() {
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+            },
+        );
+
+        let diagnostics = session_instance_registry_diagnostics(Some(&config));
+
+        assert_eq!(
+            diagnostics.get("available").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(diagnostics.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/0/id")
+                .and_then(Value::as_str),
+            Some("ak-b")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/0/serial")
+                .and_then(Value::as_str),
+            Some("127.0.0.1:16416")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/0/package_configured")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -19950,6 +20090,76 @@ mod tests {
                 .pointer("/journal/last_entry/request_id")
                 .and_then(Value::as_str),
             Some("completed-1")
+        );
+    }
+
+    #[test]
+    fn session_status_cli_diagnostics_reports_configured_instances() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+            },
+        );
+        write_user_config(&config).unwrap();
+
+        let status = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(status.exit_code(), 0);
+        let diagnostics = status
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("diagnostics")
+            .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/available")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/instances/0/id")
+                .and_then(Value::as_str),
+            Some("ak-b")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/instances/instances/0/server")
+                .and_then(Value::as_str),
+            Some("cn-bilibili")
         );
     }
 

@@ -123,6 +123,34 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab trusted remote endpoint policy: runtime endpoint use now distinguishes local direct endpoints from trusted remote endpoints, blocks unencrypted remote endpoints, requires explicit trusted remote auth material, and reports the policy through `doctor` and Session contracts.
 - ActingLab strict Session throat policy: `--require-session` and `ACTINGLAB_REQUIRE_SESSION_DAEMON` force device/control commands through an alive resident Session daemon or fail visibly with `session_daemon_required`.
 - ActingLab session instance capture health diagnostics: `session instance health --capture-diagnose` reports fresh-frame status, backend attempts, frame digest, and stale-capture recovery recommendations through the Session Layer health surface.
+- ActingLab session status instance registry diagnostics: `session status --diagnostics` and daemon-routed status diagnostics now expose configured instance summaries for future UI/scheduler health views.
+
+## Current ActingLab Session Status Instance Registry Diagnostics
+
+The current Runtime task extends the Session Layer status surface so local CLI, daemon requests, future UI clients, and scheduler health views can see the configured instance registry alongside liveness, queues, leases, and journals.
+
+Scope:
+
+- Add `diagnostics.instances` to `session status --diagnostics`.
+- Include configured instance id, serial, game, server, package, and per-field configured flags.
+- Expose the same instance registry summary through `session request status --diagnostics`.
+- Advertise the status diagnostics instance-registry field in Session capability and API contracts.
+- Keep internal status payload tests hermetic by making config-backed diagnostics an explicit caller option.
+
+Safety direction:
+
+- This is a read-only diagnostic change.
+- No device backend, capture backend, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+- Corrupt or unreadable config remains a visible failure on config-backed CLI/daemon diagnostics instead of silently dropping instances.
+
+Validation status:
+
+- Focused instance-registry diagnostics tests passed.
+- Focused CLI status diagnostics test passed.
+- `session_status` tests passed.
+- Session API and access contract tests passed.
+- Manual CLI smoke confirmed `diagnostics.instances` reports a configured temporary instance.
+- `cargo fmt --all -- --check`, `git diff --check`, prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session Instance Capture Health Diagnostics
 
