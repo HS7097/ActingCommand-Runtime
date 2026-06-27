@@ -80,8 +80,44 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session interface surface alignment: record lifecycle capabilities now advertise start/status/stop, and the future interactive `stream` command is explicitly reserved instead of being an unknown command.
 - ActingLab daemon app lifecycle routing: `session app launch|stop|restart` can now be submitted through the resident daemon request queue with lease metadata, and daemon-side app requests are lease-gated before device I/O.
 - ActingLab daemon instance lifecycle routing: `session instance list|health|reconnect` can now be submitted through the resident daemon request queue, with `reconnect` lease-gated before device I/O.
+- ActingLab daemon capture routing: `capture --via-daemon` and `session request capture` can now submit normal one-shot capture through the resident daemon request queue while preserving `--out` and freshness flags.
 
-## Current ActingLab Daemon Instance Lifecycle Routing
+## Current ActingLab Daemon Capture Routing
+
+The current Runtime task moves the normal one-shot `capture` command behind the resident Session Layer request boundary. `capture --via-daemon --out <path>` now submits a read-only daemon request, and `session request capture --out <path>` provides the explicit request form.
+
+Scope:
+
+- Add `capture --via-daemon` routing.
+- Add `session request capture` routing.
+- Keep `--out`, `--require-fresh`, `--fresh-delay-ms`, and capture backend selection available to the daemon-executed command.
+- Keep capture daemon requests read-only and lease-free.
+- Advertise `session request capture` as an available capability.
+
+Safety direction:
+
+- This milestone does not change capture backend selection, stale-frame probing, PNG artifact writing semantics, or device input behavior.
+- Capture writes only the requested local `--out` artifact and does not execute input.
+- This milestone adds no scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, direct MaaTouch startup, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab capture_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_capture_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for fallback, reconnect/retry loops, ADB shell input/screencap, direct MaaTouch startup, SQLite, or OCR/OpenCV.
+
+Known follow-ups:
+
+- Continue moving package/operation execution workflows through the resident daemon request boundary.
+- Implement the actual interactive frame/input stream after the Runtime service boundary and trusted-channel API are accepted.
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+
+## Previous ActingLab Daemon Instance Lifecycle Routing
 
 The current Runtime task moves the remaining Phase A instance lifecycle surface behind the resident Session Layer request boundary. `session instance list|health|reconnect` remains available as direct local Session Layer commands, and each can now also be submitted to the running daemon with `--via-daemon` or `session request instance ...`.
 

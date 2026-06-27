@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon capture routing
+
+### Current status
+
+- Moved normal one-shot capture one step closer to the resident Session Layer boundary.
+- `capture --via-daemon --out <path>` now submits a read-only daemon request instead of direct-running capture in the client process.
+- `session request capture --out <path>` is now accepted by the daemon request client surface.
+- Capture daemon requests remain read-only and do not require a lease.
+- `--out`, `--require-fresh`, `--fresh-delay-ms`, and capture backend selection remain part of the daemon-executed command surface.
+- Capabilities now advertise `session request capture`.
+- Existing direct `capture` behavior is unchanged.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, direct MaaTouch startup, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `68e638aee73ce8d9ddfedbbfa287d7aab19aed9a`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git diff --stat`
+- `git diff -- apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab capture_via_daemon_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_capture_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, ADB shell input/screencap, direct MaaTouch startup, SQLite, and OCR/OpenCV.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab capture_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_capture_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon capture routing milestone.
+- Full Session Layer remains incomplete: complete daemon-first package/operation routing, actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-capture-routing`.
+2. Continue full Session Layer follow-ups: package/operation daemon routing, actual interactive streaming, trusted-channel API, live prepared-emulator recording validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon instance lifecycle routing
 
 ### Current status

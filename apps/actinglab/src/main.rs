@@ -1088,6 +1088,9 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     {
         return run_capture_diagnose(global, &flags);
     }
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "capture", args);
+    }
     let out = flags.required_path("--out")?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
@@ -3726,11 +3729,12 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires capture, capture-diagnose, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
+        "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
         "capture-diagnose" => {
             let mut request_args = vec!["diagnose".to_string()];
             push_optional_flag_value(&mut request_args, &flags, "--fresh-delay-ms");
@@ -4134,6 +4138,10 @@ fn execute_session_command_request_inner(
             let global = request.global.to_global()?;
             let flags = FlagArgs::parse(&request.args)?;
             run_capture_diagnose(&global, &flags)
+        }
+        "capture" => {
+            let global = request.global.to_global()?;
+            run_capture(&global, &request.args)
         }
         "recognize" => {
             let global = request.global.to_global()?;
@@ -8487,6 +8495,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session status", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
+        command_cap(
+            "session request capture",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap(
             "session request capture-diagnose",
             ["running_runtime", "device"],
@@ -13721,6 +13734,30 @@ mod tests {
     }
 
     #[test]
+    fn capture_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("frame.png");
+        let result = run_cli(
+            [
+                "--json",
+                "capture",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn readonly_via_daemon_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -13867,6 +13904,31 @@ mod tests {
                 "health",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_capture_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("frame.png");
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "capture",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
             ],
             true,
         );
@@ -14291,6 +14353,7 @@ mod tests {
             "session app restart",
             "session capture",
             "session capture diagnose",
+            "session request capture",
             "session request capture-diagnose",
             "session request recognize",
             "session request detect-page",
