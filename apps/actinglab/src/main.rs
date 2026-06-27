@@ -389,6 +389,8 @@ struct SessionMonitorPolicy {
     args: Vec<String>,
     read_only: bool,
     recover_enabled: bool,
+    #[serde(default)]
+    lease: Option<SessionCommandLease>,
     created_at_unix_ms: u64,
     updated_at_unix_ms: u64,
 }
@@ -405,6 +407,8 @@ struct SessionMonitorState {
     last_status: Option<String>,
     last_result: Option<Value>,
     last_error: Option<EnvelopeError>,
+    last_recovery: Option<Value>,
+    last_recovery_error: Option<EnvelopeError>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1130,6 +1134,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "daemon_state": {
                 "requires_lease": false,
+                "recovery_policy_requires_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             },
             "control": {
@@ -1256,6 +1261,7 @@ fn session_access_contract() -> Value {
             ,
             "daemon_state": {
                 "requires_lease": false,
+                "recovery_policy_requires_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             }
         },
@@ -1463,7 +1469,9 @@ fn session_api_contract() -> Value {
                 "schema_version": "session.monitor_policy_status.v0.1",
                 "state_field": "state",
                 "policy_field": "policy",
-                "execution_model": "daemon_owned_read_only_monitor_once"
+                "execution_model": "daemon_owned_monitor_once",
+                "default_read_only": true,
+                "recovery_requires_matching_lease": true
             },
             "instance_registry_view": {
                 "query": "session instance registry",
@@ -1580,6 +1588,7 @@ fn session_api_contract() -> Value {
             },
             "daemon_state": {
                 "requires_lease": false,
+                "recovery_policy_requires_matching_lease": true,
                 "examples": ["session monitor-policy set", "session monitor-policy clear"]
             }
         },
@@ -5402,6 +5411,8 @@ fn run_session_monitor_policy_in_state_dir(
                     "--interval-ms must be at least {SESSION_MONITOR_POLICY_MIN_INTERVAL_MS}"
                 )));
             }
+            let recover_enabled = flags.bool("--recover");
+            let lease = session_monitor_policy_lease(&flags, recover_enabled)?;
             let monitor_args = monitor_policy_monitor_args(&args[1..], &flags)?;
             let now = current_unix_ms();
             let existing =
@@ -5416,8 +5427,9 @@ fn run_session_monitor_policy_in_state_dir(
                 interval_ms,
                 global: SessionCommandGlobal::from_global(global),
                 args: monitor_args,
-                read_only: true,
-                recover_enabled: false,
+                read_only: !recover_enabled,
+                recover_enabled,
+                lease,
                 created_at_unix_ms: created_at,
                 updated_at_unix_ms: now,
             };
@@ -5433,6 +5445,8 @@ fn run_session_monitor_policy_in_state_dir(
                 last_status: None,
                 last_result: None,
                 last_error: None,
+                last_recovery: None,
+                last_recovery_error: None,
             };
             write_json_file_atomic(&session_monitor_state_path(state_dir), &state)?;
             Ok(json!({
@@ -5474,6 +5488,14 @@ fn run_session_monitor_policy_in_state_dir(
 fn session_monitor_policy_payload(state_dir: &Path) -> CliOutcome<Value> {
     let policy = read_json_file::<SessionMonitorPolicy>(&session_monitor_policy_path(state_dir))?;
     let state = read_json_file::<SessionMonitorState>(&session_monitor_state_path(state_dir))?;
+    let read_only = policy
+        .as_ref()
+        .map(|policy| policy.read_only)
+        .unwrap_or(true);
+    let recover_enabled = policy
+        .as_ref()
+        .map(|policy| policy.recover_enabled)
+        .unwrap_or(false);
     Ok(json!({
         "schema_version": "session.monitor_policy_status.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -5484,23 +5506,32 @@ fn session_monitor_policy_payload(state_dir: &Path) -> CliOutcome<Value> {
         "state": state,
         "execution_model": {
             "daemon_owned": true,
-            "read_only": true,
+            "read_only": read_only,
             "runs_monitor_once": true,
-            "recover_enabled": false,
-            "executes_input": false,
+            "recover_enabled": recover_enabled,
+            "recovery_requires_matching_lease": recover_enabled,
+            "executes_input": recover_enabled,
             "executes_app_restart": false
         }
     }))
 }
 
-fn monitor_policy_monitor_args(raw_args: &[String], flags: &FlagArgs) -> CliOutcome<Vec<String>> {
-    if flags.bool("--recover") {
+fn session_monitor_policy_lease(
+    flags: &FlagArgs,
+    recover_enabled: bool,
+) -> CliOutcome<Option<SessionCommandLease>> {
+    let lease = session_command_lease_from_flags(flags);
+    if recover_enabled && lease.is_none() {
         return Err(CliError::safety_blocked(
-            "monitor_policy_recovery_reserved",
-            "session monitor-policy is read-only in this milestone and cannot store --recover",
-            &["monitor_policy", "self_heal"],
+            "monitor_policy_recovery_requires_lease",
+            "session monitor-policy --recover requires --lease-holder <id> and an active matching lease at execution time",
+            &["lab_lease", "monitor_policy"],
         ));
     }
+    Ok(lease)
+}
+
+fn monitor_policy_monitor_args(raw_args: &[String], flags: &FlagArgs) -> CliOutcome<Vec<String>> {
     if flags.optional("--max-iterations").is_some() {
         return Err(CliError::usage(
             "session monitor-policy stores monitor --once arguments; do not use --max-iterations",
@@ -5520,7 +5551,16 @@ fn monitor_policy_monitor_args(raw_args: &[String], flags: &FlagArgs) -> CliOutc
     let mut index = 0usize;
     while index < raw_args.len() {
         let arg = &raw_args[index];
-        if ["--interval-ms", "--state-dir", "--request-timeout-ms"].contains(&arg.as_str()) {
+        if [
+            "--interval-ms",
+            "--state-dir",
+            "--request-timeout-ms",
+            "--lease-holder",
+            "--holder",
+            "--lease-id",
+        ]
+        .contains(&arg.as_str())
+        {
             index += if index + 1 < raw_args.len() && !raw_args[index + 1].starts_with("--") {
                 2
             } else {
@@ -5529,6 +5569,10 @@ fn monitor_policy_monitor_args(raw_args: &[String], flags: &FlagArgs) -> CliOutc
             continue;
         }
         if ["--recover", "--via-daemon", "--local", "--max-iterations"].contains(&arg.as_str()) {
+            if arg == "--recover" {
+                index += 1;
+                continue;
+            }
             return Err(CliError::usage(format!(
                 "session monitor-policy set cannot store {arg}"
             )));
@@ -6538,6 +6582,8 @@ fn run_due_session_monitor_policy(state_dir: &Path) -> CliOutcome<bool> {
         last_status: None,
         last_result: None,
         last_error: None,
+        last_recovery: None,
+        last_recovery_error: None,
     });
     state.policy_updated_at_unix_ms = policy.updated_at_unix_ms;
     state.next_due_unix_ms = completed_at.saturating_add(policy.interval_ms);
@@ -6546,28 +6592,117 @@ fn run_due_session_monitor_policy(state_dir: &Path) -> CliOutcome<bool> {
     state.last_completed_at_unix_ms = Some(completed_at);
     match result {
         Ok(data) => {
-            state.last_ok = Some(true);
-            state.last_status = data
+            let mut ok = true;
+            let mut status = data
                 .get("status")
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| Some("completed".to_string()));
             state.last_result = Some(data);
             state.last_error = None;
+            if policy.recover_enabled {
+                let flags = FlagArgs::parse(&policy.args)?;
+                let recovery = run_due_session_monitor_policy_recovery(
+                    state_dir,
+                    &policy,
+                    state
+                        .last_result
+                        .as_ref()
+                        .expect("monitor result just stored"),
+                    &flags,
+                    &global,
+                );
+                match recovery {
+                    Ok(value) => {
+                        state.last_recovery = Some(value);
+                        state.last_recovery_error = None;
+                    }
+                    Err(err) => {
+                        ok = false;
+                        status = Some("recovery_failed".to_string());
+                        state.last_recovery = None;
+                        state.last_recovery_error = Some(envelope_error_from_cli_error(err));
+                    }
+                }
+            } else {
+                state.last_recovery = None;
+                state.last_recovery_error = None;
+            }
+            state.last_ok = Some(ok);
+            state.last_status = status;
         }
         Err(err) => {
             state.last_ok = Some(false);
             state.last_status = Some("failed".to_string());
             state.last_result = None;
-            state.last_error = Some(EnvelopeError {
-                code: err.code,
-                message: err.message,
-                blocked_by: err.blocked_by,
-            });
+            state.last_error = Some(envelope_error_from_cli_error(err));
+            state.last_recovery = None;
+            state.last_recovery_error = None;
         }
     }
     write_json_file_atomic(&session_monitor_state_path(state_dir), &state)?;
     Ok(true)
+}
+
+fn run_due_session_monitor_policy_recovery(
+    state_dir: &Path,
+    policy: &SessionMonitorPolicy,
+    diagnosis: &Value,
+    flags: &FlagArgs,
+    global: &GlobalOptions,
+) -> CliOutcome<Value> {
+    if diagnosis.get("status").and_then(Value::as_str) == Some("healthy") {
+        return Ok(json!({
+            "status": "not_needed",
+            "executed": false,
+            "reason": "already_healthy"
+        }));
+    }
+    validate_session_monitor_policy_lease(state_dir, policy)?;
+    let Some(recover_args) = monitor_recover_args(diagnosis, flags) else {
+        return Ok(json!({
+            "status": "not_executed",
+            "executed": false,
+            "reason": diagnosis
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable_recovery"),
+            "message": "daemon monitor policy recovery is not executable for this diagnosis"
+        }));
+    };
+    run_session_recover(global, &recover_args)
+}
+
+fn validate_session_monitor_policy_lease(
+    state_dir: &Path,
+    policy: &SessionMonitorPolicy,
+) -> CliOutcome<SessionLease> {
+    let requested = policy.lease.as_ref().ok_or_else(|| {
+        CliError::safety_blocked(
+            "monitor_policy_recovery_requires_lease",
+            "daemon monitor policy recovery requires stored lease metadata",
+            &["lab_lease", "monitor_policy"],
+        )
+    })?;
+    let instance_id = session_command_instance_id(&policy.global);
+    let lease_path = session_lease_path(state_dir, &instance_id);
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Err(CliError::safety_blocked(
+            "lab_lease_missing",
+            format!("daemon monitor policy recovery requires an active lease for {instance_id}"),
+            &["lab_lease"],
+        ));
+    };
+    validate_lease_request(&current, requested)?;
+    Ok(current)
+}
+
+fn envelope_error_from_cli_error(err: CliError) -> EnvelopeError {
+    EnvelopeError {
+        code: err.code,
+        message: err.message,
+        blocked_by: err.blocked_by,
+    }
 }
 
 fn append_session_request_journal(
@@ -23491,7 +23626,7 @@ mod tests {
     }
 
     #[test]
-    fn session_monitor_policy_rejects_recovery_storage() {
+    fn session_monitor_policy_recovery_requires_lease_metadata() {
         let temp = semantic_resource_root(false);
         let state_dir = temp.path().join("session-state");
         let scene = temp.path().join("home.png");
@@ -23515,7 +23650,68 @@ mod tests {
         assert_eq!(result.exit_code(), 3);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "monitor_policy_recovery_reserved"
+            "monitor_policy_recovery_requires_lease"
+        );
+    }
+
+    #[test]
+    fn session_monitor_policy_recovery_stores_lease_metadata() {
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session-state");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let configured = run_cli(
+            [
+                "--json",
+                "session",
+                "monitor-policy",
+                "set",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--interval-ms",
+                "500",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--recover",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+            ],
+            true,
+        );
+
+        assert_eq!(configured.exit_code(), 0);
+        let policy = configured
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("policy")
+            .unwrap();
+        assert_eq!(
+            policy.get("recover_enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            policy.get("read_only").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            policy.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert!(
+            policy
+                .get("args")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .all(|arg| !matches!(
+                    arg.as_str(),
+                    Some("--recover" | "--lease-holder" | "--lease-id")
+                ))
         );
     }
 
@@ -23617,6 +23813,123 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn daemon_monitor_policy_recovery_records_missing_lease() {
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session-state");
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            dry_run: true,
+            inside_session_daemon: true,
+            json: true,
+            ..Default::default()
+        };
+        run_session_monitor_policy_in_state_dir(
+            &global,
+            &[
+                "set".to_string(),
+                "--interval-ms".to_string(),
+                "500".to_string(),
+                "--scene".to_string(),
+                scene.display().to_string(),
+                "--expect".to_string(),
+                "home".to_string(),
+                "--recover".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            &state_dir,
+            true,
+        )
+        .unwrap();
+
+        assert!(run_due_session_monitor_policy(&state_dir).unwrap());
+        let state = read_json_file::<SessionMonitorState>(&session_monitor_state_path(&state_dir))
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.last_ok, Some(false));
+        assert_eq!(state.last_status.as_deref(), Some("recovery_failed"));
+        assert_eq!(
+            state
+                .last_recovery_error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("lab_lease_missing")
+        );
+    }
+
+    #[test]
+    fn daemon_monitor_policy_recovery_runs_with_matching_lease() {
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session-state");
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            dry_run: true,
+            inside_session_daemon: true,
+            json: true,
+            ..Default::default()
+        };
+        let lease = new_session_lease(
+            "default".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "default"), &lease).unwrap();
+        run_session_monitor_policy_in_state_dir(
+            &global,
+            &[
+                "set".to_string(),
+                "--interval-ms".to_string(),
+                "500".to_string(),
+                "--scene".to_string(),
+                scene.display().to_string(),
+                "--expect".to_string(),
+                "home".to_string(),
+                "--recover".to_string(),
+                "--lease-holder".to_string(),
+                "scheduler".to_string(),
+                "--lease-id".to_string(),
+                "lease-1".to_string(),
+            ],
+            &state_dir,
+            true,
+        )
+        .unwrap();
+
+        assert!(run_due_session_monitor_policy(&state_dir).unwrap());
+        let state = read_json_file::<SessionMonitorState>(&session_monitor_state_path(&state_dir))
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.last_ok, Some(true));
+        assert_eq!(
+            state
+                .last_result
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str),
+            Some("unexpected_page")
+        );
+        assert_eq!(
+            state
+                .last_recovery
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str),
+            Some("planned")
+        );
+        assert!(state.last_recovery_error.is_none());
     }
 
     #[test]

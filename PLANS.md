@@ -118,6 +118,25 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session API contract: `session api` and `session request api` expose `session.api.v0.1`, documenting local CLI access, reserved trusted remote access, daemon request queue fields, CLI/event envelopes, command classes, and required failure codes.
 - ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
+- ActingLab lease-gated daemon monitor recovery policy: daemon monitor policies can opt into maintenance recovery only when stored lease metadata matches the active Session Layer lease; daemon ticks persist recovery results or visible recovery errors in monitor state.
+
+## Current ActingLab Lease-Gated Daemon Monitor Recovery Policy
+
+This increment keeps the Session Layer monitor policy daemon-owned while adding a guarded maintenance recovery path.
+
+- `session monitor-policy set --recover` now requires stored lease metadata (`--lease-holder`/`--holder` plus optional `--lease-id`) before the policy can be saved.
+- The daemon monitor tick still runs diagnosis first, then validates the active lease before invoking the existing `session recover` path for non-healthy states.
+- Monitor state now records either `last_recovery` or `last_recovery_error`, so recovery failures are visible instead of silently downgrading to a successful monitor observation.
+- The policy payload advertises that recovery requires a matching lease and that normal monitor policy remains read-only by default.
+- This phase does not add scheduler implementation, UI, SQLite, OCR, game logic, new capture/input backends, direct ADB input fallback, app restart behavior, or resource repository access.
+
+Validation for this phase:
+
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 - ActingLab bounded stream event envelope: `stream` now emits a `stream_id`, `session.stream.event.v0.1` event records, and stable event indexes for future UI/API stream consumers.
 - ActingLab Session transport contract: `session transport` and `session request transport` expose `session.transport.v0.1`, describing local CLI, resident daemon file-IPC, reserved trusted remote, and interactive stream transport boundaries.
 - ActingLab trusted remote endpoint policy: runtime endpoint use now distinguishes local direct endpoints from trusted remote endpoints, blocks unencrypted remote endpoints, requires explicit trusted remote auth material, and reports the policy through `doctor` and Session contracts.

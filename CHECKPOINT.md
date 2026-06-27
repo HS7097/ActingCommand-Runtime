@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab lease-gated daemon monitor recovery policy
+
+### Current status
+
+- `session monitor-policy set --recover` now requires lease metadata before a recovery-capable daemon policy can be saved.
+- Stored monitor policies keep optional lease metadata and remain read-only by default when `--recover` is not used.
+- The resident daemon tick runs monitor diagnosis first, then validates the active Session Layer lease before invoking the existing maintenance-only `session recover` path for non-healthy diagnoses.
+- Monitor state now persists `last_recovery` on successful recovery planning/execution and `last_recovery_error` on visible recovery failure.
+- The Session API/access/capability contract payloads now advertise that monitor policy recovery requires a matching lease.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, or live device action was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a0fd1e13bbb60ace79a7894108bd60e175d79fe0`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the Session Layer task and AK freeze finding documents from the cooperation workspace.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session monitor policy, daemon tick, recovery, lease validation, status contracts, capabilities, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_policy -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport_request_returns_transport_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused monitor policy tests passed with `8` tests.
+- Session API/access/transport/capability focused tests passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/background-loop text, force-stop, or monkey additions in newly added lines.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `284` `actingcommand-actinglab` tests and the rest of the workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-daemon-monitor-recovery-lease`.
+2. Continue Session Layer follow-ups from scheduler lease coordination, trusted remote transport, long-lived stream, trusted UI exposure, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab daemon-owned read-only monitor policy invocation
 
 ### Current status
