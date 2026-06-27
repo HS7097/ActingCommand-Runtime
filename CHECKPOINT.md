@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab bounded stream event envelope
+
+### Current status
+
+- Added top-level `stream_id` to `stream` output.
+- Added `contract.event_schema_version = session.stream.event.v0.1`.
+- Added `contract.event_fields` documenting the minimum stream event envelope.
+- Added `schema_version`, `stream_id`, and `event_index` to bounded stream events.
+- Existing `stream.started`, `stream.frame_sampled`, `stream.input_relay`, and `stream.completed` event types are preserved.
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `8e6df0cb1c220d2ea823c7165c048cf834da4ca1`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` stream parsing, stream output, stream event projection, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab stream`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak stream --dry-run --max-frames 2 --input-event tap,10,20 --input-event key,back`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source diff prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab stream` passed with `7` tests.
+- Dry-run stream CLI returned top-level `stream_id`, `contract.event_schema_version = session.stream.event.v0.1`, and ordered stream events sharing the same `stream_id`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `243` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-stream-event-envelope`.
+2. Continue Session Layer follow-ups: trusted network API transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab Session request-id event cursor
 
 ### Current status

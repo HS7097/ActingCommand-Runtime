@@ -4022,8 +4022,10 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         relay_actions.len(),
         dry_run,
     );
-    let events = stream_events_json(&frames, &input_relay);
+    let stream_id = format!("stream-{}-{}", current_unix_ms(), std::process::id());
+    let events = stream_events_json(&stream_id, &frames, &input_relay);
     Ok(json!({
+        "stream_id": stream_id,
         "mode": "bounded_stream",
         "instance": instance_id,
         "transport": "local_cli",
@@ -4056,6 +4058,8 @@ fn stream_contract_json(
         "schema_version": "session.stream.v0.1",
         "stream_kind": "bounded_cli_frame_sequence",
         "frame_delivery": "json_array",
+        "event_schema_version": "session.stream.event.v0.1",
+        "event_fields": ["schema_version", "stream_id", "event_index", "type"],
         "input_relay": {
             "supported": true,
             "requested": input_event_count > 0,
@@ -4080,19 +4084,26 @@ fn stream_contract_json(
     })
 }
 
-fn stream_events_json(frames: &[Value], input_relay: &Value) -> Vec<Value> {
+fn stream_events_json(stream_id: &str, frames: &[Value], input_relay: &Value) -> Vec<Value> {
     let input_status = input_relay
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let mut events = Vec::with_capacity(frames.len() + 3);
     events.push(json!({
+        "schema_version": "session.stream.event.v0.1",
+        "stream_id": stream_id,
+        "event_index": events.len(),
         "type": "stream.started",
         "frame_count_planned": frames.len(),
         "input_relay_status": input_status
     }));
-    events.extend(frames.iter().map(|frame| {
+    let frame_event_base = events.len();
+    events.extend(frames.iter().enumerate().map(|(offset, frame)| {
         json!({
+            "schema_version": "session.stream.event.v0.1",
+            "stream_id": stream_id,
+            "event_index": frame_event_base + offset,
             "type": "stream.frame_sampled",
             "index": frame.get("index").cloned().unwrap_or(Value::Null),
             "captured": frame.get("captured").cloned().unwrap_or(Value::Bool(false)),
@@ -4101,12 +4112,18 @@ fn stream_events_json(frames: &[Value], input_relay: &Value) -> Vec<Value> {
     }));
     if input_status != "disabled" {
         events.push(json!({
+            "schema_version": "session.stream.event.v0.1",
+            "stream_id": stream_id,
+            "event_index": events.len(),
             "type": "stream.input_relay",
             "status": input_status,
             "action_count": input_relay.get("action_count").cloned().unwrap_or(Value::Null)
         }));
     }
     events.push(json!({
+        "schema_version": "session.stream.event.v0.1",
+        "stream_id": stream_id,
+        "event_index": events.len(),
         "type": "stream.completed",
         "frame_count": frames.len(),
         "input_relay_status": input_status
@@ -12467,6 +12484,11 @@ mod tests {
             Some("session.stream.v0.1")
         );
         assert_eq!(
+            data.pointer("/contract/event_schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
             data.pointer("/contract/safety/session_layer_only_throat")
                 .and_then(Value::as_bool),
             Some(true)
@@ -12476,15 +12498,45 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+        let stream_id = data.get("stream_id").and_then(Value::as_str).unwrap();
+        assert!(stream_id.starts_with("stream-"));
         let events = data.get("events").and_then(Value::as_array).unwrap();
         assert_eq!(events.len(), 4);
+        assert_eq!(
+            events[0].get("schema_version").and_then(Value::as_str),
+            Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
+            events[0].get("stream_id").and_then(Value::as_str),
+            Some(stream_id)
+        );
+        assert_eq!(
+            events[0].get("event_index").and_then(Value::as_u64),
+            Some(0)
+        );
         assert_eq!(
             events[0].get("type").and_then(Value::as_str),
             Some("stream.started")
         );
         assert_eq!(
+            events[1].get("stream_id").and_then(Value::as_str),
+            Some(stream_id)
+        );
+        assert_eq!(
+            events[1].get("event_index").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
             events[1].get("type").and_then(Value::as_str),
             Some("stream.frame_sampled")
+        );
+        assert_eq!(
+            events[3].get("stream_id").and_then(Value::as_str),
+            Some(stream_id)
+        );
+        assert_eq!(
+            events[3].get("event_index").and_then(Value::as_u64),
+            Some(3)
         );
         assert_eq!(
             events[3].get("type").and_then(Value::as_str),
@@ -12553,6 +12605,21 @@ mod tests {
             .map(|event| event.get("type").and_then(Value::as_str).unwrap())
             .collect::<Vec<_>>();
         assert!(event_types.contains(&"stream.input_relay"));
+        let relay_event = data
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|event| event.get("type").and_then(Value::as_str) == Some("stream.input_relay"))
+            .unwrap();
+        assert_eq!(
+            relay_event.get("schema_version").and_then(Value::as_str),
+            Some("session.stream.event.v0.1")
+        );
+        assert_eq!(
+            relay_event.get("stream_id").and_then(Value::as_str),
+            data.get("stream_id").and_then(Value::as_str)
+        );
     }
 
     #[test]

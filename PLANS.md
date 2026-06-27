@@ -118,6 +118,39 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session API contract: `session api` and `session request api` expose `session.api.v0.1`, documenting local CLI access, reserved trusted remote access, daemon request queue fields, CLI/event envelopes, command classes, and required failure codes.
 - ActingLab Session events cursor: `session events` and `session request events` now support `--after-unix-ms` plus cursor metadata for incremental local CLI and future UI/API event consumption.
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
+- ActingLab bounded stream event envelope: `stream` now emits a `stream_id`, `session.stream.event.v0.1` event records, and stable event indexes for future UI/API stream consumers.
+
+## Current ActingLab Bounded Stream Event Envelope
+
+The current Runtime task makes the bounded local stream scaffold easier for future UI/API clients to consume without scraping array positions. Each bounded stream response now has a stream id, and every stream event carries the same stream id, an event schema version, and a stable event index.
+
+Scope:
+
+- Add top-level `stream_id` to `stream` output.
+- Add `contract.event_schema_version = session.stream.event.v0.1`.
+- Add `contract.event_fields` documenting the minimum stream event envelope.
+- Add `schema_version`, `stream_id`, and `event_index` to `stream.started`, `stream.frame_sampled`, `stream.input_relay`, and `stream.completed` events.
+- Preserve existing bounded local stream behavior, dry-run behavior, and input relay behavior.
+
+Safety direction:
+
+- This milestone is a JSON contract tightening for the existing bounded stream scaffold.
+- No device I/O behavior, input backend behavior, capture backend behavior, trusted network listener, UI, scheduler implementation, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
+- The trusted remote stream channel remains reserved.
+
+Validation status:
+
+- Focused stream tests passed for dry-run stream contract, input relay, daemon lease gates, and no-daemon failure paths.
+- Manual CLI check confirmed `stream --dry-run --max-frames 2 --input-event ...` returns a `stream_id` and `session.stream.event.v0.1` events with stable indexes.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source diff prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `243` `actingcommand-actinglab` tests.
+
+Out of scope:
+
+- No trusted network API, TLS/auth transport, UI code, scheduler implementation, device I/O behavior change, capture backend change, recognition, resource repository access, SQLite, OCR/OpenCV, or game logic was added.
 
 ## Current ActingLab Session Request-Id Event Cursor
 
