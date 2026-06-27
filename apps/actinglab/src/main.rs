@@ -767,9 +767,9 @@ where
                 index += 1;
                 global.runtime_endpoint = Some(require_raw(&raw, index, "--runtime-endpoint")?);
             }
-            "--capture-backend" => {
+            "--capture-backend" | "--backend" => {
                 index += 1;
-                let value = require_raw(&raw, index, "--capture-backend")?;
+                let value = require_raw(&raw, index, raw[index - 1].as_str())?;
                 global.capture_backend =
                     Some(CaptureBackendChoice::parse(&value).map_err(|err| {
                         (
@@ -918,6 +918,7 @@ fn help_data() -> Value {
             "--server <server>",
             "--runtime-endpoint <url>",
             "--capture-backend <auto|adb|droidcast_raw|nemu_ipc>",
+            "--backend <auto|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
             "--require-session",
             "--dry-run",
             "--verbose",
@@ -22045,6 +22046,44 @@ mod tests {
         );
         assert_eq!(invocation.command, ["lab", "run"]);
         assert_eq!(invocation.args, ["--zip", "in.zip", "--out", "out.zip"]);
+    }
+
+    #[test]
+    fn capture_backend_short_alias_is_global_even_after_subcommand() {
+        let invocation = parse_invocation(
+            [
+                "--json",
+                "capture",
+                "--out",
+                "frame.png",
+                "--backend",
+                "adb",
+                "--require-fresh",
+            ],
+            true,
+        )
+        .expect("invocation");
+
+        assert_eq!(
+            invocation.global.capture_backend,
+            Some(CaptureBackendChoice::Adb)
+        );
+        assert_eq!(invocation.command, ["capture"]);
+        assert_eq!(invocation.args, ["--out", "frame.png", "--require-fresh"]);
+    }
+
+    #[test]
+    fn help_lists_capture_backend_short_alias() {
+        let help = help_data();
+        assert!(
+            help.get("global_options")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|option| option
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("--backend ")))
+        );
     }
 
     #[test]

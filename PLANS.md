@@ -132,6 +132,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session app lifecycle contract surface: Session access and API contracts now expose `session request app <launch|stop|restart>` as a lease-gated app lifecycle control surface for future UI/scheduler consumers.
 - ActingLab session instance connect lifecycle surface: `session instance connect` now completes the explicit connect/reconnect/keep-alive Phase A instance lifecycle surface, advertises `session request instance connect`, and routes daemon usage through the same lease-gated control path as reconnect.
 - ActingLab session instance app lifecycle alias: `session instance app <launch|stop|restart>` now matches the Session Layer task contract while reusing the existing lease-gated `session app <launch|stop|restart>` implementation.
+- ActingLab capture backend CLI alias: `--backend <auto|adb|droidcast_raw|nemu_ipc>` now matches the Session Layer task contract as a thin alias of the existing `--capture-backend` option.
+
+## Current ActingLab Capture Backend CLI Alias
+
+The current Runtime task closes a CLI wording mismatch in the Session Layer task draft, which documents `capture --backend ...`.
+
+Scope:
+
+- Add `--backend <auto|adb|droidcast_raw|nemu_ipc>` as an alias of `--capture-backend <auto|adb|droidcast_raw|nemu_ipc>`.
+- Preserve existing global parsing behavior, so the alias works before or after the subcommand.
+- Preserve existing backend priority: CLI backend option, then configured instance `capture_backend`, then `auto`.
+- Expose the alias in `help`.
+
+Safety direction:
+
+- This is a CLI compatibility alias only.
+- It does not change capture backend implementation, fresh-frame probing, backend ordering, daemon queue behavior, device/backend code, resource repositories, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic.
+- It does not add any fallback loop or retry behavior; existing severe capture errors still fail visibly.
+
+Validation status:
+
+- Focused parser and help tests passed.
+- CLI smoke confirmed `help` lists the `--backend` alias.
+- `cargo fmt --all -- --check`, `git diff --check`, added-line prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
 
 ## Current ActingLab Session Instance App Lifecycle Alias
 

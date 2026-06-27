@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab capture backend CLI alias
+
+### Current status
+
+- Added `--backend <auto|adb|droidcast_raw|nemu_ipc>` as a CLI alias for `--capture-backend <auto|adb|droidcast_raw|nemu_ipc>`.
+- The alias is parsed by the existing global option path, so it works before or after the command name.
+- Existing backend priority is unchanged: CLI backend option, configured instance `capture_backend`, then `auto`.
+- `help` now lists the `--backend` alias.
+- No capture backend implementation, fresh-frame probing, backend ordering, daemon queue behavior, device/backend code, resource repository, UI code, scheduler implementation, SQLite, OCR/OpenCV, or game logic was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `6201e1e62f6fd24572d4321d6e27dc6f01ae60ac`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and error-handling workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` global CLI parsing, `run_capture`, capture diagnosis, device runtime config, help output, and related tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab capture_backend_short_alias_is_global_even_after_subcommand`
+- `cargo test -p actingcommand-actinglab help_lists_capture_backend_short_alias`
+- `cargo run -q -p actingcommand-actinglab -- --json help`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab capture_backend_short_alias_is_global_even_after_subcommand` passed with `1` test.
+- `cargo test -p actingcommand-actinglab help_lists_capture_backend_short_alias` passed with `1` test.
+- CLI smoke confirmed `help` lists `--backend <auto|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, fallback additions, device/capture backend creation, SQLite, OCR/OpenCV, scheduler implementation, or game logic. The first broad scan only matched the existing `CaptureBackendChoice` enum name in a parser test; the refined scan had no prohibited hits.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `271` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for this implementation increment so far.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, real scheduler lease arbitration integration, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-capture-backend-alias`.
+2. Continue Session Layer follow-ups only after this capture backend alias milestone is verified.
+
 ## 2026-06-28 ActingLab session instance app lifecycle alias
 
 ### Current status
