@@ -105,6 +105,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream input relay scaffold: `stream --input-relay <tap|swipe|long-tap|key|text>` can now carry one input action through the bounded local stream contract, and daemon-routed input relay requires a matching Session Layer lease.
 - ActingLab bounded stream multi-event relay: repeated `--input-event <action,args>` can now carry multiple tap/swipe/long-tap/key/text events through one bounded stream request, with daemon-side lease enforcement unchanged.
 - ActingLab stale capture recovery plan: `session recover --stale-capture` now exposes a read-only recovery plan that diagnoses stale frames and recommends capture-backend recovery before heavy app restart.
+- ActingLab session liveness diagnostics: `session status --diagnostics` now classifies daemon heartbeat state for UI/scheduler health checks.
+
+## Current ActingLab Session Liveness Diagnostics
+
+The current Runtime task improves the resident Session Layer health surface. `session status --diagnostics` now reports daemon liveness from `session.json` and `heartbeat.json` instead of leaving UI/scheduler callers to infer whether a stale info file can still accept requests.
+
+Scope:
+
+- Add a fixed heartbeat stale threshold for diagnostics.
+- Report liveness status as `stopped`, `heartbeat_missing`, `pid_mismatch`, `stale`, or `alive`.
+- Report heartbeat age, clock skew, pid match, daemon pid, heartbeat pid, heartbeat state, and whether requests can be accepted.
+- Keep request execution, daemon loop behavior, capture, input, scheduler, UI, SQLite, OCR/OpenCV, and game logic unchanged.
+
+Safety direction:
+
+- Corrupt status, heartbeat, lease, or journal files still fail visibly through existing status paths.
+- Stale or inconsistent daemon state is reported as not accepting requests instead of silently treating any `session.json` file as healthy.
+- This is a read-only diagnostics change and does not start, stop, reconnect, click, capture, or restart anything.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_liveness_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check`, `git diff --check`, diff-only prohibited-feature scan, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace` passed.
+
+Out of scope:
+
+- No OS process probing was added.
+- No live daemon was started for this milestone.
+- No UI/API transport, scheduler arbitration, device I/O, capture backend change, resource repository access, or game-specific logic was added.
 
 ## Current ActingLab Stale Capture Recovery Plan
 

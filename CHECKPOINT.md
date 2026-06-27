@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session liveness diagnostics
+
+### Current status
+
+- Added Session Layer liveness diagnostics to `session status --diagnostics`.
+- Liveness now classifies state as `stopped`, `heartbeat_missing`, `pid_mismatch`, `stale`, or `alive`.
+- Diagnostics now report heartbeat age, heartbeat stale threshold, heartbeat clock skew, daemon pid, heartbeat pid, pid match, heartbeat state, and `can_accept_requests`.
+- Existing daemon loop, request processing, capture, input, scheduler, UI, SQLite, OCR/OpenCV, game logic, resource repository access, reconnect behavior, and app lifecycle behavior were not changed.
+- No live daemon or emulator operation was run for this read-only diagnostics milestone.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `96ca979f6f73708efaa284c4d3b0971102e70836`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected `apps/actinglab/src/main.rs` session status, heartbeat, daemon loop, request processing, and related test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_liveness_diagnostics -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Diff-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_liveness_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_request_returns_daemon_diagnostics -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Diff-only prohibited-feature scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, SQLite, OCR/OpenCV, trusted network API, scheduler implementation, or game logic in the touched source diff.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including `215` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: trusted UI/API stream transport, long-lived interactive relay protocol, scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-liveness-diagnostics`.
+2. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab stale capture recovery plan
 
 ### Current status

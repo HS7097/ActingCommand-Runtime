@@ -42,6 +42,7 @@ const SESSION_RESPONSES_DIR: &str = "responses";
 const SESSION_REQUEST_JOURNAL_FILE: &str = "request-journal.jsonl";
 const SESSION_REQUEST_JOURNAL_ARCHIVE_FILE: &str = "request-journal.1.jsonl";
 const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
+const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
     "--request-timeout-ms",
@@ -4230,23 +4231,39 @@ fn session_status_payload(state_dir: &Path, diagnostics: bool) -> CliOutcome<Val
     let heartbeat_path = session_heartbeat_path(state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
     let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
+    let diagnostics_payload = if diagnostics {
+        Some(session_status_diagnostics(
+            state_dir,
+            info.as_ref(),
+            heartbeat.as_ref(),
+            current_unix_ms(),
+        )?)
+    } else {
+        None
+    };
     let mut status = json!({
         "state_dir": state_dir.display().to_string(),
         "running": info.is_some(),
         "info": info,
         "heartbeat": heartbeat
     });
-    if diagnostics {
-        status["diagnostics"] = session_status_diagnostics(state_dir)?;
+    if let Some(diagnostics) = diagnostics_payload {
+        status["diagnostics"] = diagnostics;
     }
     Ok(status)
 }
 
-fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
+fn session_status_diagnostics(
+    state_dir: &Path,
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    now_ms: u64,
+) -> CliOutcome<Value> {
     let recent_entries = read_session_request_journal(state_dir, 5)?;
     let last_entry = recent_entries.last();
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     Ok(json!({
+        "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
         "paths": {
             "info": session_info_path(state_dir).display().to_string(),
             "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
@@ -4280,6 +4297,42 @@ fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
             }
         }
     }))
+}
+
+fn session_liveness_diagnostics(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    now_ms: u64,
+) -> Value {
+    let heartbeat_age_ms = heartbeat.map(|value| now_ms.saturating_sub(value.updated_at_unix_ms));
+    let heartbeat_clock_skew_ms = heartbeat
+        .and_then(|value| value.updated_at_unix_ms.checked_sub(now_ms))
+        .unwrap_or(0);
+    let pid_match = match (info, heartbeat) {
+        (Some(info), Some(heartbeat)) => Some(info.pid == heartbeat.pid),
+        _ => None,
+    };
+    let status = match (info, heartbeat, pid_match, heartbeat_age_ms) {
+        (None, _, _, _) => "stopped",
+        (Some(_), None, _, _) => "heartbeat_missing",
+        (Some(_), Some(_), Some(false), _) => "pid_mismatch",
+        (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => "stale",
+        (Some(_), Some(_), _, _) => "alive",
+    };
+    json!({
+        "status": status,
+        "info_present": info.is_some(),
+        "heartbeat_present": heartbeat.is_some(),
+        "daemon_pid": info.map(|value| value.pid),
+        "heartbeat_pid": heartbeat.map(|value| value.pid),
+        "pid_match": pid_match,
+        "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
+        "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
+        "heartbeat_age_ms": heartbeat_age_ms,
+        "heartbeat_clock_skew_ms": heartbeat_clock_skew_ms,
+        "stale_after_ms": SESSION_HEARTBEAT_STALE_MS,
+        "can_accept_requests": status == "alive"
+    })
 }
 
 fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
@@ -10277,6 +10330,56 @@ mod tests {
     }
 
     #[test]
+    fn session_liveness_diagnostics_classifies_heartbeat_state() {
+        let info = SessionInfo {
+            pid: 321,
+            started_at_unix_ms: 10,
+            state_dir: "state".to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: 321,
+            updated_at_unix_ms: 1_000,
+            state: "idle".to_string(),
+        };
+
+        let alive = session_liveness_diagnostics(Some(&info), Some(&heartbeat), 2_000);
+        assert_eq!(alive.get("status").and_then(Value::as_str), Some("alive"));
+        assert_eq!(
+            alive.get("heartbeat_age_ms").and_then(Value::as_u64),
+            Some(1_000)
+        );
+        assert_eq!(
+            alive.get("can_accept_requests").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let stale = session_liveness_diagnostics(Some(&info), Some(&heartbeat), 4_001);
+        assert_eq!(stale.get("status").and_then(Value::as_str), Some("stale"));
+        assert_eq!(
+            stale.get("can_accept_requests").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let missing_heartbeat = session_liveness_diagnostics(Some(&info), None, 2_000);
+        assert_eq!(
+            missing_heartbeat.get("status").and_then(Value::as_str),
+            Some("heartbeat_missing")
+        );
+
+        let mismatched = SessionHeartbeat {
+            pid: 999,
+            updated_at_unix_ms: 1_900,
+            state: "idle".to_string(),
+        };
+        let pid_mismatch = session_liveness_diagnostics(Some(&info), Some(&mismatched), 2_000);
+        assert_eq!(
+            pid_mismatch.get("status").and_then(Value::as_str),
+            Some("pid_mismatch")
+        );
+    }
+
+    #[test]
     fn status_prefers_daemon_when_session_info_exists() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -15701,6 +15804,12 @@ mod tests {
                 .pointer("/diagnostics/queues/pending_requests")
                 .and_then(Value::as_u64),
             Some(0)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/liveness/status")
+                .and_then(Value::as_str),
+            Some("stale")
         );
         assert_eq!(
             status
