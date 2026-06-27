@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab control request admission gate
+
+### Current status
+
+- Added submit-time LabLease admission for control-class Session Layer daemon requests.
+- `session request tap|swipe|long-tap|key|text|tap-target|navigate|app|lab-run|package-run|operation-run|recover ... --no-wait` now validates matching lease metadata after daemon liveness succeeds and before a request file is queued.
+- Missing `--lease-holder` fails visibly with `lab_lease_required`.
+- Missing active lease fails visibly with `lab_lease_missing`.
+- Mismatched holder or lease id continues to use the existing `lease_holder_mismatch` / `lease_id_mismatch` errors.
+- No-daemon behavior is preserved: missing, stale, or non-accepting daemon state still reports `runtime_not_running` before lease admission.
+- Read-only request routing, lease arbitration requests, recording requests, monitor-policy state requests, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, and retry behavior were not changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `11c7e575716f7db634e8f08255b43b7f704a2470`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand workspace constraints.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse --abbrev-ref HEAD`
+- Inspected Session Layer request submission, command-check, lease gate, and request queue code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_control_request -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_prefers_daemon_when_session_info_exists -- --nocapture`
+- `cargo test -p actingcommand-actinglab device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused control-request admission tests passed.
+- Initial full workspace validation failed because two existing daemon-preference tests expected request-timeout behavior without creating the active lease now required for control request admission.
+- Updated those tests to install matching test leases so they continue to validate daemon-preferred routing instead of missing-lease behavior.
+- A later full workspace run exposed a pre-existing parallel-test race in `session_lease_run_submits_with_generated_lease_and_releases_on_timeout`; the test reads user config and now holds `ENV_LOCK` like neighboring config-sensitive tests.
+- Focused daemon-preference regression tests passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed with `376` ActingLab tests plus the rest of the workspace suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-control-request-admission`.
+2. Continue Session Layer follow-ups from scheduler/UI request admission, trusted remote transport, stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab command-check surface
 
 ### Current status

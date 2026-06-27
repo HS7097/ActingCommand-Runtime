@@ -153,6 +153,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bounded stream preflight surface: `stream check` and `session request stream check` now expose a machine-readable safety preflight for bounded frame streams and per-request input relay without capturing frames, starting MaaTouch, or starting a listener.
 - ActingLab session readiness surface: `session readiness` and `session request readiness` now aggregate daemon liveness, status diagnostics, optional transport endpoint checks, stream-preflight availability, blockers, and recommended actions for UI/scheduler consumers without device I/O.
 - ActingLab command-check surface: `session command-check <command...>` and `session request command-check <command...>` now classify a target command, report daemon-route readiness and lease-gate status, and return `safe_to_submit` without enqueueing, capturing, starting MaaTouch, or touching devices.
+- ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 
 ## Current ActingLab Command-Check Surface
 

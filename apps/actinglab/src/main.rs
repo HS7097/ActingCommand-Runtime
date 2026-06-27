@@ -2149,7 +2149,13 @@ fn submit_control_session_request(
     command: &str,
     args: &[String],
 ) -> CliOutcome<Value> {
-    submit_session_command_request(global, flags, command, session_request_payload_args(args))
+    submit_session_command_request_with_lease_admission(
+        global,
+        flags,
+        command,
+        session_request_payload_args(args),
+        true,
+    )
 }
 
 fn submit_session_lease_request(
@@ -8269,6 +8275,16 @@ fn submit_session_command_request(
     command: &str,
     args: Vec<String>,
 ) -> CliOutcome<Value> {
+    submit_session_command_request_with_lease_admission(global, flags, command, args, false)
+}
+
+fn submit_session_command_request_with_lease_admission(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command: &str,
+    args: Vec<String>,
+    requires_lease: bool,
+) -> CliOutcome<Value> {
     let state_dir = session_state_dir_from_flags(flags)?;
     let info_path = session_info_path(&state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?.ok_or_else(|| {
@@ -8288,6 +8304,9 @@ fn submit_session_command_request(
             SESSION_HEARTBEAT_STALE_MS,
             state_dir.display()
         )));
+    }
+    if requires_lease {
+        validate_control_session_request_lease(global, flags, &state_dir)?;
     }
     let request_id = format!("{}-{}", current_unix_ms(), std::process::id());
     let request = SessionCommandRequest {
@@ -8347,6 +8366,36 @@ fn submit_session_command_request(
         "session daemon request {request_id} timed out after {} ms",
         timeout.as_millis()
     )))
+}
+
+fn validate_control_session_request_lease(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+) -> CliOutcome<()> {
+    let session_global = SessionCommandGlobal::from_global(global);
+    let instance_id = session_command_instance_id(&session_global);
+    let lease_path = session_lease_path(state_dir, &instance_id);
+    let requested = session_command_lease_from_flags(flags);
+    let Some(requested) = requested.as_ref().filter(|lease| !lease.holder.is_empty()) else {
+        return Err(CliError::safety_blocked(
+            "lab_lease_required",
+            format!(
+                "control session request requires --lease-holder <id> before enqueueing for {instance_id}"
+            ),
+            &["lab_lease", "request_queue"],
+        ));
+    };
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Err(CliError::safety_blocked(
+            "lab_lease_missing",
+            format!(
+                "control session request requires an active lease for {instance_id} before enqueueing"
+            ),
+            &["lab_lease", "request_queue"],
+        ));
+    };
+    validate_lease_request(&current, requested)
 }
 
 impl SessionCommandGlobal {
@@ -17162,6 +17211,14 @@ mod tests {
     fn direct_touch_prefers_daemon_when_session_info_exists() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
+        let lease = new_session_lease(
+            "default".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "default"), &lease).unwrap();
         let result = run_cli(
             [
                 "--json",
@@ -17221,6 +17278,14 @@ mod tests {
     fn device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
         let state_dir = temp.path().to_str().unwrap();
         let input = temp.path().join("input.zip");
         let out = temp.path().join("out.zip");
@@ -18384,6 +18449,7 @@ mod tests {
 
     #[test]
     fn session_lease_run_submits_with_generated_lease_and_releases_on_timeout() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let result = run_cli(
@@ -27634,6 +27700,133 @@ mod tests {
         assert_eq!(request.command, "status");
         assert!(request.args.is_empty());
         assert!(!response_path.exists());
+    }
+
+    #[test]
+    fn session_control_request_without_lease_is_blocked_before_queueing() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "tap",
+                "100",
+                "200",
+                "--no-wait",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lab_lease_required"
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn session_control_request_wrong_lease_is_blocked_before_queueing() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "tap",
+                "100",
+                "200",
+                "--no-wait",
+                "--lease-holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lease_holder_mismatch"
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn session_control_request_matching_lease_queues_request() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "lab".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request",
+                "tap",
+                "100",
+                "200",
+                "--no-wait",
+                "--lease-holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let request_paths =
+            file_paths_with_extension(&session_requests_dir(temp.path()), "json").unwrap();
+        assert_eq!(request_paths.len(), 1);
+        let request = read_json_file::<SessionCommandRequest>(&request_paths[0])
+            .unwrap()
+            .expect("queued control request");
+        assert_eq!(request.command, "tap");
+        assert_eq!(request.args, vec!["100".to_string(), "200".to_string()]);
+        assert_eq!(
+            request.lease.as_ref().map(|lease| lease.holder.as_str()),
+            Some("lab")
+        );
     }
 
     #[test]
