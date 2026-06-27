@@ -1149,6 +1149,7 @@ fn session_layer_capability_contract() -> Value {
         "resident_daemon": {
             "request_command": "session request capabilities",
             "status_command": "session status --diagnostics",
+            "readiness_command": "session readiness",
             "status_instance_registry_field": "diagnostics.instances",
             "monitor_policy_command": "session monitor-policy status",
             "journal_command": "session journal"
@@ -1240,6 +1241,7 @@ fn session_access_contract() -> Value {
             "transport": "session request transport",
             "transport_check": "session request transport check --endpoint <url>",
             "capabilities": "session request capabilities",
+            "readiness": "session request readiness",
             "status": "session request status --diagnostics",
             "journal": "session request journal",
             "events": "session request events",
@@ -1260,6 +1262,7 @@ fn session_access_contract() -> Value {
                 "examples": [
                     "status",
                     "journal",
+                    "readiness",
                     "contract",
                     "transport check",
                     "capabilities",
@@ -1551,6 +1554,17 @@ fn session_api_contract() -> Value {
                     "failed_request_inspect"
                 ]
             },
+            "readiness_view": {
+                "query": "session readiness [--endpoint <url>]",
+                "daemon_query": "session request readiness [--endpoint <url>]",
+                "schema_version": "session.readiness.v0.1",
+                "ready_field": "ready",
+                "status_field": "status",
+                "daemon_ready_field": "daemon.can_accept_requests",
+                "transport_ready_field": "transport.safe_to_connect",
+                "recommended_actions_field": "recommended_actions",
+                "blockers_field": "blockers"
+            },
             "lease_view": {
                 "query": "session lease list|status|touch|wait|acquire|release|preempt",
                 "daemon_query": "session request lease list|status|touch|wait|acquire|release|preempt",
@@ -1719,6 +1733,7 @@ fn session_api_contract() -> Value {
                 "requires_lease": false,
                 "examples": [
                     "status",
+                    "readiness",
                     "journal",
                     "events",
                     "response",
@@ -5510,6 +5525,7 @@ fn run_scheduler(sub: &str, _global: &GlobalOptions) -> CliOutcome<Value> {
 fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "status" => run_session_status(global, args),
+        "readiness" => run_session_readiness(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "cleanup" => run_session_cleanup(global, args),
@@ -5550,6 +5566,146 @@ fn run_session_api(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     }
     flags.expect_positionals("session api", 0)?;
     Ok(session_api_contract())
+}
+
+fn run_session_readiness(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "readiness", args);
+    }
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let config = read_user_config()?;
+    session_readiness_payload(
+        global,
+        &flags,
+        &state_dir,
+        Some(&config),
+        "session readiness",
+    )
+}
+
+fn session_readiness_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    config: Option<&UserConfig>,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    let status_view = session_status_payload_with_config(state_dir, true, config)?;
+    let can_accept_requests = status_view
+        .pointer("/diagnostics/liveness/can_accept_requests")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let liveness_status = status_view
+        .pointer("/diagnostics/liveness/status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let endpoint = parse_optional_string_value(flags, "--endpoint")?;
+    let transport = endpoint.as_deref().map(session_readiness_transport_check);
+    let transport_safe = transport
+        .as_ref()
+        .and_then(|value| value.get("safe_to_connect"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let recommended_actions = status_view
+        .pointer("/diagnostics/recommended_actions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let action_kinds = recommended_actions
+        .iter()
+        .filter_map(|action| action.get("action").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let blockers =
+        session_readiness_blockers(can_accept_requests, liveness_status, transport.as_ref());
+    let ready = can_accept_requests && transport_safe;
+    let status = if ready && recommended_actions.is_empty() {
+        "ready"
+    } else if ready {
+        "degraded"
+    } else {
+        "not_ready"
+    };
+    Ok(json!({
+        "schema_version": "session.readiness.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "ready": ready,
+        "status": status,
+        "daemon": {
+            "status": liveness_status,
+            "can_accept_requests": can_accept_requests,
+            "running": status_view.get("running").and_then(Value::as_bool).unwrap_or(false)
+        },
+        "transport": transport.unwrap_or_else(|| json!({
+            "checked": false,
+            "safe_to_connect": null,
+            "check_command": "session transport check --endpoint <url>",
+            "daemon_check_command": "session request transport check --endpoint <url>"
+        })),
+        "stream_preflight": {
+            "status": "available",
+            "check_command": "stream check",
+            "daemon_check_command": "session request stream check",
+            "schema_version": "session.stream_check.v0.1",
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "requires_separate_instance_and_lease_check": true
+        },
+        "recommended_action_kinds": action_kinds,
+        "recommended_actions": recommended_actions,
+        "blockers": blockers,
+        "status_view": status_view
+    }))
+}
+
+fn session_readiness_transport_check(endpoint: &str) -> Value {
+    let check = runtime_endpoint_check(endpoint);
+    json!({
+        "checked": true,
+        "endpoint": endpoint,
+        "check": check,
+        "safe_to_connect": check.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    })
+}
+
+fn session_readiness_blockers(
+    can_accept_requests: bool,
+    liveness_status: &str,
+    transport: Option<&Value>,
+) -> Vec<Value> {
+    let mut blockers = Vec::new();
+    if !can_accept_requests {
+        blockers.push(json!({
+            "kind": "daemon_liveness",
+            "status": liveness_status,
+            "message": "Session daemon is not accepting requests"
+        }));
+    }
+    if let Some(transport) = transport {
+        if transport
+            .get("safe_to_connect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return blockers;
+        }
+        blockers.push(json!({
+            "kind": "transport",
+            "endpoint": transport.get("endpoint"),
+            "error_code": transport.pointer("/check/error_code"),
+            "blocked_by": transport.pointer("/check/blocked_by"),
+            "message": "Transport endpoint is not safe to connect"
+        }));
+    }
+    blockers
 }
 
 fn run_session_transport(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -7750,13 +7906,14 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, readiness, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "cancel" => run_session_request_cancel(&flags),
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
+        "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
@@ -8704,6 +8861,18 @@ fn execute_session_command_request_inner(
                 None
             };
             session_status_payload_with_config(state_dir, diagnostics, config.as_ref())
+        }
+        "readiness" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let config = read_user_config()?;
+            let global = request.global.to_global()?;
+            session_readiness_payload(
+                &global,
+                &flags,
+                state_dir,
+                Some(&config),
+                "session request readiness",
+            )
         }
         "journal" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -14394,6 +14563,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("key", ["device"], "available"),
         command_cap("text", ["device"], "available"),
         command_cap("session status", ["offline"], "available"),
+        command_cap("session readiness", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
@@ -14416,6 +14586,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session monitor-policy", ["offline"], "available"),
         command_cap("session request cancel", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
+        command_cap(
+            "session request readiness",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap(
             "session request --no-wait",
             ["running_runtime"],
@@ -15754,6 +15929,132 @@ mod tests {
                 .get("running")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn session_readiness_without_daemon_reports_not_ready() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "readiness"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.readiness.v0.1")
+        );
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("not_ready")
+        );
+        assert_eq!(
+            data.pointer("/daemon/status").and_then(Value::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("daemon_liveness")
+        );
+        assert_eq!(
+            data.pointer("/transport/checked").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/stream_preflight/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_readiness_reports_alive_daemon_and_endpoint_policy() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "readiness", "--local"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(true));
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("ready"));
+        assert_eq!(
+            data.pointer("/daemon/status").and_then(Value::as_str),
+            Some("alive")
+        );
+        assert_eq!(
+            data.pointer("/transport/checked").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn session_readiness_request_returns_readiness_payload() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let query = SessionCommandRequest {
+            request_id: "readiness-query".to_string(),
+            command: "readiness".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--endpoint".to_string(),
+                "http://127.0.0.1:4317".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.readiness.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/scope/instance").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload
+                .pointer("/transport/checked")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(payload.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            payload.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("daemon_liveness")
         );
     }
 

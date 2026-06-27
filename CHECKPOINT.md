@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session readiness surface
+
+### Current status
+
+- Added `session readiness` as a read-only Session Layer readiness envelope for UI/scheduler consumers.
+- Added `session request readiness` through the resident daemon request queue.
+- The readiness payload returns `session.readiness.v0.1`.
+- Readiness aggregates daemon liveness, embedded status diagnostics, recommended actions, blockers, optional transport endpoint checks, and stream-preflight availability.
+- A stopped or unhealthy daemon reports `ready=false` and `status=not_ready`; the command does not silently report success.
+- Alive local daemon state can report `ready=true` when no unsafe endpoint check is requested.
+- Optional `--endpoint <url>` reuses the existing transport policy/reachability check and reports transport blockers when unsafe.
+- Stream-preflight availability is advertised without capturing frames, starting MaaTouch, starting a listener, or executing input.
+- `session api`, `session contract`, and `capabilities` now advertise the readiness surface.
+- No frame capture, MaaTouch startup, input execution, trusted remote listener, TLS implementation, token issuance, UI transport, unbounded long-lived stream transport, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `32ad1aca758c9451367ffe4359acd9f918debb01`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand workspace constraints.
+- Read `ecc:rust-patterns` skill.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer status, transport, stream preflight, API, capability, request queue, and diagnostics code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_capabilities_request_returns_daemon_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan for `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused readiness tests passed.
+- Focused Session API contract test passed.
+- Focused capability contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed with `369` ActingLab tests plus the rest of the workspace suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: actual trusted remote listener/TLS/auth service, unbounded long-lived stream transport, scheduler ownership, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-readiness`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, scheduler lease coordination, trusted remote transport, unbounded long-lived stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab bounded stream preflight surface
 
 ### Current status

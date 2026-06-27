@@ -151,6 +151,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab failed request recommended action surface: `session status --diagnostics` now turns the latest failed daemon journal entry into a read-only `failed_request_inspect` action for UI/scheduler clients.
 - ActingLab trusted transport preflight surface: `session transport check --endpoint <url>` now exposes the existing local/trusted-remote endpoint policy as a machine-readable Session Layer preflight without starting a listener.
 - ActingLab bounded stream preflight surface: `stream check` and `session request stream check` now expose a machine-readable safety preflight for bounded frame streams and per-request input relay without capturing frames, starting MaaTouch, or starting a listener.
+- ActingLab session readiness surface: `session readiness` and `session request readiness` now aggregate daemon liveness, status diagnostics, optional transport endpoint checks, stream-preflight availability, blockers, and recommended actions for UI/scheduler consumers without device I/O.
+
+## Current ActingLab Session Readiness Surface
+
+This increment adds a compact readiness envelope for future UI and scheduler clients. It answers whether the Session Layer can accept requests now, while preserving the existing detailed `session status --diagnostics` surface for deeper inspection.
+
+- `session readiness` returns `session.readiness.v0.1`.
+- `session request readiness` returns the same readiness schema through the resident daemon request queue.
+- The readiness payload includes daemon liveness, `ready`, `status`, blockers, recommended action kinds, full recommended actions, and an embedded status view.
+- Optional `--endpoint <url>` runs the existing transport endpoint policy/reachability check and contributes transport blockers when unsafe.
+- Stream-preflight availability is advertised with the existing `stream check` / `session request stream check` commands and explicitly records that it does not capture, start MaaTouch, start a listener, or execute input.
+- A stopped, stale, missing-heartbeat, or pid-mismatched daemon is reported as `ready=false` and `status=not_ready`; readiness never silently reports success.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Bounded Stream Preflight Surface
 
