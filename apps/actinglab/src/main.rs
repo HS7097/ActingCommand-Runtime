@@ -809,10 +809,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
         [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
         [cmd] if cmd == "monitor" => run_monitor(&invocation.global, &invocation.args),
-        [cmd] if cmd == "record" => Err(CliError::not_implemented(
-            "not_implemented",
-            "record is reserved for Runtime frame-stream integration",
-        )),
+        [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
         [group, sub] if group == "config" => run_config(sub, &invocation.args),
         [group, sub] if group == "lab" => run_lab(sub, &invocation.global, &invocation.args),
@@ -8537,6 +8534,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
         command_cap("session record promote", ["offline"], "available"),
+        command_cap("record", ["offline"], "available"),
+        command_cap("record step", ["offline", "device"], "available"),
+        command_cap("record candidates", ["offline"], "available"),
+        command_cap("record amend", ["offline"], "available"),
+        command_cap("record promote", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
@@ -8558,7 +8560,6 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("capture diagnose", ["device"], "available"),
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),
-        command_cap("record", ["running_runtime", "device"], "reserved"),
         command_cap(
             "operation dry-run",
             ["running_runtime", "device"],
@@ -9134,6 +9135,93 @@ mod tests {
         );
 
         assert_eq!(stop.exit_code(), 0);
+        assert_eq!(
+            stop.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/record/status")
+                .and_then(Value::as_str),
+            Some("stopped")
+        );
+    }
+
+    #[test]
+    fn top_level_record_alias_uses_session_record_context() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let status = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        let stop = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "record",
+                "stop",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(
+            start
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/record/task_id")
+                .and_then(Value::as_str),
+            Some("daily-check")
+        );
+        assert_eq!(status.exit_code(), 0);
+        assert_eq!(
+            status
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/record/status")
+                .and_then(Value::as_str),
+            Some("active")
+        );
+        assert_eq!(stop.exit_code(), 0);
+        assert_eq!(stop.envelope.command.as_str(), "record");
         assert_eq!(
             stop.envelope
                 .data
@@ -13666,6 +13754,31 @@ mod tests {
                 .unwrap()
                 .get("commands")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn top_level_record_capability_is_available() {
+        let commands = command_capabilities();
+        let record = commands
+            .iter()
+            .find(|command| command.get("command").and_then(Value::as_str) == Some("record"))
+            .expect("record capability");
+        assert_eq!(
+            record.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            record
+                .get("needs")
+                .and_then(Value::as_array)
+                .and_then(|needs| {
+                    needs
+                        .iter()
+                        .find(|need| need.as_str() == Some("offline"))
+                        .and_then(Value::as_str)
+                }),
+            Some("offline")
         );
     }
 

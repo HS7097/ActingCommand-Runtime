@@ -75,8 +75,41 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording standalone color-probe output: `session record step --kind color-probe` can now sample an authorized frame region into `color_probes[]`, and `resource convert` emits those probes as recognition-pack `type=color` targets.
 - ActingLab session recording standalone verify-template output: `session record step --kind verify-template` can now materialize an authorized template crop into `verify_templates[]`, and `resource convert` emits those templates as recognition-pack template targets.
 - ActingLab session recording color-probe/verify-template amend loop: `session record amend` can now correct standalone color-probe and verify-template steps, recompute authorized frame-backed data, and keep metadata-only steps visibly deferred.
+- ActingLab session recording top-level CLI contract alias: `record ...` now routes to the same implementation as `session record ...`, matching the Session Layer interface draft while preserving existing behavior.
 
-## Current ActingLab Session Recording Amend Loop For Standalone Resources
+## Current ActingLab Session Recording Top-Level CLI Contract Alias
+
+The current Runtime task aligns the Phase D recording CLI with the Session Layer interface draft by enabling the documented top-level `record ...` entry point. The existing `session record ...` command remains available and unchanged; both surfaces now share the same implementation and state files.
+
+Scope:
+
+- Route top-level `record <action> ...` to the existing recording implementation.
+- Keep `session record <action> ...` fully compatible.
+- Update capabilities so `record`, `record step`, `record candidates`, `record amend`, and `record promote` are available instead of reserved.
+- Preserve the existing JSON envelope, exit-code mapping, validation rules, state path behavior, and offline/device capability labels.
+
+Safety direction:
+
+- This milestone is a CLI contract alias only.
+- This milestone adds no device I/O, UI, SQLite, OCR/OpenCV, game logic, direct MaaTouch startup, ADB shell input/screencap, fallback, reconnect, or retry path.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `41` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace` run failed once in `detect_page_returns_standby_when_no_page_matches`; the isolated rerun passed and the full workspace rerun passed.
+- `cargo test --workspace` passed on rerun.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add UI/API surfaces for candidate review, color-check review, color-probe review, verify-template review, promotion, and amend flows after the CLI shape is accepted.
+
+## Previous ActingLab Session Recording Amend Loop For Standalone Resources
 
 The current Runtime task advances Phase D's "record, correct, and generate resources" path by extending the existing `session record amend` correction loop from anchors and operations to standalone `color-probe` and `verify-template` steps.
 

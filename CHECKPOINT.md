@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording top-level CLI contract alias
+
+### Current status
+
+- Aligned the Phase D recording CLI with the Session Layer interface draft by enabling top-level `record <action> ...`.
+- Top-level `record ...` now routes to the same implementation as `session record ...`.
+- Existing `session record ...` behavior, state files, JSON envelope shape, validation, and exit-code mapping remain unchanged.
+- Capabilities now mark `record`, `record step`, `record candidates`, `record amend`, and `record promote` as available instead of leaving top-level `record` reserved.
+- No device I/O, UI, SQLite, OCR/OpenCV, game logic, ADB shell input/screencap, direct MaaTouch startup, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `4cd427339defa93a24582e67b4a19d5732327380`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab detect_page_returns_standby_when_no_page_matches -- --nocapture`
+- Reran `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab top_level_record -- --nocapture` passed with `2` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `41` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace` failed once in `tests::detect_page_returns_standby_when_no_page_matches` with exit code `2` instead of `0`.
+- Isolated `cargo test -p actingcommand-actinglab detect_page_returns_standby_when_no_page_matches -- --nocapture` passed with `1` test.
+- Rerun `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the top-level recording CLI alias.
+- Full Session Layer remains incomplete: live prepared-emulator recording validation, UI/API review surfaces, resident streaming, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Run full formatting, clippy, workspace tests, diff checks, and prohibited-feature scan.
+2. Commit and push this Runtime milestone.
+3. Add checkpoint tag `checkpoint/20260627-record-top-level-alias`.
+
 ## 2026-06-27 ActingLab session recording standalone resource amend loop
 
 ### Current status
