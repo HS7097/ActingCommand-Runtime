@@ -47,6 +47,7 @@ const SESSION_REQUEST_JOURNAL_ARCHIVE_FILE: &str = "request-journal.1.jsonl";
 const SESSION_MONITOR_POLICY_FILE: &str = "monitor-policy.json";
 const SESSION_MONITOR_STATE_FILE: &str = "monitor-state.json";
 const SESSION_REQUEST_JOURNAL_MAX_BYTES: u64 = 1024 * 1024;
+const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
 const SESSION_MONITOR_POLICY_MIN_INTERVAL_MS: u64 = 500;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
@@ -1470,6 +1471,8 @@ fn session_api_contract() -> Value {
                 "liveness_field": "diagnostics.liveness",
                 "instance_registry_field": "diagnostics.instances",
                 "lease_field": "diagnostics.leases",
+                "queue_field": "diagnostics.queues",
+                "pending_request_preview_field": "diagnostics.queues.pending_request_preview",
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
                 "monitor_policy_lease_actions": [
@@ -5947,7 +5950,11 @@ fn session_status_diagnostics(
         },
         "queues": {
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
-            "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?
+            "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?,
+            "pending_request_preview": session_pending_request_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?
         },
         "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
@@ -11265,8 +11272,12 @@ fn file_size_if_exists(path: &Path) -> CliOutcome<u64> {
 }
 
 fn count_files_with_extension(dir: &Path, extension: &str) -> CliOutcome<usize> {
+    Ok(file_paths_with_extension(dir, extension)?.len())
+}
+
+fn file_paths_with_extension(dir: &Path, extension: &str) -> CliOutcome<Vec<PathBuf>> {
     if !dir.exists() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let entries = fs::read_dir(dir).map_err(|err| {
         CliError::runtime_not_running(format!(
@@ -11274,7 +11285,7 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> CliOutcome<usize> 
             dir.display()
         ))
     })?;
-    let mut count = 0usize;
+    let mut paths = Vec::new();
     for entry in entries {
         let path = entry
             .map_err(|err| {
@@ -11285,10 +11296,69 @@ fn count_files_with_extension(dir: &Path, extension: &str) -> CliOutcome<usize> 
             })?
             .path();
         if path.extension().and_then(|value| value.to_str()) == Some(extension) {
-            count += 1;
+            paths.push(path);
         }
     }
-    Ok(count)
+    Ok(paths)
+}
+
+fn session_pending_request_preview(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
+    let requests_dir = session_requests_dir(state_dir);
+    let mut paths = file_paths_with_extension(&requests_dir, "json")?;
+    paths.sort_by_key(|path| {
+        path.file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+
+    let total = paths.len();
+    let mut disappeared_during_read = 0usize;
+    let mut requests = Vec::new();
+    for path in paths.iter().take(limit) {
+        let Some(request) = read_pending_session_request(path)? else {
+            disappeared_during_read += 1;
+            continue;
+        };
+        requests.push(json!({
+            "request_id": request.request_id,
+            "command": request.command,
+            "global": request.global,
+            "lease": request.lease,
+            "created_at_unix_ms": request.created_at_unix_ms,
+            "args_count": request.args.len()
+        }));
+    }
+    let preview_count = requests.len();
+
+    Ok(json!({
+        "schema_version": "session.pending_requests.v0.1",
+        "dir": requests_dir.display().to_string(),
+        "count": total,
+        "preview_limit": limit,
+        "preview_count": preview_count,
+        "disappeared_during_read": disappeared_during_read,
+        "requests": requests
+    }))
+}
+
+fn read_pending_session_request(path: &Path) -> CliOutcome<Option<SessionCommandRequest>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(CliError::runtime_not_running(format!(
+                "failed to read pending session request {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    let request = serde_json::from_str(&text).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to parse pending session request {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(request))
 }
 
 fn app_state_root() -> CliOutcome<PathBuf> {
@@ -21276,6 +21346,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/pending_request_preview_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.queues.pending_request_preview")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/monitor_policy_lease_actions/1")
                 .and_then(Value::as_str),
             Some("monitor_policy_acquire_lease")
@@ -22996,9 +23072,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+        let pending = SessionCommandRequest {
+            request_id: "pending-1".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "ui".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 4,
+        };
         write_json_file_atomic(
             &session_requests_dir(&state_dir).join("pending-1.json"),
-            &completed,
+            &pending,
         )
         .unwrap();
         let response = SessionCommandResponse {
@@ -23050,6 +23144,42 @@ mod tests {
                 .pointer("/queues/pending_responses")
                 .and_then(Value::as_u64),
             Some(2)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/schema_version")
+                .and_then(Value::as_str),
+            Some("session.pending_requests.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/requests/0/request_id")
+                .and_then(Value::as_str),
+            Some("pending-1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/requests/0/global/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/requests/0/lease/holder")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_request_preview/requests/0/args_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
         assert_eq!(
             diagnostics
@@ -23270,6 +23400,34 @@ mod tests {
     fn session_status_diagnostics_corrupt_journal_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_corrupt_pending_request_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(session_requests_dir(temp.path())).unwrap();
+        fs::write(
+            session_requests_dir(temp.path()).join("pending-corrupt.json"),
+            "not-json",
+        )
+        .unwrap();
         let result = run_cli(
             [
                 "--json",
