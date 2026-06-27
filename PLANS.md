@@ -132,6 +132,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending response diagnostics: `session status --diagnostics` now exposes a bounded pending-response preview for unconsumed daemon responses, and corrupt response files fail visibly.
 - ActingLab session queue health diagnostics: `session status --diagnostics` now reports queue health across pending requests and unclaimed responses using the daemon request timeout threshold.
 - ActingLab session response view: `session response get <request-id> [--consume]` and `session request response get <request-id> [--consume]` expose pending daemon response files as a stable response-consumption surface for UI/scheduler clients.
+- ActingLab session request no-wait submit: `session request <command> --no-wait` now queues daemon requests and returns a request id plus response lookup commands without waiting for or consuming the daemon response.
+
+## Current ActingLab Session Request No-Wait Submit
+
+This increment adds the request-submission half of asynchronous Session Layer file-IPC consumption for future UI and scheduler clients.
+
+- `session request <command> --no-wait` writes the request JSON to the existing daemon request queue and returns immediately.
+- The returned payload includes status `queued`, request id, request path, response path, and suggested `session response get` / `session response get --consume` commands.
+- Default `session request <command>` behavior remains synchronous: it waits for the response up to `--request-timeout-ms` and consumes the response on success.
+- `--no-wait` is treated as a client-only flag and is stripped before the request payload reaches daemon command execution.
+- The `session api` contract now documents `sync_wait` and `no_wait` submit modes.
+- `capabilities` advertises `session request --no-wait`.
+- This phase does not start trusted remote network transport, implement long-lived stream transport, add scheduler execution behavior, add UI, add SQLite, add OCR/game logic, add capture/input backends, use direct ADB input fallback, run live devices, access resource repositories, or modify cooperation-workspace files.
+
+Validation for this phase:
+
+- Focused no-wait Session request tests.
+- Focused client-only payload stripping test.
+- Focused Session API contract test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Session Response View
 

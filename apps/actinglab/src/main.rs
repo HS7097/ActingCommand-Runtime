@@ -58,6 +58,7 @@ const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--holder",
     "--lease-id",
 ];
+const SESSION_REQUEST_BOOL_FLAGS: &[&str] = &["--via-daemon", "--local", "--no-wait"];
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
@@ -1445,6 +1446,20 @@ fn session_api_contract() -> Value {
                 "lease",
                 "created_at_unix_ms"
             ],
+            "submit_modes": {
+                "sync_wait": {
+                    "default": true,
+                    "waits_for_response": true,
+                    "consumes_response_on_success": true,
+                    "timeout_flag": "--request-timeout-ms"
+                },
+                "no_wait": {
+                    "flag": "--no-wait",
+                    "waits_for_response": false,
+                    "response_query": "session response get <request-id>",
+                    "consume_query": "session response get <request-id> --consume"
+                }
+            },
             "response_fields": [
                 "request_id",
                 "command",
@@ -2032,7 +2047,7 @@ fn session_request_payload_args(args: &[String]) -> Vec<String> {
     let mut index = 0usize;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--via-daemon" || arg == "--local" {
+        if SESSION_REQUEST_BOOL_FLAGS.contains(&arg.as_str()) {
             index += 1;
             continue;
         }
@@ -2055,7 +2070,7 @@ fn session_state_request_payload_args(args: &[String]) -> Vec<String> {
     let mut index = 0usize;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--via-daemon" || arg == "--local" {
+        if SESSION_REQUEST_BOOL_FLAGS.contains(&arg.as_str()) {
             index += 1;
             continue;
         }
@@ -6592,6 +6607,21 @@ fn submit_session_command_request(
     let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
     let response_path = session_responses_dir(&state_dir).join(format!("{request_id}.json"));
     write_json_file_atomic(&request_path, &request)?;
+    if flags.bool("--no-wait") {
+        return Ok(json!({
+            "status": "queued",
+            "mode": "daemon_request",
+            "state_dir": state_dir.display().to_string(),
+            "daemon_pid": info.pid,
+            "request_id": request_id.clone(),
+            "daemon_command": command,
+            "request_path": request_path.display().to_string(),
+            "response_path": response_path.display().to_string(),
+            "response_query": format!("session response get {request_id}"),
+            "consume_query": format!("session response get {request_id} --consume"),
+            "waited_for_response": false
+        }));
+    }
     let timeout = parse_optional_duration_ms(
         flags,
         "--request-timeout-ms",
@@ -12752,6 +12782,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session transport", ["offline"], "available"),
         command_cap("session monitor-policy", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
+        command_cap(
+            "session request --no-wait",
+            ["running_runtime"],
+            "available",
+        ),
         command_cap("session request journal", ["running_runtime"], "available"),
         command_cap("session request events", ["running_runtime"], "available"),
         command_cap("session request response", ["running_runtime"], "available"),
@@ -23113,6 +23148,7 @@ mod tests {
             "arknights/home".to_string(),
             "--via-daemon".to_string(),
             "--local".to_string(),
+            "--no-wait".to_string(),
             "--state-dir".to_string(),
             "target/session".to_string(),
             "--request-timeout-ms".to_string(),
@@ -23135,10 +23171,58 @@ mod tests {
     }
 
     #[test]
+    fn session_request_no_wait_queues_request_without_waiting() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "status",
+                "--no-wait",
+                "--request-timeout-ms",
+                "1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(
+            data.get("waited_for_response").and_then(Value::as_bool),
+            Some(false)
+        );
+        let request_id = data
+            .get("request_id")
+            .and_then(Value::as_str)
+            .expect("queued request id");
+        let expected_response_query = format!("session response get {request_id}");
+        assert_eq!(
+            data.get("response_query").and_then(Value::as_str),
+            Some(expected_response_query.as_str())
+        );
+        let request_path = session_requests_dir(temp.path()).join(format!("{request_id}.json"));
+        let response_path = session_responses_dir(temp.path()).join(format!("{request_id}.json"));
+        let request = read_json_file::<SessionCommandRequest>(&request_path)
+            .unwrap()
+            .expect("queued request file");
+
+        assert_eq!(request.command, "status");
+        assert!(request.args.is_empty());
+        assert!(!response_path.exists());
+    }
+
+    #[test]
     fn session_state_request_payload_preserves_holder_and_lease_id() {
         let args = [
             "acquire".to_string(),
             "--via-daemon".to_string(),
+            "--no-wait".to_string(),
             "--state-dir".to_string(),
             "target/session".to_string(),
             "--request-timeout-ms".to_string(),
@@ -24398,6 +24482,18 @@ mod tests {
             Some("trusted_remote_auth_required")
         );
         assert_eq!(
+            data.pointer("/daemon_request_queue/submit_modes/no_wait/flag")
+                .and_then(Value::as_str),
+            Some("--no-wait")
+        );
+        assert_eq!(
+            data.pointer(
+                "/daemon_request_queue/submit_modes/sync_wait/consumes_response_on_success"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/envelopes/event_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.events.v0.1")
@@ -24544,6 +24640,21 @@ mod tests {
                 Some("available")
             );
         }
+    }
+
+    #[test]
+    fn session_request_no_wait_capability_is_available() {
+        let commands = command_capabilities();
+        let command = commands
+            .iter()
+            .find(|command| {
+                command.get("command").and_then(Value::as_str) == Some("session request --no-wait")
+            })
+            .expect("session request --no-wait capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
     }
 
     #[test]

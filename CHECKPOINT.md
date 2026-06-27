@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session request no-wait submit
+
+### Current status
+
+- `session request <command> --no-wait` now writes a daemon request file and returns immediately with status `queued`.
+- The queued response includes request id, daemon command, request path, response path, and suggested `session response get` / `session response get --consume` commands.
+- Default `session request <command>` behavior remains synchronous and continues to wait for and consume successful responses.
+- `--no-wait` is stripped from daemon payload arguments alongside existing client-only request flags.
+- `session api` documents `sync_wait` and `no_wait` submit modes under `daemon_request_queue.submit_modes`.
+- `capabilities` advertises `session request --no-wait`.
+- No trusted remote network transport, long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `f278440f26a92cc6766d09c6c714e821a011a577`.
+- Runtime was confirmed up to date with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Searched local Codex memory for ActingCommand/Azur planning and repo-state workflow reminders.
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Session request routing, payload flag stripping, API contract, command capabilities, and tests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_no_wait -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_payload_strips_client_only_flags -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused no-wait Session request tests passed.
+- Focused client-only payload stripping test passed.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found no direct ADB input, shell screencap, SQLite, OCR/OpenCV, MaaTouch/Screencap backend additions, retry/fallback/reconnect text, force-stop, monkey, or live-device additions in newly added lines.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed, including all current workspace test suites.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-request-no-wait`.
+2. Continue Session Layer follow-ups from trusted UI/API consumption, stream transport, scheduler lease coordination, trusted remote transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab session response view
 
 ### Current status
