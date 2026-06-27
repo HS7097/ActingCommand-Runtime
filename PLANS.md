@@ -120,6 +120,28 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session request-id event cursor: `session events` and `session request events` now support `--after-request-id` plus request-id cursor fields so future UI/API clients can continue event reads without losing same-millisecond events.
 - ActingLab lease-gated daemon monitor recovery policy: daemon monitor policies can opt into maintenance recovery only when stored lease metadata matches the active Session Layer lease; daemon ticks persist recovery results or visible recovery errors in monitor state.
 - ActingLab lease-deferred daemon monitor recovery coordination: daemon monitor recovery now defers visibly with `deferred_by_lease` when the active lease is missing or held by another client, so self-heal does not fight scheduler or Lab ownership.
+- ActingLab monitor-policy lease recommendation surface: `session status --diagnostics` now translates `deferred_by_lease` monitor recovery into scheduler/UI-facing recommended actions for lease inspect, acquire, or preempt decisions without executing them.
+
+## Current ActingLab Monitor-Policy Lease Recommendation Surface
+
+This increment keeps scheduler ownership intact while making lease-deferred monitor recovery actionable for future UI and scheduler clients.
+
+- `session status --diagnostics` now includes monitor-policy lease actions in `diagnostics.recommended_actions` when the latest recovery result is `deferred_by_lease`.
+- Missing active leases recommend `monitor_policy_inspect_lease` followed by scheduler-owned `monitor_policy_acquire_lease`.
+- Holder or lease-id mismatches recommend `monitor_policy_inspect_lease` followed by scheduler-owned `monitor_policy_preempt_lease`.
+- Every monitor-policy lease action includes the deferral reason, affected instance, target command arguments, priority, and `requires_scheduler_decision = true`.
+- `session api` advertises that status-view clients should consume `diagnostics.recommended_actions` and lists the monitor-policy lease action names.
+- This phase does not add scheduler implementation, UI, SQLite, OCR, game logic, new capture/input backends, direct ADB input fallback, app restart behavior, live device action, or resource repository access.
+
+Validation for this phase:
+
+- Focused monitor policy and status-diagnostics recommendation tests.
+- Session API/access contract tests.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
 
 ## Current ActingLab Lease-Deferred Daemon Monitor Recovery Coordination
 

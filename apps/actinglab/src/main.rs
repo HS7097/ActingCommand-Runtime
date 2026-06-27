@@ -1450,7 +1450,13 @@ fn session_api_contract() -> Value {
                 "liveness_field": "diagnostics.liveness",
                 "instance_registry_field": "diagnostics.instances",
                 "lease_field": "diagnostics.leases",
-                "journal_field": "diagnostics.journal"
+                "journal_field": "diagnostics.journal",
+                "recommended_actions_field": "diagnostics.recommended_actions",
+                "monitor_policy_lease_actions": [
+                    "monitor_policy_inspect_lease",
+                    "monitor_policy_acquire_lease",
+                    "monitor_policy_preempt_lease"
+                ]
             },
             "event_view": {
                 "query": "session events",
@@ -5652,9 +5658,10 @@ fn session_status_diagnostics(
     let last_entry = recent_entries.last();
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
+    let monitor_policy = session_monitor_policy_payload(state_dir)?;
     Ok(json!({
         "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
-        "recommended_actions": session_liveness_recommended_actions(state_dir, liveness.status),
+        "recommended_actions": session_status_recommended_actions(state_dir, liveness.status, &monitor_policy),
         "paths": {
             "info": session_info_path(state_dir).display().to_string(),
             "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
@@ -5668,7 +5675,7 @@ fn session_status_diagnostics(
         },
         "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
-        "monitor_policy": session_monitor_policy_payload(state_dir)?,
+        "monitor_policy": monitor_policy,
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
             "path": session_request_journal_path(state_dir).display().to_string(),
@@ -5856,7 +5863,136 @@ fn session_liveness_recommended_actions(
     }
 }
 
+fn session_status_recommended_actions(
+    state_dir: &Path,
+    liveness_status: SessionLivenessStatus,
+    monitor_policy: &Value,
+) -> Vec<Value> {
+    let mut actions = session_liveness_recommended_actions(state_dir, liveness_status);
+    actions.extend(session_monitor_policy_recommended_actions(
+        state_dir,
+        monitor_policy,
+    ));
+    actions
+}
+
+fn session_monitor_policy_recommended_actions(
+    state_dir: &Path,
+    monitor_policy: &Value,
+) -> Vec<Value> {
+    let Some(last_recovery) = monitor_policy.pointer("/state/last_recovery") else {
+        return Vec::new();
+    };
+    if last_recovery.get("status").and_then(Value::as_str) != Some("deferred_by_lease") {
+        return Vec::new();
+    }
+
+    let Some(instance) = last_recovery.get("instance").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let Some(holder) = last_recovery
+        .pointer("/requested_lease/holder")
+        .and_then(Value::as_str)
+    else {
+        return Vec::new();
+    };
+    let state_dir = state_dir.display().to_string();
+    let lease_id = last_recovery
+        .pointer("/requested_lease/lease_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    let reason = last_recovery
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("lease_deferred");
+
+    let mut inspect = session_recommended_action_owned(
+        10,
+        "monitor_policy_inspect_lease",
+        "Inspect the active lease before granting monitor-policy recovery ownership.",
+        vec![
+            "session".to_string(),
+            "lease".to_string(),
+            "status".to_string(),
+            "--state-dir".to_string(),
+            state_dir.clone(),
+            "--instance".to_string(),
+            instance.to_string(),
+        ],
+    );
+    inspect["requires_scheduler_decision"] = json!(true);
+    inspect["deferral_reason"] = json!(reason);
+
+    let mut actions = vec![inspect];
+    if reason == "lab_lease_missing" {
+        let mut args = vec![
+            "session".to_string(),
+            "lease".to_string(),
+            "acquire".to_string(),
+            "--state-dir".to_string(),
+            state_dir,
+            "--instance".to_string(),
+            instance.to_string(),
+            "--holder".to_string(),
+            holder.to_string(),
+        ];
+        if let Some(lease_id) = lease_id {
+            args.push("--lease-id".to_string());
+            args.push(lease_id.to_string());
+        }
+        let mut action = session_recommended_action_owned(
+            11,
+            "monitor_policy_acquire_lease",
+            "Grant the stored monitor-policy lease so daemon self-heal may recover the instance.",
+            args,
+        );
+        action["requires_scheduler_decision"] = json!(true);
+        action["deferral_reason"] = json!(reason);
+        actions.push(action);
+    } else {
+        let mut args = vec![
+            "session".to_string(),
+            "lease".to_string(),
+            "preempt".to_string(),
+            "--state-dir".to_string(),
+            state_dir,
+            "--instance".to_string(),
+            instance.to_string(),
+            "--holder".to_string(),
+            holder.to_string(),
+        ];
+        if let Some(lease_id) = lease_id {
+            args.push("--lease-id".to_string());
+            args.push(lease_id.to_string());
+        }
+        let mut action = session_recommended_action_owned(
+            11,
+            "monitor_policy_preempt_lease",
+            "Only the scheduler should run this if it decides monitor-policy recovery may reclaim the instance.",
+            args,
+        );
+        action["requires_scheduler_decision"] = json!(true);
+        action["deferral_reason"] = json!(reason);
+        actions.push(action);
+    }
+    actions
+}
+
 fn session_recommended_action(priority: u8, action: &str, reason: &str, args: Vec<&str>) -> Value {
+    session_recommended_action_owned(
+        priority,
+        action,
+        reason,
+        args.into_iter().map(str::to_string).collect(),
+    )
+}
+
+fn session_recommended_action_owned(
+    priority: u8,
+    action: &str,
+    reason: &str,
+    args: Vec<String>,
+) -> Value {
     json!({
         "priority": priority,
         "action": action,
@@ -19966,6 +20102,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/recommended_actions_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.recommended_actions")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/monitor_policy_lease_actions/1")
+                .and_then(Value::as_str),
+            Some("monitor_policy_acquire_lease")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/monitor_policy_view/recovery_without_matching_lease_status")
                 .and_then(Value::as_str),
             Some("deferred_by_lease")
@@ -23927,6 +24075,34 @@ mod tests {
             recovery.get("executed").and_then(Value::as_bool),
             Some(false)
         );
+        let status = session_status_payload(&state_dir, true).unwrap();
+        let acquire = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("monitor_policy_acquire_lease")
+            })
+            .expect("monitor policy acquire recommendation");
+        assert_eq!(
+            acquire
+                .get("requires_scheduler_decision")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            acquire.get("deferral_reason").and_then(Value::as_str),
+            Some("lab_lease_missing")
+        );
+        assert_eq!(
+            acquire.pointer("/args/2").and_then(Value::as_str),
+            Some("acquire")
+        );
+        assert_eq!(
+            acquire.pointer("/args/8").and_then(Value::as_str),
+            Some("scheduler")
+        );
     }
 
     #[test]
@@ -24065,6 +24241,41 @@ mod tests {
             recovery
                 .pointer("/requested_lease/holder")
                 .and_then(Value::as_str),
+            Some("scheduler")
+        );
+        let status = session_status_payload(&state_dir, true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+        let inspect = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("monitor_policy_inspect_lease")
+            })
+            .expect("monitor policy inspect recommendation");
+        assert_eq!(
+            inspect
+                .get("requires_scheduler_decision")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let preempt = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("monitor_policy_preempt_lease")
+            })
+            .expect("monitor policy preempt recommendation");
+        assert_eq!(
+            preempt.get("deferral_reason").and_then(Value::as_str),
+            Some("lease_holder_mismatch")
+        );
+        assert_eq!(
+            preempt.pointer("/args/2").and_then(Value::as_str),
+            Some("preempt")
+        );
+        assert_eq!(
+            preempt.pointer("/args/8").and_then(Value::as_str),
             Some("scheduler")
         );
     }
