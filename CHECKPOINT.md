@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session status diagnostics
+
+### Current status
+
+- Added `session status --diagnostics` as a read-only daemon health surface.
+- Normal `session status` output remains stable unless `--diagnostics` is requested.
+- Diagnostics now report daemon state paths for info, heartbeat, requests, responses, and journal.
+- Diagnostics now report pending request and pending response JSON file counts.
+- Diagnostics now report request journal existence, total parsed entries, recent count, last entry, and last error entry.
+- Journal total counting parses every non-empty journal line so corrupt historical lines fail visibly.
+- No daemon request execution semantics, request ordering, lease enforcement, capture/input paths, command routing, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e00b369cb76caa56b91811823f09223fcf1cb1c4`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_corrupt_journal_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test after correcting the pending-response expectation to account for the daemon response left for client consumption.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_corrupt_journal_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the session status diagnostics milestone.
+- Full Session Layer remains incomplete: journal retention/rotation, trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-status-diagnostics`.
+2. Continue Session Layer follow-ups: journal retention/rotation policy, trusted UI/API diagnostics, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon request journal
 
 ### Current status

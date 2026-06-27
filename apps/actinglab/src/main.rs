@@ -3851,11 +3851,42 @@ fn run_session_status(args: &[String]) -> CliOutcome<Value> {
     let heartbeat_path = session_heartbeat_path(&state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
     let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
-    Ok(json!({
+    let mut status = json!({
         "state_dir": state_dir.display().to_string(),
         "running": info.is_some(),
         "info": info,
         "heartbeat": heartbeat
+    });
+    if flags.bool("--diagnostics") {
+        status["diagnostics"] = session_status_diagnostics(&state_dir)?;
+    }
+    Ok(status)
+}
+
+fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
+    let recent_entries = read_session_request_journal(state_dir, 5)?;
+    let last_entry = recent_entries.last();
+    let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
+    Ok(json!({
+        "paths": {
+            "info": session_info_path(state_dir).display().to_string(),
+            "heartbeat": session_heartbeat_path(state_dir).display().to_string(),
+            "requests": session_requests_dir(state_dir).display().to_string(),
+            "responses": session_responses_dir(state_dir).display().to_string(),
+            "journal": session_request_journal_path(state_dir).display().to_string()
+        },
+        "queues": {
+            "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
+            "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?
+        },
+        "journal": {
+            "exists": session_request_journal_path(state_dir).exists(),
+            "total_entries": count_session_request_journal_entries(state_dir)?,
+            "recent_limit": 5,
+            "recent_count": recent_entries.len(),
+            "last_entry": last_entry,
+            "last_error": last_error
+        }
     }))
 }
 
@@ -7706,6 +7737,58 @@ fn read_session_request_journal(
             })
         })
         .collect()
+}
+
+fn count_session_request_journal_entries(state_dir: &Path) -> CliOutcome<usize> {
+    let path = session_request_journal_path(state_dir);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let text = fs::read_to_string(&path).map_err(|err| {
+        CliError::runtime_not_running(format!("failed to read journal {}: {err}", path.display()))
+    })?;
+    let mut count = 0usize;
+    for (line_no, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        serde_json::from_str::<SessionRequestJournalEntry>(line).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to parse journal {} line {}: {err}",
+                path.display(),
+                line_no + 1
+            ))
+        })?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+fn count_files_with_extension(dir: &Path, extension: &str) -> CliOutcome<usize> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let entries = fs::read_dir(dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to read session directory {}: {err}",
+            dir.display()
+        ))
+    })?;
+    let mut count = 0usize;
+    for entry in entries {
+        let path = entry
+            .map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to read session directory entry {}: {err}",
+                    dir.display()
+                ))
+            })?
+            .path();
+        if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn app_state_root() -> CliOutcome<PathBuf> {
@@ -14823,6 +14906,109 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_reports_queue_and_journal_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let completed = SessionCommandRequest {
+            request_id: "completed-1".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--max-frames".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(&state_dir).join("completed-1.json"),
+            &completed,
+        )
+        .unwrap();
+        assert_eq!(process_session_requests(&state_dir).unwrap(), 1);
+        write_json_file_atomic(
+            &session_requests_dir(&state_dir).join("pending-1.json"),
+            &completed,
+        )
+        .unwrap();
+        let response = SessionCommandResponse {
+            request_id: "response-1".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"status": "done"})),
+            error: None,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(&state_dir).join("response-1.json"),
+            &response,
+        )
+        .unwrap();
+
+        let status = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--diagnostics",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(status.exit_code(), 0);
+        let diagnostics = status
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("diagnostics")
+            .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/queues/pending_responses")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/total_entries")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/last_entry/request_id")
+                .and_then(Value::as_str),
+            Some("completed-1")
+        );
+    }
+
+    #[test]
     fn session_journal_corrupt_line_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
@@ -14833,6 +15019,29 @@ mod tests {
                 "journal",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_corrupt_journal_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--diagnostics",
             ],
             true,
         );

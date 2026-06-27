@@ -85,8 +85,50 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon package/operation run routing: `package run --via-daemon`, `operation run --via-daemon`, `session request package-run`, and `session request operation-run` now submit through the resident daemon request queue with daemon-side lease validation before package, operation, or device I/O.
 - ActingLab bounded stream scaffold: `stream --max-frames N` now exposes a local bounded frame-sampling contract, `stream --via-daemon` and `session request stream` route through the resident Session Layer request queue, and interactive input relay remains explicitly reserved.
 - ActingLab daemon request journal: processed resident daemon requests now append a durable JSONL journal, and `session journal` exposes recent request outcomes for diagnostics after response files are consumed.
+- ActingLab session status diagnostics: `session status --diagnostics` now reports queue depths, daemon state paths, journal totals, recent request summary, and latest request error for UI/scheduler health inspection.
 
-## Current ActingLab Daemon Request Journal
+## Current ActingLab Session Status Diagnostics
+
+The current Runtime task surfaces the resident daemon request journal through `session status --diagnostics`. This keeps normal `session status` stable while giving UI, scheduler, and operator tooling a single health surface for queue depth and recent daemon request outcomes.
+
+Scope:
+
+- Add `session status --diagnostics`.
+- Report daemon state paths for info, heartbeat, requests, responses, and journal.
+- Report pending request and pending response JSON file counts.
+- Report whether the request journal exists.
+- Report parsed journal total count.
+- Report a recent-entry limit of `5`, recent count, last entry, and last error entry.
+- Parse all journal lines while counting total entries so corrupt historical lines fail visibly.
+
+Safety direction:
+
+- This milestone is read-only diagnostics only.
+- It does not change daemon request execution, request ordering, lease enforcement, capture/input paths, or command routing.
+- A corrupt journal line fails loudly with a runtime error instead of silently omitting bad data.
+- This milestone adds no UI, scheduler implementation, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_corrupt_journal_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_without_daemon_is_offline_ok -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Decide retention/rotation policy for long-running daemon journals.
+- Expose the same diagnostics through the future trusted UI/API channel once that channel exists.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Daemon Request Journal
 
 The current Runtime task adds persistent diagnostics to the resident Session Layer request queue. A daemon-processed request now leaves a JSONL journal entry after the response is written and the request file is removed, so later UI, scheduler, or operator diagnostics can inspect what the single control throat actually accepted and returned.
 
