@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab LabLease status alias
+
+### Current status
+
+- Added the Lab-facing `lab lease status` alias over the existing Session Layer lease status implementation.
+- `lab lease` still defaults to `session lease acquire` for existing callers.
+- Explicit `lab lease status` now reads the same Session Layer `lease-*.json` file as `session lease status`.
+- `lab lease status` is now advertised as an available LabLease capability.
+- Lease state remains in the existing Session Layer `lease-*.json` files.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, resource repository read/write, or trusted network API was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `d97aaf4666c4819539ba1a8e93382de086477082`.
+- Runtime was confirmed up to date with `origin/main` before this implementation step.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Inspected `apps/actinglab/src/main.rs` Lab command, session lease, capability, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab_lease_status_alias_reads_session_lease_file -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_lease_capabilities_are_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab lab_lease_status_alias_reads_session_lease_file -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab lab_lease_capabilities_are_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed with all workspace tests, including `209` `actingcommand-actinglab` tests.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-lab-lease-status-alias`.
+2. Continue Session Layer follow-ups: scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab LabLease preempt alias
 
 ### Current status

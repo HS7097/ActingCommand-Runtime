@@ -3763,9 +3763,14 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
 }
 
 fn run_lab_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let mut lease_args = vec!["acquire".to_string()];
-    lease_args.extend_from_slice(args);
-    run_session_lease_inner(global, &lease_args, None)
+    match args.first().map(String::as_str) {
+        Some("acquire" | "status") => run_session_lease_inner(global, args, None),
+        _ => {
+            let mut lease_args = vec!["acquire".to_string()];
+            lease_args.extend_from_slice(args);
+            run_session_lease_inner(global, &lease_args, None)
+        }
+    }
 }
 
 fn run_lab_preempt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -9478,6 +9483,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("scheduler stop", ["running_runtime"], "reserved"),
         command_cap("lab status", ["offline"], "available"),
         command_cap("lab lease", ["offline", "lab_lease"], "available"),
+        command_cap("lab lease status", ["offline", "lab_lease"], "available"),
         command_cap("lab preempt", ["offline", "lab_lease"], "available"),
         command_cap("lab release", ["offline", "lab_lease"], "available"),
         command_cap("lab validate", ["offline"], "available"),
@@ -9766,6 +9772,61 @@ mod tests {
             Some("released")
         );
         assert!(!session_lease_path(&state_dir, "ak").exists());
+    }
+
+    #[test]
+    fn lab_lease_status_alias_reads_session_lease_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let leased = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "scheduler-lease",
+            ],
+            true,
+        );
+        let status = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "status",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(leased.exit_code(), 0);
+        assert_eq!(status.exit_code(), 0);
+        let data = status.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/lease/holder").and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            data.pointer("/lease/lease_id").and_then(Value::as_str),
+            Some("scheduler-lease")
+        );
     }
 
     #[test]
@@ -16868,7 +16929,13 @@ mod tests {
     #[test]
     fn lab_lease_capabilities_are_available() {
         let commands = command_capabilities();
-        for command_name in ["lab status", "lab lease", "lab preempt", "lab release"] {
+        for command_name in [
+            "lab status",
+            "lab lease",
+            "lab lease status",
+            "lab preempt",
+            "lab release",
+        ] {
             let command = commands
                 .iter()
                 .find(|command| {
