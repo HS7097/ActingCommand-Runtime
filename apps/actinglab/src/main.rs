@@ -1531,6 +1531,11 @@ fn session_api_contract() -> Value {
                 "capture_health_actions": [
                     "stale_capture_recover",
                     "capture_backend_health_check"
+                ],
+                "queue_health_actions": [
+                    "blocked_request_inspect",
+                    "blocked_running_request_inspect",
+                    "unclaimed_response_read"
                 ]
             },
             "lease_view": {
@@ -6686,10 +6691,12 @@ fn session_status_diagnostics(
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
     let monitor_policy = session_monitor_policy_payload(state_dir)?;
+    let queue_health = session_queue_health(state_dir, now_ms, SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
     let recommended_actions = session_status_recommended_actions(
         state_dir,
         liveness.status,
         &monitor_policy,
+        &queue_health,
         &recent_entries,
     )?;
     Ok(json!({
@@ -6707,11 +6714,7 @@ fn session_status_diagnostics(
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
             "running_requests": count_files_with_extension(&session_running_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?,
-            "health": session_queue_health(
-                state_dir,
-                now_ms,
-                SESSION_DAEMON_REQUEST_TIMEOUT_MS
-            )?,
+            "health": queue_health,
             "pending_request_preview": session_pending_request_preview(
                 state_dir,
                 SESSION_PENDING_REQUEST_PREVIEW_LIMIT
@@ -6919,9 +6922,14 @@ fn session_status_recommended_actions(
     state_dir: &Path,
     liveness_status: SessionLivenessStatus,
     monitor_policy: &Value,
+    queue_health: &Value,
     recent_entries: &[SessionRequestJournalEntry],
 ) -> CliOutcome<Vec<Value>> {
     let mut actions = session_liveness_recommended_actions(state_dir, liveness_status);
+    actions.extend(session_queue_health_recommended_actions(
+        state_dir,
+        queue_health,
+    ));
     actions.extend(session_stale_lease_recommended_actions(state_dir)?);
     actions.extend(session_capture_health_recommended_actions(
         state_dir,
@@ -6932,6 +6940,99 @@ fn session_status_recommended_actions(
         monitor_policy,
     ));
     Ok(actions)
+}
+
+fn session_queue_health_recommended_actions(state_dir: &Path, queue_health: &Value) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    let mut actions = Vec::new();
+    if let Some(request_id) =
+        queue_health_oldest_id(queue_health.pointer("/pending_requests"), "blocked")
+    {
+        let mut action = session_recommended_action_owned(
+            20,
+            "blocked_request_inspect",
+            "Inspect the oldest blocked queued daemon request before deciding whether to wait or cancel it.",
+            vec![
+                "session".to_string(),
+                "request-state".to_string(),
+                "get".to_string(),
+                request_id.to_string(),
+                "--state-dir".to_string(),
+                state_dir_display.clone(),
+            ],
+        );
+        action["read_only"] = json!(true);
+        action["queue"] = json!("pending_requests");
+        action["request_id"] = json!(request_id);
+        action["queue_health"] = queue_health
+            .pointer("/pending_requests")
+            .cloned()
+            .unwrap_or(Value::Null);
+        actions.push(action);
+    }
+    if let Some(request_id) =
+        queue_health_oldest_id(queue_health.pointer("/running_requests"), "blocked")
+    {
+        let mut action = session_recommended_action_owned(
+            21,
+            "blocked_running_request_inspect",
+            "Inspect the oldest blocked running daemon request before scheduler or UI intervention.",
+            vec![
+                "session".to_string(),
+                "request-state".to_string(),
+                "get".to_string(),
+                request_id.to_string(),
+                "--state-dir".to_string(),
+                state_dir_display.clone(),
+            ],
+        );
+        action["read_only"] = json!(true);
+        action["queue"] = json!("running_requests");
+        action["request_id"] = json!(request_id);
+        action["queue_health"] = queue_health
+            .pointer("/running_requests")
+            .cloned()
+            .unwrap_or(Value::Null);
+        actions.push(action);
+    }
+    if let Some(request_id) =
+        queue_health_oldest_id(queue_health.pointer("/pending_responses"), "unclaimed")
+    {
+        let mut action = session_recommended_action_owned(
+            22,
+            "unclaimed_response_read",
+            "Read the oldest unclaimed daemon response so request results are not hidden in the response queue.",
+            vec![
+                "session".to_string(),
+                "response".to_string(),
+                "get".to_string(),
+                request_id.to_string(),
+                "--state-dir".to_string(),
+                state_dir_display,
+            ],
+        );
+        action["read_only"] = json!(true);
+        action["consumes_response"] = json!(false);
+        action["queue"] = json!("pending_responses");
+        action["request_id"] = json!(request_id);
+        action["queue_health"] = queue_health
+            .pointer("/pending_responses")
+            .cloned()
+            .unwrap_or(Value::Null);
+        actions.push(action);
+    }
+    actions
+}
+
+fn queue_health_oldest_id<'a>(
+    section: Option<&'a Value>,
+    expected_status: &str,
+) -> Option<&'a str> {
+    let section = section?;
+    if section.get("status").and_then(Value::as_str) != Some(expected_status) {
+        return None;
+    }
+    section.get("oldest_request_id").and_then(Value::as_str)
 }
 
 fn session_capture_health_recommended_actions(
@@ -24859,6 +24960,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/queue_health_actions/0")
+                .and_then(Value::as_str),
+            Some("blocked_request_inspect")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/queue_health_actions/2")
+                .and_then(Value::as_str),
+            Some("unclaimed_response_read")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/pending_request_preview_field")
                 .and_then(Value::as_str),
             Some("diagnostics.queues.pending_request_preview")
@@ -28012,6 +28125,83 @@ mod tests {
             diagnostics
                 .pointer("/queues/pending_response_preview/responses/1/request_id")
                 .and_then(Value::as_str),
+            Some("response-1")
+        );
+        let actions = diagnostics
+            .pointer("/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+        let pending_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("blocked_request_inspect")
+            })
+            .unwrap();
+        assert_eq!(
+            pending_action.get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            pending_action.get("queue").and_then(Value::as_str),
+            Some("pending_requests")
+        );
+        assert_eq!(
+            pending_action.get("request_id").and_then(Value::as_str),
+            Some("pending-1")
+        );
+        assert_eq!(
+            pending_action.pointer("/args/1").and_then(Value::as_str),
+            Some("request-state")
+        );
+        assert_eq!(
+            pending_action.pointer("/args/3").and_then(Value::as_str),
+            Some("pending-1")
+        );
+        let running_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str)
+                    == Some("blocked_running_request_inspect")
+            })
+            .unwrap();
+        assert_eq!(
+            running_action.get("queue").and_then(Value::as_str),
+            Some("running_requests")
+        );
+        assert_eq!(
+            running_action.get("request_id").and_then(Value::as_str),
+            Some("running-1")
+        );
+        let response_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str) == Some("unclaimed_response_read")
+            })
+            .unwrap();
+        assert_eq!(
+            response_action.get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            response_action
+                .get("consumes_response")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            response_action.get("queue").and_then(Value::as_str),
+            Some("pending_responses")
+        );
+        assert_eq!(
+            response_action.get("request_id").and_then(Value::as_str),
+            Some("response-1")
+        );
+        assert_eq!(
+            response_action.pointer("/args/1").and_then(Value::as_str),
+            Some("response")
+        );
+        assert_eq!(
+            response_action.pointer("/args/3").and_then(Value::as_str),
             Some("response-1")
         );
         assert_eq!(

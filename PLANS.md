@@ -147,6 +147,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session lease freshness diagnostics: `session lease status`, `session lease list`, and `session status --diagnostics` now report lease freshness metadata for scheduler/UI visibility without reclaiming leases automatically.
 - ActingLab stale lease recommended action surface: `session status --diagnostics` now emits `stale_lease_inspect` recommendations for stale leases, marked as scheduler decisions rather than automatic recovery.
 - ActingLab capture health recommended action surface: `session status --diagnostics` now turns recent stale/unavailable capture journal summaries into read-only scheduler/UI recommendations before anyone treats a game as frozen.
+- ActingLab queue health recommended action surface: `session status --diagnostics` now turns blocked queued/running requests and unclaimed responses into read-only inspect/read actions for UI/scheduler clients.
+
+## Current ActingLab Queue Health Recommended Action Surface
+
+This increment closes a diagnostics gap for future UI and scheduler clients: queue-health states are no longer only raw counters and status strings, but also include safe next actions.
+
+- `session status --diagnostics` computes queue health once and reuses it for both diagnostics output and recommended-action generation.
+- Blocked queued requests emit `blocked_request_inspect`, pointing to `session request-state get <request-id>`.
+- Blocked running requests emit `blocked_running_request_inspect`, also pointing to `session request-state get <request-id>`.
+- Unclaimed responses emit `unclaimed_response_read`, pointing to `session response get <request-id>`.
+- Queue-health recommendations include queue kind, request id, queue-health details, and read-only flags.
+- `unclaimed_response_read` records `consumes_response=false`; consumers can inspect without deleting response files.
+- `session api` advertises the queue-health recommendation actions in the status-view contract.
+
+No trusted remote network transport, unbounded long-lived stream transport, scheduler execution behavior, UI, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Capture Health Recommended Action Surface
 
