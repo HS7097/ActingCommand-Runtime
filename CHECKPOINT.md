@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session lease diagnostics
+
+### Current status
+
+- Added active lease visibility to `session status --diagnostics`.
+- The diagnostics payload now reports active lease count, holder, lease id, timestamps, preempt provenance, and lease file path for `lease-*.json` files in the selected session state directory.
+- Concurrent lease release during diagnostics is surfaced through `released_during_read_count` instead of reporting a stale active lease.
+- Corrupt lease JSON fails visibly and is not silently skipped.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, or trusted network API was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0f691aee00ac94b777c0fb99ef1058af1f9a165d`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this split repository.
+- Re-read local `rust-patterns` and `rust-testing` skill instructions.
+- Inspected `apps/actinglab/src/main.rs` session status, lease, request, capability, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_active_leases -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_rejects_corrupt_lease_file -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_active_leases -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_rejects_corrupt_lease_file -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-session-lease-diagnostics`.
+2. Continue Session Layer follow-ups: scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab manual lease run UX
 
 ### Current status

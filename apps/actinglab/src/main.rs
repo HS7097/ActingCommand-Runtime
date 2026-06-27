@@ -4002,6 +4002,7 @@ fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
             "pending_requests": count_files_with_extension(&session_requests_dir(state_dir), "json")?,
             "pending_responses": count_files_with_extension(&session_responses_dir(state_dir), "json")?
         },
+        "leases": session_lease_diagnostics(state_dir)?,
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
             "path": session_request_journal_path(state_dir).display().to_string(),
@@ -4023,6 +4024,67 @@ fn session_status_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
             }
         }
     }))
+}
+
+fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
+    let mut paths = session_lease_paths(state_dir)?;
+    paths.sort();
+    let mut released_during_read_count = 0usize;
+    let mut leases = Vec::new();
+    for path in paths {
+        let Some(lease) = read_json_file::<SessionLease>(&path)? else {
+            released_during_read_count += 1;
+            continue;
+        };
+        leases.push(json!({
+            "instance": lease.instance,
+            "holder": lease.holder,
+            "lease_id": lease.lease_id,
+            "acquired_at_unix_ms": lease.acquired_at_unix_ms,
+            "updated_at_unix_ms": lease.updated_at_unix_ms,
+            "preempted": lease.preempted,
+            "previous": lease.previous,
+            "path": path.display().to_string()
+        }));
+    }
+    Ok(json!({
+        "path": state_dir.display().to_string(),
+        "active_count": leases.len(),
+        "released_during_read_count": released_during_read_count,
+        "leases": leases
+    }))
+}
+
+fn session_lease_paths(state_dir: &Path) -> CliOutcome<Vec<PathBuf>> {
+    if !state_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = fs::read_dir(state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to read session state directory {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to read session state directory entry {}: {err}",
+                    state_dir.display()
+                ))
+            })?
+            .path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if path.extension().and_then(|value| value.to_str()) == Some("json")
+            && file_name.starts_with("lease-")
+        {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
 
 fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -15070,6 +15132,60 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(SESSION_REQUEST_JOURNAL_MAX_BYTES)
         );
+    }
+
+    #[test]
+    fn session_status_diagnostics_reports_active_leases() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(state_dir, "ak"), &lease).unwrap();
+
+        let status = session_status_payload(state_dir, true).unwrap();
+
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/active_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/leases/0/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/leases/0/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            status
+                .pointer("/diagnostics/leases/leases/0/lease_id")
+                .and_then(Value::as_str),
+            Some("lease-1")
+        );
+    }
+
+    #[test]
+    fn session_status_diagnostics_rejects_corrupt_lease_file() {
+        let temp = TempDir::new().unwrap();
+        let path = session_lease_path(temp.path(), "ak");
+        fs::write(&path, "{not-json").unwrap();
+
+        let err = session_status_payload(temp.path(), true).unwrap_err();
+
+        assert_eq!(err.code, "validation_failed");
+        assert!(err.message.contains("failed to parse"));
+        assert!(err.message.contains("lease-ak.json"));
     }
 
     #[test]

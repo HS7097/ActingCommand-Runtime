@@ -98,8 +98,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-preferred control routing: when session info indicates a resident daemon is running, direct touch/input and semantic control entries prefer the daemon request queue by default while daemon-side handlers force local execution to avoid recursive requeue.
 - ActingLab daemon-preferred lifecycle and run routing: monitor, instance lifecycle diagnostics/reconnect, app lifecycle, Lab run, package run, and operation run now prefer the resident daemon request queue when session info exists.
 - ActingLab manual lease run UX: `session lease run -- <command...>` now acquires a temporary local lease, submits a daemon request with lease metadata, and releases the lease after success or failure.
+- ActingLab session lease diagnostics: `session status --diagnostics` now reports active lease files for UI/scheduler visibility, and corrupt lease state fails visibly.
 
-## Current ActingLab Manual Lease Run UX
+## Current ActingLab Session Lease Diagnostics
+
+The current Runtime task improves Session Layer observability for the lease/arbitration surface. `session status --diagnostics` now includes the active `lease-*.json` records in the selected session state directory, so future UI, scheduler, and operator tools can see who currently owns control without issuing one lease-status command per instance.
+
+Scope:
+
+- Add read-only lease diagnostics to `session status --diagnostics`.
+- Report active lease count, holder, lease id, timestamps, preempt provenance, and lease file path.
+- Keep concurrent release races visible through `released_during_read_count` instead of pretending a stale lease is still active.
+- Reject corrupt lease JSON visibly instead of skipping it.
+
+Safety direction:
+
+- This milestone is diagnostics only and performs no device I/O.
+- Corrupt lease state is a state-integrity problem and must not be silently ignored.
+- This milestone does not add scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, or trusted network API.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_active_leases -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_rejects_corrupt_lease_file -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Surface these diagnostics through the future trusted UI/API channel.
+- Connect lease ownership to the real scheduler arbitration layer once that layer exists.
+- Continue live prepared-emulator validation after the Session Layer task sequence is ready.
+- Implement trusted interactive stream/input relay in a later milestone.
+
+## Previous ActingLab Manual Lease Run UX
 
 The current Runtime task adds a small manual-operator convenience layer above the existing Session Layer lease and daemon request queue. Operators can run one daemon-routed command through `session lease run -- <session-request-command...>` without manually acquiring and releasing a lease in separate commands.
 
