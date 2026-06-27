@@ -3756,6 +3756,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         }
         "status" => run_session_status(global, args),
         "lease" => run_lab_lease(global, args),
+        "preempt" => run_lab_preempt(global, args),
         "release" => run_lab_release(global, args),
         _ => Err(CliError::usage(format!("unknown lab command: {sub}"))),
     }
@@ -3763,6 +3764,12 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
 
 fn run_lab_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let mut lease_args = vec!["acquire".to_string()];
+    lease_args.extend_from_slice(args);
+    run_session_lease_inner(global, &lease_args, None)
+}
+
+fn run_lab_preempt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let mut lease_args = vec!["preempt".to_string()];
     lease_args.extend_from_slice(args);
     run_session_lease_inner(global, &lease_args, None)
 }
@@ -9471,6 +9478,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("scheduler stop", ["running_runtime"], "reserved"),
         command_cap("lab status", ["offline"], "available"),
         command_cap("lab lease", ["offline", "lab_lease"], "available"),
+        command_cap("lab preempt", ["offline", "lab_lease"], "available"),
         command_cap("lab release", ["offline", "lab_lease"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
@@ -9758,6 +9766,73 @@ mod tests {
             Some("released")
         );
         assert!(!session_lease_path(&state_dir, "ak").exists());
+    }
+
+    #[test]
+    fn lab_preempt_alias_records_previous_session_lease() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let scheduler_lease = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "lease",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--holder",
+                "scheduler",
+                "--lease-id",
+                "scheduler-lease",
+            ],
+            true,
+        );
+        let lab_preempt = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "lab",
+                "preempt",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--holder",
+                "lab",
+                "--lease-id",
+                "lab-lease",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(scheduler_lease.exit_code(), 0);
+        assert_eq!(lab_preempt.exit_code(), 0);
+        let data = lab_preempt.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("preempted")
+        );
+        assert_eq!(
+            data.pointer("/lease/holder").and_then(Value::as_str),
+            Some("lab")
+        );
+        assert_eq!(
+            data.pointer("/lease/previous/holder")
+                .and_then(Value::as_str),
+            Some("scheduler")
+        );
+        assert_eq!(
+            data.pointer("/previous/lease_id").and_then(Value::as_str),
+            Some("scheduler-lease")
+        );
     }
 
     #[test]
@@ -16793,7 +16868,7 @@ mod tests {
     #[test]
     fn lab_lease_capabilities_are_available() {
         let commands = command_capabilities();
-        for command_name in ["lab status", "lab lease", "lab release"] {
+        for command_name in ["lab status", "lab lease", "lab preempt", "lab release"] {
             let command = commands
                 .iter()
                 .find(|command| {

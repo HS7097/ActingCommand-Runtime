@@ -100,8 +100,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab manual lease run UX: `session lease run -- <command...>` now acquires a temporary local lease, submits a daemon request with lease metadata, and releases the lease after success or failure.
 - ActingLab session lease diagnostics: `session status --diagnostics` now reports active lease files for UI/scheduler visibility, and corrupt lease state fails visibly.
 - ActingLab LabLease aliases: `lab status`, `lab lease`, and `lab release` now expose the Lab-facing lease/status surface as thin aliases over the Session Layer status and lease files.
+- ActingLab LabLease preempt alias: `lab preempt` now exposes the Session Layer preempt path from the Lab-facing CLI surface and preserves previous-holder provenance.
 
-## Current ActingLab LabLease Aliases
+## Current ActingLab LabLease Preempt Alias
+
+The current Runtime task completes the Lab-facing lease surface by adding `lab preempt` as a thin alias over `session lease preempt`. This aligns the Lab CLI with the task contract that leases support acquire, release, and preempt without creating a second lease model.
+
+Scope:
+
+- Route `lab preempt` to the existing `session lease preempt` implementation.
+- Preserve existing previous-holder provenance in the resulting `lease-*.json` state.
+- Advertise `lab preempt` as an available LabLease capability.
+- Keep all lease state in the same Session Layer `lease-*.json` files.
+
+Safety direction:
+
+- `lab preempt` is only a local lease-state interface; it does not implement scheduler ownership or arbitration policy.
+- Existing holder, lease-id, and daemon-side lease checks remain the authority for task-level input.
+- This milestone does not add scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, silent fallback, live emulator execution, or trusted network API.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab lab_preempt_alias_records_previous_session_lease -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab lab_lease_capabilities_are_available -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source scan found no newly added `adb shell input`, `input tap`, `input swipe`, `adb shell screencap`, fallback, reconnect, retry loop, OCR/OpenCV, SQLite, UI, scheduler implementation, or game logic in the touched source file.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Connect LabLease ownership to the real scheduler arbitration layer once that layer exists.
+- Surface LabLease state through the future trusted UI/API channel.
+- Continue live prepared-emulator validation after the Session Layer task sequence is ready.
+- Implement trusted interactive stream/input relay in a later milestone.
+
+## Previous ActingLab LabLease Aliases
 
 The current Runtime task aligns the Lab-facing CLI surface with the Session Layer lease contract. `lab status`, `lab lease`, and `lab release` now reuse the existing Session Layer status and lease file implementation instead of staying reserved behind an unavailable runtime endpoint.
 
