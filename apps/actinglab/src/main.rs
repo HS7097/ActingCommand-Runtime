@@ -278,6 +278,9 @@ struct GlobalOptions {
     runtime_endpoint: Option<String>,
     capture_backend: Option<CaptureBackendChoice>,
     version: bool,
+    // Daemon request handlers must execute local command implementations instead of
+    // re-submitting work into the same resident request queue.
+    inside_session_daemon: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1011,7 +1014,7 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
 
 fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "status", args);
     }
     require_runtime(global).map(|data| {
@@ -1024,7 +1027,7 @@ fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "devices", args);
     }
     flags.expect_positionals("devices", 0)?;
@@ -1118,7 +1121,7 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     {
         return run_capture_diagnose(global, &flags);
     }
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "capture", args);
     }
     let out = flags.required_path("--out")?;
@@ -1156,7 +1159,7 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
-    if should_route_readonly_via_session_daemon(flags)? {
+    if should_route_readonly_via_session_daemon(global, flags)? {
         return submit_capture_diagnose_request(global, flags);
     }
     let config = read_user_config()?;
@@ -1183,13 +1186,36 @@ fn submit_capture_diagnose_request(global: &GlobalOptions, flags: &FlagArgs) -> 
     submit_session_command_request(global, flags, "capture_diagnose", args)
 }
 
-fn should_route_readonly_via_session_daemon(flags: &FlagArgs) -> CliOutcome<bool> {
+fn should_route_readonly_via_session_daemon(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<bool> {
+    if global.inside_session_daemon {
+        return Ok(false);
+    }
     if flags.bool("--local") {
         return Ok(false);
     }
     if flags.bool("--via-daemon") {
         return Ok(true);
     }
+    session_daemon_info_exists(flags)
+}
+
+fn should_route_control_via_session_daemon(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<bool> {
+    if global.inside_session_daemon {
+        return Ok(false);
+    }
+    if flags.bool("--via-daemon") {
+        return Ok(true);
+    }
+    session_daemon_info_exists(flags)
+}
+
+fn session_daemon_info_exists(flags: &FlagArgs) -> CliOutcome<bool> {
     let Ok(state_dir) = session_state_dir_from_flags(flags) else {
         return Ok(false);
     };
@@ -1710,7 +1736,7 @@ fn handshake_json(handshake: HandshakeInfo) -> Value {
 
 fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, command, args);
     }
     let command = DirectTouchCommand::parse(command, &flags)?;
@@ -1745,7 +1771,7 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
 
 fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, command, args);
     }
     let command = DirectInputCommand::parse(command, &flags)?;
@@ -1837,7 +1863,7 @@ fn canonical_key(key: &str) -> String {
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "recognize", args);
     }
     let target = flags.required("--target")?;
@@ -1889,7 +1915,7 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "detect_page", args);
     }
     let config = read_user_config()?;
@@ -1913,7 +1939,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 
 fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "current_page", args);
     }
     let config = read_user_config()?;
@@ -1925,7 +1951,7 @@ fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value
 
 fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "is_visible", args);
     }
     let target = target_argument(&flags, "is-visible")?;
@@ -1955,7 +1981,7 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
 fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "locate", args);
     }
     let template = flags
@@ -1985,7 +2011,7 @@ fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "tap_target", args);
     }
     let target = target_argument(&flags, "tap-target")?;
@@ -2057,7 +2083,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
 fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "navigate", args);
     }
     let to = flags.required("--to")?;
@@ -2139,7 +2165,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
+    if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "recover", args);
     }
     let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -3397,7 +3423,7 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 
 fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "stream", args);
     }
     if flags.bool("--input-relay") || flags.bool("--interactive-input") {
@@ -3910,7 +3936,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
 
 fn run_session_journal(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "journal", args);
     }
     flags.expect_positionals("session journal", 0)?;
@@ -3934,7 +3960,7 @@ fn session_journal_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> 
 
 fn run_session_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(&flags)? {
+    if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "status", args);
     }
     flags.expect_positionals("session status", 0)?;
@@ -4137,6 +4163,7 @@ impl SessionCommandGlobal {
             capture_backend,
             dry_run: self.dry_run,
             json: true,
+            inside_session_daemon: true,
             ..Default::default()
         })
     }
@@ -9586,6 +9613,65 @@ mod tests {
                 .message
                 .contains("timed out")
         );
+    }
+
+    #[test]
+    fn direct_touch_prefers_daemon_when_session_info_exists() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let result = run_cli(
+            [
+                "--json",
+                "tap",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+                "--request-timeout-ms",
+                "1",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "100",
+                "200",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("timed out")
+        );
+    }
+
+    #[test]
+    fn daemon_internal_handlers_do_not_requeue_to_daemon() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let flags = FlagArgs::parse(&[
+            "--state-dir".to_string(),
+            temp.path().to_str().unwrap().to_string(),
+        ])
+        .unwrap();
+        let client_global = GlobalOptions::default();
+        let daemon_global = GlobalOptions {
+            inside_session_daemon: true,
+            ..Default::default()
+        };
+
+        assert!(should_route_readonly_via_session_daemon(&client_global, &flags).unwrap());
+        assert!(should_route_control_via_session_daemon(&client_global, &flags).unwrap());
+        assert!(!should_route_readonly_via_session_daemon(&daemon_global, &flags).unwrap());
+        assert!(!should_route_control_via_session_daemon(&daemon_global, &flags).unwrap());
     }
 
     #[test]

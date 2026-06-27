@@ -95,8 +95,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
+- ActingLab daemon-preferred control routing: when session info indicates a resident daemon is running, direct touch/input and semantic control entries prefer the daemon request queue by default while daemon-side handlers force local execution to avoid recursive requeue.
 
-## Current ActingLab Daemon-Preferred Read-Only Routing
+## Current ActingLab Daemon-Preferred Control Routing
+
+The current Runtime task extends the Session Layer default from diagnostics toward control safety: when a resident session daemon is visible through the session state info file, direct control CLI entries prefer the daemon request queue without requiring `--via-daemon`. Daemon-side request handlers now mark their reconstructed `GlobalOptions` as already inside the resident daemon, so they execute local command implementations instead of submitting a second request back into the same queue.
+
+Scope:
+
+- Add an internal daemon-execution marker to `GlobalOptions`.
+- Make daemon-side request execution set the marker when reconstructing `GlobalOptions`.
+- Update read-only daemon-preference helpers so daemon-side handlers always stay local.
+- Add a control daemon-preference helper that routes client-side control commands to the daemon when session info exists or `--via-daemon` is present.
+- Apply daemon-preferred control routing to `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover`.
+- Preserve existing local/direct behavior when no session info exists.
+- Preserve daemon-side lease validation for control requests before device I/O.
+
+Safety direction:
+
+- Client-side control commands should not directly touch MaaTouch/device paths when a resident Session Layer daemon is visible.
+- Daemon-side handlers must not recursively requeue their own work.
+- Missing or unprocessed daemon requests fail visibly with `runtime_not_running` timeout instead of silently falling back to direct device access.
+- This milestone does not add scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab direct_touch_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Decide when app lifecycle, instance reconnect, Lab/package/operation run, and monitor recovery should also default to daemon-preferred routing.
+- Add operator lease-acquisition UX for manual control.
+- Expose the same Session Layer boundary through the future trusted UI/API channel.
+- Continue scheduler lease arbitration integration and live prepared-emulator validation.
+
+## Previous ActingLab Daemon-Preferred Read-Only Routing
 
 The current Runtime task moves from opt-in daemon routing toward the Session Layer default: when a resident session daemon is visible through the session state info file, read-only and diagnostic CLI entries prefer the daemon request queue without requiring `--via-daemon`. If the daemon is absent, existing local/offline behavior remains available. `--local` is the explicit diagnostic override for local state reads or direct one-shot read-only commands.
 

@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-preferred control routing
+
+### Current status
+
+- Added an internal daemon-execution marker to prevent resident daemon request handlers from recursively re-submitting work into the same request queue.
+- Updated daemon-side request global reconstruction so daemon handlers execute local command implementations.
+- Extended daemon-preferred routing from read-only diagnostics to direct touch/input and semantic control entries when session info exists.
+- `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover` now prefer the resident daemon request queue by default when a session daemon is visible.
+- Existing local/direct behavior remains available when no session info exists.
+- Existing daemon-side lease validation remains the gate before control request device I/O.
+- No scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `9ce31652aac4d9ce701b15d6cf1c65e487f64f7c`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git fetch --prune --tags`
+- `rg -n -- "struct GlobalOptions|struct SessionCommandGlobal|impl SessionCommandGlobal|fn to_global|fn from_global|should_route_readonly_via_session_daemon|run_direct_touch|run_direct_input|run_tap_target|run_navigate|run_session_recover" apps/actinglab/src/main.rs`
+- Inspected `apps/actinglab/src/main.rs` routing, daemon request, and test sections.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab direct_touch_prefers_daemon_when_session_info_exists -- --nocapture`
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture`
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab direct_touch_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab daemon_internal_handlers_do_not_requeue_to_daemon -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_via_daemon_accepts_lease_flags_before_daemon_lookup -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab status_prefers_daemon_when_session_info_exists -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for the local implementation.
+- Full Session Layer remains incomplete: scheduler lease arbitration integration, manual operator lease UX, trusted UI/API exposure, broader daemon-preferred control policy, live prepared-emulator validation, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-preferred-control`.
+2. Continue Session Layer follow-ups: app/instance/lab/package/operation daemon-preferred policy, manual lease UX, scheduler lease arbitration, trusted UI/API exposure, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon-preferred read-only routing
 
 ### Current status
