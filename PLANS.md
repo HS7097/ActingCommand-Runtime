@@ -88,12 +88,46 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session status diagnostics: `session status --diagnostics` now reports queue depths, daemon state paths, journal totals, recent request summary, and latest request error for UI/scheduler health inspection.
 - ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
+- ActingLab top-level daemon-routed status entry: `status --via-daemon` now submits the top-level status diagnostic through the resident daemon request queue while bare `status` keeps its existing local runtime probe behavior.
 - ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 - ActingLab daemon-routed lease interface: `session request lease acquire|release|preempt|status` can now run through the resident daemon request queue, using the daemon state directory and preserving lease holder/id command arguments.
 - ActingLab daemon-routed recording interface: `session request record start|status|stop|...` can now run through the resident daemon request queue, using the daemon state directory and preserving holder/lease provenance command arguments.
 - ActingLab daemon-routed devices diagnostics: `devices --via-daemon` and `session request devices` can now submit device enumeration through the resident daemon request queue instead of requiring the caller to run the ADB listing directly.
 
-## Current ActingLab Daemon-Routed Devices Diagnostics
+## Current ActingLab Top-Level Daemon-Routed Status Entry
+
+The current Runtime task routes the top-level `status` diagnostic entry point through the resident daemon request queue when `--via-daemon` is present. Bare `status` remains the local runtime-info probe, while `status --via-daemon --diagnostics` now reaches the same daemon-side status diagnostics already exposed by `session request status --diagnostics`.
+
+Scope:
+
+- Add `status --via-daemon`.
+- Reuse the existing daemon-side `status` request handling instead of adding a duplicate status path.
+- Preserve bare `status` behavior for local runtime probing.
+- Add a no-daemon regression test for `status --via-daemon --diagnostics`.
+
+Safety direction:
+
+- The routed status request is diagnostic and read-only.
+- Missing daemon state remains a visible runtime-not-running error.
+- The milestone does not change device control, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab status_via_daemon_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_status_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+Known follow-ups:
+
+- Decide whether the default top-level `status` command should auto-prefer the resident daemon when it is already running.
+- Expose daemon status diagnostics through the future trusted UI/API channel once that channel exists.
+- Continue moving user-facing diagnostic and control surfaces behind the resident Session Layer request/API boundary.
+
+## Previous ActingLab Daemon-Routed Devices Diagnostics
 
 The current Runtime task routes the `devices` diagnostic entry point through the resident daemon request queue. Local `devices` remains available, while `devices --via-daemon` and `session request devices` can now serialize device enumeration through the daemon.
 

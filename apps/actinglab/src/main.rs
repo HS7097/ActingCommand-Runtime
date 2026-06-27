@@ -803,12 +803,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "paths" => run_paths(&invocation.global),
         [cmd] if cmd == "capabilities" => run_capabilities(&invocation.global),
         [cmd] if cmd == "doctor" => run_doctor(&invocation.global),
-        [cmd] if cmd == "status" => require_runtime(&invocation.global).map(|data| {
-            json!({
-                "state": "running",
-                "runtime": data,
-            })
-        }),
+        [cmd] if cmd == "status" => run_status(&invocation.global, &invocation.args),
         [cmd] if cmd == "devices" => run_devices(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
@@ -1012,6 +1007,19 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
         ],
         "discovered_recognition_packs": discovered
     }))
+}
+
+fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        return submit_readonly_session_request(global, &flags, "status", args);
+    }
+    require_runtime(global).map(|data| {
+        json!({
+            "state": "running",
+            "runtime": data,
+        })
+    })
 }
 
 fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -14628,6 +14636,28 @@ mod tests {
                 "session",
                 "request",
                 "capture-diagnose",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn status_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "status",
+                "--via-daemon",
+                "--diagnostics",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
             ],
