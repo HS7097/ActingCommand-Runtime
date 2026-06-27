@@ -1,5 +1,80 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session daemon monitor-once routing
+
+### Current status
+
+- Added read-only daemon routing for one-shot monitor diagnosis.
+- Added `monitor --once --via-daemon`.
+- Added `session request monitor-once`.
+- `monitor --via-daemon` without `--once` fails visibly with `validation_failed`.
+- `monitor --once --via-daemon --recover` is safety-blocked with `daemon_recovery_requires_lease`.
+- The daemon execution path rejects recovery for `monitor_once` requests even if a crafted request file includes `--recover`.
+- This task routes read-only monitor diagnosis only.
+- No tap, key, text, navigate, recover execution, app restart, scheduler body, game-task action, UI, SQLite, OCR, new capture backend, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a056c19aa67df4ed83acee210046f5b9aee67492`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_via_daemon`
+- Attempted `cargo test -p actingcommand-actinglab monitor_once_via_daemon_without_daemon_is_runtime_error session_request`; Cargo rejected the extra test filter, so the tests were rerun separately.
+- `cargo test -p actingcommand-actinglab monitor_once_via_daemon_without_daemon_is_runtime_error`
+- `cargo test -p actingcommand-actinglab session_request`
+- Started a live-safe session daemon in `target\session-monitor-request-smoke`.
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark monitor --once --via-daemon --capture --state-dir target\session-monitor-request-smoke --request-timeout-ms 20000`
+- Stopped the live-safe session daemon and checked session status.
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab monitor_via_daemon` passed with `2` focused tests.
+- `cargo test -p actingcommand-actinglab monitor_once_via_daemon_without_daemon_is_runtime_error` passed.
+- `cargo test -p actingcommand-actinglab session_request` passed with `3` focused tests.
+- Live-safe daemon smoke passed:
+  - started session daemon pid `41756`;
+  - submitted AK `monitor --once --via-daemon --capture` for `127.0.0.1:16416`;
+  - daemon response returned `mode = daemon_request`;
+  - daemon response returned `daemon_command = monitor_once`;
+  - inner response reported `status = healthy`, `expected_page = arknights/home`, and `click_allowed = false`;
+  - no click, app restart, recovery, or screenshot file write was performed;
+  - daemon was stopped and final status reported `running = false`.
+- `cargo test -p actingcommand-actinglab` passed with `99` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+
+### Current blocker
+
+- No blocker for read-only monitor-once daemon routing.
+- Full Session Layer is still incomplete: input routing, semantic tap, navigation, recovery execution, app restart, scheduler-owned lease arbitration, API/event streaming, UI integration, recording, and broader command dispatch remain future work.
+- Recovery remains intentionally blocked in daemon monitor requests until scheduler lease arbitration is connected.
+
+### Next step
+
+1. Commit and push the monitor-once daemon-routing Runtime changes.
+2. Add a checkpoint tag if this is accepted as a stable daemon-monitor rollback point.
+3. Continue by adding a lease/arbitration interface or by routing more status-only session commands through the daemon.
+
 ## 2026-06-27 ActingLab session daemon read-only semantic routing
 
 ### Current status

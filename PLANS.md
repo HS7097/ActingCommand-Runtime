@@ -52,6 +52,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session layer Phase A/C capture stale diagnostics: `capture diagnose` and `session capture diagnose` run a structured fresh-frame probe, report stale/unavailable capture states, and recommend lighter capture-backend recovery before app restart.
 - ActingLab session daemon request channel: the resident daemon now processes a narrow file-IPC request queue for read-only `capture_diagnose` requests, allowing `capture diagnose --via-daemon` and `session request capture-diagnose` to execute through the running daemon.
 - ActingLab session daemon read-only semantic routing: `recognize`, `detect-page`, `current-page`, `is-visible`, and `locate` can now submit read-only requests through the same daemon queue with `--via-daemon` or `session request ...`.
+- ActingLab daemon monitor-once routing: `monitor --once --via-daemon` and `session request monitor-once` now run read-only health diagnosis through the resident daemon while `--recover` remains blocked until lease arbitration exists.
 
 ## Current ActingLab Session Daemon Read-Only Request Routing
 
@@ -67,6 +68,7 @@ Scope:
 - Add `current-page --via-daemon` and `session request current-page`.
 - Add `is-visible --via-daemon` and `session request is-visible`.
 - Add `locate --via-daemon` and `session request locate`.
+- Add `monitor --once --via-daemon` and `session request monitor-once`.
 - Request-only client flags such as `--via-daemon`, `--state-dir`, and `--request-timeout-ms` are stripped before the daemon executes the inner command, preventing recursive request submission.
 - Response files preserve success data or visible structured errors.
 - Client-side request submission remains bounded by `--request-timeout-ms`, default `10000`.
@@ -75,6 +77,7 @@ Scope:
 Safety direction:
 
 - The daemon-routed commands in this phase are read-only capture, recognition, page detection, visibility, and template-location checks.
+- Daemon-routed monitor is one-shot diagnosis only. `--recover` is safety-blocked until scheduler lease arbitration is connected.
 - No tap, key, text, navigate, recover, app restart, game-task action, scheduler body, UI, SQLite, OCR, or new capture backend was added.
 - Device input commands remain outside daemon request dispatch until lease and arbitration rules are stronger.
 - Daemon request failures propagate visibly instead of being treated as empty or successful responses.
@@ -84,8 +87,11 @@ Validation status:
 - Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
 - `cargo test -p actingcommand-actinglab session_request` passed.
 - `cargo test -p actingcommand-actinglab readonly_via_daemon_without_daemon_is_runtime_error` passed.
+- `cargo test -p actingcommand-actinglab monitor_via_daemon` passed.
+- `cargo test -p actingcommand-actinglab monitor_once_via_daemon_without_daemon_is_runtime_error` passed.
 - `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
 - A live-safe smoke started the session daemon, submitted AK `current-page --via-daemon --capture` for `127.0.0.1:16416`, received a daemon response with `mode = daemon_request`, `daemon_command = current_page`, and `page = arknights/home`, then stopped the daemon.
+- A second live-safe smoke submitted AK `monitor --once --via-daemon --capture` for `127.0.0.1:16416`, received `daemon_command = monitor_once`, `status = healthy`, and `click_allowed = false`, then stopped the daemon.
 - `cargo test -p actingcommand-actinglab` passed.
 - `cargo test --workspace` passed.
 - `cargo fmt --all -- --check` passed.

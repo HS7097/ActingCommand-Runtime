@@ -2944,10 +2944,37 @@ fn poll_for_matched_page(
 
 fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--via-daemon") {
+        if !flags.bool("--once") {
+            return Err(CliError::usage(
+                "monitor --via-daemon currently requires --once",
+            ));
+        }
+        return submit_monitor_once_session_request(global, &flags, args);
+    }
     if flags.bool("--once") {
         return run_monitor_once(global, &flags);
     }
     run_monitor_loop(global, &flags)
+}
+
+fn submit_monitor_once_session_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    args: &[String],
+) -> CliOutcome<Value> {
+    if flags.bool("--recover") {
+        return Err(CliError::safety_blocked(
+            "daemon_recovery_requires_lease",
+            "monitor --via-daemon does not support --recover until scheduler lease arbitration is connected",
+            &["lab_lease", "scheduler_arbitration"],
+        ));
+    }
+    let mut payload = session_request_payload_args(args);
+    if !payload.iter().any(|arg| arg == "--once") {
+        payload.push("--once".to_string());
+    }
+    submit_session_command_request(global, flags, "monitor_once", payload)
 }
 
 fn run_monitor_loop(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -3336,7 +3363,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, or locate",
+                "session request requires capture-diagnose, recognize, detect-page, current-page, is-visible, locate, or monitor-once",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -3353,6 +3380,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         }
         "is-visible" => submit_readonly_session_request(global, &flags, "is_visible", &args[1..]),
         "locate" => submit_readonly_session_request(global, &flags, "locate", &args[1..]),
+        "monitor-once" => submit_monitor_once_session_request(global, &flags, &args[1..]),
         other => Err(CliError::usage(format!(
             "unknown session request command: {other}"
         ))),
@@ -3742,6 +3770,18 @@ fn execute_session_command_request_inner(request: &SessionCommandRequest) -> Cli
         "locate" => {
             let global = request.global.to_global()?;
             run_locate(&global, &request.args)
+        }
+        "monitor_once" => {
+            let global = request.global.to_global()?;
+            let flags = FlagArgs::parse(&request.args)?;
+            if flags.bool("--recover") {
+                return Err(CliError::safety_blocked(
+                    "daemon_recovery_requires_lease",
+                    "monitor daemon requests do not support recovery until scheduler lease arbitration is connected",
+                    &["lab_lease", "scheduler_arbitration"],
+                ));
+            }
+            run_monitor_once(&global, &flags)
         }
         other => Err(CliError::usage(format!(
             "unsupported daemon request command: {other}"
@@ -5442,6 +5482,11 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device"],
             "available",
         ),
+        command_cap(
+            "session request monitor-once",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
@@ -5743,6 +5788,53 @@ mod tests {
     }
 
     #[test]
+    fn monitor_once_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "monitor",
+                "--once",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn monitor_via_daemon_requires_once() {
+        let result = run_cli(["--json", "monitor", "--via-daemon"], true);
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+    }
+
+    #[test]
+    fn monitor_via_daemon_recover_is_safety_blocked() {
+        let result = run_cli(
+            ["--json", "monitor", "--once", "--via-daemon", "--recover"],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "daemon_recovery_requires_lease"
+        );
+    }
+
+    #[test]
     fn session_request_readonly_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -5997,6 +6089,7 @@ mod tests {
             "session request current-page",
             "session request is-visible",
             "session request locate",
+            "session request monitor-once",
             "session lease",
             "capture diagnose",
         ] {
