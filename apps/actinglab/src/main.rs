@@ -412,7 +412,7 @@ enum SessionRecordStepData {
         frame_provenance: Option<Box<SessionRecordFrameProvenance>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<Box<SessionRecordAnchorArtifact>>,
-        evaluation: SessionRecordStepEvaluation,
+        evaluation: Box<SessionRecordStepEvaluation>,
     },
     Operation {
         from: String,
@@ -451,11 +451,30 @@ struct SessionRecordStepEvaluation {
     reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backtest: Option<SessionRecordAnchorBacktest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contrast_backtest: Option<SessionRecordAnchorContrastBacktest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionRecordAnchorBacktest {
     source: String,
+    metric: String,
+    region: SessionRecordRect,
+    x: i32,
+    y: i32,
+    raw_score: f32,
+    score: f32,
+    threshold: f32,
+    passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordAnchorContrastBacktest {
+    source: String,
+    path: String,
+    sha256: String,
+    width: u32,
+    height: u32,
     metric: String,
     region: SessionRecordRect,
     x: i32,
@@ -4983,6 +5002,7 @@ fn new_session_record_anchor_step(
             status: "deferred".to_string(),
             reason: "frame_not_provided".to_string(),
             backtest: None,
+            contrast_backtest: None,
         });
     Ok(SessionRecordStepData::Anchor {
         id,
@@ -4993,7 +5013,7 @@ fn new_session_record_anchor_step(
             .as_ref()
             .map(|materialized| Box::new(materialized.frame_provenance.clone())),
         artifact: materialized.map(|materialized| Box::new(materialized.artifact)),
-        evaluation,
+        evaluation: Box::new(evaluation),
     })
 }
 
@@ -5092,8 +5112,50 @@ fn backtest_anchor_crop(
     threshold: Option<f64>,
     flags: &FlagArgs,
 ) -> CliOutcome<SessionRecordStepEvaluation> {
-    let scene = scene_from_frame(frame)?;
     let metric = parse_match_metric_flag(flags)?;
+    let threshold = threshold.unwrap_or(0.95) as f32;
+    let backtest = match_anchor_crop_in_frame(
+        frame,
+        rect,
+        crop_png,
+        metric,
+        threshold,
+        "local_png_self_test",
+    )?;
+    let contrast_backtest =
+        backtest_contrast_anchor_crop(rect, crop_png, metric, threshold, flags)?;
+    let positive_passed = backtest.passed;
+    let contrast_passed = contrast_backtest
+        .as_ref()
+        .map(|backtest| backtest.passed)
+        .unwrap_or(true);
+    let passed = positive_passed && contrast_passed;
+    let reason = if !positive_passed {
+        "self_backtest_below_threshold"
+    } else if !contrast_passed {
+        "contrast_backtest_matched"
+    } else if contrast_backtest.is_some() {
+        "self_and_contrast_backtest_passed"
+    } else {
+        "self_backtest_passed"
+    };
+    Ok(SessionRecordStepEvaluation {
+        status: if passed { "passed" } else { "failed" }.to_string(),
+        reason: reason.to_string(),
+        backtest: Some(backtest),
+        contrast_backtest,
+    })
+}
+
+fn match_anchor_crop_in_frame(
+    frame: &Frame,
+    rect: &SessionRecordRect,
+    crop_png: &[u8],
+    metric: MatchMetric,
+    threshold: f32,
+    source: &str,
+) -> CliOutcome<SessionRecordAnchorBacktest> {
+    let scene = scene_from_frame(frame)?;
     let matched = scene
         .match_template_with_metric(
             crop_png,
@@ -5106,28 +5168,64 @@ fn backtest_anchor_crop(
             metric,
         )
         .map_err(|err| CliError::usage(format!("failed to backtest record anchor crop: {err}")))?;
-    let threshold = threshold.unwrap_or(0.95) as f32;
-    let passed = matched.score >= threshold;
-    Ok(SessionRecordStepEvaluation {
-        status: if passed { "passed" } else { "failed" }.to_string(),
-        reason: if passed {
-            "self_backtest_passed"
-        } else {
-            "self_backtest_below_threshold"
-        }
-        .to_string(),
-        backtest: Some(SessionRecordAnchorBacktest {
-            source: "local_png_self_test".to_string(),
-            metric: match_metric_name(metric).to_string(),
-            region: rect.clone(),
-            x: matched.x,
-            y: matched.y,
-            raw_score: matched.raw_score,
-            score: matched.score,
-            threshold,
-            passed,
-        }),
+    Ok(SessionRecordAnchorBacktest {
+        source: source.to_string(),
+        metric: match_metric_name(metric).to_string(),
+        region: rect.clone(),
+        x: matched.x,
+        y: matched.y,
+        raw_score: matched.raw_score,
+        score: matched.score,
+        threshold,
+        passed: matched.score >= threshold,
     })
+}
+
+fn backtest_contrast_anchor_crop(
+    rect: &SessionRecordRect,
+    crop_png: &[u8],
+    metric: MatchMetric,
+    threshold: f32,
+    flags: &FlagArgs,
+) -> CliOutcome<Option<SessionRecordAnchorContrastBacktest>> {
+    let Some(frame_path) = flags
+        .optional_path("--contrast-frame")
+        .or_else(|| flags.optional_path("--negative-frame"))
+    else {
+        return Ok(None);
+    };
+    let frame_png = fs::read(&frame_path).map_err(|err| {
+        CliError::usage(format!(
+            "failed to read record contrast frame {}: {err}",
+            frame_path.display()
+        ))
+    })?;
+    let frame_hash = hex_sha256(&frame_png);
+    let frame = Frame::from_png(frame_png, CaptureBackendName::AdbScreencap)
+        .map_err(|err| CliError::usage(format!("failed to decode record contrast frame: {err}")))?;
+    let backtest = match_anchor_crop_in_frame(
+        &frame,
+        rect,
+        crop_png,
+        metric,
+        threshold,
+        "local_png_contrast",
+    )?;
+    Ok(Some(SessionRecordAnchorContrastBacktest {
+        source: "local_png_contrast".to_string(),
+        path: frame_path.display().to_string(),
+        sha256: frame_hash,
+        width: frame.width,
+        height: frame.height,
+        metric: backtest.metric,
+        region: backtest.region,
+        x: backtest.x,
+        y: backtest.y,
+        raw_score: backtest.raw_score,
+        score: backtest.score,
+        threshold: backtest.threshold,
+        passed: backtest.score < threshold,
+    }))
 }
 
 fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame> {
@@ -5345,6 +5443,7 @@ fn amend_anchor_record_step(
             status: "deferred".to_string(),
             reason: "amended_needs_backtest".to_string(),
             backtest: None,
+            contrast_backtest: None,
         };
     }
     Ok(changed)
@@ -7067,6 +7166,30 @@ mod tests {
         .expect("test frame png")
     }
 
+    fn test_contrast_record_frame_png(width: u32, height: u32) -> Vec<u8> {
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[
+                    ((x * 37 + y * 17 + 91) % 256) as u8,
+                    ((x * 13 + y * 53 + 7) % 256) as u8,
+                    ((x * 97 + y * 11 + 3) % 256) as u8,
+                    255,
+                ]);
+            }
+        }
+        Frame::from_pixels(
+            width,
+            height,
+            pixels,
+            PixelFormat::Rgba8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("test contrast frame")
+        .png_for_artifact()
+        .expect("test contrast frame png")
+    }
+
     #[test]
     fn version_outputs_json_envelope() {
         let result = run_cli(["--json", "--version"], true);
@@ -7810,6 +7933,7 @@ mod tests {
                 .and_then(Value::as_f64)
                 .is_some_and(|threshold| (threshold - 0.95).abs() < 0.00001)
         );
+        assert!(data.pointer("/step/evaluation/contrast_backtest").is_none());
         let artifact_path = data
             .pointer("/step/artifact/path")
             .and_then(Value::as_str)
@@ -7825,6 +7949,185 @@ mod tests {
             data.pointer("/record/steps/0/artifact/path")
                 .and_then(Value::as_str),
             Some(artifact_path.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_contrast_frame_passes_when_distinct() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let contrast_path = temp.path().join("contrast.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        fs::write(&contrast_path, test_contrast_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--contrast-frame",
+                contrast_path.to_str().unwrap(),
+                "--threshold",
+                "0.999",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(
+            step.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&step.envelope).unwrap()
+        );
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("self_and_contrast_backtest_passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/contrast_backtest/source")
+                .and_then(Value::as_str),
+            Some("local_png_contrast")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/contrast_backtest/passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/step/evaluation/contrast_backtest/score")
+                .and_then(Value::as_f64)
+                .is_some_and(|score| score < 0.999)
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_contrast_frame_fails_when_matching() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--negative-frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("contrast_backtest_matched")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/contrast_backtest/passed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.pointer("/step/evaluation/contrast_backtest/score")
+                .and_then(Value::as_f64)
+                .is_some_and(|score| score >= 0.95)
         );
     }
 

@@ -62,6 +62,45 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording anchor frame materialization: authorized anchor steps can optionally attach a local PNG source frame, crop a rect-only template draft artifact, and record frame/artifact hashes without device I/O or resource writes.
 - ActingLab session recording anchor self-backtest: frame-backed anchor crops now run an offline source-frame template self-test and persist score, threshold, metric, match point, and pass/fail evaluation metadata.
 - ActingLab session recording build-task draft: authorized, backtested recording steps can now assemble a local draft operation bundle and asset directory without device I/O, resource writes, UI, SQLite, or game logic.
+- ActingLab session recording anchor contrast validation: frame-backed anchor crops can now be checked against an explicit contrast frame so ambiguous anchors fail before draft bundle generation.
+
+## Current ActingLab Session Recording Anchor Contrast Validation
+
+The current Runtime task advances Phase D by adding optional offline contrast-frame validation to authorized frame-backed anchor steps. A usable anchor now can prove both sides of the intended distinction: it must match its source frame inside the authorized rect, and, when provided, it must not match the supplied contrast frame above the same threshold.
+
+Scope:
+
+- Add optional `--contrast-frame <png>` to `session record step --kind anchor`.
+- Add alias `--negative-frame <png>` for the same contrast-frame role.
+- Preserve the existing no-contrast behavior: frame-backed anchors still self-test and pass/fail exactly as before when no contrast frame is supplied.
+- When a contrast frame is supplied, persist a `contrast_backtest` record with source, path, hash, dimensions, metric, region, match point, score, threshold, and pass/fail.
+- Mark the anchor evaluation `passed` only when the source-frame self-test passes and the contrast-frame score remains below threshold.
+- Mark the anchor evaluation `failed` with reason `contrast_backtest_matched` when the contrast frame also matches.
+- Clear contrast-backtest metadata when an anchor is amended.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not live-capture frames, write resource repositories, touch SQLite, implement UI, add OCR/OpenCV, or add game logic.
+- Contrast frame read/decode errors and recognition errors fail visibly.
+- Failed contrast validation is recorded visibly in the step evaluation, and downstream `build-task` continues to reject non-passed anchors.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `6` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `18` tests.
+- `cargo test -p actingcommand-actinglab` passed with `126` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after boxing anchor-step evaluation metadata to keep the recording enum compact without changing the JSON shape.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for device input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add current-frame integration only after stale-frame policy and daemon routing are fully aligned with recording.
+- Add resource-promotion/write flow after draft bundle and contrast validation semantics are accepted.
+- Consider additional resource types such as color-probe or verify-template in later recording milestones.
 
 ## Current ActingLab Session Recording Build-Task Draft
 

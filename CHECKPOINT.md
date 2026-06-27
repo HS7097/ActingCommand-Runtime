@@ -1,5 +1,87 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording anchor contrast validation
+
+### Current status
+
+- Added optional offline contrast-frame validation for frame-backed `session record step --kind anchor`.
+- `--contrast-frame <png>` and alias `--negative-frame <png>` can now be supplied with `--frame <png>`.
+- Source-frame self-backtest remains unchanged when no contrast frame is supplied.
+- When a contrast frame is supplied, the anchor evaluation now includes `contrast_backtest` metadata:
+  - source
+  - path
+  - SHA-256
+  - dimensions
+  - metric
+  - region
+  - match point
+  - raw score
+  - normalized score
+  - threshold
+  - pass/fail boolean
+- A frame-backed anchor now passes with a contrast frame only when the source self-test passes and the contrast-frame score is below threshold.
+- A contrast frame that also matches marks the anchor `failed` with reason `contrast_backtest_matched`.
+- Anchor amendment clears both self-backtest and contrast-backtest metadata.
+- No device I/O, MaaTouch startup, live screenshot capture, resource repository write, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `e43c0967e43ca207becb4d34e759a32287a8fc2c`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- First `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB input fallback, `adb shell screencap`, MaaTouch startup, live capture routing, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `6` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `18` tests.
+- `cargo test -p actingcommand-actinglab` passed with `126` tests.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` failed with `clippy::large-enum-variant` after contrast metadata enlarged the anchor variant.
+- Anchor-step `evaluation` metadata was boxed; this keeps the JSON shape unchanged while reducing enum size.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- Rerun `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for local contrast-frame validation.
+- Full recording remains incomplete: live current-frame integration, resource promotion, UI/API wiring, and SQLite metadata are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-anchor-contrast rollback point.
+3. Next implementation milestone should add current-frame integration or resource-promotion flow after contrast validation semantics are accepted.
+
 ## 2026-06-27 ActingLab session recording build-task draft
 
 ### Current status
