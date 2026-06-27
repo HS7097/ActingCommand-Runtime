@@ -3834,13 +3834,17 @@ fn run_session_journal(args: &[String]) -> CliOutcome<Value> {
     flags.expect_positionals("session journal", 0)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
     let limit = parse_optional_usize(&flags, "--limit", 20)?;
+    session_journal_payload(&state_dir, limit)
+}
+
+fn session_journal_payload(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let entries = read_session_request_journal(&state_dir, limit)?;
+    let entries = read_session_request_journal(state_dir, limit)?;
     Ok(json!({
         "state_dir": state_dir.display().to_string(),
-        "journal": session_request_journal_path(&state_dir).display().to_string(),
+        "journal": session_request_journal_path(state_dir).display().to_string(),
         "limit": limit,
         "entries": entries
     }))
@@ -3915,12 +3919,13 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires status, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires status, journal, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
+        "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "capture" => submit_readonly_session_request(global, &flags, "capture", &args[1..]),
         "capture-diagnose" => {
             let mut request_args = vec!["diagnose".to_string()];
@@ -4353,6 +4358,12 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             flags.expect_positionals("session request status", 0)?;
             session_status_payload(state_dir, flags.bool("--diagnostics"))
+        }
+        "journal" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request journal", 0)?;
+            let limit = parse_optional_usize(&flags, "--limit", 20)?;
+            session_journal_payload(state_dir, limit)
         }
         "capture_diagnose" => {
             let global = request.global.to_global()?;
@@ -8896,6 +8907,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session stop", ["offline"], "available"),
         command_cap("session journal", ["offline"], "available"),
         command_cap("session request status", ["running_runtime"], "available"),
+        command_cap("session request journal", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
             ["running_runtime", "device"],
@@ -14284,6 +14296,63 @@ mod tests {
     }
 
     #[test]
+    fn session_journal_request_returns_daemon_journal_entries() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let journaled = SessionCommandRequest {
+            request_id: "journaled-request".to_string(),
+            command: "stream".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--dry-run".to_string(),
+                "--max-frames".to_string(),
+                "1".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        let response = SessionCommandResponse {
+            request_id: "journaled-request".to_string(),
+            command: "stream".to_string(),
+            ok: true,
+            data: Some(json!({"status": "done"})),
+            error: None,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        append_session_request_journal(state_dir, &journaled, &response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "journal-query".to_string(),
+            command: "journal".to_string(),
+            global: journaled.global.clone(),
+            args: vec!["--limit".to_string(), "1".to_string()],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+
+        assert_eq!(payload.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            payload
+                .pointer("/entries/0/request_id")
+                .and_then(Value::as_str),
+            Some("journaled-request")
+        );
+        assert_eq!(
+            payload.pointer("/entries/0/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_request_without_daemon_is_runtime_error() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -14314,6 +14383,28 @@ mod tests {
                 "session",
                 "request",
                 "status",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn session_request_journal_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "journal",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
             ],
@@ -15560,6 +15651,7 @@ mod tests {
             "session capture",
             "session capture diagnose",
             "session request status",
+            "session request journal",
             "session request capture",
             "session request capture-diagnose",
             "session request stream",

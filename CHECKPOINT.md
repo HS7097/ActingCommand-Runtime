@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab daemon-routed journal diagnostics
+
+### Current status
+
+- Added `session request journal` as a read-only daemon request.
+- `session request journal [--limit N]` now returns recent resident daemon request-journal entries through the daemon request queue.
+- Local `session journal [--limit N]` now shares the same `session_journal_payload` helper.
+- Capabilities now advertise `session request journal`.
+- Missing daemon state still fails visibly with `runtime_not_running`.
+- Corrupt journal lines remain visible runtime errors.
+- No daemon command execution semantics, request ordering, response retention, lease enforcement, capture/input path, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `05dc5b2c3156928bdb59498f0efcda8824683a6c`.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the current cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Re-read the current cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Re-read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_journal_request_returns_daemon_journal_entries -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_journal_without_daemon_is_runtime_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture`
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for fallback, reconnect/retry loops, direct input fallback, ADB shell input/screencap, SQLite, OCR/OpenCV, and unreviewed trusted-channel implementation.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_journal_request_returns_daemon_journal_entries -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_journal_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` initially found a needless-borrow warning in the extracted journal helper; after correcting it, the command passed.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the daemon-routed journal diagnostics milestone.
+- Full Session Layer remains incomplete: trusted UI/API diagnostics exposure, actual trusted interactive streaming, daemon transport/API for long-lived frame streams, live prepared-emulator validation, and full scheduler/UI integration remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260627-daemon-journal-diagnostics`.
+2. Continue Session Layer follow-ups: trusted UI/API diagnostics, trusted interactive frame/input channel, long-lived stream transport/API, live prepared-emulator validation, UI/API review surfaces, and scheduler/UI integration.
+
 ## 2026-06-27 ActingLab daemon-routed status diagnostics
 
 ### Current status

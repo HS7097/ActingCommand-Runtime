@@ -88,8 +88,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session status diagnostics: `session status --diagnostics` now reports queue depths, daemon state paths, journal totals, recent request summary, and latest request error for UI/scheduler health inspection.
 - ActingLab request journal retention: daemon request journals now rotate the active JSONL file into a single local archive when it exceeds the fixed retention cap, and diagnostics expose the active/archive byte counts and policy.
 - ActingLab daemon-routed status diagnostics: `session request status --diagnostics` can now return the same status and diagnostics payload through the resident daemon request queue for future UI/API consumption.
+- ActingLab daemon-routed journal diagnostics: `session request journal [--limit]` can now return recent request-journal entries through the resident daemon request queue for future UI/API consumption.
 
-## Current ActingLab Daemon-Routed Status Diagnostics
+## Current ActingLab Daemon-Routed Journal Diagnostics
+
+The current Runtime task extends the resident Session Layer diagnostic surface by routing request-journal reads through the daemon request queue. Local `session journal` remains available, and `session request journal [--limit N]` can now submit the same read-only query through the resident daemon.
+
+Scope:
+
+- Extract shared journal rendering into `session_journal_payload`.
+- Keep local `session journal [--limit]` behavior stable.
+- Add `session request journal [--limit]`.
+- Add daemon-side handling for the read-only `journal` request.
+- Advertise `session request journal` in capabilities.
+
+Safety direction:
+
+- `session request journal` is read-only and requires no lease.
+- Missing daemon state remains a visible runtime-not-running error.
+- Corrupt journal lines remain visible runtime errors.
+- The milestone does not change daemon command execution, request ordering, response retention, lease enforcement, capture/input paths, scheduler implementation, UI, SQLite, OCR/OpenCV, game logic, ADB input fallback, capture hot-path algorithm change, reconnect loop, retry loop, or silent fallback.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_journal_request_returns_daemon_journal_entries -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_journal_without_daemon_is_runtime_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab session_request_journal_records_success_and_error -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab top_level_record_capability_is_available -- --nocapture` passed with `1` test.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture` passed with `1` test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after correcting a needless-borrow warning in the extracted journal helper.
+- `cargo test --workspace` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+Known follow-ups:
+
+- Expose the same daemon request/journal surface through the future trusted UI/API channel once that channel exists.
+- Implement the actual trusted interactive frame/input channel after the Runtime service boundary is accepted.
+- Decide the daemon transport/API shape for long-lived frame streams instead of bounded local CLI sampling.
+- Add live prepared-emulator validation for real captured stream frames when safe target states are available.
+- Review UI/API stream consumption after the trusted channel contract lands.
+
+## Previous ActingLab Daemon-Routed Status Diagnostics
 
 The current Runtime task moves the Session Layer status surface one step closer to the shared internal API. Local `session status --diagnostics` remains available, and `session request status --diagnostics` can now submit a read-only request through the resident daemon queue and return the same daemon state/diagnostics payload.
 
