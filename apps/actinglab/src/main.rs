@@ -522,6 +522,7 @@ struct SessionRecordSourceFrame {
     png: Vec<u8>,
     source: String,
     path: PathBuf,
+    recorded_at_unix_ms: u64,
     capture_backend: Option<String>,
     freshness: Option<Value>,
     capture_attempts: Vec<Value>,
@@ -532,6 +533,21 @@ struct SessionRecordStepContext<'a> {
     config: &'a UserConfig,
     record: &'a SessionRecordContext,
     state_dir: &'a Path,
+}
+
+struct SessionRecordAmendContext {
+    record_id: String,
+    state_dir: PathBuf,
+}
+
+struct SessionRecordAnchorAmendTarget<'a> {
+    id: &'a mut String,
+    region: &'a mut SessionRecordRegion,
+    color_check: &'a mut bool,
+    threshold: &'a mut Option<f64>,
+    frame_provenance: &'a mut Option<Box<SessionRecordFrameProvenance>>,
+    artifact: &'a mut Option<Box<SessionRecordAnchorArtifact>>,
+    evaluation: &'a mut SessionRecordStepEvaluation,
 }
 
 struct SessionRecordBuildDraft {
@@ -4595,6 +4611,10 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                 ));
             }
             let step_id = record_amend_step_id(&flags)?;
+            let amend_context = SessionRecordAmendContext {
+                record_id: record.record_id.clone(),
+                state_dir: state_dir.clone(),
+            };
             let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {
                 return Err(CliError::safety_blocked(
                     "record_step_not_found",
@@ -4602,7 +4622,7 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                     &["session_record"],
                 ));
             };
-            amend_session_record_step(step, &flags)?;
+            amend_session_record_step(&amend_context, step, &flags)?;
             record.updated_at_unix_ms = current_unix_ms();
             let amended_step = step.clone();
             write_json_file_atomic(&record_path, &record)?;
@@ -5213,6 +5233,7 @@ fn read_session_record_source_frame(frame_path: &Path) -> CliOutcome<SessionReco
         png: frame_png,
         source: "local_png".to_string(),
         path: frame_path.to_path_buf(),
+        recorded_at_unix_ms: current_unix_ms(),
         capture_backend: None,
         freshness: None,
         capture_attempts: Vec::new(),
@@ -5264,6 +5285,7 @@ fn capture_session_record_source_frame(
         png,
         source: "current_capture".to_string(),
         path: source_path,
+        recorded_at_unix_ms: current_unix_ms(),
     })
 }
 
@@ -5305,7 +5327,7 @@ fn materialize_anchor_artifact_from_source(
             sha256: hex_sha256(&source_frame.png),
             width: source_frame.frame.width,
             height: source_frame.frame.height,
-            recorded_at_unix_ms: current_unix_ms(),
+            recorded_at_unix_ms: source_frame.recorded_at_unix_ms,
             capture_backend: source_frame.capture_backend,
             freshness: source_frame.freshness,
             capture_attempts: source_frame.capture_attempts,
@@ -5593,16 +5615,33 @@ fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
     Ok(value)
 }
 
-fn amend_session_record_step(step: &mut SessionRecordStep, flags: &FlagArgs) -> CliOutcome<()> {
+fn amend_session_record_step(
+    context: &SessionRecordAmendContext,
+    step: &mut SessionRecordStep,
+    flags: &FlagArgs,
+) -> CliOutcome<()> {
+    let step_id = step.step_id.clone();
     let changed = match &mut step.data {
         SessionRecordStepData::Anchor {
             id,
             region,
             color_check,
             threshold,
+            frame_provenance,
+            artifact,
             evaluation,
-            ..
-        } => amend_anchor_record_step(id, region, color_check, threshold, evaluation, flags)?,
+        } => {
+            let mut target = SessionRecordAnchorAmendTarget {
+                id,
+                region,
+                color_check,
+                threshold,
+                frame_provenance,
+                artifact,
+                evaluation,
+            };
+            amend_anchor_record_step(context, &step_id, &mut target, flags)?
+        }
         SessionRecordStepData::Operation {
             from,
             to,
@@ -5620,11 +5659,9 @@ fn amend_session_record_step(step: &mut SessionRecordStep, flags: &FlagArgs) -> 
 }
 
 fn amend_anchor_record_step(
-    id: &mut String,
-    region: &mut SessionRecordRegion,
-    color_check: &mut bool,
-    threshold: &mut Option<f64>,
-    evaluation: &mut SessionRecordStepEvaluation,
+    context: &SessionRecordAmendContext,
+    step_id: &str,
+    target: &mut SessionRecordAnchorAmendTarget<'_>,
     flags: &FlagArgs,
 ) -> CliOutcome<bool> {
     let mut changed = false;
@@ -5632,38 +5669,117 @@ fn amend_anchor_record_step(
         if value.trim().is_empty() {
             return Err(CliError::usage("--id must not be empty"));
         }
-        *id = value;
+        *target.id = value;
         changed = true;
     }
     if let Some(value) = flags.optional("--region").filter(|value| value != "true") {
-        *region = parse_session_record_region(&value)?;
+        *target.region = parse_session_record_region(&value)?;
         changed = true;
     }
     if flags.bool("--color-check") {
-        *color_check = true;
+        *target.color_check = true;
         changed = true;
     }
     if flags.bool("--no-color-check") {
-        *color_check = false;
+        *target.color_check = false;
         changed = true;
     }
     if flags.flags.contains_key("--threshold") {
-        *threshold = parse_optional_unit_f64(flags, "--threshold")?;
+        *target.threshold = parse_optional_unit_f64(flags, "--threshold")?;
         changed = true;
     }
     if flags.bool("--clear-threshold") {
-        *threshold = None;
+        *target.threshold = None;
         changed = true;
     }
     if changed {
-        *evaluation = SessionRecordStepEvaluation {
+        refresh_amended_anchor_artifact(context, step_id, target, flags)?;
+    }
+    Ok(changed)
+}
+
+fn refresh_amended_anchor_artifact(
+    context: &SessionRecordAmendContext,
+    step_id: &str,
+    target: &mut SessionRecordAnchorAmendTarget<'_>,
+    flags: &FlagArgs,
+) -> CliOutcome<()> {
+    let Some(provenance) = target.frame_provenance.as_deref() else {
+        *target.evaluation = SessionRecordStepEvaluation {
             status: "deferred".to_string(),
-            reason: "amended_needs_backtest".to_string(),
+            reason: "amended_without_frame_provenance".to_string(),
             backtest: None,
             contrast_backtest: None,
         };
-    }
-    Ok(changed)
+        return Ok(());
+    };
+    let SessionRecordRegion::Rect { rect } = target.region else {
+        return Err(CliError::usage(
+            "record anchor amend re-backtest requires a rect region; auto region candidate selection is not implemented",
+        ));
+    };
+    let source_frame = read_session_record_source_frame_from_provenance(provenance)?;
+    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
+    let materialized = materialize_anchor_artifact_from_source(
+        source_frame,
+        rect,
+        &artifact_dir,
+        step_id,
+        target.id,
+        *target.threshold,
+        flags,
+    )?;
+    *target.frame_provenance = Some(Box::new(materialized.frame_provenance));
+    *target.artifact = Some(Box::new(materialized.artifact));
+    *target.evaluation = materialized.evaluation;
+    Ok(())
+}
+
+fn read_session_record_source_frame_from_provenance(
+    provenance: &SessionRecordFrameProvenance,
+) -> CliOutcome<SessionRecordSourceFrame> {
+    let frame_path = PathBuf::from(&provenance.path);
+    let frame_png = fs::read(&frame_path).map_err(|err| {
+        CliError::usage(format!(
+            "failed to read record source frame {} for amend: {err}",
+            frame_path.display()
+        ))
+    })?;
+    let backend_name = match provenance.capture_backend.as_deref() {
+        Some("nemu_ipc") => CaptureBackendName::NemuIpc,
+        Some("droidcast_raw") => CaptureBackendName::DroidcastRaw,
+        _ => CaptureBackendName::AdbScreencap,
+    };
+    let frame = Frame::from_png(frame_png.clone(), backend_name).map_err(|err| {
+        CliError::usage(format!(
+            "failed to decode record source frame {} for amend: {err}",
+            frame_path.display()
+        ))
+    })?;
+    Ok(SessionRecordSourceFrame {
+        frame,
+        png: frame_png,
+        source: provenance.source.clone(),
+        path: frame_path,
+        recorded_at_unix_ms: provenance.recorded_at_unix_ms,
+        capture_backend: provenance.capture_backend.clone(),
+        freshness: provenance.freshness.clone(),
+        capture_attempts: provenance.capture_attempts.clone(),
+    })
+}
+
+fn amended_anchor_artifact_dir(
+    context: &SessionRecordAmendContext,
+    artifact: Option<&SessionRecordAnchorArtifact>,
+) -> PathBuf {
+    artifact
+        .and_then(|artifact| Path::new(&artifact.path).parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| {
+            context
+                .state_dir
+                .join("record-artifacts")
+                .join(safe_file_stem(&context.record_id))
+        })
 }
 
 fn amend_operation_record_step(
@@ -8184,6 +8300,7 @@ mod tests {
             png,
             source: "current_capture".to_string(),
             path: source_path.clone(),
+            recorded_at_unix_ms: current_unix_ms(),
             capture_backend: Some("nemu_ipc".to_string()),
             freshness: Some(json!({
                 "required": true,
@@ -9457,8 +9574,138 @@ mod tests {
         assert_eq!(
             data.pointer("/step/evaluation/reason")
                 .and_then(Value::as_str),
-            Some("amended_needs_backtest")
+            Some("amended_without_frame_provenance")
         );
+    }
+
+    #[test]
+    fn session_record_amend_rebacktests_frame_backed_anchor() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let artifact_dir = temp.path().join("artifacts");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--artifact-dir",
+                artifact_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "home-anchor",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--region",
+                "1,2,3,4",
+                "--threshold",
+                "0.90",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        assert_eq!(
+            amend.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&amend.envelope).unwrap()
+        );
+        let data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/reason")
+                .and_then(Value::as_str),
+            Some("self_backtest_passed")
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/x")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/backtest/y")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert!(
+            data.pointer("/step/evaluation/backtest/threshold")
+                .and_then(Value::as_f64)
+                .is_some_and(|threshold| (threshold - 0.90).abs() < 0.00001)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/width").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/height")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/frame_provenance/path")
+                .and_then(Value::as_str),
+            Some(frame_path.to_str().unwrap())
+        );
+        let artifact_path = data
+            .pointer("/step/artifact/path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .expect("artifact path");
+        assert!(artifact_path.is_file());
     }
 
     #[test]

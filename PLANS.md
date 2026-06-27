@@ -65,6 +65,43 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording anchor contrast validation: frame-backed anchor crops can now be checked against an explicit contrast frame so ambiguous anchors fail before draft bundle generation.
 - ActingLab session recording package handoff: generated draft bundles now satisfy the existing `package build-task` dry-run validation path, with early page-anchor and click-bound checks in `record build-task`.
 - ActingLab session recording current-frame inlet: authorized anchor steps can now use `--capture` / `--current-frame` to materialize a source frame through the existing CaptureBackend path, persist provenance/freshness metadata, and reuse the same crop/backtest path as local PNG frames.
+- ActingLab session recording amend re-backtest loop: frame-backed anchor amendments now immediately re-crop, re-materialize, and re-run self/contrast backtests from the recorded source frame instead of degrading to deferred evaluation.
+
+## Current ActingLab Session Recording Amend Re-Backtest Loop
+
+The current Runtime task advances Phase D by closing the correction loop required by the session-layer recording plan. When an authorized anchor step already has source-frame provenance, `session record amend` now recalculates the template artifact and evaluation immediately after supported anchor metadata changes.
+
+Scope:
+
+- Reuse existing source-frame provenance for frame-backed anchor amendments.
+- Preserve original source-frame capture/local provenance, freshness metadata, and recorded timestamp when re-reading the source frame.
+- Re-crop and rewrite the anchor artifact after changing region, id, color-check flag, or threshold.
+- Re-run the existing self-backtest and optional contrast-backtest path after amendment.
+- Keep no-frame anchors explicit: amendments remain deferred with reason `amended_without_frame_provenance`.
+- Keep operation amendment behavior unchanged.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not capture a new frame during amend.
+- This milestone does not write resource repositories, open MaaTouch, click, navigate, run OCR/OpenCV, touch SQLite, implement UI, or add game logic.
+- Missing or unreadable recorded source frames fail visibly during amend instead of silently keeping stale evaluation data.
+
+Validation status:
+
+- `cargo test -p actingcommand-actinglab session_record_amend -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `23` tests.
+- `cargo test -p actingcommand-actinglab` passed with `131` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after grouping anchor-amend mutable fields into `SessionRecordAnchorAmendTarget`.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned no matches for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, or retry.
+
+Known follow-ups:
+
+- Add live prepared-emulator validation for `--capture --require-fresh` recording when a safe target state is available.
+- Add resource-promotion/write flow after recording correction semantics are accepted.
+- Add `--region auto`, color-probe, or verify-template recording step kinds in later milestones.
 
 ## Current ActingLab Session Recording Current-Frame Inlet
 

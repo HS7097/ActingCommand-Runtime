@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording amend re-backtest loop
+
+### Current status
+
+- Advanced Phase D recording by making frame-backed `session record amend` immediately re-test anchor changes.
+- Anchor amendments now reuse existing `frame_provenance.path` instead of requiring a new capture.
+- When a frame-backed anchor is amended, Runtime re-reads the recorded source frame, re-crops the anchor artifact, rewrites the artifact PNG, and re-runs self/contrast backtests.
+- Existing source-frame provenance is preserved across amend, including source type, path, capture backend, freshness metadata, capture attempts, and original recorded timestamp.
+- No-frame anchors still remain explicit and deferred, now with reason `amended_without_frame_provenance`.
+- Missing or unreadable recorded source frames now fail visibly during amend instead of silently preserving stale evaluation.
+- Operation amend behavior is unchanged.
+- No device I/O, current capture, resource repository write, MaaTouch startup, click/navigation execution, OCR, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `b657ac7f2a57d32b29362c4607d7732c3fc80b25`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read repo-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` does not exist in this repository.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_amend -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- First `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Rerun `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only added-code prohibited-feature scan over `apps/actinglab/src/main.rs` for ADB shell input/screencap, MaaTouch startup, direct tap/swipe execution, SQLite, OCR/OpenCV, fallback, reconnect, and retry.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_record_amend -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `23` tests.
+- `cargo test -p actingcommand-actinglab` passed with `131` tests.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` failed because `amend_anchor_record_step` and `refresh_amended_anchor_artifact` had too many arguments.
+- Anchor-amend mutable fields are now grouped into `SessionRecordAnchorAmendTarget`.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Rerun `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only added-code prohibited-feature scan returned `NO_PROHIBITED_CODE_ADDED_LINES`.
+
+### Current blocker
+
+- No blocker for the amend re-backtest loop.
+- Full Phase D remains incomplete: live prepared-emulator validation, resource promotion/write flow, `--region auto`, additional recording resource kinds, UI/API wiring, and SQLite metadata remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add checkpoint tag `checkpoint/20260627-session-record-amend-rebacktest`.
+3. Continue Phase D with live prepared-emulator validation or resource-promotion flow after this amend loop is accepted.
+
 ## 2026-06-27 ActingLab session recording current-frame inlet
 
 ### Current status
