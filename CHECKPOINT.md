@@ -1,5 +1,86 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session daemon request channel
+
+### Current status
+
+- Implemented the first resident session daemon request lane.
+- The session daemon now polls a local file-IPC request queue under the session state directory.
+- Added request and response directories under the session state directory.
+- Added atomic request/response JSON writes so the daemon does not read half-written files.
+- Added `session request capture-diagnose`.
+- Added `capture diagnose --via-daemon`.
+- Only read-only `capture_diagnose` requests are accepted by the daemon in this phase.
+- Daemon request submission has a bounded `--request-timeout-ms`, default `10000`.
+- Daemon responses preserve success payloads or structured visible errors.
+- Daemon heartbeat now records `processed_request` after it processes one or more queued requests.
+- No tap, key, text, navigate, recover, app restart, game-task action, scheduler body, UI, SQLite, OCR, new capture backend, fallback, reconnect, or retry path was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `2d3db811f1f8dd074b813c02bc272e5560868071`.
+- `ActingCommand-Resources-Arknights`: `7509ed1da92504dc546e8ef46dd9a450243b52cc`.
+- `ActingCommand-Resources-AzurLane`: `17f5efb8460e7c5a7cdfbf3dd8e751719ec57d0c`.
+- `ActingCommand-Resources-BlueArchive`: `1bdea27c315e1d10e3e737679bcd67d83a482166`.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for Runtime.
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` for the three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request`
+- `cargo test -p actingcommand-actinglab capture_diagnose_via_daemon_without_daemon_is_runtime_error`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered`
+- Started a live-safe session daemon in `target\session-request-smoke`.
+- `cargo run -q -p actingcommand-actinglab -- --json --instance 127.0.0.1:16416 --capture-backend adb capture diagnose --via-daemon --state-dir target\session-request-smoke --fresh-delay-ms 200 --request-timeout-ms 15000`
+- Stopped the live-safe session daemon and checked session status.
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Diff prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR, OpenCV, fallback, reconnect, retry, and MaaTouch startup additions.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab session_request` passed.
+- `cargo test -p actingcommand-actinglab capture_diagnose_via_daemon_without_daemon_is_runtime_error` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
+- Live-safe daemon smoke passed:
+  - started session daemon pid `35564`;
+  - submitted AK `capture diagnose --via-daemon` for `127.0.0.1:16416`;
+  - daemon response returned `mode = daemon_request`, `daemon_command = capture_diagnose`, and inner `status = fresh`;
+  - first probe hash: `1f5cbe83ce47b5f1cfd523937a9755c528eb2791841161ce2291cdf1a52228ca`;
+  - second probe hash: `3da5b2c37f107543354f6a40219ffd5f7bcea10436ccbe80adf3239cc80eb7d3`;
+  - `click_allowed = false` and `action_executed = false`;
+  - daemon was stopped and final status reported `running = false`.
+- `cargo test -p actingcommand-actinglab` passed with `93` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- First `cargo clippy --workspace -- -D warnings` found one `needless_match`; after simplifying the result assignment, clippy passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches in the current diff.
+
+### Current blocker
+
+- No blocker for this first read-only daemon request lane.
+- Full Session Layer is still incomplete: the daemon currently accepts only `capture_diagnose`.
+- Scheduler-owned lease arbitration, input routing, recovery routing, API/event streaming, UI integration, recording, and broader command dispatch remain future work.
+
+### Next step
+
+1. Commit and push the session daemon request channel Runtime changes.
+2. Add a checkpoint tag after push if this is accepted as a stable rollback point.
+3. Continue by routing more read-only commands through the daemon, then add lease-gated maintenance recovery requests.
+
 ## 2026-06-27 ActingLab capture stale diagnostics
 
 ### Current status

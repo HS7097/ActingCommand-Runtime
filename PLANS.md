@@ -50,6 +50,50 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session layer Phase C startup-login resource loop: `session recover --startup-login` reads `STARTUP-LOGIN.md` and runs a bounded maintenance-only popup-close/continue loop toward the target page.
 - ActingLab session layer Phase C bounded monitor loop: `monitor` now runs bounded diagnosis iterations and can explicitly delegate non-healthy states to `session recover` when `--recover` is present.
 - ActingLab session layer Phase A/C capture stale diagnostics: `capture diagnose` and `session capture diagnose` run a structured fresh-frame probe, report stale/unavailable capture states, and recommend lighter capture-backend recovery before app restart.
+- ActingLab session daemon request channel: the resident daemon now processes a narrow file-IPC request queue for read-only `capture_diagnose` requests, allowing `capture diagnose --via-daemon` and `session request capture-diagnose` to execute through the running daemon.
+
+## Current ActingLab Session Daemon Request Channel
+
+The current Runtime task starts converting one-shot CLI execution into a resident Session Layer mechanism by adding a narrow local file-IPC request channel to the session daemon.
+
+Scope:
+
+- Add request and response directories under the session state directory.
+- The session daemon polls pending JSON requests and processes them serially.
+- Add `session request capture-diagnose`.
+- Add `capture diagnose --via-daemon`.
+- Only the read-only `capture_diagnose` request is accepted by the daemon in this phase.
+- Request files are published with an atomic write-and-rename path so the daemon does not read half-written JSON.
+- Response files preserve success data or visible structured errors.
+- Client-side request submission has a bounded `--request-timeout-ms`, default `10000`.
+- The daemon heartbeat records whether a request was processed.
+
+Safety direction:
+
+- The first daemon-routed command is capture diagnosis only.
+- No tap, key, text, navigate, recover, app restart, game-task action, scheduler body, UI, SQLite, OCR, or new capture backend was added.
+- Device input commands remain outside daemon request dispatch until lease and arbitration rules are stronger.
+- Daemon request failures propagate visibly instead of being treated as empty or successful responses.
+
+Validation status:
+
+- Runtime and the three resource repositories were fetched and confirmed aligned with `origin/main`.
+- `cargo test -p actingcommand-actinglab session_request` passed.
+- `cargo test -p actingcommand-actinglab capture_diagnose_via_daemon_without_daemon_is_runtime_error` passed.
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered` passed.
+- A live-safe smoke started the session daemon, submitted AK `capture diagnose --via-daemon` for `127.0.0.1:16416`, received a daemon response with `status = fresh`, and stopped the daemon.
+- `cargo test -p actingcommand-actinglab` passed.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Diff prohibited-feature scan returned no matches.
+
+Known follow-ups:
+
+- This is a first resident request lane, not the complete command routing layer.
+- The daemon still needs scheduler-owned lease arbitration before it can accept input or recovery requests.
+- Future work should route more read-only commands through the daemon, then add lease-gated maintenance recovery requests.
 
 ## Current ActingLab Capture Stale Diagnostics
 

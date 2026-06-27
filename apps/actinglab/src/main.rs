@@ -37,6 +37,8 @@ const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
 const SESSION_INFO_FILE: &str = "session.json";
 const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
+const SESSION_REQUESTS_DIR: &str = "requests";
+const SESSION_RESPONSES_DIR: &str = "responses";
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
@@ -150,7 +152,7 @@ impl Envelope {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct EnvelopeError {
     code: String,
     message: String,
@@ -299,6 +301,36 @@ struct SessionHeartbeat {
     pid: u32,
     updated_at_unix_ms: u128,
     state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionCommandRequest {
+    request_id: String,
+    command: String,
+    global: SessionCommandGlobal,
+    args: Vec<String>,
+    created_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionCommandGlobal {
+    instance: Option<String>,
+    game: Option<String>,
+    server: Option<String>,
+    resource_root: Option<String>,
+    capture_backend: Option<String>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionCommandResponse {
+    request_id: String,
+    command: String,
+    ok: bool,
+    data: Option<Value>,
+    error: Option<EnvelopeError>,
+    started_at_unix_ms: u128,
+    completed_at_unix_ms: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -792,6 +824,9 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    if flags.bool("--via-daemon") {
+        return submit_capture_diagnose_request(global, flags);
+    }
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
     let requested = global.capture_backend.unwrap_or_default();
@@ -808,6 +843,12 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
         "frame": report.frame.as_ref().map(capture_frame_summary_json),
         "recovery": capture_diagnosis_recovery_json(report.status, requested)
     }))
+}
+
+fn submit_capture_diagnose_request(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let mut args = vec!["diagnose".to_string()];
+    push_optional_flag_value(&mut args, flags, "--fresh-delay-ms");
+    submit_session_command_request(global, flags, "capture_diagnose", args)
 }
 
 struct CaptureCommandResult {
@@ -3216,6 +3257,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "daemon" => run_session_daemon(args),
+        "request" => run_session_request(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
@@ -3238,6 +3280,137 @@ fn run_session_status(args: &[String]) -> CliOutcome<Value> {
         "info": info,
         "heartbeat": heartbeat
     }))
+}
+
+fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let command = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session request requires capture-diagnose"))?;
+    let flags = FlagArgs::parse(&args[1..])?;
+    match command {
+        "capture-diagnose" => {
+            let mut request_args = vec!["diagnose".to_string()];
+            push_optional_flag_value(&mut request_args, &flags, "--fresh-delay-ms");
+            submit_session_command_request(global, &flags, "capture_diagnose", request_args)
+        }
+        other => Err(CliError::usage(format!(
+            "unknown session request command: {other}"
+        ))),
+    }
+}
+
+fn submit_session_command_request(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command: &str,
+    args: Vec<String>,
+) -> CliOutcome<Value> {
+    let state_dir = session_state_dir_from_flags(flags)?;
+    let info_path = session_info_path(&state_dir);
+    let info = read_json_file::<SessionInfo>(&info_path)?.ok_or_else(|| {
+        CliError::runtime_not_running(format!(
+            "session daemon is not running; missing {}",
+            info_path.display()
+        ))
+    })?;
+    let request_id = format!("{}-{}", current_unix_ms(), std::process::id());
+    let request = SessionCommandRequest {
+        request_id: request_id.clone(),
+        command: command.to_string(),
+        global: SessionCommandGlobal::from_global(global),
+        args,
+        created_at_unix_ms: current_unix_ms(),
+    };
+    let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
+    let response_path = session_responses_dir(&state_dir).join(format!("{request_id}.json"));
+    write_json_file_atomic(&request_path, &request)?;
+    let timeout = parse_optional_duration_ms(flags, "--request-timeout-ms", 10_000)?;
+    let started = Instant::now();
+    while started.elapsed() <= timeout {
+        if let Some(response) = read_json_file::<SessionCommandResponse>(&response_path)? {
+            let _ = fs::remove_file(&response_path);
+            if response.ok {
+                return Ok(json!({
+                    "status": "completed",
+                    "mode": "daemon_request",
+                    "state_dir": state_dir.display().to_string(),
+                    "daemon_pid": info.pid,
+                    "request_id": response.request_id,
+                    "daemon_command": response.command,
+                    "response": response.data
+                }));
+            }
+            let error = response.error.ok_or_else(|| {
+                CliError::runtime_not_running("daemon request failed without error details")
+            })?;
+            return Err(cli_error_from_envelope(error));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(CliError::runtime_not_running(format!(
+        "session daemon request {request_id} timed out after {} ms",
+        timeout.as_millis()
+    )))
+}
+
+impl SessionCommandGlobal {
+    fn from_global(global: &GlobalOptions) -> Self {
+        Self {
+            instance: global.instance.clone(),
+            game: global.game.clone(),
+            server: global.server.clone(),
+            resource_root: global
+                .resource_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            capture_backend: global
+                .capture_backend
+                .map(|backend| backend.as_str().to_string()),
+            dry_run: global.dry_run,
+        }
+    }
+
+    fn to_global(&self) -> CliOutcome<GlobalOptions> {
+        let capture_backend = self
+            .capture_backend
+            .as_deref()
+            .map(CaptureBackendChoice::parse)
+            .transpose()
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        Ok(GlobalOptions {
+            instance: self.instance.clone(),
+            game: self.game.clone(),
+            server: self.server.clone(),
+            resource_root: self.resource_root.as_ref().map(PathBuf::from),
+            capture_backend,
+            dry_run: self.dry_run,
+            json: true,
+            ..Default::default()
+        })
+    }
+}
+
+fn cli_error_from_envelope(error: EnvelopeError) -> CliError {
+    match error.code.as_str() {
+        "validation_failed" | "package_invalid" => CliError::usage(error.message),
+        "runtime_not_running" => CliError::runtime_not_running(error.message),
+        "instance_not_found" => CliError::instance(error.message),
+        "device_error" => CliError::device(error.message),
+        "not_implemented" => CliError::not_implemented("not_implemented", error.message),
+        code if code.starts_with("navigation_") || code.contains("blocked") => {
+            let blocked = error
+                .blocked_by
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            CliError::safety_blocked("daemon_request_blocked", error.message, &blocked)
+        }
+        _ => CliError::runtime_not_running(format!(
+            "daemon request failed with {}: {}",
+            error.code, error.message
+        )),
+    }
 }
 
 #[cfg(windows)]
@@ -3415,6 +3588,88 @@ fn run_session_stop(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
+fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
+    let requests_dir = session_requests_dir(state_dir);
+    if !requests_dir.exists() {
+        return Ok(0);
+    }
+    let mut paths = fs::read_dir(&requests_dir)
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to read session request dir {}: {err}",
+                requests_dir.display()
+            ))
+        })?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut processed = 0usize;
+    for path in paths {
+        let request = read_json_file::<SessionCommandRequest>(&path)?.ok_or_else(|| {
+            CliError::runtime_not_running(format!(
+                "session request disappeared before processing: {}",
+                path.display()
+            ))
+        })?;
+        let response = execute_session_command_request(request);
+        let response_path =
+            session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
+        write_json_file_atomic(&response_path, &response)?;
+        fs::remove_file(&path).map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to remove processed request {}: {err}",
+                path.display()
+            ))
+        })?;
+        processed += 1;
+    }
+    Ok(processed)
+}
+
+fn execute_session_command_request(request: SessionCommandRequest) -> SessionCommandResponse {
+    let started_at_unix_ms = current_unix_ms();
+    let result = execute_session_command_request_inner(&request);
+    let completed_at_unix_ms = current_unix_ms();
+    match result {
+        Ok(data) => SessionCommandResponse {
+            request_id: request.request_id,
+            command: request.command,
+            ok: true,
+            data: Some(data),
+            error: None,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+        },
+        Err(err) => SessionCommandResponse {
+            request_id: request.request_id,
+            command: request.command,
+            ok: false,
+            data: None,
+            error: Some(EnvelopeError {
+                code: err.code,
+                message: err.message,
+                blocked_by: err.blocked_by,
+            }),
+            started_at_unix_ms,
+            completed_at_unix_ms,
+        },
+    }
+}
+
+fn execute_session_command_request_inner(request: &SessionCommandRequest) -> CliOutcome<Value> {
+    match request.command.as_str() {
+        "capture_diagnose" => {
+            let global = request.global.to_global()?;
+            let flags = FlagArgs::parse(&request.args)?;
+            run_capture_diagnose(&global, &flags)
+        }
+        other => Err(CliError::usage(format!(
+            "unsupported daemon request command: {other}"
+        ))),
+    }
+}
+
 fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
@@ -3433,13 +3688,18 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
     write_json_file(&session_info_path(&state_dir), &info)?;
     let stop_path = session_stop_path(&state_dir);
     while !stop_path.exists() {
+        let processed = process_session_requests(&state_dir)?;
         let heartbeat = SessionHeartbeat {
             pid: std::process::id(),
             updated_at_unix_ms: current_unix_ms(),
-            state: "idle".to_string(),
+            state: if processed > 0 {
+                "processed_request".to_string()
+            } else {
+                "idle".to_string()
+            },
         };
         write_json_file(&session_heartbeat_path(&state_dir), &heartbeat)?;
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(100));
     }
     let _ = fs::remove_file(session_info_path(&state_dir));
     let _ = fs::remove_file(stop_path);
@@ -4072,6 +4332,14 @@ fn session_stop_path(state_dir: &Path) -> PathBuf {
     state_dir.join(SESSION_STOP_FILE)
 }
 
+fn session_requests_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_REQUESTS_DIR)
+}
+
+fn session_responses_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(SESSION_RESPONSES_DIR)
+}
+
 fn current_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4110,6 +4378,29 @@ where
         .map_err(|err| CliError::usage(format!("failed to serialize JSON: {err}")))?;
     fs::write(path, text)
         .map_err(|err| CliError::usage(format!("failed to write {}: {err}", path.display())))
+}
+
+fn write_json_file_atomic<T>(path: &Path, value: &T) -> CliOutcome<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            CliError::usage(format!("failed to create {}: {err}", parent.display()))
+        })?;
+    }
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|err| CliError::usage(format!("failed to serialize JSON: {err}")))?;
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&tmp, text)
+        .map_err(|err| CliError::usage(format!("failed to write {}: {err}", tmp.display())))?;
+    fs::rename(&tmp, path).map_err(|err| {
+        CliError::usage(format!(
+            "failed to publish {} from {}: {err}",
+            path.display(),
+            tmp.display()
+        ))
+    })
 }
 
 fn safe_file_stem(value: &str) -> String {
@@ -5042,6 +5333,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session status", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
+        command_cap(
+            "session request capture-diagnose",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session app", ["device"], "available"),
         command_cap("session capture", ["device"], "available"),
@@ -5278,6 +5574,50 @@ mod tests {
     }
 
     #[test]
+    fn session_request_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "capture-diagnose",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
+    fn capture_diagnose_via_daemon_without_daemon_is_runtime_error() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "capture",
+                "diagnose",
+                "--via-daemon",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+    }
+
+    #[test]
     fn session_instance_list_reads_config() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -5479,6 +5819,7 @@ mod tests {
             "session app",
             "session capture",
             "session capture diagnose",
+            "session request capture-diagnose",
             "session lease",
             "capture diagnose",
         ] {
