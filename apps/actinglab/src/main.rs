@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, Frame, HandshakeInfo,
-    InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat, combine_operation_and_close,
-    create_capture_backend, resolve_adb_path,
+    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
+    Frame, HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat,
+    combine_operation_and_close, create_capture_backend, resolve_adb_path,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Scene, ScenePixelFormat};
@@ -408,6 +408,10 @@ enum SessionRecordStepData {
         color_check: bool,
         #[serde(default)]
         threshold: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_provenance: Option<Box<SessionRecordFrameProvenance>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<Box<SessionRecordAnchorArtifact>>,
         evaluation: SessionRecordStepEvaluation,
     },
     Operation {
@@ -445,6 +449,31 @@ enum SessionRecordClick {
 struct SessionRecordStepEvaluation {
     status: String,
     reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordFrameProvenance {
+    source: String,
+    path: String,
+    sha256: String,
+    width: u32,
+    height: u32,
+    recorded_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordAnchorArtifact {
+    kind: String,
+    path: String,
+    sha256: String,
+    width: u32,
+    height: u32,
+    region: SessionRecordRect,
+}
+
+struct MaterializedAnchorArtifact {
+    frame_provenance: SessionRecordFrameProvenance,
+    artifact: SessionRecordAnchorArtifact,
 }
 
 #[derive(Debug, Clone)]
@@ -4461,7 +4490,7 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                     &["session_record"],
                 ));
             }
-            let step = new_session_record_step(&record, &flags)?;
+            let step = new_session_record_step(&record, &state_dir, &flags)?;
             record.steps.push(step.clone());
             record.updated_at_unix_ms = current_unix_ms();
             write_json_file_atomic(&record_path, &record)?;
@@ -4522,6 +4551,7 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
 
 fn new_session_record_step(
     record: &SessionRecordContext,
+    state_dir: &Path,
     flags: &FlagArgs,
 ) -> CliOutcome<SessionRecordStep> {
     let kind = flags.required("--kind")?;
@@ -4540,7 +4570,7 @@ fn new_session_record_step(
         ));
     }
     let data = match kind.as_str() {
-        "anchor" => new_session_record_anchor_step(flags)?,
+        "anchor" => new_session_record_anchor_step(record, state_dir, &step_id, flags)?,
         "operation" => new_session_record_operation_step(flags)?,
         other => {
             return Err(CliError::usage(format!(
@@ -4557,17 +4587,28 @@ fn new_session_record_step(
     })
 }
 
-fn new_session_record_anchor_step(flags: &FlagArgs) -> CliOutcome<SessionRecordStepData> {
+fn new_session_record_anchor_step(
+    record: &SessionRecordContext,
+    state_dir: &Path,
+    step_id: &str,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordStepData> {
     let id = required_non_empty_flag(flags, "--id")?;
     let region = parse_session_record_region(&flags.required("--region")?)?;
+    let materialized =
+        materialize_anchor_artifact(record, state_dir, step_id, &id, &region, flags)?;
     Ok(SessionRecordStepData::Anchor {
         id,
         region,
         color_check: flags.bool("--color-check"),
         threshold: parse_optional_unit_f64(flags, "--threshold")?,
+        frame_provenance: materialized
+            .as_ref()
+            .map(|materialized| Box::new(materialized.frame_provenance.clone())),
+        artifact: materialized.map(|materialized| Box::new(materialized.artifact)),
         evaluation: SessionRecordStepEvaluation {
             status: "deferred".to_string(),
-            reason: "capture_and_backtest_not_implemented".to_string(),
+            reason: "backtest_not_implemented".to_string(),
         },
     })
 }
@@ -4581,6 +4622,145 @@ fn new_session_record_operation_step(flags: &FlagArgs) -> CliOutcome<SessionReco
         click: parse_session_record_click(&flags.required("--click")?)?,
         destructive: flags.bool("--destructive"),
     })
+}
+
+fn materialize_anchor_artifact(
+    record: &SessionRecordContext,
+    state_dir: &Path,
+    step_id: &str,
+    anchor_id: &str,
+    region: &SessionRecordRegion,
+    flags: &FlagArgs,
+) -> CliOutcome<Option<MaterializedAnchorArtifact>> {
+    let Some(frame_path) = flags
+        .optional_path("--frame")
+        .or_else(|| flags.optional_path("--source-frame"))
+    else {
+        return Ok(None);
+    };
+    let SessionRecordRegion::Rect { rect } = region else {
+        return Err(CliError::usage(
+            "record anchor frame materialization requires a rect region; auto region candidate selection is not implemented",
+        ));
+    };
+    let frame_png = fs::read(&frame_path).map_err(|err| {
+        CliError::usage(format!(
+            "failed to read record source frame {}: {err}",
+            frame_path.display()
+        ))
+    })?;
+    let source_hash = hex_sha256(&frame_png);
+    let frame = Frame::from_png(frame_png, CaptureBackendName::AdbScreencap)
+        .map_err(|err| CliError::usage(format!("failed to decode record source frame: {err}")))?;
+    let crop = crop_frame_rect(&frame, rect)?;
+    let crop_png = crop
+        .png_for_artifact()
+        .map_err(|err| CliError::usage(format!("failed to encode record anchor crop: {err}")))?;
+    let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
+        state_dir
+            .join("record-artifacts")
+            .join(safe_file_stem(&record.record_id))
+    });
+    fs::create_dir_all(&artifact_dir).map_err(|err| {
+        CliError::usage(format!(
+            "failed to create record artifact dir {}: {err}",
+            artifact_dir.display()
+        ))
+    })?;
+    let artifact_path = artifact_dir.join(format!(
+        "anchor-{}-{}.png",
+        safe_file_stem(step_id),
+        safe_file_stem(anchor_id)
+    ));
+    fs::write(&artifact_path, &crop_png).map_err(|err| {
+        CliError::usage(format!(
+            "failed to write record anchor artifact {}: {err}",
+            artifact_path.display()
+        ))
+    })?;
+    Ok(Some(MaterializedAnchorArtifact {
+        frame_provenance: SessionRecordFrameProvenance {
+            source: "local_png".to_string(),
+            path: frame_path.display().to_string(),
+            sha256: source_hash,
+            width: frame.width,
+            height: frame.height,
+            recorded_at_unix_ms: current_unix_ms(),
+        },
+        artifact: SessionRecordAnchorArtifact {
+            kind: "template_crop".to_string(),
+            path: artifact_path.display().to_string(),
+            sha256: hex_sha256(&crop_png),
+            width: crop.width,
+            height: crop.height,
+            region: rect.clone(),
+        },
+    }))
+}
+
+fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame> {
+    if rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(
+            "record anchor crop rect must have non-negative origin and positive size",
+        ));
+    }
+    let x = u32::try_from(rect.x).map_err(|_| CliError::usage("record anchor rect x overflow"))?;
+    let y = u32::try_from(rect.y).map_err(|_| CliError::usage("record anchor rect y overflow"))?;
+    let width = u32::try_from(rect.width)
+        .map_err(|_| CliError::usage("record anchor rect width overflow"))?;
+    let height = u32::try_from(rect.height)
+        .map_err(|_| CliError::usage("record anchor rect height overflow"))?;
+    let right = x
+        .checked_add(width)
+        .ok_or_else(|| CliError::usage("record anchor crop rect x+width overflow"))?;
+    let bottom = y
+        .checked_add(height)
+        .ok_or_else(|| CliError::usage("record anchor crop rect y+height overflow"))?;
+    if right > frame.width || bottom > frame.height {
+        return Err(CliError::usage(format!(
+            "record anchor crop rect {}x{} at {},{} exceeds frame {}x{}",
+            width, height, x, y, frame.width, frame.height
+        )));
+    }
+    let stride = match frame.pixel_format {
+        PixelFormat::Rgb8 => 3usize,
+        PixelFormat::Rgba8 => 4usize,
+    };
+    let frame_width = usize::try_from(frame.width)
+        .map_err(|_| CliError::usage("record source frame width exceeds usize"))?;
+    let x = usize::try_from(x).map_err(|_| CliError::usage("record anchor x exceeds usize"))?;
+    let y = usize::try_from(y).map_err(|_| CliError::usage("record anchor y exceeds usize"))?;
+    let width =
+        usize::try_from(width).map_err(|_| CliError::usage("record anchor width exceeds usize"))?;
+    let height = usize::try_from(height)
+        .map_err(|_| CliError::usage("record anchor height exceeds usize"))?;
+    let row_bytes = width
+        .checked_mul(stride)
+        .ok_or_else(|| CliError::usage("record anchor row byte length overflow"))?;
+    let mut pixels = Vec::with_capacity(
+        row_bytes
+            .checked_mul(height)
+            .ok_or_else(|| CliError::usage("record anchor crop byte length overflow"))?,
+    );
+    for row in 0..height {
+        let offset = ((y + row)
+            .checked_mul(frame_width)
+            .and_then(|value| value.checked_add(x))
+            .and_then(|value| value.checked_mul(stride)))
+        .ok_or_else(|| CliError::usage("record anchor crop offset overflow"))?;
+        let end = offset
+            .checked_add(row_bytes)
+            .ok_or_else(|| CliError::usage("record anchor crop row end overflow"))?;
+        pixels.extend_from_slice(&frame.pixels[offset..end]);
+    }
+    Frame::from_pixels(
+        u32::try_from(width).map_err(|_| CliError::usage("record anchor width exceeds u32"))?,
+        u32::try_from(height).map_err(|_| CliError::usage("record anchor height exceeds u32"))?,
+        pixels,
+        frame.pixel_format,
+        frame.backend_name,
+    )
+    .map_err(|err| CliError::usage(format!("failed to build record anchor crop frame: {err}")))
 }
 
 fn required_non_empty_flag(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
@@ -4674,6 +4854,7 @@ fn amend_session_record_step(step: &mut SessionRecordStep, flags: &FlagArgs) -> 
             color_check,
             threshold,
             evaluation,
+            ..
         } => amend_anchor_record_step(id, region, color_check, threshold, evaluation, flags)?,
         SessionRecordStepData::Operation {
             from,
@@ -6432,6 +6613,25 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn test_record_frame_png(width: u32, height: u32) -> Vec<u8> {
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[x as u8, y as u8, 128, 255]);
+            }
+        }
+        Frame::from_pixels(
+            width,
+            height,
+            pixels,
+            PixelFormat::Rgba8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("test frame")
+        .png_for_artifact()
+        .expect("test frame png")
+    }
+
     #[test]
     fn version_outputs_json_envelope() {
         let result = run_cli(["--json", "--version"], true);
@@ -7039,6 +7239,240 @@ mod tests {
             data.pointer("/record/steps/0/step_id")
                 .and_then(Value::as_str),
             Some("home-anchor")
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_materializes_frame_crop() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let artifact_dir = temp.path().join("artifacts");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--artifact-dir",
+                artifact_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/frame_provenance/source")
+                .and_then(Value::as_str),
+            Some("local_png")
+        );
+        assert_eq!(
+            data.pointer("/step/frame_provenance/width")
+                .and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/kind").and_then(Value::as_str),
+            Some("template_crop")
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/width").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/step/artifact/height")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        let artifact_path = data
+            .pointer("/step/artifact/path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .expect("artifact path");
+        assert!(artifact_path.exists());
+        let artifact_png = fs::read(&artifact_path).unwrap();
+        let artifact_frame = Frame::from_png(artifact_png, CaptureBackendName::AdbScreencap)
+            .expect("artifact frame");
+        assert_eq!(artifact_frame.width, 4);
+        assert_eq!(artifact_frame.height, 5);
+        assert_eq!(
+            data.pointer("/record/steps/0/artifact/path")
+                .and_then(Value::as_str),
+            Some(artifact_path.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_frame_requires_rect_region() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 2);
+        assert_eq!(
+            step.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            step.envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("rect region")
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_rejects_out_of_bounds_frame_crop() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "10,8,4,4",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 2);
+        assert_eq!(
+            step.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            step.envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("exceeds frame")
         );
     }
 

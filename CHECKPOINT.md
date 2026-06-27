@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-06-27 ActingLab session recording anchor frame materialization
+
+### Current status
+
+- Added optional local PNG frame materialization for `session record step --kind anchor`.
+- `--frame <png>` and `--source-frame <png>` attach frame provenance to the authorized anchor step.
+- `--artifact-dir <dir>` can override the default draft artifact directory.
+- Frame-backed anchors require a rect region; `--region auto` with a frame fails visibly because automatic candidate selection is not implemented.
+- Rect crops are bounds-checked, encoded as draft PNG artifacts, and recorded with path, hash, dimensions, and source region.
+- Metadata-only anchor steps still work when no frame is supplied.
+- `session record build-task` remains explicit `record_authoring_not_implemented`.
+- No device I/O, MaaTouch startup, live screenshot capture, resource write, task bundle generation, OCR, recognition change, SQLite, UI, or game logic was added.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `d1e2daa908916fc6f093669296819424c4df99da`.
+- Resource repositories were not read or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Continued from the already-read cooperation workspace task document `TASK-Lab-session-layer.md`.
+- Continued from the already-read cooperation workspace finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- `git status --short --branch`
+- `git log -3 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all`
+- Rerun `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture`
+- Rerun `cargo clippy --workspace -- -D warnings`
+- Rerun `cargo fmt --all -- --check`
+- Rerun `git diff --check`
+- Rerun `cargo test -p actingcommand-actinglab session_record -- --nocapture`
+- Rerun `cargo test --workspace`
+- Added-code prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, MaaTouch startup, SQLite, OCR/OpenCV, fallback, reconnect, retry, and live capture routing.
+
+### Test results
+
+- First targeted test run failed at compile time because `amend_session_record_step` still matched the old anchor fields; the match was fixed with `..`.
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `14` tests.
+- `cargo test -p actingcommand-actinglab` passed with `122` tests.
+- `cargo test --workspace` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- The first `cargo clippy --workspace -- -D warnings` found a large enum variant after adding anchor artifact metadata; optional `frame_provenance` and `artifact` fields were boxed without changing the JSON shape.
+- Rerun `cargo clippy --workspace -- -D warnings` passed.
+- A broad prohibited-feature scan over docs and code matched only documentation statements saying SQLite/OCR were not added.
+- Source-only added-code prohibited-feature scan returned no matches.
+
+### Current blocker
+
+- No blocker for the local frame materialization implementation.
+- Full recording remains incomplete: live frame capture/current-frame integration, anchor backtest, build-task/package output, and resource writes are still future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag if this is accepted as a stable recording-anchor-frame rollback point.
+3. Next implementation milestone should add capture/current-frame integration or anchor backtest semantics before resource writes.
+
 ## 2026-06-27 ActingLab session recording amend schema
 
 ### Current status

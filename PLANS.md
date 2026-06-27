@@ -59,6 +59,46 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording context skeleton: `session record start|status|stop` can create and inspect a local JSON recording context with `auto_recording=false`, while step authoring and task bundle generation remain explicitly reserved.
 - ActingLab session recording step schema: `session record step --kind anchor|operation` now appends explicit authorized step metadata to an active recording context without capturing frames or writing resources.
 - ActingLab session recording amend schema: `session record amend` can update existing authorized anchor/operation step metadata without capturing frames, backtesting, or writing resources.
+- ActingLab session recording anchor frame materialization: authorized anchor steps can optionally attach a local PNG source frame, crop a rect-only template draft artifact, and record frame/artifact hashes without device I/O or resource writes.
+
+## Current ActingLab Session Recording Anchor Frame Materialization
+
+The current Runtime task advances Phase D by adding optional local frame provenance and rect crop materialization to authorized anchor steps. This remains an offline recording-authoring aid: it can consume a user-supplied PNG frame and write a draft crop artifact under the session state tree or an explicit artifact directory, but it does not capture from a device, backtest recognition, or write resource repositories.
+
+Scope:
+
+- Add optional `--frame <png>` and alias `--source-frame <png>` to `session record step --kind anchor`.
+- Add optional `--artifact-dir <dir>` for local draft artifact output.
+- When a frame is supplied, require `--region x,y,width,height`.
+- Reject `--region auto` with a supplied frame because automatic anchor candidate selection is not implemented.
+- Decode the local PNG into an in-memory frame, crop the requested rect, encode the crop as a PNG draft artifact, and record hashes and dimensions.
+- Store `frame_provenance` and `artifact` metadata on the anchor step and persisted record context.
+- Preserve the metadata-only anchor path when no frame is supplied.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not live-capture frames, run recognition, backtest anchors, write resource packs, generate task bundles, touch SQLite, implement UI, or add game logic.
+- Local frame decode, crop bounds, artifact directory creation, and artifact writes fail visibly instead of silently recording incomplete metadata.
+- `session record build-task` remains explicitly not implemented.
+
+Validation status:
+
+- Runtime was already aligned with `origin/main` before this task.
+- `cargo test -p actingcommand-actinglab session_record_step_anchor -- --nocapture` passed with `4` tests.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `14` tests.
+- `cargo test -p actingcommand-actinglab` passed with `122` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed after boxing optional anchor artifact metadata to keep enum variants compact.
+- `git diff --check` passed.
+- Added-code prohibited-feature scan over source changes returned no matches for device input fallback, `adb shell screencap`, MaaTouch startup, SQLite, OCR/OpenCV, fallback, reconnect, retry, or live capture routing.
+
+Known follow-ups:
+
+- Add capture/current-frame integration only after the session daemon and stale-frame policy are wired into the recording path.
+- Define anchor backtest semantics before promoting draft artifacts into resource repositories.
+- Implement `session record build-task` and resource-write integration in a later milestone.
 
 ## Current ActingLab Session Recording Amend Schema
 
