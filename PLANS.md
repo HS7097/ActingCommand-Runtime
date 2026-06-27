@@ -57,6 +57,49 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon lease-gated control request routing: `tap`, `swipe`, `long-tap`, `key`, `text`, `tap-target`, `navigate`, and `session recover` can now be submitted to the resident daemon only with matching session lease metadata.
 - ActingLab daemon monitor recovery routing: bounded `monitor --via-daemon --recover` and `session request monitor --recover` can now run through the resident daemon only after a matching session lease is validated.
 - ActingLab session recording context skeleton: `session record start|status|stop` can create and inspect a local JSON recording context with `auto_recording=false`, while step authoring and task bundle generation remain explicitly reserved.
+- ActingLab session recording step schema: `session record step --kind anchor|operation` now appends explicit authorized step metadata to an active recording context without capturing frames or writing resources.
+
+## Current ActingLab Session Recording Step Schema
+
+The current Runtime task advances Phase D by adding explicit recording-step authorization inside an active recording context. It records the operator's intent for anchor and operation steps, but keeps frame capture, backtesting, resource writes, amend, and build-task output for later milestones.
+
+Scope:
+
+- Add `session record step --kind anchor`.
+- Anchor steps require `--id <page>` and `--region <auto|x,y,width,height>`.
+- Anchor steps may include `--color-check` and `--threshold <0..1>`.
+- Anchor step evaluation is recorded as `deferred` with reason `capture_and_backtest_not_implemented`.
+- Add `session record step --kind operation`.
+- Operation steps require `--from <page>`, `--to <page|null>`, and `--click <x,y|target>`.
+- Operation steps may include `--destructive`.
+- Add optional `--step-id`; otherwise ids are generated as `step-0001`, `step-0002`, and so on.
+- Reject duplicate step ids and missing/inactive recording contexts visibly.
+- Keep `session record amend` and `session record build-task` explicit `not_implemented` responses.
+- Advertise `session record step` as an offline available capability.
+
+Safety direction:
+
+- This milestone performs no device I/O and does not open MaaTouch.
+- This milestone does not capture frames, crop templates, run recognition, backtest anchors, write resource packs, generate task bundles, touch SQLite, implement UI, or add game logic.
+- `session record step` only appends explicit operator-authorized metadata to the local recording context.
+- The top-level `record` capability remains reserved because full frame-stream recording is not implemented.
+
+Validation status:
+
+- Runtime was fetched and confirmed aligned with `origin/main` before the task.
+- `cargo test -p actingcommand-actinglab session_record -- --nocapture` passed with `8` tests.
+- `cargo test -p actingcommand-actinglab` passed with `116` tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Added-code prohibited-feature scan returned no matches for device input fallback, screenshot/capture backend additions, SQLite, OCR/OpenCV, reconnect, retry, or MaaTouch startup.
+
+Known follow-ups:
+
+- Implement `session record amend` once patch/update semantics for steps are defined.
+- Implement anchor capture, crop, and backtest only after the frame provenance model is finalized.
+- Implement `session record build-task` and resource-write integration in a later milestone.
 
 ## Current ActingLab Session Recording Context Skeleton
 

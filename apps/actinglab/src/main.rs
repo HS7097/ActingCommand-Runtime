@@ -386,7 +386,64 @@ struct SessionRecordContext {
     started_at_unix_ms: u128,
     updated_at_unix_ms: u128,
     #[serde(default)]
-    steps: Vec<Value>,
+    steps: Vec<SessionRecordStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordStep {
+    schema_version: String,
+    step_id: String,
+    created_at_unix_ms: u128,
+    #[serde(flatten)]
+    data: SessionRecordStepData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SessionRecordStepData {
+    Anchor {
+        id: String,
+        region: SessionRecordRegion,
+        color_check: bool,
+        #[serde(default)]
+        threshold: Option<f64>,
+        evaluation: SessionRecordStepEvaluation,
+    },
+    Operation {
+        from: String,
+        #[serde(default)]
+        to: Option<String>,
+        click: SessionRecordClick,
+        destructive: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum SessionRecordRegion {
+    Auto,
+    Rect { rect: SessionRecordRect },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SessionRecordClick {
+    Coord { x: i32, y: i32 },
+    Target { target: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecordStepEvaluation {
+    status: String,
+    reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -4312,12 +4369,12 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
     let action = args
         .first()
         .map(String::as_str)
-        .ok_or_else(|| CliError::usage("session record requires start|status|stop"))?;
+        .ok_or_else(|| CliError::usage("session record requires start|status|stop|step"))?;
     let flags = FlagArgs::parse(&args[1..])?;
-    if matches!(action, "step" | "amend" | "build-task") {
+    if matches!(action, "amend" | "build-task") {
         return Err(CliError::not_implemented(
             "record_authoring_not_implemented",
-            "session record step/amend/build-task are reserved for the next recording authoring milestone",
+            "session record amend/build-task are reserved for the next recording authoring milestone",
         ));
     }
     let config = read_user_config()?;
@@ -4382,10 +4439,173 @@ fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
                 "path": record_path.display().to_string()
             }))
         }
+        "step" => {
+            let Some(mut record) = read_json_file::<SessionRecordContext>(&record_path)? else {
+                return Err(CliError::safety_blocked(
+                    "record_session_not_active",
+                    format!(
+                        "no recording session exists for {}; run session record start first",
+                        instance_id
+                    ),
+                    &["session_record"],
+                ));
+            };
+            if record.status != "active" {
+                return Err(CliError::safety_blocked(
+                    "record_session_not_active",
+                    format!(
+                        "recording session for {} is {}, not active",
+                        instance_id, record.status
+                    ),
+                    &["session_record"],
+                ));
+            }
+            let step = new_session_record_step(&record, &flags)?;
+            record.steps.push(step.clone());
+            record.updated_at_unix_ms = current_unix_ms();
+            write_json_file_atomic(&record_path, &record)?;
+            Ok(json!({
+                "status": "step_recorded",
+                "step": step,
+                "record": record,
+                "path": record_path.display().to_string(),
+                "step_count": record.steps.len()
+            }))
+        }
         other => Err(CliError::usage(format!(
             "unknown session record action: {other}"
         ))),
     }
+}
+
+fn new_session_record_step(
+    record: &SessionRecordContext,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRecordStep> {
+    let kind = flags.required("--kind")?;
+    let step_id = flags
+        .optional("--step-id")
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| format!("step-{:04}", record.steps.len() + 1));
+    if step_id.trim().is_empty() {
+        return Err(CliError::usage("--step-id must not be empty"));
+    }
+    if record.steps.iter().any(|step| step.step_id == step_id) {
+        return Err(CliError::safety_blocked(
+            "record_step_id_conflict",
+            format!("recording step id already exists: {step_id}"),
+            &["session_record"],
+        ));
+    }
+    let data = match kind.as_str() {
+        "anchor" => new_session_record_anchor_step(flags)?,
+        "operation" => new_session_record_operation_step(flags)?,
+        other => {
+            return Err(CliError::usage(format!(
+                "unsupported record step kind: {other}"
+            )));
+        }
+    };
+    Ok(SessionRecordStep {
+        schema_version: "session-record-step-v0".to_string(),
+        step_id,
+        created_at_unix_ms: current_unix_ms(),
+        data,
+    })
+}
+
+fn new_session_record_anchor_step(flags: &FlagArgs) -> CliOutcome<SessionRecordStepData> {
+    let id = required_non_empty_flag(flags, "--id")?;
+    let region = parse_session_record_region(&flags.required("--region")?)?;
+    Ok(SessionRecordStepData::Anchor {
+        id,
+        region,
+        color_check: flags.bool("--color-check"),
+        threshold: parse_optional_unit_f64(flags, "--threshold")?,
+        evaluation: SessionRecordStepEvaluation {
+            status: "deferred".to_string(),
+            reason: "capture_and_backtest_not_implemented".to_string(),
+        },
+    })
+}
+
+fn new_session_record_operation_step(flags: &FlagArgs) -> CliOutcome<SessionRecordStepData> {
+    let from = required_non_empty_flag(flags, "--from")?;
+    let to = required_non_empty_flag(flags, "--to")?;
+    Ok(SessionRecordStepData::Operation {
+        from,
+        to: if to == "null" { None } else { Some(to) },
+        click: parse_session_record_click(&flags.required("--click")?)?,
+        destructive: flags.bool("--destructive"),
+    })
+}
+
+fn required_non_empty_flag(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
+    let value = flags.required(name)?;
+    if value.trim().is_empty() {
+        return Err(CliError::usage(format!("{name} must not be empty")));
+    }
+    Ok(value)
+}
+
+fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {
+    if value == "auto" {
+        return Ok(SessionRecordRegion::Auto);
+    }
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return Err(CliError::usage(format!(
+            "record anchor region must be auto or x,y,width,height: {value}"
+        )));
+    }
+    let parse_part = |index: usize, name: &str| {
+        parts[index].parse::<i32>().map_err(|err| {
+            CliError::usage(format!(
+                "failed to parse record anchor region {name} '{}': {err}",
+                parts[index]
+            ))
+        })
+    };
+    let rect = SessionRecordRect {
+        x: parse_part(0, "x")?,
+        y: parse_part(1, "y")?,
+        width: parse_part(2, "width")?,
+        height: parse_part(3, "height")?,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(
+            "record anchor region width and height must be positive",
+        ));
+    }
+    Ok(SessionRecordRegion::Rect { rect })
+}
+
+fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
+    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(CliError::usage(format!(
+            "{name} must be a finite number between 0 and 1"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_session_record_click(value: &str) -> CliOutcome<SessionRecordClick> {
+    if value.trim().is_empty() {
+        return Err(CliError::usage("--click must not be empty"));
+    }
+    if value.contains(',') {
+        let (x, y) = parse_point_pair(value)?;
+        return Ok(SessionRecordClick::Coord { x, y });
+    }
+    Ok(SessionRecordClick::Target {
+        target: value.to_string(),
+    })
 }
 
 fn session_record_path(state_dir: &Path, instance_id: &str) -> PathBuf {
@@ -5946,6 +6166,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session recover", ["device"], "available"),
         command_cap("session lease", ["offline"], "available"),
         command_cap("session record", ["offline"], "available"),
+        command_cap("session record step", ["offline"], "available"),
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
@@ -6541,11 +6762,9 @@ mod tests {
                 "ak",
                 "session",
                 "record",
-                "step",
+                "amend",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
-                "--task-id",
-                "daily-check",
             ],
             true,
         );
@@ -6554,6 +6773,305 @@ mod tests {
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
             "record_authoring_not_implemented"
+        );
+    }
+
+    #[test]
+    fn session_record_step_anchor_records_region_schema() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "10,20,30,40",
+                "--color-check",
+                "--threshold",
+                "0.96",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("step_recorded")
+        );
+        assert_eq!(data.get("step_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/step/step_id").and_then(Value::as_str),
+            Some("home-anchor")
+        );
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("anchor")
+        );
+        assert_eq!(
+            data.pointer("/step/id").and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            data.pointer("/step/region/mode").and_then(Value::as_str),
+            Some("rect")
+        );
+        assert_eq!(
+            data.pointer("/step/region/rect/x").and_then(Value::as_i64),
+            Some(10)
+        );
+        assert_eq!(
+            data.pointer("/step/color_check").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/step/threshold").and_then(Value::as_f64),
+            Some(0.96)
+        );
+        assert_eq!(
+            data.pointer("/step/evaluation/status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/record/steps/0/step_id")
+                .and_then(Value::as_str),
+            Some("home-anchor")
+        );
+    }
+
+    #[test]
+    fn session_record_step_operation_records_coord_click() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "100,200",
+                "--destructive",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 0);
+        let data = step.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/step/kind").and_then(Value::as_str),
+            Some("operation")
+        );
+        assert_eq!(
+            data.pointer("/step/from").and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            data.pointer("/step/to").and_then(Value::as_str),
+            Some("page/mail")
+        );
+        assert_eq!(
+            data.pointer("/step/click/type").and_then(Value::as_str),
+            Some("coord")
+        );
+        assert_eq!(
+            data.pointer("/step/click/x").and_then(Value::as_i64),
+            Some(100)
+        );
+        assert_eq!(
+            data.pointer("/step/destructive").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_record_step_requires_active_record() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "record_session_not_active"
+        );
+    }
+
+    #[test]
+    fn session_record_step_rejects_duplicate_step_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let first = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "auto",
+            ],
+            true,
+        );
+        let duplicate = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-anchor",
+                "--from",
+                "page/home",
+                "--to",
+                "null",
+                "--click",
+                "mail_button",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(first.exit_code(), 0);
+        assert_eq!(duplicate.exit_code(), 3);
+        assert_eq!(
+            duplicate.envelope.error.as_ref().unwrap().code,
+            "record_step_id_conflict"
         );
     }
 
