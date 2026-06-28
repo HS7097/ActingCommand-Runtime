@@ -2643,6 +2643,8 @@ fn session_api_contract() -> Value {
                 "transport_ready_field": "transport.safe_to_connect",
                 "policy_summary_field": "policy_summary",
                 "policy_summary_schema_version": "session.readiness_policy_summary.v0.1",
+                "diagnostics_summary_field": "diagnostics_summary",
+                "diagnostics_summary_schema_version": "session.readiness_diagnostics_summary.v0.1",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
             },
@@ -7274,6 +7276,7 @@ fn session_readiness_payload(
             "does_not_start_listener": true,
             "requires_separate_instance_and_lease_check": true
         },
+        "diagnostics_summary": session_readiness_diagnostics_summary(&status_view),
         "policy_summary": session_readiness_policy_summary(),
         "recommended_action_kinds": action_kinds,
         "recommended_actions": recommended_actions,
@@ -7777,6 +7780,128 @@ fn session_readiness_policy_summary() -> Value {
             "status": "deferred",
             "deferred_code": "requires-live-device",
             "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    })
+}
+
+fn session_readiness_diagnostics_summary(status_view: &Value) -> Value {
+    json!({
+        "schema_version": "session.readiness_diagnostics_summary.v0.1",
+        "source": "session status --diagnostics",
+        "liveness_status": status_view
+            .pointer("/diagnostics/liveness/status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "can_accept_requests": status_view
+            .pointer("/diagnostics/liveness/can_accept_requests")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "queue_health_status": status_view
+            .pointer("/diagnostics/queues/health/status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "capture_freshness": {
+            "schema_version": status_view
+                .pointer("/diagnostics/capture_freshness/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "stale_capture_status": status_view
+                .pointer("/diagnostics/capture_freshness/stale_classification/stale_capture_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "must_not_classify_as_game_freeze_from_adb_screencap_alone": status_view
+                .pointer("/diagnostics/capture_freshness/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "preferred_backend_order": status_view
+                .pointer("/diagnostics/capture_freshness/preferred_backend_order")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "live_validation_deferred_code": status_view
+                .pointer("/diagnostics/capture_freshness/live_validation/deferred_code")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "self_heal": {
+            "schema_version": status_view
+                .pointer("/diagnostics/self_heal/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "default_recovery_kind": status_view
+                .pointer("/diagnostics/self_heal/default_plan/recovery_kind")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "ready_to_execute_maintenance": status_view
+                .pointer("/diagnostics/self_heal/default_plan/ready_to_execute_maintenance")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "game_progress_actions_allowed": status_view
+                .pointer("/diagnostics/self_heal/maintenance_boundary/game_progress_actions_allowed")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "live_validation_deferred_code": status_view
+                .pointer("/diagnostics/self_heal/live_validation/deferred_code")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "interaction_flow": {
+            "schema_version": status_view
+                .pointer("/diagnostics/interaction_flow/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "bounded_local_cli_status": status_view
+                .pointer("/diagnostics/interaction_flow/bounded_local_cli/status")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "trusted_remote_status": status_view
+                .pointer("/diagnostics/interaction_flow/trusted_remote_long_lived/status")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "input_relay_requires_matching_lease": status_view
+                .pointer("/diagnostics/interaction_flow/input_relay/requires_matching_lease")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "trusted_channel": {
+            "schema_version": status_view
+                .pointer("/diagnostics/trusted_channel/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "requires_encryption": status_view
+                .pointer("/diagnostics/trusted_channel/trusted_remote/requires_encryption")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "requires_authentication": status_view
+                .pointer("/diagnostics/trusted_channel/trusted_remote/requires_authentication")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "network_listener_implemented": status_view
+                .pointer("/diagnostics/trusted_channel/trusted_remote/network_listener_implemented")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "validation": {
+            "schema_version": status_view
+                .pointer("/diagnostics/validation/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "pending_live_deferred_code": status_view
+                .pointer("/diagnostics/validation/pending_live_acceptance/deferred_code")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "must_not_mark_live_pass_from_offline_checks": status_view
+                .pointer("/diagnostics/validation/pending_live_acceptance/must_not_be_marked_passed_by_offline_checks")
+                .cloned()
+                .unwrap_or(Value::Null)
         },
         "guarantees": {
             "does_not_enqueue": true,
@@ -21353,6 +21478,41 @@ mod tests {
             Some("requires-live-device")
         );
         assert_eq!(
+            data.pointer("/diagnostics_summary/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_diagnostics_summary.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/liveness_status")
+                .and_then(Value::as_str),
+            Some("stopped")
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/capture_freshness/must_not_classify_as_game_freeze_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/self_heal/default_recovery_kind")
+                .and_then(Value::as_str),
+            Some("observe_first")
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/self_heal/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/trusted_channel/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/diagnostics_summary/validation/pending_live_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/instances/schema_version")
                 .and_then(Value::as_str),
             Some("session.readiness_instances.v0.1")
@@ -22035,6 +22195,26 @@ mod tests {
                 .pointer("/policy_summary/transport/trusted_remote_requires_encryption")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_diagnostics_summary.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer(
+                    "/diagnostics_summary/interaction_flow/input_relay_requires_matching_lease"
+                )
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/trusted_channel/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
         );
         assert_eq!(payload.get("ready").and_then(Value::as_bool), Some(false));
         assert_eq!(
@@ -40640,6 +40820,16 @@ mod tests {
             data.pointer("/envelopes/readiness_view/policy_summary_schema_version")
                 .and_then(Value::as_str),
             Some("session.readiness_policy_summary.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/diagnostics_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics_summary")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/diagnostics_summary_schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_diagnostics_summary.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/connect_plan_view/schema_version")

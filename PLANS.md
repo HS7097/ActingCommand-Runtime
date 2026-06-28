@@ -207,6 +207,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bootstrap capture freshness API contract alignment: `session bootstrap` now embeds `status_diagnostics.capture_freshness`, and `session api` advertises both `status_view.capture_freshness_summary_field` and `bootstrap_view.status_diagnostics_capture_freshness_field`.
 - ActingLab interaction/trusted-channel status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `interaction_flow` and `trusted_channel` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab self-heal status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `self_heal` summaries, and `session api` advertises their status/bootstrap field paths.
+- ActingLab readiness diagnostics summary: `session readiness` now exposes a compact `diagnostics_summary` for liveness, queue health, capture freshness, self-heal, interaction flow, trusted channel, and live-validation state without forcing clients to parse the full embedded status view.
+
+## Current ActingLab Readiness Diagnostics Summary
+
+This increment gives UI, scheduler, and agent clients a compact startup-readiness diagnostic slice while preserving `status_view` as the full source of truth.
+
+- `session readiness` now includes `diagnostics_summary`.
+- `diagnostics_summary` is derived from `session status --diagnostics`; it does not run capture, self-heal, stream, transport, or device operations again.
+- The summary exposes liveness, queue health, stale-capture classification, self-heal default recovery state, interaction-flow relay lease requirement, trusted-channel security state, and pending live-validation deferral.
+- `session request readiness` returns the same `diagnostics_summary` through the daemon request path.
+- `session api` now declares `envelopes.readiness_view.diagnostics_summary_field=diagnostics_summary`.
+- `session api` now declares `envelopes.readiness_view.diagnostics_summary_schema_version=session.readiness_diagnostics_summary.v0.1`.
 
 ## Current ActingLab Self-Heal Status Diagnostics Summary
 
