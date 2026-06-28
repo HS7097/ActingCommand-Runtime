@@ -204,6 +204,17 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C bootstrap-view API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_phase_c_field="status_diagnostics.phase_c"`, so startup clients can discover the embedded Phase C diagnostics summary from the API contract.
 - ActingLab bootstrap validation diagnostics API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_validation_field="status_diagnostics.validation"`, so startup clients can discover the embedded pending-live validation summary from the API contract.
 - ActingLab capture freshness status diagnostics summary: `session status --diagnostics` now embeds `diagnostics.capture_freshness`, exposing stale-frame policy, backend order, AK stale-screencap classification, and lighter recovery guidance without touching devices.
+- ActingLab bootstrap capture freshness API contract alignment: `session bootstrap` now embeds `status_diagnostics.capture_freshness`, and `session api` advertises both `status_view.capture_freshness_summary_field` and `bootstrap_view.status_diagnostics_capture_freshness_field`.
+
+## Current ActingLab Bootstrap Capture Freshness API Contract Alignment
+
+This increment aligns startup and API-discovery surfaces with the capture freshness diagnostics summary.
+
+- `session bootstrap` now includes `status_diagnostics.capture_freshness`.
+- `session api` now declares `envelopes.status_view.capture_freshness_summary_field=diagnostics.capture_freshness`.
+- `session api` now declares `envelopes.bootstrap_view.status_diagnostics_capture_freshness_field=status_diagnostics.capture_freshness`.
+- Startup clients can discover and read stale-frame policy, backend order, AK stale-screencap classification, and live-validation deferral from the bootstrap/API surfaces.
+- The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, execute recovery, or perform live validation.
 
 ## Current ActingLab Capture Freshness Status Diagnostics Summary
 

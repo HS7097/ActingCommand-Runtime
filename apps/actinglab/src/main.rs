@@ -2584,6 +2584,7 @@ fn session_api_contract() -> Value {
                 "pending_response_preview_field": "diagnostics.queues.pending_response_preview",
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
+                "capture_freshness_summary_field": "diagnostics.capture_freshness",
                 "phase_c_summary_field": "diagnostics.phase_c",
                 "validation_summary_field": "diagnostics.validation",
                 "monitor_policy_lease_actions": [
@@ -3174,6 +3175,7 @@ fn session_bootstrap_view_contract() -> Value {
         "daemon_query": "session request bootstrap",
         "schema_version": "session.bootstrap.v0.1",
         "status_diagnostics_field": "status_diagnostics",
+        "status_diagnostics_capture_freshness_field": "status_diagnostics.capture_freshness",
         "status_diagnostics_phase_c_field": "status_diagnostics.phase_c",
         "status_diagnostics_validation_field": "status_diagnostics.validation",
         "readiness_field": "readiness",
@@ -8161,6 +8163,7 @@ fn session_bootstrap_diagnostics_summary(
         "running": status.get("running").cloned().unwrap_or(Value::Null),
         "liveness": diagnostics.get("liveness").cloned().unwrap_or(Value::Null),
         "queue_health": diagnostics.pointer("/queues/health").cloned().unwrap_or(Value::Null),
+        "capture_freshness": diagnostics.get("capture_freshness").cloned().unwrap_or(Value::Null),
         "phase_c": diagnostics.get("phase_c").cloned().unwrap_or(Value::Null),
         "validation": diagnostics.get("validation").cloned().unwrap_or(Value::Null),
         "recommended_action_count": recommended_action_kinds.len(),
@@ -23140,6 +23143,31 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/status_diagnostics/capture_freshness/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_freshness_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/capture_freshness/preferred_backend_order/0")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/capture_freshness/preferred_backend_order/2")
+                .and_then(Value::as_str),
+            Some("adb_screencap")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/capture_freshness/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/capture_freshness/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/status_diagnostics/phase_c/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_diagnostics.v0.1")
@@ -34540,6 +34568,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/capture_freshness_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.capture_freshness")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/phase_c_summary_field")
                 .and_then(Value::as_str),
             Some("diagnostics.phase_c")
@@ -40019,6 +40053,11 @@ mod tests {
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_field")
                 .and_then(Value::as_str),
             Some("status_diagnostics")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_capture_freshness_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics.capture_freshness")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_phase_c_field")
