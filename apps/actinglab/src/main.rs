@@ -1179,7 +1179,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session transport check", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session transport check", "session submit-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1243,6 +1243,7 @@ fn session_access_contract() -> Value {
             "capabilities": "session request capabilities",
             "readiness": "session request readiness",
             "command_check": "session request command-check <command...>",
+            "submit_plan": "session request submit-plan <command...>",
             "status": "session request status --diagnostics",
             "queue": "session request queue",
             "journal": "session request journal",
@@ -1267,6 +1268,7 @@ fn session_access_contract() -> Value {
                     "journal",
                     "readiness",
                     "command-check",
+                    "submit-plan",
                     "contract",
                     "transport check",
                     "capabilities",
@@ -1606,6 +1608,18 @@ fn session_api_contract() -> Value {
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
             },
+            "submit_plan_view": {
+                "query": "session submit-plan <command...>",
+                "daemon_query": "session request submit-plan <command...>",
+                "schema_version": "session.submit_plan.v0.1",
+                "ready_to_submit_field": "ready_to_submit",
+                "readiness_field": "readiness",
+                "command_check_field": "command_check",
+                "queue_field": "queue",
+                "blockers_field": "blockers",
+                "does_not_enqueue": true,
+                "does_not_touch_device": true
+            },
             "lease_view": {
                 "query": "session lease list|status|touch|wait|acquire|release|preempt",
                 "daemon_query": "session request lease list|status|touch|wait|acquire|release|preempt",
@@ -1779,6 +1793,7 @@ fn session_api_contract() -> Value {
                     "status",
                     "readiness",
                     "command-check",
+                    "submit-plan",
                     "journal",
                     "events",
                     "response",
@@ -2154,8 +2169,12 @@ fn session_daemon_info_exists(flags: &FlagArgs) -> CliOutcome<bool> {
     let Ok(state_dir) = session_state_dir_from_flags(flags) else {
         return Ok(false);
     };
-    let info_path = session_info_path(&state_dir);
-    let heartbeat_path = session_heartbeat_path(&state_dir);
+    session_daemon_info_exists_in_state_dir(&state_dir)
+}
+
+fn session_daemon_info_exists_in_state_dir(state_dir: &Path) -> CliOutcome<bool> {
+    let info_path = session_info_path(state_dir);
+    let heartbeat_path = session_heartbeat_path(state_dir);
     let info = read_json_file::<SessionInfo>(&info_path)?;
     let heartbeat = read_json_file::<SessionHeartbeat>(&heartbeat_path)?;
     Ok(
@@ -5579,6 +5598,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "readiness" => run_session_readiness(global, args),
         "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
+        "submit-plan" => run_session_submit_plan(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "cleanup" => run_session_cleanup(global, args),
@@ -5899,6 +5919,19 @@ fn run_session_command_check(global: &GlobalOptions, args: &[String]) -> CliOutc
     session_command_check_payload(global, &flags, &state_dir, "session command-check")
 }
 
+fn run_session_submit_plan(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let config = read_user_config()?;
+    session_submit_plan_payload(
+        global,
+        &flags,
+        &state_dir,
+        Some(&config),
+        "session submit-plan",
+    )
+}
+
 fn session_command_check_payload(
     global: &GlobalOptions,
     flags: &FlagArgs,
@@ -5907,7 +5940,7 @@ fn session_command_check_payload(
 ) -> CliOutcome<Value> {
     let tokens = session_command_check_tokens(flags, command_name)?;
     let classification = classify_session_command_for_check(&tokens, flags)?;
-    let daemon_alive = session_daemon_info_exists(flags)?;
+    let daemon_alive = session_daemon_info_exists_in_state_dir(state_dir)?;
     let explicit_daemon = flags.bool("--via-daemon");
     let local_override = flags.bool("--local");
     let strict_session_required = session_throat_required(global);
@@ -5967,6 +6000,103 @@ fn session_command_check_payload(
     }))
 }
 
+fn session_submit_plan_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    config: Option<&UserConfig>,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    let tokens = session_command_check_tokens(flags, command_name)?;
+    let mut readiness_flags = flags.clone();
+    readiness_flags.positionals.clear();
+    let readiness = session_readiness_payload(
+        global,
+        &readiness_flags,
+        state_dir,
+        config,
+        "session submit-plan readiness",
+    )?;
+    let command_check = session_command_check_payload(global, flags, state_dir, command_name)?;
+    let queue = session_queue_payload(state_dir)?;
+    let readiness_ready = readiness
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let command_safe = command_check
+        .get("safe_to_submit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queue_can_enqueue = queue
+        .pointer("/admission/can_enqueue")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ready_to_submit = readiness_ready && command_safe && queue_can_enqueue;
+    let blockers = session_submit_plan_blockers(&readiness, &command_check, &queue);
+    let normalized_command = tokens.join(" ");
+    let readiness_actions = readiness
+        .get("recommended_actions")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let queue_actions = queue
+        .get("recommended_actions")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+
+    Ok(json!({
+        "schema_version": "session.submit_plan.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "command_tokens": tokens,
+        "normalized_command": normalized_command,
+        "ready_to_submit": ready_to_submit,
+        "status": if ready_to_submit { "ready" } else { "blocked" },
+        "readiness": readiness,
+        "command_check": command_check,
+        "queue": queue,
+        "blockers": blockers,
+        "recommended_actions": {
+            "readiness": readiness_actions,
+            "queue": queue_actions
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_start_maatouch": true,
+            "does_not_capture": true,
+            "does_not_start_listener": true
+        }
+    }))
+}
+
+fn session_submit_plan_blockers(
+    readiness: &Value,
+    command_check: &Value,
+    queue: &Value,
+) -> Vec<Value> {
+    let mut blockers = Vec::new();
+    extend_blockers(&mut blockers, readiness.get("blockers"));
+    extend_blockers(&mut blockers, command_check.get("blockers"));
+    if !queue
+        .pointer("/admission/can_enqueue")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        blockers.push(json!({
+            "kind": "queue_admission",
+            "code": queue.pointer("/admission/blocked_code"),
+            "message": queue.pointer("/admission/message"),
+            "queue": queue
+        }));
+    }
+    blockers
+}
+
+fn extend_blockers(blockers: &mut Vec<Value>, value: Option<&Value>) {
+    if let Some(items) = value.and_then(Value::as_array) {
+        blockers.extend(items.iter().cloned());
+    }
+}
+
 fn session_command_check_tokens(flags: &FlagArgs, command_name: &str) -> CliOutcome<Vec<String>> {
     if flags.positionals.is_empty() {
         return Err(CliError::usage(format!(
@@ -6019,7 +6149,9 @@ fn classify_session_command_for_check(
 
     match first {
         "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
-        | "contract" | "api" | "transport" | "capabilities" | "command-check" => Ok(read_only),
+        | "contract" | "api" | "transport" | "capabilities" | "command-check" | "submit-plan" => {
+            Ok(read_only)
+        }
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -8686,7 +8818,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, readiness, queue, command-check, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, readiness, queue, command-check, submit-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -8698,6 +8830,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "command-check" => {
             submit_readonly_session_request(global, &flags, "command_check", &args[1..])
         }
+        "submit-plan" => submit_readonly_session_request(global, &flags, "submit_plan", &args[1..]),
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
@@ -9748,6 +9881,18 @@ fn execute_session_command_request_inner(
                 &flags,
                 state_dir,
                 "session request command-check",
+            )
+        }
+        "submit_plan" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            let config = read_user_config()?;
+            session_submit_plan_payload(
+                &global,
+                &flags,
+                state_dir,
+                Some(&config),
+                "session request submit-plan",
             )
         }
         "journal" => {
@@ -15443,6 +15588,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session readiness", ["offline"], "available"),
         command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
+        command_cap("session submit-plan", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
@@ -15473,6 +15619,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request queue", ["running_runtime"], "available"),
         command_cap(
             "session request command-check",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request submit-plan",
             ["running_runtime"],
             "available",
         ),
@@ -17473,6 +17624,209 @@ mod tests {
         assert_eq!(
             payload.pointer("/lease_gate/code").and_then(Value::as_str),
             Some("lab_lease_required")
+        );
+    }
+
+    #[test]
+    fn session_submit_plan_reports_ready_when_daemon_queue_and_command_are_ready() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "submit-plan", "status"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.submit_plan.v0.1")
+        );
+        assert_eq!(
+            data.get("ready_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("ready"));
+        assert_eq!(
+            data.pointer("/readiness/ready").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/command_check/safe_to_submit")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/queue/admission/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_submit_plan_blocks_when_queue_needs_attention_without_enqueueing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let pending = SessionCommandRequest {
+            request_id: "pending-submit-plan".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("pending-submit-plan.json"),
+            &pending,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "submit-plan", "status"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("ready_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/queue/admission/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.get("kind").and_then(Value::as_str)
+                    == Some("queue_admission"))
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn session_submit_plan_control_command_requires_lease_without_enqueueing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "submit-plan",
+                "tap",
+                "100",
+                "200",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("ready_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/command_check/lease_gate/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.get("kind").and_then(Value::as_str) == Some("lease_gate"))
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn session_submit_plan_request_returns_submit_plan_payload() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let query = SessionCommandRequest {
+            request_id: "submit-plan-query".to_string(),
+            command: "submit_plan".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["status".to_string()],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.submit_plan.v0.1")
+        );
+        assert_eq!(
+            payload.get("ready_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/readiness/scope/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload
+                .pointer("/command_check/normalized_command")
+                .and_then(Value::as_str),
+            Some("status")
         );
     }
 
@@ -31800,6 +32154,22 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session submit-plan"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request submit-plan"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request events"))
         );
         assert!(
@@ -31873,6 +32243,11 @@ mod tests {
             data.pointer("/daemon_queries/queue")
                 .and_then(Value::as_str),
             Some("session request queue")
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/submit_plan")
+                .and_then(Value::as_str),
+            Some("session request submit-plan <command...>")
         );
         assert_eq!(
             data.pointer("/daemon_queries/transport")
@@ -32216,6 +32591,21 @@ mod tests {
             data.pointer("/envelopes/command_check_view/queue_gate_field")
                 .and_then(Value::as_str),
             Some("queue_gate")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.submit_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/query")
+                .and_then(Value::as_str),
+            Some("session submit-plan <command...>")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request submit-plan <command...>")
         );
         assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")
@@ -32756,6 +33146,7 @@ mod tests {
         }
         for command in [
             "session status",
+            "session submit-plan",
             "session journal",
             "session events",
             "session events wait",
@@ -32781,6 +33172,7 @@ mod tests {
             "session capture diagnose",
             "session recover --stale-capture",
             "session request status",
+            "session request submit-plan",
             "session request journal",
             "session request events",
             "session request events wait",

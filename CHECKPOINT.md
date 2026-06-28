@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab submit-plan preflight view
+
+### Current status
+
+- Added a local `session submit-plan <command...>` preflight surface that returns `session.submit_plan.v0.1`.
+- Added a daemon handler for `session request submit-plan <command...>` so the same payload can be returned through the resident request path when queue admission allows the diagnostic request.
+- The submit-plan payload embeds readiness, command-check, and queue views, reports `ready_to_submit`, and aggregates blockers for UI/scheduler clients.
+- Queue admission is checked in the combined plan even when the target command's command-check route would otherwise skip the queue gate.
+- Control commands still require matching Session Layer lease metadata through the existing command-check lease gate.
+- `session api`, `session contract`, and `capabilities` now advertise/classify the submit-plan view.
+- No daemon execution, device actions, capture, MaaTouch startup, resource access, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `7500d59ba21f860c9bb0e5c3b645c9ec80adfedd`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read Runtime `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` was not present in this repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- `git status --short --branch; git rev-parse HEAD; git rev-parse origin/main`
+- Inspected Session Layer readiness, command-check, queue, request handler, API contract, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo test -p actingcommand-actinglab session_submit_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- Initial clippy run failed on a new needless borrow in `session_daemon_info_exists_in_state_dir`; fixed the borrow and reran clippy successfully.
+- `cargo test --workspace`
+- `git diff --check`
+- Added-line prohibited-feature scan over `apps/actinglab/src/main.rs`, `PLANS.md`, and `CHECKPOINT.md` for direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and new capture/backend terms.
+
+### Test results
+
+- Focused `session_submit_plan` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Focused capability registration test passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed after the needless-borrow fix.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+- Added-line prohibited-feature scan found only negative-scope documentation and the `does_not_start_maatouch` guarantee field; no source path added actual fallback, reconnect, OCR/OpenCV, SQLite, shell screencap, direct ADB input, new capture backend, or MaaTouch startup behavior.
+
+### Current blocker
+
+- Full Session Layer remains incomplete: scheduler lease arbitration integration, trusted UI/API exposure, live prepared-emulator validation, trusted interactive stream/input relay, and scheduler/UI integration remain future work.
+
+### Next step
+
+1. Run full formatting, clippy, test, diff, and prohibited-feature validation.
+2. Commit and push Runtime repository changes.
+3. Continue Session Layer follow-ups: trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
+
 ## 2026-06-28 ActingLab Session queue view
 
 ### Current status
