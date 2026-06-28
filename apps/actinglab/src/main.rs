@@ -1608,6 +1608,7 @@ fn session_api_contract() -> Value {
                 "command_class_field": "command_class",
                 "lease_gate_field": "lease_gate",
                 "queue_gate_field": "queue_gate",
+                "instance_gate_field": "instance_gate",
                 "routing_field": "routing",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
@@ -1617,6 +1618,7 @@ fn session_api_contract() -> Value {
                 "daemon_query": "session request submit-plan <command...>",
                 "schema_version": "session.submit_plan.v0.1",
                 "ready_to_submit_field": "ready_to_submit",
+                "preflight_summary_field": "preflight_summary",
                 "readiness_field": "readiness",
                 "command_check_field": "command_check",
                 "queue_field": "queue",
@@ -6078,7 +6080,14 @@ struct SessionCommandCheckClass {
 fn run_session_command_check(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let state_dir = session_state_dir_from_flags(&flags)?;
-    session_command_check_payload(global, &flags, &state_dir, "session command-check")
+    let config = read_user_config()?;
+    session_command_check_payload(
+        global,
+        &flags,
+        &state_dir,
+        Some(&config),
+        "session command-check",
+    )
 }
 
 fn run_session_submit_plan(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6098,6 +6107,7 @@ fn session_command_check_payload(
     global: &GlobalOptions,
     flags: &FlagArgs,
     state_dir: &Path,
+    config: Option<&UserConfig>,
     command_name: &str,
 ) -> CliOutcome<Value> {
     let tokens = session_command_check_tokens(flags, command_name)?;
@@ -6124,14 +6134,20 @@ fn session_command_check_payload(
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let instance_gate = session_command_check_instance_gate(global, classification, config);
+    let instance_gate_ok = instance_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let blockers = session_command_check_blockers(
         daemon_route_ok,
         daemon_alive,
         strict_session_required,
         &lease_gate,
         &queue_gate,
+        &instance_gate,
     );
-    let safe_to_submit = daemon_route_ok && lease_gate_ok && queue_gate_ok;
+    let safe_to_submit = daemon_route_ok && lease_gate_ok && queue_gate_ok && instance_gate_ok;
     Ok(json!({
         "schema_version": "session.command_check.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -6151,6 +6167,7 @@ fn session_command_check_payload(
         },
         "lease_gate": lease_gate,
         "queue_gate": queue_gate,
+        "instance_gate": instance_gate,
         "blockers": blockers,
         "guarantees": {
             "does_not_enqueue": true,
@@ -6179,7 +6196,8 @@ fn session_submit_plan_payload(
         config,
         "session submit-plan readiness",
     )?;
-    let command_check = session_command_check_payload(global, flags, state_dir, command_name)?;
+    let command_check =
+        session_command_check_payload(global, flags, state_dir, config, command_name)?;
     let queue = session_queue_payload(state_dir)?;
     let readiness_ready = readiness
         .get("ready")
@@ -6212,6 +6230,18 @@ fn session_submit_plan_payload(
         "normalized_command": normalized_command,
         "ready_to_submit": ready_to_submit,
         "status": if ready_to_submit { "ready" } else { "blocked" },
+        "preflight_summary": {
+            "readiness_ready": readiness_ready,
+            "command_safe": command_safe,
+            "queue_can_enqueue": queue_can_enqueue,
+            "selected_instance_status": readiness.pointer("/instances/selected_status").cloned().unwrap_or(Value::Null),
+            "command_class": command_check.get("command_class").cloned().unwrap_or(Value::Null),
+            "requires_lease": command_check.get("requires_lease").cloned().unwrap_or(Value::Null),
+            "lease_status": command_check.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
+            "queue_status": queue.pointer("/admission/status").cloned().unwrap_or(Value::Null),
+            "instance_gate_status": command_check.pointer("/instance_gate/status").cloned().unwrap_or(Value::Null),
+            "instance_gate_code": command_check.pointer("/instance_gate/code").cloned().unwrap_or(Value::Null)
+        },
         "readiness": readiness,
         "command_check": command_check,
         "queue": queue,
@@ -6470,12 +6500,78 @@ fn session_command_check_queue_gate(state_dir: &Path, check_queue: bool) -> CliO
     }
 }
 
+fn session_command_check_instance_gate(
+    global: &GlobalOptions,
+    classification: SessionCommandCheckClass,
+    config: Option<&UserConfig>,
+) -> Value {
+    let Some(selected) = global.instance.as_deref() else {
+        return json!({
+            "ok": true,
+            "required": false,
+            "status": "not_selected",
+            "message": "no selected instance was provided for this preflight"
+        });
+    };
+    if !classification.device_affecting {
+        return json!({
+            "ok": true,
+            "required": false,
+            "status": "not_required",
+            "instance": selected,
+            "message": "target command does not touch a device or emulator instance"
+        });
+    }
+    let Some(config) = config else {
+        return json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "instance_registry_unavailable",
+            "instance": selected,
+            "message": "selected instance cannot be checked because the instance registry is unavailable"
+        });
+    };
+    let Some(instance) = config.instances.get(selected) else {
+        return json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "instance_not_found",
+            "instance": selected,
+            "message": "selected instance is not present in the instance registry"
+        });
+    };
+    let missing = instance_missing_required_fields(instance);
+    if !missing.is_empty() {
+        return json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "instance_configuration",
+            "instance": selected,
+            "missing_required": missing,
+            "message": "selected instance is missing required serial, game, or server configuration"
+        });
+    }
+    json!({
+        "ok": true,
+        "required": true,
+        "status": "ready",
+        "instance": selected,
+        "game": instance.game,
+        "server": instance.server,
+        "serial_configured": instance.serial.is_some()
+    })
+}
+
 fn session_command_check_blockers(
     daemon_route_ok: bool,
     daemon_alive: bool,
     strict_session_required: bool,
     lease_gate: &Value,
     queue_gate: &Value,
+    instance_gate: &Value,
 ) -> Vec<Value> {
     let mut blockers = Vec::new();
     if !daemon_route_ok {
@@ -6508,6 +6604,18 @@ fn session_command_check_blockers(
             "code": queue_gate.get("code"),
             "message": queue_gate.get("message"),
             "queue_gate": queue_gate
+        }));
+    }
+    if !instance_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        blockers.push(json!({
+            "kind": "instance_gate",
+            "code": instance_gate.get("code"),
+            "message": instance_gate.get("message"),
+            "instance_gate": instance_gate
         }));
     }
     blockers
@@ -10038,10 +10146,12 @@ fn execute_session_command_request_inner(
         "command_check" => {
             let flags = FlagArgs::parse(&request.args)?;
             let global = request.global.to_global()?;
+            let config = read_user_config()?;
             session_command_check_payload(
                 &global,
                 &flags,
                 state_dir,
+                Some(&config),
                 "session request command-check",
             )
         }
@@ -17768,9 +17878,24 @@ mod tests {
     fn session_command_check_control_requires_matching_lease() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config_path);
         }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
         let missing = run_cli(
             [
                 "--json",
@@ -17826,6 +17951,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
         }
 
         assert_eq!(missing.exit_code(), 0);
@@ -17853,6 +17979,12 @@ mod tests {
         );
         assert_eq!(
             matching_data
+                .pointer("/instance_gate/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            matching_data
                 .pointer("/lease_gate/status")
                 .and_then(Value::as_str),
             Some("ready")
@@ -17871,6 +18003,72 @@ mod tests {
                 .pointer("/lease_gate/code")
                 .and_then(Value::as_str),
             Some("lease_holder_mismatch")
+        );
+    }
+
+    #[test]
+    fn session_command_check_blocks_selected_instance_missing_required_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: None,
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "command-check",
+                "capture",
+            ],
+            true,
+        );
+
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/instance_gate/code").and_then(Value::as_str),
+            Some("instance_configuration")
+        );
+        assert_eq!(
+            data.pointer("/instance_gate/missing_required/0")
+                .and_then(Value::as_str),
+            Some("serial")
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.get("kind").and_then(Value::as_str)
+                    == Some("instance_gate"))
         );
     }
 
@@ -18014,6 +18212,16 @@ mod tests {
             data.pointer("/queue/admission/can_enqueue")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/command_safe")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/instance_gate_status")
+                .and_then(Value::as_str),
+            Some("not_selected")
         );
         assert_eq!(
             data.pointer("/guarantees/does_not_enqueue")
@@ -32979,6 +33187,11 @@ mod tests {
             Some("queue_gate")
         );
         assert_eq!(
+            data.pointer("/envelopes/command_check_view/instance_gate_field")
+                .and_then(Value::as_str),
+            Some("instance_gate")
+        );
+        assert_eq!(
             data.pointer("/envelopes/submit_plan_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.submit_plan.v0.1")
@@ -32992,6 +33205,11 @@ mod tests {
             data.pointer("/envelopes/submit_plan_view/daemon_query")
                 .and_then(Value::as_str),
             Some("session request submit-plan <command...>")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/preflight_summary_field")
+                .and_then(Value::as_str),
+            Some("preflight_summary")
         );
         assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")

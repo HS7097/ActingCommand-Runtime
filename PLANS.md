@@ -166,6 +166,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab readiness queue summary: `session readiness` and `session request readiness` now expose top-level `queues` with queue counts, queue health, and blocked-request recommendation kinds so UI/scheduler clients do not need to parse the full embedded status diagnostics for queue state.
 - ActingLab readiness instance summary: `session readiness` and `session request readiness` now expose top-level `instances` with registry availability, selected instance, missing required fields, and configured instance summaries for UI/scheduler consumers.
 - ActingLab readiness selected-instance gate: `session readiness` and `session request readiness` now mark selected missing or incomplete instances as `ready=false` with explicit instance blockers, so UI/scheduler consumers do not submit work against unusable instance config.
+- ActingLab command-check instance gate: `session command-check` and `session request command-check` now gate device-affecting commands on selected-instance configuration, and `session submit-plan` exposes a compact `preflight_summary` for UI/scheduler consumers.
+
+## Current ActingLab Command-Check Instance Gate
+
+This increment aligns command preflight with the selected-instance readiness gate. Future UI/scheduler clients can use either `session command-check <command...>` or the aggregated `session submit-plan <command...>` view without accidentally treating an incomplete selected instance as submittable.
+
+- `session command-check` now includes `instance_gate`.
+- Device-affecting commands with `--instance <id>` are blocked when the selected instance is missing from the registry or lacks required `serial`, `game`, or `server` configuration.
+- Non-device commands and commands without a selected instance keep non-blocking `instance_gate` statuses.
+- `session submit-plan` now includes `preflight_summary` with readiness, command, queue, lease, and instance-gate status fields.
+- `session api` now advertises `command_check_view.instance_gate_field` and `submit_plan_view.preflight_summary_field`.
+- This remains a pure local/daemon preflight surface; it does not enqueue, capture, start MaaTouch, touch devices, start a listener, or read resource repositories.
+
+Live-device and operator validation for Session Layer behavior is deferred for this round as `requires-live-device`. Offline code, contracts, and unit tests continue to move forward without claiming live acceptance.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Readiness Selected-Instance Gate
 
