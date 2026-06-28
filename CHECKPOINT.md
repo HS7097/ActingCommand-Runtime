@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab validation-plan status-view contract alignment
+
+### Current status
+
+- Added `validation_plan_actions=["validation_plan_review"]` to the Session API `status_view` contract.
+- Updated the offline API contract test so UI/scheduler clients can discover `validation_plan_review` without hard-coding a diagnostics action kind.
+- The change is a machine-readable API-discovery alignment increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `03cf595f88d75ef3be41e94db4a9dbaaea25e9e8`.
+- Checkpoint tag: `checkpoint/20260628-validation-plan-status-action-contract`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `18ddad7c871398e26d15a8a3f94581c50c914238`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Inspected `session api` status-view contract and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Advertise validation plan status action"`
+
+### Test results
+
+- Focused `session_api_is_offline_api_contract` passed and covers the new `status_view.validation_plan_actions` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live validation-plan diagnostics observation through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep Phase C self-heal execution behind observe-first, readiness, queue, and lease gates.
+4. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab validation-plan diagnostics routing
 
 ### Current status
