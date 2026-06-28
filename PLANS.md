@@ -192,6 +192,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
 - ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
 - ActingLab stream-plan next-action summary: `session stream-plan` and `session request stream-plan` now expose a machine-readable `next_actions` interaction decision list for UI/scheduler clients, covering connect blockers, input-relay lease review, trusted remote stream boundaries, Phase C review, and deferred live-validation boundaries.
+- ActingLab self-heal-plan next-action summary: `session self-heal-plan` and `session request self-heal-plan` now expose a machine-readable `next_actions` recovery decision list for UI/scheduler clients, covering observe-first selection, stale-capture diagnosis, readiness/queue/lease blockers, recovery review, Phase C review, and deferred live-validation boundaries.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -220,6 +221,22 @@ This increment turns the aggregate `session phase-c-plan` view into an actionabl
 - The live-validation summary carries `deferred: requires-live-device` and the pending live acceptance payload from `session validation-plan`.
 - `phase_c_plan` daemon request summaries now retain next-action count and first next action for journal/events consumers.
 - The Session API contract now advertises `next_actions_field=next_actions` under `phase_c_plan_view`.
+
+No device input, capture, MaaTouch startup, app lifecycle action, self-heal execution, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Phase C Self-Heal Next-Action Summary
+
+This increment turns the detailed `session self-heal-plan` preflight into an actionable no-device roadmap for UI, scheduler, and agent clients.
+
+- `session self-heal-plan` now embeds `next_actions` with schema `session.self_heal_next_actions.v0.1`.
+- `session request self-heal-plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders follow-up actions for observe-first trigger selection, stale-capture freshness diagnosis, session readiness, daemon queue inspection, maintenance lease resolution, recovery-candidate review, submission preflight, status diagnostics, and Phase C aggregate review.
+- Stale capture and capture-backend-unavailable triggers place `inspect_capture_freshness` before any heavy recovery review, preserving the rule that stale `adb_screencap` evidence alone must not be treated as game-freeze proof.
+- Maintenance-control triggers such as standby, unexpected page, modal popup, startup-login required, and session expired surface `resolve_maintenance_lease` when the current lease gate is not satisfied.
+- The recovery summary records trigger, target page, recovery kind, matching-lease requirement, maintenance readiness, heavy-recovery candidate, and the no-heavy-recovery guarantee.
+- The readiness, queue, and lease summaries expose the blockers that a UI/scheduler should resolve before submitting recovery work.
+- `self_heal_plan` daemon request summaries now retain next-action count, first next action, and deferred live-validation status for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `self_heal_plan_view`.
 
 No device input, capture, MaaTouch startup, app lifecycle action, self-heal execution, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
 

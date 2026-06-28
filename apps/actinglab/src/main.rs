@@ -1536,6 +1536,17 @@ fn session_self_heal_plan_payload(
             .unwrap_or(false);
     let ready_to_execute_maintenance =
         blockers.is_empty() && trigger != "observe_required" && lease_ready;
+    let next_actions = session_self_heal_plan_next_actions(SessionSelfHealPlanNextActionInputs {
+        trigger: &trigger,
+        target_page: &target_page,
+        recovery: &recovery,
+        escalation: &escalation,
+        readiness: &readiness,
+        queue: &queue,
+        lease_gate: &lease_gate,
+        blockers: &blockers,
+        ready_to_execute_maintenance,
+    });
 
     Ok(json!({
         "schema_version": "session.self_heal_plan.v0.1",
@@ -1586,6 +1597,7 @@ fn session_self_heal_plan_payload(
         "lease_gate": lease_gate,
         "ready_to_execute_maintenance": ready_to_execute_maintenance,
         "blockers": blockers,
+        "next_actions": next_actions,
         "live_validation": {
             "status": "deferred",
             "deferred_code": "requires-live-device"
@@ -1771,6 +1783,215 @@ fn session_self_heal_plan_blockers(
         }));
     }
     blockers
+}
+
+struct SessionSelfHealPlanNextActionInputs<'a> {
+    trigger: &'a str,
+    target_page: &'a str,
+    recovery: &'a Value,
+    escalation: &'a Value,
+    readiness: &'a Value,
+    queue: &'a Value,
+    lease_gate: &'a Value,
+    blockers: &'a [Value],
+    ready_to_execute_maintenance: bool,
+}
+
+fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInputs<'_>) -> Value {
+    let readiness_ready = input
+        .readiness
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queue_can_enqueue = input
+        .queue
+        .pointer("/admission/can_enqueue")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let lease_required = input
+        .recovery
+        .get("requires_matching_lease")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let lease_ok = input
+        .lease_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut ordered = Vec::new();
+    let mut priority = 1;
+
+    if input.trigger == "observe_required" {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "observe_and_select_trigger",
+            "Run observation and diagnostics before choosing a concrete self-heal trigger.",
+            "monitor --once",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if matches!(
+        input.trigger,
+        "capture_stale_suspected" | "capture_backend_unavailable"
+    ) {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "inspect_capture_freshness",
+            "Distinguish stale capture output from a game freeze before considering heavy recovery.",
+            "session capture diagnose --require-fresh",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if !readiness_ready {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "resolve_session_readiness",
+            "Resolve session liveness, selected instance, policy, or queue readiness before maintenance recovery.",
+            "session readiness",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if !queue_can_enqueue {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "inspect_request_queue",
+            "Inspect daemon queue admission and recent request outcomes before submitting recovery work.",
+            "session status --diagnostics",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if lease_required && !lease_ok {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "resolve_maintenance_lease",
+            "Maintenance recovery that can control the device requires a matching Session Layer lease.",
+            "session lease status",
+            true,
+        ));
+        priority += 1;
+    }
+
+    ordered.push(session_connect_plan_next_action(
+        priority,
+        "review_recovery_candidate",
+        "Review the selected self-heal recovery plan without executing device control.",
+        &format!(
+            "session self-heal-plan --trigger {} --to {}",
+            input.trigger, input.target_page
+        ),
+        true,
+    ));
+    priority += 1;
+
+    if input.ready_to_execute_maintenance {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "submit_recovery_dry_run_plan",
+            "Submit only a plan/preflight for the selected recovery path; execution still requires the Session Layer gate.",
+            &session_self_heal_plan_submit_plan_command(input.trigger, input.target_page),
+            true,
+        ));
+        priority += 1;
+    } else {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "inspect_status_diagnostics",
+            "Inspect blockers, queue health, liveness, and journal summaries before retrying self-heal planning.",
+            "session status --diagnostics",
+            true,
+        ));
+        priority += 1;
+    }
+
+    ordered.push(session_connect_plan_next_action(
+        priority,
+        "review_phase_c_plan",
+        "Review the aggregate Phase C plan so self-heal, interaction flow, trusted channel, and live acceptance stay aligned.",
+        &format!(
+            "session phase-c-plan --trigger {} --to {}",
+            input.trigger, input.target_page
+        ),
+        true,
+    ));
+
+    json!({
+        "schema_version": "session.self_heal_next_actions.v0.1",
+        "status": if input.ready_to_execute_maintenance { "ready" } else { "blocked" },
+        "ordered": ordered,
+        "recovery": {
+            "trigger": input.trigger,
+            "target_page": input.target_page,
+            "kind": input.recovery.pointer("/kind").cloned().unwrap_or(Value::Null),
+            "requires_matching_lease": lease_required,
+            "ready_to_execute_maintenance": input.ready_to_execute_maintenance,
+            "heavy_recovery_candidate": input.escalation.pointer("/heavy_recovery_candidate").cloned().unwrap_or(Value::Null),
+            "does_not_execute_heavy_recovery": input.escalation.pointer("/does_not_execute_heavy_recovery").cloned().unwrap_or(Value::Null)
+        },
+        "readiness": {
+            "ready": readiness_ready,
+            "status": input.readiness.get("status").cloned().unwrap_or(Value::Null),
+            "recommended_action_kinds": input
+                .readiness
+                .get("recommended_action_kinds")
+                .cloned()
+                .unwrap_or_else(|| json!([]))
+        },
+        "queue": {
+            "can_enqueue": queue_can_enqueue,
+            "admission_status": input.queue.pointer("/admission/status").cloned().unwrap_or(Value::Null),
+            "health": input.queue.get("health").cloned().unwrap_or(Value::Null)
+        },
+        "lease": {
+            "required": lease_required,
+            "ok": lease_ok,
+            "status": input.lease_gate.get("status").cloned().unwrap_or(Value::Null),
+            "code": input.lease_gate.get("code").cloned().unwrap_or(Value::Null)
+        },
+        "blocker_count": input.blockers.len(),
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "operator_live_validation_required": input
+                .escalation
+                .pointer("/operator_live_validation_required")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_execute_recovery": true,
+            "does_not_execute_heavy_recovery": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_self_heal_plan_submit_plan_command(trigger: &str, target_page: &str) -> String {
+    match trigger {
+        "capture_stale_suspected" | "capture_backend_unavailable" => {
+            "session submit-plan session recover --stale-capture".to_string()
+        }
+        "startup_login_required" => format!(
+            "session submit-plan session request recover --startup-login --to {target_page} --capture --lease-holder <holder>"
+        ),
+        _ => format!(
+            "session submit-plan session request recover --to {target_page} --capture --lease-holder <holder>"
+        ),
+    }
 }
 
 fn session_phase_c_plan_payload(
@@ -2912,6 +3133,7 @@ fn session_self_heal_plan_view_contract() -> Value {
         "lease_gate_field": "lease_gate",
         "blockers_field": "blockers",
         "ready_to_execute_field": "ready_to_execute_maintenance",
+        "next_actions_field": "next_actions",
         "does_not_enqueue": true,
         "does_not_touch_device": true,
         "does_not_capture": true,
@@ -12650,6 +12872,9 @@ fn self_heal_plan_request_data_summary(data: &Value) -> Value {
         "operator_live_validation_required": data.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null),
         "ready_to_execute_maintenance": data.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
         "lease_status": data.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
+        "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
+        "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/next_actions/live_validation/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
 }
@@ -22785,6 +23010,21 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("observe_and_select_trigger")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/guarantees/does_not_execute_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -22854,6 +23094,23 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        let next_actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .expect("self-heal-plan next actions must be an array");
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("inspect_capture_freshness")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/recovery/kind")
+                .and_then(Value::as_str),
+            Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
         let blockers = data
             .get("blockers")
             .and_then(Value::as_array)
@@ -22915,6 +23172,18 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/escalation/operator_live_validation_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let next_actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .expect("self-heal-plan next actions must be an array");
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("resolve_maintenance_lease")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/lease/required")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -22998,6 +23267,22 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert!(
+            summary
+                .get("next_action_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 4)
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("inspect_capture_freshness")
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
     }
 
     #[test]
@@ -23061,6 +23346,10 @@ mod tests {
                 .get("operator_live_validation_required")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("resolve_session_readiness")
         );
     }
 
@@ -38796,6 +39085,11 @@ mod tests {
             data.pointer("/envelopes/self_heal_policy_view/maintenance_boundary_field")
                 .and_then(Value::as_str),
             Some("maintenance_boundary")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/self_heal_plan_view/next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
         );
         assert_eq!(
             data.pointer("/envelopes/status_view/queue_health_actions/1")
