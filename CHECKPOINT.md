@@ -8,7 +8,7 @@
 - The new summary returns `schema_version=session.readiness_instances.v0.1`, registry availability, count, status, selected instance, missing required fields, and configured instance entries.
 - `session api` now advertises `readiness_view.instances_field` and `readiness_view.instance_status_field`.
 - The implementation is a pure status projection from existing diagnostics; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual instance health/connect behavior.
-- Milestone source commit is pending until final validation and commit.
+- Milestone source commit `20c270e4e42d45df61a7701981e91c2f1dd9da66` was prepared with checkpoint tag `checkpoint/20260628-readiness-instance-summary`.
 
 ### Resource mirrors used
 
@@ -41,6 +41,8 @@
 - Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Add readiness instance summary"`
+- `git tag checkpoint/20260628-readiness-instance-summary 20c270e4e42d45df61a7701981e91c2f1dd9da66`
 
 ### Test results
 
@@ -60,8 +62,7 @@
 
 ### Next step
 
-1. Commit and push Runtime repository changes.
-2. Tag a meaningful checkpoint for rollback/provenance.
+1. Push Runtime repository changes and checkpoint tag.
 
 ## 2026-06-28 ActingLab submit-plan preflight view
 
