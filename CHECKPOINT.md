@@ -8,6 +8,7 @@
 - Admission now reuses Session queue health and allows `clear` / `active` queue states while blocking `needs_attention`.
 - Blocked admission returns visible `request_queue_needs_attention` instead of silently adding more work to a blocked queue.
 - `session api` now documents the daemon request queue admission gate and points clients to `session command-check <command...>` as the matching preflight.
+- Milestone source commit `16ec141f9ff6d6a70337201f38d69a05e4b6e721` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-request-admission-queue-gate`.
 - No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
@@ -40,6 +41,10 @@
 - Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Gate request admission on queue health"`
+- `git tag checkpoint/20260628-request-admission-queue-gate 16ec141f9ff6d6a70337201f38d69a05e4b6e721`
+- `git push origin main`
+- `git push origin checkpoint/20260628-request-admission-queue-gate`
 
 ### Test results
 
@@ -58,8 +63,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-request-admission-queue-gate`.
-2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+1. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
 
 ## 2026-06-28 ActingLab command-check queue gate
 
