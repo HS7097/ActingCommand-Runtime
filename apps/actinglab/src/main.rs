@@ -1187,7 +1187,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1406,6 +1406,123 @@ fn session_capture_policy_payload(
             "does_not_start_listener": true,
             "does_not_start_apps": true,
             "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
+fn session_record_policy_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    Ok(json!({
+        "schema_version": "session.record_policy.v0.1",
+        "status": "offline_policy",
+        "purpose": "machine-readable active recording authorization policy for Session Layer clients",
+        "generated_at_unix_ms": current_unix_ms(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "authorization_model": {
+            "active_authorization_required": true,
+            "passive_full_recording_allowed": false,
+            "navigation_is_not_recorded_by_default": true,
+            "operator_selects_step_kind": true,
+            "recording_session_required": true,
+            "record_start_command": "session record start --task-id <id>",
+            "record_step_command": "session record step --kind <kind>",
+            "record_amend_command": "session record amend",
+            "record_build_command": "session record build-task",
+            "record_promote_command": "session record promote"
+        },
+        "allowed_step_kinds": [
+            {
+                "kind": "anchor",
+                "purpose": "materialize a reviewed page or UI anchor from an authorized frame",
+                "requires_explicit_frame_source": true,
+                "can_materialize_template": true
+            },
+            {
+                "kind": "operation",
+                "purpose": "record reviewed operation metadata and click-bound references",
+                "requires_explicit_click_reference": true,
+                "can_execute_click": false
+            },
+            {
+                "kind": "color-probe",
+                "purpose": "sample a reviewed frame region into color-probe resource metadata",
+                "requires_explicit_frame_source": true,
+                "can_materialize_color_data": true
+            },
+            {
+                "kind": "verify-template",
+                "purpose": "materialize a reviewed verification template from an authorized frame",
+                "requires_explicit_frame_source": true,
+                "can_materialize_template": true
+            }
+        ],
+        "frame_source_policy": {
+            "local_png_allowed": true,
+            "current_frame_allowed": true,
+            "current_frame_requires_explicit_flag": "--capture or --current-frame",
+            "current_frame_uses_existing_capture_backend": true,
+            "current_frame_live_validation": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_store_provenance": true,
+            "must_store_hash": true,
+            "must_store_freshness_metadata_when_available": true,
+            "must_not_read_resource_repositories": true,
+            "policy_command_captures": false
+        },
+        "resource_write_policy": {
+            "build_task_writes_local_draft": true,
+            "promote_requires_explicit_command": "session record promote",
+            "policy_command_writes_resources": false,
+            "policy_command_promotes_resources": false,
+            "overwrite_requires_opt_in": true,
+            "resource_repository_write_requires_explicit_repo": true,
+            "promotion_must_preserve_provenance": true
+        },
+        "safety_policy": {
+            "destructive_operation_requires_explicit_flag": true,
+            "game_progress_actions_allowed": false,
+            "premium_or_paid_resource_use_allowed": false,
+            "blind_confirmation_allowed": false,
+            "requires_session_layer_for_device_frame_capture": true,
+            "requires_matching_lease_for_future_device_control": true,
+            "severe_errors_fail_loud": true,
+            "silent_failure_allowed": false
+        },
+        "client_guidance": {
+            "ui_should_show_authorization_prompt": true,
+            "ui_should_show_step_kind_picker": true,
+            "ui_should_show_frame_source_picker": true,
+            "ui_should_show_resource_write_warning_before_promote": true,
+            "agents_should_call_record_policy_before_record_step": true,
+            "operator_can_amend_before_build": true,
+            "operator_can_review_candidates_before_build": true,
+            "record_policy_query": "session record-policy",
+            "daemon_record_policy_query": "session request record-policy"
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_write_resource_repositories": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
         }
     }))
 }
@@ -2595,6 +2712,7 @@ fn session_access_contract() -> Value {
             "bootstrap": "session request bootstrap",
             "throat_policy": "session request throat-policy",
             "capture_policy": "session request capture-policy",
+            "record_policy": "session request record-policy",
             "self_heal_policy": "session request self-heal-policy",
             "self_heal_plan": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
             "phase_c_plan": "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
@@ -2633,6 +2751,7 @@ fn session_access_contract() -> Value {
                     "bootstrap",
                     "throat-policy",
                     "capture-policy",
+                    "record-policy",
                     "self-heal-policy",
                     "self-heal-plan",
                     "phase-c-plan",
@@ -3134,7 +3253,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "capture_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -3215,6 +3334,7 @@ fn session_api_contract() -> Value {
                     "stream-plan",
                     "throat-policy",
                     "capture-policy",
+                    "record-policy",
                     "self-heal-policy",
                     "self-heal-plan",
                     "command-check",
@@ -3347,6 +3467,14 @@ fn session_api_contract() -> Value {
         .and_then(Value::as_object_mut)
         .expect("session api contract envelopes must be an object")
         .insert(
+            "record_policy_view".to_string(),
+            session_record_policy_view_contract(),
+        );
+    contract
+        .pointer_mut("/envelopes")
+        .and_then(Value::as_object_mut)
+        .expect("session api contract envelopes must be an object")
+        .insert(
             "self_heal_policy_view".to_string(),
             session_self_heal_policy_view_contract(),
         );
@@ -3461,6 +3589,27 @@ fn session_capture_policy_view_contract() -> Value {
         "does_not_touch_device": true,
         "does_not_capture": true,
         "does_not_start_maatouch": true
+    })
+}
+
+fn session_record_policy_view_contract() -> Value {
+    json!({
+        "query": "session record-policy",
+        "daemon_query": "session request record-policy",
+        "schema_version": "session.record_policy.v0.1",
+        "authorization_model_field": "authorization_model",
+        "allowed_step_kinds_field": "allowed_step_kinds",
+        "frame_source_policy_field": "frame_source_policy",
+        "resource_write_policy_field": "resource_write_policy",
+        "safety_policy_field": "safety_policy",
+        "client_guidance_field": "client_guidance",
+        "live_validation_field": "live_validation",
+        "does_not_enqueue": true,
+        "does_not_touch_device": true,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true,
+        "does_not_read_resource_repositories": true,
+        "does_not_write_resource_repositories": true
     })
 }
 
@@ -7284,6 +7433,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "bootstrap" => run_session_bootstrap(global, args),
         "throat-policy" => run_session_throat_policy(global, args),
         "capture-policy" => run_session_capture_policy(global, args),
+        "record-policy" => run_session_record_policy(global, args),
         "self-heal-policy" => run_session_self_heal_policy(global, args),
         "self-heal-plan" => run_session_self_heal_plan(global, args),
         "phase-c-plan" => run_session_phase_c_plan(global, args),
@@ -7366,6 +7516,14 @@ fn run_session_capture_policy(global: &GlobalOptions, args: &[String]) -> CliOut
         return submit_readonly_session_request(global, &flags, "capture_policy", args);
     }
     session_capture_policy_payload(global, &flags, "session capture-policy")
+}
+
+fn run_session_record_policy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "record_policy", args);
+    }
+    session_record_policy_payload(global, &flags, "session record-policy")
 }
 
 fn run_session_self_heal_policy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -8549,6 +8707,7 @@ fn session_bootstrap_payload(
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
     let throat_policy = session_throat_policy_payload(global, flags, command_name)?;
     let capture_policy = session_capture_policy_payload(global, flags, command_name)?;
+    let record_policy = session_record_policy_payload(global, flags, command_name)?;
     let self_heal_policy = session_self_heal_policy_payload(global, flags, command_name)?;
     let self_heal_plan =
         session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
@@ -8569,6 +8728,7 @@ fn session_bootstrap_payload(
             "status": "session status --diagnostics",
             "throat_policy": "session throat-policy",
             "capture_policy": "session capture-policy",
+            "record_policy": "session record-policy",
             "self_heal_policy": "session self-heal-policy",
             "self_heal_plan": "session self-heal-plan [--trigger <kind>] [--to <page>]",
             "phase_c_plan": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
@@ -8585,6 +8745,7 @@ fn session_bootstrap_payload(
             "status": "session request status --diagnostics",
             "throat_policy": "session request throat-policy",
             "capture_policy": "session request capture-policy",
+            "record_policy": "session request record-policy",
             "self_heal_policy": "session request self-heal-policy",
             "self_heal_plan": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
             "phase_c_plan": "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
@@ -8602,6 +8763,7 @@ fn session_bootstrap_payload(
         "commands": command_capabilities(),
         "throat_policy": throat_policy,
         "capture_policy": capture_policy,
+        "record_policy": record_policy,
         "self_heal_policy": self_heal_policy,
         "self_heal_plan": self_heal_plan,
         "phase_c_plan": phase_c_plan,
@@ -9385,8 +9547,8 @@ fn classify_session_command_for_check(
         "status" | "readiness" | "connect-plan" | "stream-plan" | "queue" | "journal"
         | "events" | "response" | "request-state" | "contract" | "api" | "transport"
         | "capabilities" | "bootstrap" | "command-check" | "submit-plan" | "validation-plan"
-        | "throat-policy" | "capture-policy" | "self-heal-policy" | "self-heal-plan"
-        | "phase-c-plan" => Ok(read_only),
+        | "throat-policy" | "capture-policy" | "record-policy" | "self-heal-policy"
+        | "self-heal-plan" | "phase-c-plan" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -13282,7 +13444,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, self-heal-plan, phase-c-plan, readiness, connect-plan, stream-plan, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, record-policy, self-heal-policy, self-heal-plan, phase-c-plan, readiness, connect-plan, stream-plan, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -13295,6 +13457,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         }
         "capture-policy" => {
             submit_readonly_session_request(global, &flags, "capture_policy", &args[1..])
+        }
+        "record-policy" => {
+            submit_readonly_session_request(global, &flags, "record_policy", &args[1..])
         }
         "self-heal-policy" => {
             submit_readonly_session_request(global, &flags, "self_heal_policy", &args[1..])
@@ -14203,6 +14368,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
         "capture_policy" => Some(capture_policy_request_data_summary(data)),
+        "record_policy" => Some(record_policy_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
         "phase_c_plan" => Some(phase_c_plan_request_data_summary(data)),
         "connect_plan" => Some(connect_plan_request_data_summary(data)),
@@ -14237,6 +14403,23 @@ fn capture_policy_request_data_summary(data: &Value) -> Value {
         "freeze_gate_required_evidence_count": data.pointer("/freeze_classification_gate/required_before_game_freeze_label").and_then(Value::as_array).map(Vec::len),
         "live_validation_status": data.pointer("/freeze_classification_gate/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/freeze_classification_gate/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn record_policy_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "record_policy",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "active_authorization_required": data.pointer("/authorization_model/active_authorization_required").cloned().unwrap_or(Value::Null),
+        "passive_full_recording_allowed": data.pointer("/authorization_model/passive_full_recording_allowed").cloned().unwrap_or(Value::Null),
+        "allowed_step_kind_count": data.get("allowed_step_kinds").and_then(Value::as_array).map(Vec::len),
+        "current_frame_deferred_code": data.pointer("/frame_source_policy/deferred_code").cloned().unwrap_or(Value::Null),
+        "promote_command": data.pointer("/resource_write_policy/promote_requires_explicit_command").cloned().unwrap_or(Value::Null),
+        "policy_command_writes_resources": data.pointer("/resource_write_policy/policy_command_writes_resources").cloned().unwrap_or(Value::Null),
+        "destructive_operation_requires_explicit_flag": data.pointer("/safety_policy/destructive_operation_requires_explicit_flag").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -14542,6 +14725,11 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             let global = request.global.to_global()?;
             session_capture_policy_payload(&global, &flags, "session request capture-policy")
+        }
+        "record_policy" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            session_record_policy_payload(&global, &flags, "session request record-policy")
         }
         "self_heal_policy" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -20335,6 +20523,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session bootstrap", ["offline"], "available"),
         command_cap("session throat-policy", ["offline"], "available"),
         command_cap("session capture-policy", ["offline"], "available"),
+        command_cap("session record-policy", ["offline"], "available"),
         command_cap("session self-heal-policy", ["offline"], "available"),
         command_cap("session self-heal-plan", ["offline"], "available"),
         command_cap("session phase-c-plan", ["offline"], "available"),
@@ -20380,6 +20569,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request capture-policy",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request record-policy",
             ["running_runtime"],
             "available",
         ),
@@ -23354,6 +23548,48 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_record_policy_is_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "record-policy",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_command_check_self_heal_policy_is_read_only() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -24525,6 +24761,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/daemon_queries/record_policy")
+                .and_then(Value::as_str),
+            Some("session request record-policy")
+        );
+        assert_eq!(
+            payload
+                .pointer("/record_policy/authorization_model/active_authorization_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
                 .pointer("/daemon_queries/self_heal_policy")
                 .and_then(Value::as_str),
             Some("session request self-heal-policy")
@@ -24747,6 +24995,164 @@ mod tests {
         assert_eq!(
             summary
                 .get("safe_to_classify_game_frozen")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary.get("deferred_code").and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+    }
+
+    #[test]
+    fn session_record_policy_reports_active_authorization_without_device_work() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(["--json", "session", "record-policy", "--local"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.record_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/authorization_model/active_authorization_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/authorization_model/passive_full_recording_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.get("allowed_step_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.get("kind").and_then(Value::as_str) == Some("anchor"))
+        );
+        assert!(
+            data.get("allowed_step_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.get("kind").and_then(Value::as_str) == Some("operation"))
+        );
+        assert_eq!(
+            data.pointer("/frame_source_policy/local_png_allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/frame_source_policy/current_frame_live_validation")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/resource_write_policy/promote_requires_explicit_command")
+                .and_then(Value::as_str),
+            Some("session record promote")
+        );
+        assert_eq!(
+            data.pointer("/resource_write_policy/policy_command_writes_resources")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/safety_policy/destructive_operation_requires_explicit_flag")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_write_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_record_policy_request_returns_summary() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "record-policy-query".to_string(),
+            command: "record_policy".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ba-jp".to_string()),
+                game: Some("bluearchive".to_string()),
+                server: Some("jp".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 7,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        let response = SessionCommandResponse {
+            request_id: query.request_id,
+            command: query.command,
+            ok: true,
+            data: Some(payload.clone()),
+            error: None,
+            started_at_unix_ms: 8,
+            completed_at_unix_ms: 9,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.record_policy.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/scope/instance").and_then(Value::as_str),
+            Some("ba-jp")
+        );
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("record_policy")
+        );
+        assert_eq!(
+            summary
+                .get("active_authorization_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("passive_full_recording_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("allowed_step_kind_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            summary.get("promote_command").and_then(Value::as_str),
+            Some("session record promote")
+        );
+        assert_eq!(
+            summary
+                .get("policy_command_writes_resources")
                 .and_then(Value::as_bool),
             Some(false)
         );
@@ -35954,6 +36360,7 @@ mod tests {
             .unwrap();
         for kind in [
             "capture_policy",
+            "record_policy",
             "connect_plan",
             "stream_plan",
             "transport_plan",
@@ -41405,6 +41812,26 @@ mod tests {
             data.pointer("/envelopes/command_check_view/throat_gate_field")
                 .and_then(Value::as_str),
             Some("throat_gate")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/record_policy_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.record_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/record_policy_view/authorization_model_field")
+                .and_then(Value::as_str),
+            Some("authorization_model")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/record_policy_view/allowed_step_kinds_field")
+                .and_then(Value::as_str),
+            Some("allowed_step_kinds")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/record_policy_view/does_not_write_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer(

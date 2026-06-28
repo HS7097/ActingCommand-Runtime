@@ -212,6 +212,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab interaction/trusted-channel status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `interaction_flow` and `trusted_channel` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab self-heal status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `self_heal` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab readiness diagnostics summary: `session readiness` now exposes a compact `diagnostics_summary` for liveness, queue health, capture freshness, self-heal, interaction flow, trusted channel, and live-validation state without forcing clients to parse the full embedded status view.
+- ActingLab session recording authorization policy: `session record-policy` and `session request record-policy` expose the active recording authorization model, allowed step kinds, frame-source policy, resource-write policy, safety policy, and no-device/no-resource-write guarantees for UI/scheduler/agent clients.
 
 ## Current ActingLab Phase C Interaction Plan View
 
@@ -5654,6 +5655,34 @@ This is still a contract/discovery increment only:
 - no daemon request is enqueued by the policy command;
 - no recovery is executed;
 - no capture backend, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
+
+## Current ActingLab Session Recording Authorization Policy
+
+This increment makes the recording/resource-authoring boundary discoverable before UI, scheduler, or agent clients ask Runtime to record steps.
+
+`session record-policy` now exposes:
+
+- `schema_version=session.record_policy.v0.1`;
+- an active authorization model where passive full recording is not allowed;
+- explicit allowed step kinds: `anchor`, `operation`, `color-probe`, and `verify-template`;
+- frame-source policy for local PNG and explicitly requested current-frame capture;
+- resource-write policy where draft build and repository promotion remain explicit commands;
+- safety policy blocking blind confirmation, game-progress actions, and paid-resource use;
+- client guidance for UI prompts, step-kind selection, frame-source selection, amend-before-build review, and promote warnings;
+- live validation marked `deferred: requires-live-device`.
+
+`session request record-policy` returns the same payload through the resident daemon request queue, and request journals summarize `record_policy` results without forcing clients to parse the full policy payload.
+
+`session api`, `session bootstrap`, `session command-check`, and `capabilities` now advertise the record-policy route and view contract.
+
+This is still a contract/discovery increment only:
+
+- no recording session is created;
+- no daemon request is enqueued by the local policy command;
+- no frame is captured;
+- no MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- no resource repository is read or written;
 - live validation remains `deferred: requires-live-device`.
 
 ## Repo-local planning policy
