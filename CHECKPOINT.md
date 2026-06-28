@@ -12,20 +12,78 @@
 - This increment only exposes daemon journal/event diagnostics and does not create recording sessions, enqueue daemon work, capture frames, write drafts or resources, start listeners, issue tokens, start TLS, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `c607a030b7bea302926801c27e192098eeb64ae0`.
 - Milestone source commit: `c9700b13d28a33b0a5f87a1b0d6fe30c47ec34c1`.
+- Documentation close-out for `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` is complete: the target files are now split into 56 explicit chronological subtasks.
+- Detailed status counts: `已完成` 46, `待真机验收` 6, `未完成` 1, `未来范围` 2, `待资源补齐` 1.
+- This documentation close-out changed only `PLANS.md` and `CHECKPOINT.md`; no business code was modified.
 
-### Task-file subtask status
+### Detailed task-file status table
 
-1. Session Layer unique throat and daemon-first control path: partially complete; offline contracts, daemon request routing, lease gates, and event summaries are in place, but full live daemon/device acceptance remains deferred.
-2. Phase A instance lifecycle and CLI routing: partially complete; lifecycle/request surfaces exist, but live emulator/app validation remains `deferred: requires-live-device`.
-3. Phase A reliable capture and stale-frame policy: partially complete; capture backend primitives, diagnose surfaces, AK stale-frame classification, and capture-policy event summaries are implemented, but AK fresh-frame recovery live validation remains `deferred: requires-live-device`.
-4. Phase A complete input including key/text: partially complete; MaaTouch input and key/text surfaces exist, but live input validation remains `deferred: requires-live-device`.
-5. Phase B recognition/status and semantic actions: partially complete; recognize, detect-page, current-page, is-visible, locate, tap-target, and navigate surfaces exist, but broad resource/live verification remains deferred or resource-dependent.
-6. Phase C self-heal and recovery planning: partially complete; observe-first policy, self-heal plans, monitor policy, stale-capture recovery planning, and policy/event summaries exist, but automatic live recovery remains `deferred: requires-live-device`.
-7. LabLease arbitration interface: partially complete; acquire/release/preempt/status and lease-gated daemon requests exist, while scheduler ownership integration remains future work.
-8. Interaction flow and input relay: partially complete; bounded stream and input-relay preflight/contracts exist, but long-lived UI stream and relay live validation remain `deferred: requires-live-device`.
-9. Phase D active recording and resource generation: partially complete; recording context, step/amend/build/promote surfaces and record-policy/event summaries exist, but current-frame authoring and operator live acceptance remain `deferred: requires-live-device`.
-10. Multi-channel access and trusted remote: partially complete; local CLI/file-IPC contracts and transport plans exist, while encrypted/authenticated remote listener/token/TLS work remains reserved and future.
-11. AK stale-screencap finding response: partially complete; policy prevents false game-freeze classification from `adb_screencap` alone, but the lighter-backend recovery path needs future live validation.
+Status vocabulary:
+
+- `已完成`: implemented and covered by offline tests, contracts, or checked command output in this repository.
+- `待真机验收`: implementation or contract exists, but the explicit task requires a connected emulator/device, running game, live screenshot, or operator observation.
+- `未完成`: not implemented yet in Runtime.
+- `未来范围`: intentionally reserved for a later milestone or another component, not claimed as complete in this task.
+- `待资源补齐`: Runtime surface exists, but per-game resource data must be completed before broad acceptance.
+
+| Order | Source requirement | Subtask | Status | Evidence in current Runtime | Remaining work |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Section 0/1 unique throat | Define Session Layer as the only device/control throat | 已完成 | `session throat-policy`, strict throat gate, `session api` contract, and `throat_policy` event summary exist | Live/system-wide adoption by every future client remains an integration task |
+| 2 | Section 0/1 unique throat | Expose no-direct-ADB rules for UI, scheduler, and agents | 已完成 | `session throat-policy` summary includes client/UI/scheduler/agent no-direct-device fields | None for offline contract |
+| 3 | Section 0/1 daemon shape | Resident daemon lifecycle surface | 已完成 | `session start`, `session stop`, `session status`, heartbeat/liveness gates, stale cleanup, diagnostics entries exist | Prepared-device daemon soak remains live validation |
+| 4 | Section 0/1 daemon shape | Daemon-first request queue and journal | 已完成 | request queue, responses, journal, events, wait, cancel, state, retention, and diagnostics surfaces exist | None for offline contract |
+| 5 | Section 0/1 daemon shape | Automatic daemon-preferred routing for read-only and control commands | 已完成 | daemon-preferred read-only/control/lifecycle/run routing is recorded in `PLANS.md` and tested through request surfaces | Full client adoption outside Runtime remains integration work |
+| 6 | Section 1 arbitration split | LabLease acquire, release, preempt, status | 已完成 | `session lease acquire/release/preempt/status`, list/touch/wait, LabLease aliases, and lease diagnostics exist | Scheduler-owned arbitration service remains outside Runtime |
+| 7 | Section 1 arbitration split | Lease-gated control execution | 已完成 | tap/swipe/long-tap/key/text/tap-target/navigate/recover/app/lab/package/operation daemon requests require matching lease | Live conflict behavior requires operator/device validation |
+| 8 | Section 1 arbitration split | Scheduler as true lease owner | 未来范围 | Runtime exposes lease interface only | Implement in scheduler repository/service later |
+| 9 | Requirement 1 instance lifecycle | Instance registry schema and diagnostics | 已完成 | instance registry, backend fields, selected-instance gate, readiness instance summary, status registry diagnostics exist | Per-user instance inventory must be configured by operator |
+| 10 | Requirement 1 instance lifecycle | Instance list, health, keep-alive, connect, reconnect surfaces | 已完成 | `session instance list/health/keep-alive/connect/reconnect` and daemon request routing exist | Real emulator validation is separate |
+| 11 | Requirement 1 instance lifecycle | App launch/stop/force-stop/restart command surface | 已完成 | `session app ...`, `session instance app ...`, aliases, API contract, and lease-gated daemon routing exist | Real app lifecycle behavior is live validation |
+| 12 | Requirement 1 instance lifecycle | Verify app lifecycle on connected games | 待真机验收 | Deferred by current task policy | Run against prepared Azur/Ark/BA instances |
+| 13 | Requirement 2 reliable capture | CaptureBackend primitives and selectable backends | 已完成 | ADB screencap, DroidCast raw, Nemu IPC, capture artifacts, backend aliases, diagnostics, benchmark labels exist | None for primitive contract |
+| 14 | Requirement 2 reliable capture | `--require-fresh` and stale diagnosis surface | 已完成 | `capture diagnose`, `session capture diagnose`, instance health capture diagnose, fresh-frame policy, stale signal summaries exist | Live stale reproduction still needed |
+| 15 | Requirement 2 reliable capture | AK stale-screencap false-freeze classification guard | 已完成 | `session capture-policy`, `capture_policy` event summary, status/bootstrap capture freshness diagnostics reference `FINDING-AK-game-freeze-2026-06-27` | None for offline guard |
+| 16 | Requirement 2 reliable capture | Lighter capture backend recovery before app restart | 已完成 | `session recover --stale-capture` planning and capture policy recommend lighter backend recovery first | Actual AK recovery effectiveness is live validation |
+| 17 | Requirement 2 reliable capture | Prove AK fresh-frame recovery on emulator | 待真机验收 | Deferred by current task policy | Reproduce stale frame and compare adb_screencap vs lighter backend on AK |
+| 18 | Requirement 3 input | MaaTouch tap/swipe/long-tap backend | 已完成 | MaaTouch backend and direct touch CLI exist; no ADB input fallback policy remains active | Live input smoke tests are separate |
+| 19 | Requirement 3 input | Key and text input surfaces | 已完成 | explicit MaaTouch key/text input and daemon-routed `key`/`text` command surfaces exist | Live popup/login behavior remains validation |
+| 20 | Requirement 3 input | Verify input against running games | 待真机验收 | Deferred by current task policy | Run safe non-paid input checks on prepared devices |
+| 21 | Requirement 4 recognition/status | `recognize` and `detect-page` primitives | 已完成 | recognition engine, recognition-pack layer, PageDetector, `detect-page`, generated pack compatibility, fixture tests exist | Per-game resource quality can still improve |
+| 22 | Requirement 4 recognition/status | `current-page`, `is-visible`, `locate` semantic read-only commands | 已完成 | CLI entry points and daemon request routing exist | Real frame coverage depends on resource packs |
+| 23 | Requirement 4 recognition/status | Broad per-game page/resource completeness | 待资源补齐 | Runtime accepts packs and pages, but earlier checkpoints list resource gaps for BA/Azur/Ark | Complete resource repositories and regenerate packs |
+| 24 | Requirement 5 semantic action | `tap-target` semantic click surface | 已完成 | `tap-target` CLI and daemon-routed control path exist with lease gating | Live verification and resource coverage remain separate |
+| 25 | Requirement 5 semantic action | `navigate --to <page>` with navigation graph | 已完成 | `navigate` dry-run, navigation graph, navigation-only safety gates, destructive overlap blocking exist | Per-game route resources and live checks remain |
+| 26 | Requirement 5 semantic action | `locate <template>` for calibration | 已完成 | `locate` returns template coordinates and is included in read-only daemon routing | Broader operator calibration workflow remains future polish |
+| 27 | Requirement 5 safety | `navigation_only` default and destructive opt-in | 已完成 | navigation guards and destructive overlap blocking tests exist | None for offline safety contract |
+| 28 | Requirement 6 self-heal | Observe-first self-heal policy | 已完成 | `session self-heal-policy`, self-heal diagnostics, command-check Phase C scope, and event summaries exist | None for offline policy |
+| 29 | Requirement 6 self-heal | Self-heal planning for stale capture, standby, modal, unexpected page, login/session-expired | 已完成 | `session self-heal-plan`, trigger classifications, escalation policy, execution gate, next actions exist | Per-game live scenarios remain validation |
+| 30 | Requirement 6 self-heal | Monitor once and bounded monitor loop | 已完成 | `monitor --once`, bounded monitor loop, monitor-policy status/set/clear, due monitor policy code and tests exist | Long-running live monitor acceptance remains device work |
+| 31 | Requirement 6 self-heal | Startup-login resource loop | 已完成 | `session recover --startup-login` reads `STARTUP-LOGIN.md`, validates missing resources/coordinates, and plans bounded loop | Game-specific resources and live login proof remain |
+| 32 | Requirement 6 self-heal | Execute automatic recovery to known good page without operator | 待真机验收 | Execution paths are gated and planned; current task forbids live device proof | Run prepared live scenarios and inspect journal/recovery evidence |
+| 33 | Requirement 6 self-heal | Ensure recovery never performs game-progress actions | 已完成 | self-heal policy and execution gate expose maintenance-only/no-game-progress/no-paid-resource fields | Live audit still needed for configured resources |
+| 34 | Requirement 7 lease interface | Lease metadata in daemon requests | 已完成 | request structures preserve holder/lease id; wrong holder/id is rejected before device I/O | None for offline contract |
+| 35 | Requirement 7 lease interface | Lease-aware monitor recovery | 已完成 | monitor-policy recovery stores lease metadata and defers on missing/mismatched lease | Live recovery conflict testing remains |
+| 36 | Requirement 8 program mode | Discrete local CLI/API-style command surfaces | 已完成 | capture, recognize, detect-page, current-page, is-visible, locate, tap-target, navigate, record, status, request, events surfaces exist | External client SDK/API wrapper remains future |
+| 37 | Requirement 8 interaction mode | Bounded local stream contract | 已完成 | `stream --max-frames`, stream event envelope, stream plan, stream check, daemon-routed stream request exist | Live streaming frame quality remains validation |
+| 38 | Requirement 8 interaction mode | Input relay scaffold | 已完成 | `stream --input-relay`, repeated `--input-event`, `--relay-event`, command-check and submit-plan gates exist | Live input relay behavior remains validation |
+| 39 | Requirement 8 interaction mode | Long-lived UI stream | 未来范围 | `trusted_remote_long_lived_stream_status=reserved` is exposed | Implement after transport/security design |
+| 40 | Requirement 9 recording | Recording context start/status/stop | 已完成 | `session record start/status/stop`, daemon-routed record interface, top-level `record` alias exist | None for offline context |
+| 41 | Requirement 9 recording | Explicit step authorization model | 已完成 | `record-policy`, `record_policy` event summary, command-check classification, no passive full recording | None for offline policy |
+| 42 | Requirement 9 recording | Anchor and operation step schema | 已完成 | `session record step --kind anchor/operation` appends reviewed metadata without automatic recording | None for offline schema |
+| 43 | Requirement 9 recording | Color-probe and verify-template step schema | 已完成 | standalone color-probe and verify-template output plus amend loop exist | None for offline schema |
+| 44 | Requirement 9 recording | Frame-backed anchor materialization and self-backtest | 已完成 | local PNG frame source, crop artifact, hashes, self-backtest, contrast validation, auto-region candidates exist | Live current-frame source remains separate |
+| 45 | Requirement 9 recording | Amend, candidate preview, build-task, package handoff | 已完成 | amend re-backtest, candidate preview, build-task draft, package build-task dry-run compatibility exist | More operator UX can be future work |
+| 46 | Requirement 9 recording | Resource promotion | 已完成 | `session record promote` publishes validated drafts with overwrite protection and package compatibility | Real repo promotion review remains operator process |
+| 47 | Requirement 9 recording | Current-frame authoring from live capture | 待真机验收 | `--capture`/`--current-frame` inlet exists and records provenance/freshness metadata | Needs live frame capture and operator artifact review |
+| 48 | Requirement 10 local channel | Local CLI direct access | 已完成 | local CLI/file-IPC surfaces, `--local` override, API/access contract, bootstrap/connect-plan exist | None for offline local contract |
+| 49 | Requirement 10 daemon file IPC | Local daemon request channel | 已完成 | `session request <command>`, no-wait, response get/wait, events wait, journal and state list exist | None for offline IPC |
+| 50 | Requirement 10 trusted channel | Transport plan and endpoint policy checks | 已完成 | `session transport plan`, `session transport check`, trusted remote gate, endpoint policy blockers exist | None for no-listener contract |
+| 51 | Requirement 10 trusted channel | Encrypted/authenticated remote listener | 未完成 | API/transport contracts intentionally report listener/token/TLS not implemented | Implement listener, TLS, auth material, token/cert validation, audit |
+| 52 | Requirement 11 safety | Serial/admission queue visibility | 已完成 | queue health, admission gate, blocked cancel dry-run, request state/list, recommended actions exist | None for offline contract |
+| 53 | Requirement 11 safety | UI/scheduler startup envelopes | 已完成 | `session bootstrap`, readiness, connect-plan, validation-plan, status diagnostics summaries exist | Future UI must consume them |
+| 54 | Requirement 11 safety | Offline/live acceptance separation | 已完成 | `session validation-plan` and pending live acceptance list use `deferred: requires-live-device` and no-live-pass guarantees | Operator must run live acceptance later |
+| 55 | AK finding | Avoid classifying stale adb_screencap as game freeze | 已完成 | capture policy, diagnostics, bootstrap/readiness summaries, and event summaries expose the false-freeze guard | None for offline guard |
+| 56 | AK finding | Validate lighter backend recovery on AK | 待真机验收 | Current task explicitly skips live device validation | Reproduce on `127.0.0.1:16416` or future AK instance when allowed |
 
 ### Pending live validation
 
@@ -75,6 +133,10 @@
 - Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace --quiet`
+- Documentation close-out validation:
+  - `git diff --name-only`
+  - `git diff --check`
+  - targeted table count/status-count check for the `Detailed task-file status table`
 
 ### Test results
 
@@ -87,6 +149,7 @@
 - Source-only prohibited added-lines scan passed.
 - `cargo clippy --workspace -- -D warnings` passed.
 - `cargo test --workspace --quiet` passed with workspace tests green, including 454 `actinglab` tests.
+- Documentation close-out validation passed: the detailed target table has 56 rows with status counts `已完成=46`, `待真机验收=6`, `未完成=1`, `未来范围=2`, and `待资源补齐=1`.
 
 ### Current blocker
 
@@ -95,8 +158,8 @@
 
 ### Next step
 
-1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
-2. Continue the next offline Session Layer safety or discovery increment.
+1. Commit and push Runtime documentation changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. User may refine the remaining live-validation, future-scope, resource, and trusted-channel items from the detailed status table.
 
 ## 2026-06-29 ActingLab capture policy event summary
 

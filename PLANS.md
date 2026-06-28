@@ -230,6 +230,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab throat policy event summary: daemon request journals and `session events --data-summary-kind throat_policy` now expose compact unique-control-throat, strict-session, route, lease, trusted-remote, and no-device/no-resource guarantees for UI/scheduler clients.
 - ActingLab capture policy event summary: daemon request journals and `session events --data-summary-kind capture_policy` now expose compact fresh-frame, stale-capture, AK false-freeze, lighter-recovery, deferred-live, and no-device/no-capture guarantees for UI/scheduler clients.
 - ActingLab record policy event summary: daemon request journals and `session events --data-summary-kind record_policy` now expose compact active authorization, explicit step-kind selection, no passive full recording, explicit resource promotion, safety, deferred-live, and no-device/no-resource-write guarantees for UI/scheduler clients.
+- ActingLab detailed target-file status table: `CHECKPOINT.md` now breaks `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` into 56 explicit rows marked `已完成`, `待真机验收`, `未完成`, `未来范围`, or `待资源补齐`.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
