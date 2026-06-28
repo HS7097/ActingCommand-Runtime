@@ -13,7 +13,8 @@
 - `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the capture-policy surface.
 - The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending until the source commit is created and tagged.
+- Milestone source commit: `2e59ba6119adf7b733ace3edb54672a44c842323`.
+- Checkpoint tag: `checkpoint/20260628-session-capture-policy`.
 
 ### Resource mirrors used
 
@@ -82,10 +83,9 @@
 
 ### Next step
 
-1. Commit and push this Runtime increment.
-2. Create and push a checkpoint tag for this milestone.
-3. Record the source commit hash in this checkpoint.
-4. Continue offline Session Layer planning for self-heal, interaction streams, and encrypted transport.
+1. Commit this checkpoint hash backfill.
+2. Push Runtime `main` and `checkpoint/20260628-session-capture-policy`.
+3. Continue offline Session Layer planning for self-heal, interaction streams, and encrypted transport.
 
 ## 2026-06-28 ActingLab unique Session throat-policy surface
 
