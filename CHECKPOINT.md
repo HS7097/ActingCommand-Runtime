@@ -15,8 +15,8 @@
 - `session api`, `session transport`, `session contract`, access-channel contracts, and command capabilities now advertise the transport-plan surface.
 - The change is a pure no-device/no-listener/no-TCP-probe preflight for UI/API, scheduler, and agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending until commit.
-- Checkpoint tag: pending until commit.
+- Milestone source commit: `2d66cd13f8aca0116a13a0931f59132dbff6edc8`.
+- Checkpoint tag: `checkpoint/20260628-session-transport-plan`.
 
 ### Resource mirrors used
 
@@ -83,9 +83,8 @@
 
 ### Next step
 
-1. Commit and push Runtime changes.
-2. Record final commit hash and checkpoint tag after commit.
-3. Continue the next offline Session Layer increment before live validation.
+1. Push Runtime changes and checkpoint tag.
+2. Continue the next offline Session Layer increment before live validation.
 
 ## 2026-06-28 ActingLab interactive stream-plan preflight
 
