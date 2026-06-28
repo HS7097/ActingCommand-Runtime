@@ -187,6 +187,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending-live validation diagnostics summary: `session status --diagnostics` now exposes the `待真机验收` summary from `session validation-plan` for UI/scheduler clients without marking live checks passed.
 
 - ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
+- ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -199,6 +200,19 @@ This increment gives UI, scheduler, and agent clients one Phase C planning envel
 - Trusted remote remains reserved: the aggregate plan records that no listener is started, no token is issued, and no TLS implementation is started.
 - Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
 - `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters now advertise the Phase C plan surface.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Phase C Plan Diagnostics Recommended Action
+
+This increment connects the aggregate Phase C planning surface to the status diagnostics recommendation lane.
+
+- `session status --diagnostics` inspects recent request journal entries for `data_summary.kind=phase_c_plan`.
+- If the latest Phase C aggregate plan still has reserved interaction flow, reserved trusted-channel work, or deferred live validation, diagnostics emits `phase_c_plan_review`.
+- The action routes back to `session phase-c-plan`, preserving summarized trigger and endpoint context when present.
+- The action records the source request id, source command, next review queries, and full data summary.
+- The Session API contract advertises `phase_c_plan_actions` under `status_view`.
+- The action explicitly records that it does not touch devices, start a listener, issue tokens, start TLS, or mark live validation passed.
 
 No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
 

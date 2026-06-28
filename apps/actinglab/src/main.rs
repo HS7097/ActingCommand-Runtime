@@ -2285,6 +2285,9 @@ fn session_api_contract() -> Value {
                     "interactive_stream_preflight_review",
                     "trusted_channel_preflight_review"
                 ],
+                "phase_c_plan_actions": [
+                    "phase_c_plan_review"
+                ],
                 "queue_health_actions": [
                     "blocked_request_inspect",
                     "blocked_request_cancel_dry_run",
@@ -10104,6 +10107,10 @@ fn session_status_recommended_actions(
         state_dir,
         recent_entries,
     ));
+    actions.extend(session_phase_c_plan_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_last_error_recommended_actions(
         state_dir,
         recent_entries,
@@ -10670,6 +10677,90 @@ fn session_transport_plan_recommended_action(
     action["source_command"] = json!(entry.command);
     action["data_summary"] = summary.clone();
     Some(action)
+}
+
+fn session_phase_c_plan_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    for entry in recent_entries.iter().rev() {
+        let Some(summary) = entry.data_summary.as_ref() else {
+            continue;
+        };
+        if summary.get("kind").and_then(Value::as_str) != Some("phase_c_plan") {
+            continue;
+        }
+
+        let trusted_channel_reserved = summary
+            .get("trusted_channel_status")
+            .and_then(Value::as_str)
+            == Some("reserved");
+        let interaction_reserved =
+            summary.get("stream_plan_status").and_then(Value::as_str) == Some("reserved_contract");
+        let live_validation_deferred = summary
+            .get("live_validation_status")
+            .and_then(Value::as_str)
+            == Some("deferred");
+        if !(trusted_channel_reserved || interaction_reserved || live_validation_deferred) {
+            return Vec::new();
+        }
+
+        let mut args = vec![
+            "session".to_string(),
+            "phase-c-plan".to_string(),
+            "--state-dir".to_string(),
+            state_dir_display,
+        ];
+        if let Some(trigger) = summary.get("self_heal_trigger").and_then(Value::as_str) {
+            args.extend(["--trigger".to_string(), trigger.to_string()]);
+        }
+        if let Some(endpoint) = summary.get("trusted_endpoint").and_then(Value::as_str) {
+            args.extend(["--endpoint".to_string(), endpoint.to_string()]);
+        }
+        if let Some(instance) = entry
+            .global
+            .as_ref()
+            .and_then(|global| global.instance.as_ref())
+        {
+            args.extend(["--instance".to_string(), instance.clone()]);
+        }
+
+        let mut action = session_recommended_action_owned(
+            35,
+            "phase_c_plan_review",
+            "Recent Phase C planning still has deferred or reserved lanes; review the aggregate plan before implementing self-heal execution, interaction flow, or trusted-channel work.",
+            args,
+        );
+        action["read_only"] = json!(true);
+        action["requires_scheduler_decision"] = json!(true);
+        action["requires_security_review"] = json!(trusted_channel_reserved);
+        action["does_not_touch_device"] = json!(true);
+        action["does_not_start_listener"] = summary
+            .get("does_not_start_listener")
+            .cloned()
+            .unwrap_or(json!(true));
+        action["does_not_issue_tokens"] = summary
+            .get("does_not_issue_tokens")
+            .cloned()
+            .unwrap_or(json!(true));
+        action["does_not_start_tls"] = summary
+            .get("does_not_start_tls")
+            .cloned()
+            .unwrap_or(json!(true));
+        action["does_not_mark_live_validation_passed"] = json!(true);
+        action["next_reviews"] = json!([
+            "session self-heal-plan [--trigger <kind>]",
+            "session stream-plan [--endpoint <url>]",
+            "session transport plan [--endpoint <url>]",
+            "session validation-plan"
+        ]);
+        action["source_request_id"] = json!(entry.request_id);
+        action["source_command"] = json!(entry.command);
+        action["data_summary"] = summary.clone();
+        return vec![action];
+    }
+    Vec::new()
 }
 
 fn session_last_error_recommended_actions(
@@ -12155,9 +12246,12 @@ fn phase_c_plan_request_data_summary(data: &Value) -> Value {
         "status": data.get("status").cloned().unwrap_or(Value::Null),
         "milestone_count": data.get("milestones").and_then(Value::as_array).map(Vec::len),
         "self_heal_status": data.pointer("/self_heal/plan/status").cloned().unwrap_or(Value::Null),
+        "self_heal_trigger": data.pointer("/self_heal/plan/trigger/kind").cloned().unwrap_or(Value::Null),
+        "target_page": data.pointer("/self_heal/plan/target/page").cloned().unwrap_or(Value::Null),
         "self_heal_recovery_kind": data.pointer("/self_heal/plan/recovery/kind").cloned().unwrap_or(Value::Null),
         "stream_plan_status": data.pointer("/interaction_flow/plan/status").cloned().unwrap_or(Value::Null),
         "trusted_channel_status": data.pointer("/trusted_channel/plan/trusted_remote/status").cloned().unwrap_or(Value::Null),
+        "trusted_endpoint": data.pointer("/trusted_channel/plan/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
         "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
@@ -30257,6 +30351,131 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_recommends_phase_c_plan_review() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "phase-c-plan-review",
+            "phase_c_plan",
+            Some("ak"),
+            json!({
+                "schema_version": "session.phase_c_plan.v0.1",
+                "status": "offline_plan",
+                "milestones": [
+                    {"id": "phase_c_1_self_heal_policy_and_plan"},
+                    {"id": "phase_c_2_interaction_flow_preflight"},
+                    {"id": "phase_c_3_trusted_channel_preflight"},
+                    {"id": "phase_c_4_live_acceptance"}
+                ],
+                "self_heal": {
+                    "plan": {
+                        "status": "blocked",
+                        "trigger": {"kind": "capture_stale_suspected"},
+                        "target": {"page": "home"},
+                        "recovery": {"kind": "capture_backend_recovery"}
+                    }
+                },
+                "interaction_flow": {
+                    "plan": {"status": "reserved_contract"}
+                },
+                "trusted_channel": {
+                    "plan": {
+                        "trusted_remote": {
+                            "status": "reserved",
+                            "endpoint_policy": {
+                                "endpoint": "https://127.0.0.1:9443"
+                            }
+                        }
+                    }
+                },
+                "live_validation": {
+                    "status": "deferred",
+                    "deferred_code": "requires-live-device"
+                },
+                "guarantees": {
+                    "does_not_start_listener": true,
+                    "does_not_issue_tokens": true,
+                    "does_not_start_tls": true
+                }
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("phase_c_plan_review")
+        );
+        assert_eq!(
+            actions[0].get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("requires_security_review")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0].get("source_request_id").and_then(Value::as_str),
+            Some("phase-c-plan-review")
+        );
+        assert_eq!(
+            actions[0]
+                .pointer("/data_summary/trusted_endpoint")
+                .and_then(Value::as_str),
+            Some("https://127.0.0.1:9443")
+        );
+        assert_eq!(
+            actions[0]
+                .pointer("/data_summary/self_heal_trigger")
+                .and_then(Value::as_str),
+            Some("capture_stale_suspected")
+        );
+        let args = actions[0].get("args").and_then(Value::as_array).unwrap();
+        assert!(args.iter().any(|arg| arg.as_str() == Some("--trigger")));
+        assert!(args.iter().any(|arg| arg.as_str() == Some("--endpoint")));
+        assert!(
+            actions[0]
+                .get("next_reviews")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("session validation-plan"))
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_stale_lease_inspect() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -32621,6 +32840,12 @@ mod tests {
                 .pointer("/envelopes/status_view/interaction_channel_actions/1")
                 .and_then(Value::as_str),
             Some("trusted_channel_preflight_review")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/phase_c_plan_actions/0")
+                .and_then(Value::as_str),
+            Some("phase_c_plan_review")
         );
         assert_eq!(
             payload

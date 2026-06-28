@@ -1,5 +1,90 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C plan diagnostics recommendation
+
+### Current status
+
+- Connected recent `phase_c_plan` request summaries to `session status --diagnostics` recommended actions.
+- Recent request journal entries with `data_summary.kind=phase_c_plan` now produce a read-only `phase_c_plan_review` action when the aggregate Phase C plan still has reserved interaction flow, reserved trusted-channel work, or deferred live validation.
+- The recommended action routes back to `session phase-c-plan` and preserves summarized self-heal trigger, trusted endpoint, source request id, source command, next review queries, and full data summary.
+- `phase_c_plan` request summaries now retain `self_heal_trigger`, `target_page`, and `trusted_endpoint` for UI/scheduler diagnostics.
+- The Session API contract now advertises `phase_c_plan_actions` under `status_view`.
+- The change is a pure no-device diagnostics/recommendation contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending.
+- Checkpoint tag: pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `462afe46c03b71590fd647a538a61188ea8ae307`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and Runtime task documents.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected existing Phase C aggregate plan, request data-summary, status diagnostics recommended actions, Session API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_phase_c_plan_review -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan_request_returns_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture`
+- Second `cargo test --workspace`
+- Source-only prohibited-feature scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, capture execution, and MaaTouch/touch execution.
+- Refined source-only prohibited-feature scan excluding negative guarantee fields such as `does_not_issue_tokens`.
+
+### Test results
+
+- Focused `session_status_diagnostics_recommends_phase_c_plan_review` passed.
+- Focused `session_phase_c_plan_request_returns_summary` passed and covered the enriched `phase_c_plan` request summary.
+- Focused `session_api` tests passed and covered the new `phase_c_plan_actions` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace` run failed once in pre-existing `current_page_resolves_semantic_page` with exit code 2 instead of 0.
+- Focused `current_page_resolves_semantic_page` rerun passed.
+- Second `cargo test --workspace` passed.
+- Initial source-only prohibited-feature scan matched only negative guarantee/data fields such as `does_not_issue_tokens`.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, or MaaTouch/touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C aggregate plan and diagnostics observation through a resident daemon and real UI/scheduler polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit Runtime changes and record the milestone commit/tag.
+2. Push Runtime changes and checkpoint tag.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab Phase C aggregate plan surface
 
 ### Current status
