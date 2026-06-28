@@ -11,8 +11,8 @@
 - The Session API contract now advertises `phase_c_plan_actions` under `status_view`.
 - The change is a pure no-device diagnostics/recommendation contract extension.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending.
-- Checkpoint tag: pending.
+- Milestone source commit: `2fecf734c4268ca17b7045d5c5de333b106d3015`.
+- Checkpoint tag: `checkpoint/20260628-phase-c-plan-diagnostics`.
 
 ### Resource mirrors used
 
