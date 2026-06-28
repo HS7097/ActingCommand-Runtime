@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C aggregate plan surface
+
+### Current status
+
+- Added a read-only `session phase-c-plan` surface for Phase C self-heal, interaction flow, trusted channel, and live-validation boundaries.
+- Added daemon-routed `session request phase-c-plan` support through the existing resident request queue.
+- `session phase-c-plan` returns `session.phase_c_plan.v0.1` and aggregates self-heal policy/plan data, an interaction-flow contract summary, trusted-channel transport plan data, and `session validation-plan`.
+- The aggregate interaction-flow section is a contract/preflight summary and does not require a configured live instance; instance-level stream readiness remains the responsibility of `session stream-plan`.
+- The trusted-channel section explicitly records that no listener is started, no token is issued, and no TLS implementation is started.
+- The surface is advertised by `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters.
+- The change is a pure no-device planning contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending.
+- Checkpoint tag: pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `27a138b0e30a034c3b5932c16b78ec81294755b3`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and Runtime task documents.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected existing `session self-heal-policy`, `session self-heal-plan`, `session stream-plan`, `session transport plan`, `session validation-plan`, bootstrap, API, request summary, and command-check surfaces in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_command_check_phase_c_plan_is_read_only -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Initial source-only prohibited-feature scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, and direct navigation execution.
+- Initial source-only scan for capture/MaaTouch/touch execution references in the added `apps/actinglab/src/main.rs` diff lines.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Refined execution-pattern scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP binding/accept, token issuance calls, TLS acceptor/connector startup, fallback calls, reconnect calls, direct ADB input, SQLite APIs, OCR/OpenCV, semantic input execution, direct navigation execution, and direct recovery execution.
+- Refined execution-pattern scan over the added `apps/actinglab/src/main.rs` diff lines for ScreencapBackend/MaaTouchBackend construction, capture calls, touch execution, or ADB shell input.
+
+### Test results
+
+- First focused `session_phase_c_plan` and `session_bootstrap` runs failed because the aggregate plan initially reused instance-level stream readiness and therefore required a configured instance. The implementation was corrected to expose an interaction-flow contract summary while keeping instance-level readiness in `session stream-plan`.
+- Focused `session_phase_c_plan` tests passed and covered local and request-summary paths.
+- Focused `session_bootstrap` tests passed and covered the embedded `phase_c_plan`.
+- Focused `session_api` tests passed and covered `phase_c_plan_view` plus event data-summary filter support.
+- Focused `session_command_check_phase_c_plan_is_read_only` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Initial source-only prohibited-feature scans matched only negative guarantee/data fields such as `does_not_issue_tokens`, `does_not_capture`, `does_not_start_maatouch`, and `does_not_touch_device`.
+- Refined execution-pattern scans passed with no matches for listener startup, TCP binding/accept, token issuance calls, TLS acceptor/connector startup, fallback calls, reconnect calls, direct ADB input, SQLite APIs, OCR/OpenCV, semantic input execution, direct navigation execution, direct recovery execution, ScreencapBackend/MaaTouchBackend construction, capture calls, touch execution, or ADB shell input.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C aggregate plan observation through a resident daemon and real UI/scheduler polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit Runtime changes and record the milestone commit/tag.
+2. Push Runtime changes and checkpoint tag.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab pending-live validation diagnostics summary
 
 ### Current status

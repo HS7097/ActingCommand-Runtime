@@ -1153,6 +1153,7 @@ fn session_layer_capability_contract() -> Value {
             "capture_policy_command": "session capture-policy",
             "self_heal_policy_command": "session self-heal-policy",
             "self_heal_plan_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
             "status_command": "session status --diagnostics",
             "readiness_command": "session readiness",
             "validation_plan_command": "session validation-plan",
@@ -1186,7 +1187,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session self-heal-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1772,6 +1773,130 @@ fn session_self_heal_plan_blockers(
     blockers
 }
 
+fn session_phase_c_plan_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    config: Option<&UserConfig>,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    let self_heal_policy = session_self_heal_policy_payload(global, flags, command_name)?;
+    let self_heal_plan =
+        session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
+    let transport_plan = session_transport_plan_payload(flags)?;
+    let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
+
+    Ok(json!({
+        "schema_version": "session.phase_c_plan.v0.1",
+        "status": "offline_plan",
+        "purpose": "machine-readable Phase C roadmap for self-heal, interaction flow, trusted channel, and live acceptance boundaries",
+        "generated_at_unix_ms": current_unix_ms(),
+        "state_dir": state_dir.display().to_string(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "execution_model": {
+            "session_layer_is_only_control_throat": true,
+            "ui_must_not_directly_touch_adb_or_device": true,
+            "scheduler_owns_arbitration": true,
+            "control_execution_requires_matching_lease": true,
+            "local_cli_is_available": true,
+            "trusted_remote_is_reserved": true
+        },
+        "milestones": [
+            {
+                "id": "phase_c_1_self_heal_policy_and_plan",
+                "lane": "self_heal",
+                "status": "available_offline",
+                "query": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+                "daemon_query": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
+                "acceptance": "plans are inspectable without execution; live recovery remains deferred"
+            },
+            {
+                "id": "phase_c_2_interaction_flow_preflight",
+                "lane": "interaction_stream",
+                "status": "partial_offline",
+                "query": "session stream-plan [--endpoint <url>]",
+                "daemon_query": "session request stream-plan [--endpoint <url>]",
+                "acceptance": "bounded local stream and input relay contracts are visible; long-lived UI stream remains reserved"
+            },
+            {
+                "id": "phase_c_3_trusted_channel_preflight",
+                "lane": "trusted_channel",
+                "status": "reserved_contract",
+                "query": "session transport plan [--endpoint <url>]",
+                "daemon_query": "session request transport plan [--endpoint <url>]",
+                "acceptance": "remote channels require encryption and authentication before any listener can be accepted"
+            },
+            {
+                "id": "phase_c_4_live_acceptance",
+                "lane": "live_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "query": "session validation-plan",
+                "daemon_query": "session request validation-plan",
+                "acceptance": "operator/live evidence is required and offline checks must not mark live items passed"
+            }
+        ],
+        "self_heal": {
+            "policy": self_heal_policy,
+            "plan": self_heal_plan
+        },
+        "interaction_flow": {
+            "plan": {
+                "schema_version": "session.phase_c_interaction_plan.v0.1",
+                "status": "reserved_contract",
+                "stream_plan_query": "session stream-plan [--endpoint <url>]",
+                "daemon_stream_plan_query": "session request stream-plan [--endpoint <url>]",
+                "stream_plan_contract": session_stream_plan_view_contract(),
+                "bounded_local_cli_stream_status": "available",
+                "daemon_bounded_stream_request_status": "available",
+                "trusted_remote_long_lived_stream_status": "reserved",
+                "instance_level_preflight_required": true
+            },
+            "long_lived_ui_stream_status": "reserved",
+            "input_relay_requires_matching_lease": true,
+            "does_not_execute_input_relay": true
+        },
+        "trusted_channel": {
+            "plan": transport_plan,
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
+        },
+        "live_validation": {
+            "plan": validation_plan,
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "client_guidance": {
+            "ui_should_read": ["session bootstrap", "session phase-c-plan", "session status --diagnostics"],
+            "scheduler_should_read": ["session readiness", "session queue", "session submit-plan <command...>", "session validation-plan"],
+            "agents_should_read": ["session command-check <command...>", "session self-heal-plan [--trigger <kind>]", "session transport plan [--endpoint <url>]"],
+            "operator_live_acceptance_list": "session validation-plan"
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    }))
+}
+
 fn session_access_contract() -> Value {
     json!({
         "schema_version": "session.access.v0.1",
@@ -1810,6 +1935,7 @@ fn session_access_contract() -> Value {
             "capture_policy": "session request capture-policy",
             "self_heal_policy": "session request self-heal-policy",
             "self_heal_plan": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
+            "phase_c_plan": "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
@@ -1847,6 +1973,7 @@ fn session_access_contract() -> Value {
                     "capture-policy",
                     "self-heal-policy",
                     "self-heal-plan",
+                    "phase-c-plan",
                     "queue",
                     "journal",
                     "readiness",
@@ -2325,7 +2452,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "self_heal_plan", "connect_plan", "stream_plan", "transport_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -2550,6 +2677,14 @@ fn session_api_contract() -> Value {
             session_self_heal_plan_view_contract(),
         );
     contract
+        .pointer_mut("/envelopes")
+        .and_then(Value::as_object_mut)
+        .expect("session api contract envelopes must be an object")
+        .insert(
+            "phase_c_plan_view".to_string(),
+            session_phase_c_plan_view_contract(),
+        );
+    contract
 }
 
 fn session_connect_plan_view_contract() -> Value {
@@ -2682,6 +2817,26 @@ fn session_self_heal_plan_view_contract() -> Value {
     })
 }
 
+fn session_phase_c_plan_view_contract() -> Value {
+    json!({
+        "query": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "daemon_query": "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "schema_version": "session.phase_c_plan.v0.1",
+        "self_heal_field": "self_heal",
+        "interaction_flow_field": "interaction_flow",
+        "trusted_channel_field": "trusted_channel",
+        "live_validation_field": "live_validation",
+        "milestones_field": "milestones",
+        "does_not_enqueue": true,
+        "does_not_touch_device": true,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true,
+        "does_not_start_listener": true,
+        "does_not_issue_tokens": true,
+        "does_not_start_tls": true
+    })
+}
+
 fn session_bootstrap_view_contract() -> Value {
     json!({
         "query": "session bootstrap",
@@ -2693,6 +2848,7 @@ fn session_bootstrap_view_contract() -> Value {
         "capture_policy_field": "capture_policy",
         "self_heal_policy_field": "self_heal_policy",
         "validation_plan_field": "validation_plan",
+        "phase_c_plan_field": "phase_c_plan",
         "api_contract_field": "api_contract",
         "access_contract_field": "access_contract",
         "does_not_enqueue": true,
@@ -6429,6 +6585,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "capture-policy" => run_session_capture_policy(global, args),
         "self-heal-policy" => run_session_self_heal_policy(global, args),
         "self-heal-plan" => run_session_self_heal_plan(global, args),
+        "phase-c-plan" => run_session_phase_c_plan(global, args),
         "readiness" => run_session_readiness(global, args),
         "connect-plan" => run_session_connect_plan(global, args),
         "stream-plan" => run_session_stream_plan(global, args),
@@ -6531,6 +6688,22 @@ fn run_session_self_heal_plan(global: &GlobalOptions, args: &[String]) -> CliOut
         &state_dir,
         Some(&config),
         "session self-heal-plan",
+    )
+}
+
+fn run_session_phase_c_plan(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "phase_c_plan", args);
+    }
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let config = read_user_config()?;
+    session_phase_c_plan_payload(
+        global,
+        &flags,
+        &state_dir,
+        Some(&config),
+        "session phase-c-plan",
     )
 }
 
@@ -7296,6 +7469,8 @@ fn session_bootstrap_payload(
     let self_heal_policy = session_self_heal_policy_payload(global, flags, command_name)?;
     let self_heal_plan =
         session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
+    let phase_c_plan =
+        session_phase_c_plan_payload(global, flags, state_dir, config, command_name)?;
     Ok(json!({
         "schema_version": "session.bootstrap.v0.1",
         "generated_at_unix_ms": current_unix_ms(),
@@ -7312,6 +7487,7 @@ fn session_bootstrap_payload(
             "capture_policy": "session capture-policy",
             "self_heal_policy": "session self-heal-policy",
             "self_heal_plan": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "phase_c_plan": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
             "readiness": "session readiness",
             "connect_plan": "session connect-plan",
             "stream_plan": "session stream-plan",
@@ -7327,6 +7503,7 @@ fn session_bootstrap_payload(
             "capture_policy": "session request capture-policy",
             "self_heal_policy": "session request self-heal-policy",
             "self_heal_plan": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
+            "phase_c_plan": "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
             "readiness": "session request readiness",
             "connect_plan": "session request connect-plan",
             "stream_plan": "session request stream-plan",
@@ -7343,6 +7520,7 @@ fn session_bootstrap_payload(
         "capture_policy": capture_policy,
         "self_heal_policy": self_heal_policy,
         "self_heal_plan": self_heal_plan,
+        "phase_c_plan": phase_c_plan,
         "readiness": readiness,
         "queue": queue,
         "validation_plan": validation_plan,
@@ -7906,9 +8084,8 @@ fn classify_session_command_for_check(
         "status" | "readiness" | "connect-plan" | "stream-plan" | "queue" | "journal"
         | "events" | "response" | "request-state" | "contract" | "api" | "transport"
         | "capabilities" | "bootstrap" | "command-check" | "submit-plan" | "validation-plan"
-        | "throat-policy" | "capture-policy" | "self-heal-policy" | "self-heal-plan" => {
-            Ok(read_only)
-        }
+        | "throat-policy" | "capture-policy" | "self-heal-policy" | "self-heal-plan"
+        | "phase-c-plan" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -11015,7 +11192,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, self-heal-plan, readiness, connect-plan, stream-plan, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, self-heal-plan, phase-c-plan, readiness, connect-plan, stream-plan, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -11034,6 +11211,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         }
         "self-heal-plan" => {
             submit_readonly_session_request(global, &flags, "self_heal_plan", &args[1..])
+        }
+        "phase-c-plan" => {
+            submit_readonly_session_request(global, &flags, "phase_c_plan", &args[1..])
         }
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
         "connect-plan" => {
@@ -11933,6 +12113,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
+        "phase_c_plan" => Some(phase_c_plan_request_data_summary(data)),
         "connect_plan" => Some(connect_plan_request_data_summary(data)),
         "stream_plan" => Some(stream_plan_request_data_summary(data)),
         "transport"
@@ -11964,6 +12145,24 @@ fn self_heal_plan_request_data_summary(data: &Value) -> Value {
         "ready_to_execute_maintenance": data.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
         "lease_status": data.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
+    })
+}
+
+fn phase_c_plan_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "phase_c_plan",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "milestone_count": data.get("milestones").and_then(Value::as_array).map(Vec::len),
+        "self_heal_status": data.pointer("/self_heal/plan/status").cloned().unwrap_or(Value::Null),
+        "self_heal_recovery_kind": data.pointer("/self_heal/plan/recovery/kind").cloned().unwrap_or(Value::Null),
+        "stream_plan_status": data.pointer("/interaction_flow/plan/status").cloned().unwrap_or(Value::Null),
+        "trusted_channel_status": data.pointer("/trusted_channel/plan/trusted_remote/status").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
+        "does_not_issue_tokens": data.pointer("/guarantees/does_not_issue_tokens").cloned().unwrap_or(Value::Null),
+        "does_not_start_tls": data.pointer("/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -12182,6 +12381,18 @@ fn execute_session_command_request_inner(
                 state_dir,
                 Some(&config),
                 "session request self-heal-plan",
+            )
+        }
+        "phase_c_plan" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let config = read_user_config()?;
+            let global = request.global.to_global()?;
+            session_phase_c_plan_payload(
+                &global,
+                &flags,
+                state_dir,
+                Some(&config),
+                "session request phase-c-plan",
             )
         }
         "readiness" => {
@@ -17949,6 +18160,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture-policy", ["offline"], "available"),
         command_cap("session self-heal-policy", ["offline"], "available"),
         command_cap("session self-heal-plan", ["offline"], "available"),
+        command_cap("session phase-c-plan", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
         command_cap("session connect-plan", ["offline"], "available"),
         command_cap("session stream-plan", ["offline"], "available"),
@@ -18001,6 +18213,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request self-heal-plan",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request phase-c-plan",
             ["running_runtime"],
             "available",
         ),
@@ -20703,6 +20920,40 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_phase_c_plan_is_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "command-check", "phase-c-plan"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_command_check_connect_plan_is_read_only() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -21414,6 +21665,16 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/phase_c_plan/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_plan/trusted_channel/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -21454,6 +21715,14 @@ mod tests {
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session self-heal-policy"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session phase-c-plan"))
         );
     }
 
@@ -21516,6 +21785,14 @@ mod tests {
                 .pointer("/daemon_queries/self_heal_policy")
                 .and_then(Value::as_str),
             Some("session request self-heal-policy")
+        );
+        assert_eq!(
+            payload
+                .pointer("/daemon_queries/phase_c_plan")
+                .and_then(Value::as_str),
+            Some(
+                "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]"
+            )
         );
         assert_eq!(
             payload
@@ -22058,6 +22335,171 @@ mod tests {
             summary
                 .get("operator_live_validation_required")
                 .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_phase_c_plan_reports_self_heal_interaction_and_trusted_channel_without_device_work()
+    {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "phase-c-plan",
+                "--local",
+                "--trigger",
+                "capture_stale_suspected",
+                "--endpoint",
+                "https://127.0.0.1:9443",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.phase_c_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/self_heal/plan/escalation/category")
+                .and_then(Value::as_str),
+            Some("transient_capture_path")
+        );
+        assert_eq!(
+            data.pointer("/interaction_flow/long_lived_ui_stream_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/trusted_channel/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_channel/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_channel/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_channel/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_phase_c_plan_request_returns_summary() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "phase-c-plan-query".to_string(),
+            command: "phase_c_plan".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--trigger".to_string(),
+                "capture_stale_suspected".to_string(),
+                "--endpoint".to_string(),
+                "https://127.0.0.1:9443".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        let response = SessionCommandResponse {
+            request_id: query.request_id,
+            command: query.command,
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("phase_c_plan")
+        );
+        assert_eq!(
+            summary
+                .get("self_heal_recovery_kind")
+                .and_then(Value::as_str),
+            Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            summary
+                .get("trusted_channel_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            summary.get("deferred_code").and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            summary
+                .get("does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary.get("does_not_start_tls").and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -32090,6 +32532,12 @@ mod tests {
                 "missing data summary kind {kind}"
             );
         }
+        assert!(
+            data_summary_kinds
+                .iter()
+                .any(|item| item.as_str() == Some("phase_c_plan")),
+            "missing data summary kind phase_c_plan"
+        );
         assert_eq!(
             payload
                 .pointer("/envelopes/event_view/data_summary_kind_filter_repeats")
@@ -32173,6 +32621,30 @@ mod tests {
                 .pointer("/envelopes/status_view/interaction_channel_actions/1")
                 .and_then(Value::as_str),
             Some("trusted_channel_preflight_review")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_plan.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload
@@ -37031,6 +37503,13 @@ mod tests {
             data.pointer("/daemon_queries/validation_plan")
                 .and_then(Value::as_str),
             Some("session request validation-plan")
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/phase_c_plan")
+                .and_then(Value::as_str),
+            Some(
+                "session request phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]"
+            )
         );
         assert_eq!(
             data.pointer("/daemon_queries/transport")

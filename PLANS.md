@@ -186,6 +186,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab interaction/trusted-channel diagnostics recommended actions: `session status --diagnostics` now turns recent `stream_plan` and `transport_plan` summaries into read-only `interactive_stream_preflight_review` and `trusted_channel_preflight_review` actions for UI/scheduler clients.
 - ActingLab pending-live validation diagnostics summary: `session status --diagnostics` now exposes the `待真机验收` summary from `session validation-plan` for UI/scheduler clients without marking live checks passed.
 
+- ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
+
+## Current ActingLab Phase C Aggregate Plan Surface
+
+This increment gives UI, scheduler, and agent clients one Phase C planning envelope instead of requiring them to manually stitch together self-heal, stream, trusted-channel, and validation-plan queries.
+
+- `session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]` returns `session.phase_c_plan.v0.1`.
+- `session request phase-c-plan ...` exposes the same surface through the resident daemon request queue.
+- The plan includes self-heal policy/plan data, an interaction-flow contract summary, trusted-channel transport plan data, and the pending live-validation plan.
+- Interaction flow remains a contract/preflight summary in this aggregate view; instance-level stream readiness still belongs to `session stream-plan`.
+- Trusted remote remains reserved: the aggregate plan records that no listener is started, no token is issued, and no TLS implementation is started.
+- Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
+- `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters now advertise the Phase C plan surface.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
 ## Current ActingLab Pending-Live Validation Diagnostics Summary
 
 This increment makes the skipped live-device acceptance list visible from the main status diagnostics surface.
