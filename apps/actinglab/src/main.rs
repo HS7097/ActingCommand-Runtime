@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "command_check", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15012,6 +15012,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     let data = response.data.as_ref()?;
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
+        "command_check" => Some(command_check_request_data_summary(data)),
         "capture_policy" => Some(capture_policy_request_data_summary(data)),
         "record_policy" => Some(record_policy_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
@@ -15031,6 +15032,48 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         }
         _ => None,
     }
+}
+
+fn command_check_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "command_check",
+        "status": if data.get("safe_to_submit").and_then(Value::as_bool).unwrap_or(false) {
+            "ready"
+        } else {
+            "blocked"
+        },
+        "normalized_command": data.get("normalized_command").cloned().unwrap_or(Value::Null),
+        "command_class": data.get("command_class").cloned().unwrap_or(Value::Null),
+        "device_affecting": data.get("device_affecting").cloned().unwrap_or(Value::Null),
+        "requires_lease": data.get("requires_lease").cloned().unwrap_or(Value::Null),
+        "safe_to_submit": data.get("safe_to_submit").cloned().unwrap_or(Value::Null),
+        "phase_c_scope_schema_version": data.pointer("/phase_c_scope/schema_version").cloned().unwrap_or(Value::Null),
+        "phase_c_relevant": data.pointer("/phase_c_scope/phase_c_relevant").cloned().unwrap_or(Value::Null),
+        "phase_c_lane_count": data.pointer("/phase_c_scope/relevant_lanes").and_then(Value::as_array).map(Vec::len),
+        "phase_c_relevant_lanes": data.pointer("/phase_c_scope/relevant_lanes").cloned().unwrap_or(Value::Null),
+        "self_heal_relevant": data.pointer("/phase_c_scope/self_heal/relevant").cloned().unwrap_or(Value::Null),
+        "interaction_flow_relevant": data.pointer("/phase_c_scope/interaction_flow/relevant").cloned().unwrap_or(Value::Null),
+        "trusted_channel_relevant": data.pointer("/phase_c_scope/trusted_channel/relevant").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/phase_c_scope/live_validation/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/phase_c_scope/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "throat_status": data.pointer("/throat_gate/status").cloned().unwrap_or(Value::Null),
+        "session_layer_required": data.pointer("/throat_gate/session_layer_required").cloned().unwrap_or(Value::Null),
+        "direct_adb_or_device_access_allowed": data.pointer("/throat_gate/direct_adb_or_device_access_allowed").cloned().unwrap_or(Value::Null),
+        "clients_must_not_directly_touch_adb_or_devices": data.pointer("/throat_gate/clients_must_not_directly_touch_adb_or_devices").cloned().unwrap_or(Value::Null),
+        "lease_status": data.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
+        "queue_gate_status": data.pointer("/queue_gate/status").cloned().unwrap_or(Value::Null),
+        "instance_gate_status": data.pointer("/instance_gate/status").cloned().unwrap_or(Value::Null),
+        "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len),
+        "does_not_enqueue": data.pointer("/guarantees/does_not_enqueue").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/phase_c_scope/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
+        "does_not_issue_tokens": data.pointer("/phase_c_scope/guarantees/does_not_issue_tokens").cloned().unwrap_or(Value::Null),
+        "does_not_start_tls": data.pointer("/phase_c_scope/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null),
+        "does_not_mark_live_validation_passed": data.pointer("/phase_c_scope/guarantees/does_not_mark_live_validation_passed").cloned().unwrap_or(Value::Null)
+    })
 }
 
 fn capture_policy_request_data_summary(data: &Value) -> Value {
@@ -25283,6 +25326,32 @@ mod tests {
         assert_eq!(
             payload.pointer("/lease_gate/code").and_then(Value::as_str),
             Some("lab_lease_required")
+        );
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("command_check")
+        );
+        assert_eq!(
+            summary
+                .get("direct_adb_or_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -36932,6 +37001,121 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_command_check_phase_c_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: None,
+            server: None,
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let command_check_request = SessionCommandRequest {
+            request_id: "command-check-stream-event".to_string(),
+            command: "command_check".to_string(),
+            global: global.clone(),
+            args: vec![
+                "stream".to_string(),
+                "--input-event".to_string(),
+                "tap,10,20".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 90,
+        };
+        let command_check_payload =
+            execute_session_command_request_inner(&command_check_request, state_dir).unwrap();
+        let command_check_response = SessionCommandResponse {
+            request_id: command_check_request.request_id.clone(),
+            command: command_check_request.command.clone(),
+            ok: true,
+            data: Some(command_check_payload),
+            error: None,
+            started_at_unix_ms: 91,
+            completed_at_unix_ms: 92,
+        };
+        append_session_request_journal(state_dir, &command_check_request, &command_check_response)
+            .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-command-check-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "command_check".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 93,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("command-check-stream-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("command_check")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/phase_c_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/interaction_flow_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/direct_adb_or_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_events_filters_by_status_after_cursor() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -37720,6 +37904,7 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         for kind in [
+            "command_check",
             "capture_policy",
             "record_policy",
             "connect_plan",

@@ -180,6 +180,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
 - ActingLab command-check Phase C scope: `session command-check` now includes `phase_c_scope`, classifying self-heal, interaction-flow, trusted-channel, and live-validation relevance before clients submit or enqueue work.
+- ActingLab command-check Phase C event summary: daemon request journals and `session events --data-summary-kind command_check` now expose compact command-check Phase C scope for UI/scheduler event consumers.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
@@ -250,6 +251,17 @@ This increment makes the Phase C lane decision visible from the earliest no-devi
 - Trusted channel remains reserved and closed by default: encrypted/authenticated remote access is documented as required, while listeners, token issuance, and TLS startup remain unimplemented in this increment.
 - Live validation remains `deferred` with `deferred_code=requires-live-device`; `command-check` must not mark any live check accepted.
 - This is an offline contract/discovery increment only: it does not enqueue daemon work, capture frames, touch devices, start MaaTouch, start apps, start listeners, issue tokens, start TLS, read resource repositories, write SQLite, or run game logic.
+
+## Current ActingLab Command-Check Phase C Event Summary
+
+This increment makes command-check Phase C scope discoverable from daemon request journals and event filters.
+
+- `session_request_data_summary` now emits `kind=command_check` for successful `session request command-check ...` responses.
+- The command-check summary carries command class, lease requirement, safe-to-submit status, Session throat status, direct-device-access prohibition, blockers, and compact Phase C lane data.
+- Interaction-flow preflights such as `stream --input-event <action,args>` can now be retrieved with `session events --data-summary-kind command_check`.
+- The event summary preserves no-device guarantees: no enqueue, no capture, no MaaTouch, no listener, no token issuer, no TLS startup, and no live-validation pass marker.
+- `session api` now advertises `command_check` in `event_view.data_summary_kinds`.
+- This is an offline journal/event contract increment only; it does not execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, touch devices, read resource repositories, write SQLite, or run game logic.
 
 ## Current ActingLab Recording Command Preflight Classification
 

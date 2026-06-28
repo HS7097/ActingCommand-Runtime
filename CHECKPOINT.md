@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab command-check Phase C event summary
+
+### Current status
+
+- Continued offline-only Session Layer work after adding `phase_c_scope` to command-check.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added `command_check` request data summaries for successful `session request command-check ...` responses.
+- The summary exposes command class, normalized command, lease requirement, safe-to-submit status, Session throat status, direct ADB/device access prohibition, blocker count, and compact Phase C lane fields.
+- `session events --data-summary-kind command_check` can now return command-check Phase C summaries for UI/scheduler event consumers.
+- Interaction-flow preflights such as `stream --input-event <action,args>` now produce event summaries with `interaction_flow_relevant=true`, `requires_lease=true`, `deferred_code=requires-live-device`, and no listener/token/TLS guarantees.
+- `session api` now advertises `command_check` under `event_view.data_summary_kinds`.
+- This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `b548985c79e31fa68fcd40209dd87dc5e9362052`.
+- Milestone source commit: pending until commit is created.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: command-check summaries can show whether a preflight belongs to the self-heal lane without executing recovery.
+- Interaction flow: command-check summaries make input-relay lease requirements visible from journal/events before any stream/input work starts.
+- Trusted channel: command-check summaries preserve trusted-channel reserved/closed-by-default guarantees and record no listener/token/TLS startup from this surface.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; event summaries must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Inspected Session Layer command-check, request data-summary, journal/events, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_filters_command_check_phase_c_data_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused command-check tests passed.
+- Focused command-check Phase C event-summary test passed.
+- Focused API contract test passed.
+- Manual JSON smoke for `session api` showed `event_view.data_summary_kinds` includes `command_check`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab command-check Phase C scope
 
 ### Current status
