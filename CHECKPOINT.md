@@ -15,7 +15,7 @@
 - Added a small test-isolation fix for `current_page_resolves_semantic_page`: it now takes the shared env lock and clears Session config/state env vars before running, matching nearby semantic CLI tests and avoiding parallel test pollution.
 - This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `fa4303e0a52891049fe2ac583647f59e9fa0e55c`.
-- Milestone source commit: pending.
+- Milestone source commit: `bd61ecb198afdff2d47ae7ceb036a3c06774e975`.
 
 ### 待真机验收
 
