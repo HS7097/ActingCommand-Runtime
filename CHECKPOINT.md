@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab target-scoped request-state list
+
+### Current status
+
+- Added target filters to `session request-state list` for UI/scheduler queue inspection.
+- The list view now accepts global `--instance`, `--game`, and `--server` selectors plus repeatable `--lease-holder`.
+- Filtering applies to queued, running, and journal-backed request states through the same target matching semantics used by Session events and journal views.
+- Response-only entries without recorded target metadata remain visible when no target filter is active and are excluded when a target filter cannot be proven to match.
+- `session api` now advertises the request-state list filters and global filters.
+- No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `6c803e200618c109383055b2170c2e74a3a3109f`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Continued from the already-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Continued from the already-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Inspected Session Layer request-state list, event target filters, Session API contract, and existing request-state tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_state_list -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused Session request-state list tests passed.
+- Initial full workspace test failed because `session_api_is_offline_api_contract` still expected the old request-state list query without `--lease-holder`.
+- Updated the Session API contract test to assert the new daemon list query, global filters, and repeated lease-holder filter flag.
+- Focused Session API contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-target-scoped-request-state-list`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab blocked queue cancel recommendation
 
 ### Current status

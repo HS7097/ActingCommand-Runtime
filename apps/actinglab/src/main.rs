@@ -1633,9 +1633,12 @@ fn session_api_contract() -> Value {
                 "wait_query": "session request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]",
                 "daemon_wait_query": "session request request-state wait <request-id> [--status <state>] [--timeout-ms N] [--poll-ms N]",
                 "schema_version": "session.request_state.v0.1",
-                "list_query": "session request-state list [--limit N] [--status <state>]",
-                "daemon_list_query": "session request request-state list [--limit N] [--status <state>]",
+                "list_query": "session request-state list [--limit N] [--status <state>] [--lease-holder <id>]",
+                "daemon_list_query": "session request request-state list [--limit N] [--status <state>] [--lease-holder <id>]",
                 "list_schema_version": "session.request_state_list.v0.1",
+                "list_filters": ["--limit", "--status", "--lease-holder"],
+                "list_global_filters": ["--instance", "--game", "--server"],
+                "lease_holder_filter_repeats": true,
                 "statuses": ["queued", "running", "response_available", "completed", "failed", "unknown"],
                 "state_sources": ["requests", "running", "responses", "request-journal"],
                 "wait_default_statuses": ["response_available", "completed", "failed"],
@@ -6248,10 +6251,14 @@ fn run_session_request_state(global: &GlobalOptions, args: &[String]) -> CliOutc
     if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "request_state", args);
     }
-    run_session_request_state_in_state_dir(&flags, &session_state_dir_from_flags(&flags)?)
+    run_session_request_state_in_state_dir(global, &flags, &session_state_dir_from_flags(&flags)?)
 }
 
-fn run_session_request_state_in_state_dir(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+fn run_session_request_state_in_state_dir(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+) -> CliOutcome<Value> {
     let sub = flags
         .positionals
         .first()
@@ -6264,7 +6271,7 @@ fn run_session_request_state_in_state_dir(flags: &FlagArgs, state_dir: &Path) ->
     match sub {
         "get" => run_session_request_state_get(flags, state_dir),
         "wait" => run_session_request_state_wait(flags, state_dir),
-        "list" => run_session_request_state_list(flags, state_dir),
+        "list" => run_session_request_state_list(global, flags, state_dir),
         other => Err(CliError::usage(format!(
             "unknown session request-state command: {other}"
         ))),
@@ -6333,19 +6340,46 @@ fn run_session_request_state_wait(flags: &FlagArgs, state_dir: &Path) -> CliOutc
 struct SessionRequestStateListItem {
     request_id: String,
     status: &'static str,
+    global: Option<SessionCommandGlobal>,
+    lease: Option<SessionCommandLease>,
     timestamp_unix_ms: u64,
     priority: u8,
     value: Value,
 }
 
-fn run_session_request_state_list(flags: &FlagArgs, state_dir: &Path) -> CliOutcome<Value> {
+#[derive(Debug)]
+struct SessionRequestStateListFilters {
+    statuses: Vec<String>,
+    target: SessionEventTargetFilter,
+}
+
+fn run_session_request_state_list(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+) -> CliOutcome<Value> {
     flags.expect_positionals("session request-state list", 1)?;
     let limit = parse_optional_usize(flags, "--limit", 20)?;
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let status_filter = parse_session_request_state_list_status_filter(flags)?;
-    session_request_state_list_payload(state_dir, limit, &status_filter)
+    let filters = parse_session_request_state_list_filters(global, flags)?;
+    session_request_state_list_payload(state_dir, limit, &filters)
+}
+
+fn parse_session_request_state_list_filters(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+) -> CliOutcome<SessionRequestStateListFilters> {
+    Ok(SessionRequestStateListFilters {
+        statuses: parse_session_request_state_list_status_filter(flags)?,
+        target: parse_session_event_target_filter(
+            global.instance.clone(),
+            global.game.clone(),
+            global.server.clone(),
+            flags,
+        )?,
+    })
 }
 
 fn parse_session_request_state_list_status_filter(flags: &FlagArgs) -> CliOutcome<Vec<String>> {
@@ -6384,7 +6418,7 @@ fn parse_session_request_state_wait_status_filter(flags: &FlagArgs) -> CliOutcom
 fn session_request_state_list_payload(
     state_dir: &Path,
     limit: usize,
-    status_filter: &[String],
+    filters: &SessionRequestStateListFilters,
 ) -> CliOutcome<Value> {
     let requests_dir = session_requests_dir(state_dir);
     let running_dir = session_running_dir(state_dir);
@@ -6406,6 +6440,8 @@ fn session_request_state_list_payload(
             SessionRequestStateListItem {
                 request_id: request_id.clone(),
                 status: "queued",
+                global: Some(request.global.clone()),
+                lease: request.lease.clone(),
                 timestamp_unix_ms: request.created_at_unix_ms,
                 priority: 2,
                 value: json!({
@@ -6440,6 +6476,8 @@ fn session_request_state_list_payload(
             SessionRequestStateListItem {
                 request_id: request_id.clone(),
                 status: "running",
+                global: Some(request.global.clone()),
+                lease: request.lease.clone(),
                 timestamp_unix_ms: request.started_at_unix_ms,
                 priority: 1,
                 value: json!({
@@ -6476,6 +6514,8 @@ fn session_request_state_list_payload(
             SessionRequestStateListItem {
                 request_id: request_id.clone(),
                 status: "response_available",
+                global: None,
+                lease: None,
                 timestamp_unix_ms: response.completed_at_unix_ms,
                 priority: 0,
                 value: json!({
@@ -6509,6 +6549,8 @@ fn session_request_state_list_payload(
             SessionRequestStateListItem {
                 request_id: request_id.clone(),
                 status,
+                global: entry.global.clone(),
+                lease: entry.lease.clone(),
                 timestamp_unix_ms: entry.completed_at_unix_ms,
                 priority: 3,
                 value: json!({
@@ -6535,7 +6577,8 @@ fn session_request_state_list_payload(
         );
     }
 
-    let status_filter_set = status_filter
+    let status_filter_set = filters
+        .statuses
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
@@ -6549,7 +6592,12 @@ fn session_request_state_list_payload(
     let status_counts = request_state_status_counts(&all_items);
     let mut filtered_items = all_items
         .into_iter()
-        .filter(|item| status_filter_set.is_empty() || status_filter_set.contains(item.status))
+        .filter(|item| {
+            (status_filter_set.is_empty() || status_filter_set.contains(item.status))
+                && filters
+                    .target
+                    .matches_parts(item.global.as_ref(), item.lease.as_ref())
+        })
         .collect::<Vec<_>>();
     let total_matching = filtered_items.len();
     if filtered_items.len() > limit {
@@ -6564,11 +6612,12 @@ fn session_request_state_list_payload(
         "schema_version": "session.request_state_list.v0.1",
         "state_dir": state_dir.display().to_string(),
         "limit": limit,
-        "status_filter": if status_filter.is_empty() {
+        "status_filter": if filters.statuses.is_empty() {
             Value::Null
         } else {
-            json!(status_filter)
+            json!(&filters.statuses)
         },
+        "target_filter": filters.target.to_json(),
         "total_matching": total_matching,
         "item_count": items.len(),
         "counts": status_counts,
@@ -6869,7 +6918,14 @@ impl SessionEventTargetFilter {
     }
 
     fn matches(&self, entry: &SessionRequestJournalEntry) -> bool {
-        let global = entry.global.as_ref();
+        self.matches_parts(entry.global.as_ref(), entry.lease.as_ref())
+    }
+
+    fn matches_parts(
+        &self,
+        global: Option<&SessionCommandGlobal>,
+        lease: Option<&SessionCommandLease>,
+    ) -> bool {
         if !optional_selector_matches(
             global.and_then(|global| global.instance.as_deref()),
             self.instance.as_deref(),
@@ -6889,7 +6945,7 @@ impl SessionEventTargetFilter {
             return false;
         }
         if !self.lease_holders.is_empty()
-            && !entry.lease.as_ref().is_some_and(|lease| {
+            && !lease.is_some_and(|lease| {
                 self.lease_holders
                     .iter()
                     .any(|holder| holder == &lease.holder)
@@ -9368,7 +9424,8 @@ fn execute_session_command_request_inner(
         }
         "request_state" => {
             let flags = FlagArgs::parse(&request.args)?;
-            run_session_request_state_in_state_dir(&flags, state_dir)
+            let global = request.global.to_global()?;
+            run_session_request_state_in_state_dir(&global, &flags, state_dir)
         }
         "contract" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -29159,6 +29216,91 @@ mod tests {
     }
 
     #[test]
+    fn session_request_state_list_filters_target_and_lease_holder() {
+        let temp = TempDir::new().unwrap();
+        for (request_id, instance, holder, created_at_unix_ms) in [
+            ("ak-ui", "ak", "ui", 10_u64),
+            ("ak-scheduler", "ak", "scheduler", 20_u64),
+            ("ba-ui", "ba", "ui", 30_u64),
+        ] {
+            let request = SessionCommandRequest {
+                request_id: request_id.to_string(),
+                command: "stream".to_string(),
+                global: SessionCommandGlobal {
+                    instance: Some(instance.to_string()),
+                    game: Some(
+                        if instance == "ak" {
+                            "arknights"
+                        } else {
+                            "bluearchive"
+                        }
+                        .to_string(),
+                    ),
+                    server: Some("jp".to_string()),
+                    resource_root: None,
+                    capture_backend: None,
+                    dry_run: false,
+                },
+                args: Vec::new(),
+                lease: Some(SessionCommandLease {
+                    holder: holder.to_string(),
+                    lease_id: Some(format!("{holder}-lease")),
+                }),
+                created_at_unix_ms,
+            };
+            write_json_file_atomic(
+                &session_requests_dir(temp.path()).join(format!("{request_id}.json")),
+                &request,
+            )
+            .unwrap();
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "request-state",
+                "list",
+                "--lease-holder",
+                "ui",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("total_matching").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            data.pointer("/target_filter/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            data.pointer("/target_filter/lease_holders/0")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
+        assert_eq!(
+            data.pointer("/items/0/request_id").and_then(Value::as_str),
+            Some("ak-ui")
+        );
+        assert_eq!(
+            data.pointer("/items/0/global/instance")
+                .and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            data.pointer("/items/0/lease/holder")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
+    }
+
+    #[test]
     fn session_request_state_list_rejects_unknown_status() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -31013,7 +31155,19 @@ mod tests {
         assert_eq!(
             data.pointer("/envelopes/request_state_view/daemon_list_query")
                 .and_then(Value::as_str),
-            Some("session request request-state list [--limit N] [--status <state>]")
+            Some(
+                "session request request-state list [--limit N] [--status <state>] [--lease-holder <id>]"
+            )
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/list_global_filters/0")
+                .and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/request_state_view/lease_holder_filter_repeats")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/envelopes/request_state_view/statuses/1")
