@@ -1151,6 +1151,7 @@ fn session_layer_capability_contract() -> Value {
             "bootstrap_command": "session bootstrap",
             "throat_policy_command": "session throat-policy",
             "capture_policy_command": "session capture-policy",
+            "self_heal_policy_command": "session self-heal-policy",
             "status_command": "session status --diagnostics",
             "readiness_command": "session readiness",
             "validation_plan_command": "session validation-plan",
@@ -1183,7 +1184,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1274,7 +1275,8 @@ fn session_throat_policy_payload(
             "session contract",
             "session bootstrap",
             "session validation-plan",
-            "session throat-policy"
+            "session throat-policy",
+            "session self-heal-policy"
         ],
         "deferred_live_acceptance": {
             "status": "deferred",
@@ -1371,6 +1373,129 @@ fn session_capture_policy_payload(
     }))
 }
 
+fn session_self_heal_policy_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    Ok(json!({
+        "schema_version": "session.self_heal_policy.v0.1",
+        "status": "offline_policy",
+        "purpose": "machine-readable Phase C maintenance self-heal policy for Session Layer clients",
+        "generated_at_unix_ms": current_unix_ms(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "phase_c": {
+            "name": "self-heal",
+            "goal": "return a session to a known-good state without executing game-progress actions",
+            "target_state": "home_or_known_good_page",
+            "live_acceptance_status": "deferred",
+            "deferred_code": "requires-live-device"
+        },
+        "flow": [
+            {
+                "stage": "observe",
+                "allowed_commands": ["monitor --once", "session status --diagnostics", "session instance health --capture-diagnose"],
+                "device_control_allowed": false
+            },
+            {
+                "stage": "diagnose",
+                "allowed_commands": ["capture diagnose --require-fresh", "session capture diagnose --require-fresh", "current-page", "is-visible"],
+                "must_distinguish_capture_stale_from_game_freeze": true
+            },
+            {
+                "stage": "plan",
+                "allowed_commands": ["session recover --stale-capture", "session recover --to <page> --dry-run", "session submit-plan <command...>"],
+                "must_be_inspectable_before_execution": true
+            },
+            {
+                "stage": "execute",
+                "allowed_commands": ["session request recover", "session request app restart", "session monitor-policy set --recover"],
+                "requires_matching_lease": true,
+                "must_run_through_session_layer": true
+            }
+        ],
+        "trigger_policy": {
+            "supported_triggers": [
+                "capture_stale_suspected",
+                "capture_backend_unavailable",
+                "standby",
+                "unexpected_page",
+                "modal_popup",
+                "startup_login_required",
+                "session_expired"
+            ],
+            "stale_adb_screencap_alone_is_not_game_freeze": true,
+            "must_diagnose_before_restart": true,
+            "must_not_treat_missing_evidence_as_success": true
+        },
+        "recovery_order": [
+            {
+                "order": 1,
+                "kind": "read_only_diagnosis",
+                "examples": ["monitor --once", "capture diagnose --require-fresh"]
+            },
+            {
+                "order": 2,
+                "kind": "capture_backend_recovery",
+                "examples": ["try nemu_ipc", "try droidcast_raw", "use adb_screencap only as last resort"]
+            },
+            {
+                "order": 3,
+                "kind": "maintenance_navigation",
+                "examples": ["standby wake", "modal close", "safe route to home"]
+            },
+            {
+                "order": 4,
+                "kind": "startup_login_loop",
+                "examples": ["session recover --startup-login --dry-run", "bounded popup close loop"]
+            },
+            {
+                "order": 5,
+                "kind": "app_lifecycle_restart",
+                "examples": ["session app restart"],
+                "heavy_recovery": true
+            }
+        ],
+        "maintenance_boundary": {
+            "allowed_outcome": "known_good_state_only",
+            "game_progress_actions_allowed": false,
+            "destructive_actions_allowed": false,
+            "premium_or_paid_resource_use_allowed": false,
+            "pvp_or_exercise_allowed": false,
+            "blind_confirmation_allowed": false,
+            "navigation_only_default": true
+        },
+        "lease_and_scheduler_policy": {
+            "scheduler_owns_arbitration": true,
+            "session_layer_owns_device_mechanism": true,
+            "control_execution_requires_matching_lease": true,
+            "monitor_policy_recovery_without_matching_lease": "deferred_by_lease",
+            "ui_must_not_bypass_session_layer": true
+        },
+        "client_guidance": {
+            "ui_should_show_degraded_state": true,
+            "scheduler_should_pause_task_submission_until_policy_allows_execution": true,
+            "agents_should_request_plan_before_execution": true,
+            "interactive_stream_should_report_recovery_state_but_not_execute_without_lease": true,
+            "operator_live_acceptance_deferred_code": "requires-live-device"
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
 fn session_access_contract() -> Value {
     json!({
         "schema_version": "session.access.v0.1",
@@ -1406,6 +1531,7 @@ fn session_access_contract() -> Value {
             "bootstrap": "session request bootstrap",
             "throat_policy": "session request throat-policy",
             "capture_policy": "session request capture-policy",
+            "self_heal_policy": "session request self-heal-policy",
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
@@ -1438,6 +1564,7 @@ fn session_access_contract() -> Value {
                     "bootstrap",
                     "throat-policy",
                     "capture-policy",
+                    "self-heal-policy",
                     "queue",
                     "journal",
                     "readiness",
@@ -1993,6 +2120,7 @@ fn session_api_contract() -> Value {
                     "readiness",
                     "throat-policy",
                     "capture-policy",
+                    "self-heal-policy",
                     "command-check",
                     "submit-plan",
                     "validation-plan",
@@ -2098,6 +2226,14 @@ fn session_api_contract() -> Value {
             session_capture_policy_view_contract(),
         );
     contract
+        .pointer_mut("/envelopes")
+        .and_then(Value::as_object_mut)
+        .expect("session api contract envelopes must be an object")
+        .insert(
+            "self_heal_policy_view".to_string(),
+            session_self_heal_policy_view_contract(),
+        );
+    contract
 }
 
 fn session_throat_policy_view_contract() -> Value {
@@ -2133,6 +2269,24 @@ fn session_capture_policy_view_contract() -> Value {
     })
 }
 
+fn session_self_heal_policy_view_contract() -> Value {
+    json!({
+        "query": "session self-heal-policy",
+        "daemon_query": "session request self-heal-policy",
+        "schema_version": "session.self_heal_policy.v0.1",
+        "phase_c_field": "phase_c",
+        "flow_field": "flow",
+        "trigger_policy_field": "trigger_policy",
+        "recovery_order_field": "recovery_order",
+        "maintenance_boundary_field": "maintenance_boundary",
+        "lease_and_scheduler_policy_field": "lease_and_scheduler_policy",
+        "does_not_enqueue": true,
+        "does_not_touch_device": true,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true
+    })
+}
+
 fn session_bootstrap_view_contract() -> Value {
     json!({
         "query": "session bootstrap",
@@ -2142,6 +2296,7 @@ fn session_bootstrap_view_contract() -> Value {
         "queue_field": "queue",
         "throat_policy_field": "throat_policy",
         "capture_policy_field": "capture_policy",
+        "self_heal_policy_field": "self_heal_policy",
         "validation_plan_field": "validation_plan",
         "api_contract_field": "api_contract",
         "access_contract_field": "access_contract",
@@ -5877,6 +6032,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "bootstrap" => run_session_bootstrap(global, args),
         "throat-policy" => run_session_throat_policy(global, args),
         "capture-policy" => run_session_capture_policy(global, args),
+        "self-heal-policy" => run_session_self_heal_policy(global, args),
         "readiness" => run_session_readiness(global, args),
         "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
@@ -5954,6 +6110,14 @@ fn run_session_capture_policy(global: &GlobalOptions, args: &[String]) -> CliOut
         return submit_readonly_session_request(global, &flags, "capture_policy", args);
     }
     session_capture_policy_payload(global, &flags, "session capture-policy")
+}
+
+fn run_session_self_heal_policy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "self_heal_policy", args);
+    }
+    session_self_heal_policy_payload(global, &flags, "session self-heal-policy")
 }
 
 fn run_session_readiness(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6433,6 +6597,7 @@ fn session_bootstrap_payload(
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
     let throat_policy = session_throat_policy_payload(global, flags, command_name)?;
     let capture_policy = session_capture_policy_payload(global, flags, command_name)?;
+    let self_heal_policy = session_self_heal_policy_payload(global, flags, command_name)?;
     Ok(json!({
         "schema_version": "session.bootstrap.v0.1",
         "generated_at_unix_ms": current_unix_ms(),
@@ -6447,6 +6612,7 @@ fn session_bootstrap_payload(
             "status": "session status --diagnostics",
             "throat_policy": "session throat-policy",
             "capture_policy": "session capture-policy",
+            "self_heal_policy": "session self-heal-policy",
             "readiness": "session readiness",
             "queue": "session queue",
             "validation_plan": "session validation-plan",
@@ -6458,6 +6624,7 @@ fn session_bootstrap_payload(
             "status": "session request status --diagnostics",
             "throat_policy": "session request throat-policy",
             "capture_policy": "session request capture-policy",
+            "self_heal_policy": "session request self-heal-policy",
             "readiness": "session request readiness",
             "queue": "session request queue",
             "validation_plan": "session request validation-plan",
@@ -6470,6 +6637,7 @@ fn session_bootstrap_payload(
         "commands": command_capabilities(),
         "throat_policy": throat_policy,
         "capture_policy": capture_policy,
+        "self_heal_policy": self_heal_policy,
         "readiness": readiness,
         "queue": queue,
         "validation_plan": validation_plan,
@@ -7032,7 +7200,8 @@ fn classify_session_command_for_check(
     match first {
         "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
         | "contract" | "api" | "transport" | "capabilities" | "bootstrap" | "command-check"
-        | "submit-plan" | "validation-plan" | "throat-policy" | "capture-policy" => Ok(read_only),
+        | "submit-plan" | "validation-plan" | "throat-policy" | "capture-policy"
+        | "self-heal-policy" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -9777,7 +9946,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -9790,6 +9959,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         }
         "capture-policy" => {
             submit_readonly_session_request(global, &flags, "capture_policy", &args[1..])
+        }
+        "self-heal-policy" => {
+            submit_readonly_session_request(global, &flags, "self_heal_policy", &args[1..])
         }
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
         "queue" => submit_readonly_session_request(global, &flags, "queue", &args[1..]),
@@ -10846,6 +11018,11 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             let global = request.global.to_global()?;
             session_capture_policy_payload(&global, &flags, "session request capture-policy")
+        }
+        "self_heal_policy" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            session_self_heal_policy_payload(&global, &flags, "session request self-heal-policy")
         }
         "readiness" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -16586,6 +16763,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session bootstrap", ["offline"], "available"),
         command_cap("session throat-policy", ["offline"], "available"),
         command_cap("session capture-policy", ["offline"], "available"),
+        command_cap("session self-heal-policy", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
         command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
@@ -16625,6 +16803,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request capture-policy",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request self-heal-policy",
             ["running_runtime"],
             "available",
         ),
@@ -18671,6 +18854,48 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_self_heal_policy_is_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "self-heal-policy",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_command_check_explicit_daemon_requires_alive_daemon() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -19304,6 +19529,16 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/self_heal_policy/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/self_heal_policy/maintenance_boundary/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -19336,6 +19571,14 @@ mod tests {
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session capture-policy"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session self-heal-policy"))
         );
     }
 
@@ -19395,9 +19638,21 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/daemon_queries/self_heal_policy")
+                .and_then(Value::as_str),
+            Some("session request self-heal-policy")
+        );
+        assert_eq!(
+            payload
                 .pointer("/capture_policy/backend_policy/preferred_order/0")
                 .and_then(Value::as_str),
             Some("nemu_ipc")
+        );
+        assert_eq!(
+            payload
+                .pointer("/self_heal_policy/phase_c/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
         );
         assert_eq!(
             payload
@@ -19517,6 +19772,108 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/guarantees/does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_self_heal_policy_reports_phase_c_boundaries_without_device_work() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(["--json", "session", "self-heal-policy", "--local"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.self_heal_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c/target_state")
+                .and_then(Value::as_str),
+            Some("home_or_known_good_page")
+        );
+        assert_eq!(
+            data.pointer("/trigger_policy/stale_adb_screencap_alone_is_not_game_freeze")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/recovery_order/0/kind")
+                .and_then(Value::as_str),
+            Some("read_only_diagnosis")
+        );
+        assert_eq!(
+            data.pointer("/recovery_order/4/heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/maintenance_boundary/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/lease_and_scheduler_policy/control_execution_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_self_heal_policy_request_returns_payload() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "self-heal-policy-query".to_string(),
+            command: "self_heal_policy".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.self_heal_policy.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/scope/instance").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload
+                .pointer(
+                    "/lease_and_scheduler_policy/monitor_policy_recovery_without_matching_lease"
+                )
+                .and_then(Value::as_str),
+            Some("deferred_by_lease")
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_guidance/interactive_stream_should_report_recovery_state_but_not_execute_without_lease")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -34208,6 +34565,11 @@ mod tests {
             Some("session request capture-policy")
         );
         assert_eq!(
+            data.pointer("/daemon_queries/self_heal_policy")
+                .and_then(Value::as_str),
+            Some("session request self-heal-policy")
+        );
+        assert_eq!(
             data.pointer("/daemon_queries/api").and_then(Value::as_str),
             Some("session request api")
         );
@@ -34573,6 +34935,16 @@ mod tests {
             data.pointer("/envelopes/capture_policy_view/stale_classification_field")
                 .and_then(Value::as_str),
             Some("stale_classification")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/self_heal_policy_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/self_heal_policy_view/maintenance_boundary_field")
+                .and_then(Value::as_str),
+            Some("maintenance_boundary")
         );
         assert_eq!(
             data.pointer("/envelopes/status_view/queue_health_actions/1")
@@ -35211,6 +35583,7 @@ mod tests {
             "session bootstrap",
             "session throat-policy",
             "session capture-policy",
+            "session self-heal-policy",
             "session submit-plan",
             "session validation-plan",
             "session journal",
@@ -35241,6 +35614,7 @@ mod tests {
             "session request bootstrap",
             "session request throat-policy",
             "session request capture-policy",
+            "session request self-heal-policy",
             "session request submit-plan",
             "session request validation-plan",
             "session request journal",

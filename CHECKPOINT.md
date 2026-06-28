@@ -1,5 +1,93 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C self-heal policy surface
+
+### Current status
+
+- Added `session self-heal-policy` as a local no-device Session Layer policy query.
+- Added daemon-routed `session request self-heal-policy` support through the resident request handler.
+- The payload returns `schema_version=session.self_heal_policy.v0.1`.
+- The policy records Phase C maintenance self-heal as an `observe -> diagnose -> plan -> execute` flow.
+- The policy records that stale `adb_screencap` alone is not game-freeze evidence and restart requires diagnosis first.
+- The policy records recovery ordering: read-only diagnosis, capture backend recovery, maintenance navigation, startup-login loop, then heavy app lifecycle restart.
+- The policy records the maintenance boundary: restore to a known-good state only, with no game progress, destructive action, premium or paid resource use, PvP/exercise, or blind confirmation.
+- The policy records lease and scheduler ownership: scheduler owns arbitration, Session Layer owns device mechanism, and execution requires a matching lease.
+- The policy records interactive-stream guidance: streams may report recovery state but must not execute recovery input without a lease.
+- `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the self-heal-policy surface.
+- The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending until this checkpoint is committed and tagged.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `324c843911f4e16a838653e3992a8fbd981f2de3`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected Session Layer policy payloads, bootstrap, API contract, access contract, request routing, command-check classification, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_self_heal_policy -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_command_check_self_heal_policy_is_read_only -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture --test-threads=1`
+- `cargo run -q -p actingcommand-actinglab -- --json session self-heal-policy --local`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_self_heal_policy` tests passed.
+- Focused command-check self-heal-policy classification test passed.
+- Focused `session_bootstrap` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Focused capability registration test passed.
+- CLI smoke `session self-heal-policy --local` passed and returned `schema_version=session.self_heal_policy.v0.1`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live self-heal validation for stale capture, standby, modal popup, startup-login, and unexpected-page recovery.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and push this Runtime increment.
+2. Create and push a checkpoint tag for this milestone.
+3. Record the source commit hash in this checkpoint.
+
 ## 2026-06-28 ActingLab capture freshness policy surface
 
 ### Current status

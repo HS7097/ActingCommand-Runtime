@@ -173,6 +173,28 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending live acceptance checklist: `session validation-plan` now includes a `pending_live_acceptance` block titled `待真机验收`, listing every skipped live/device/operator validation item and the evidence required before it can be marked passed.
 - ActingLab unique Session throat-policy surface: `session throat-policy` and `session request throat-policy` expose a machine-readable policy that Session Layer is the only device/control throat, while UI, scheduler, and agents must not directly touch adb/devices.
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
+- ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
+
+## Current ActingLab Phase C Self-Heal Policy Surface
+
+This increment turns Phase C maintenance self-heal boundaries into a stable no-device policy query for UI, scheduler, and agent clients.
+
+- `session self-heal-policy` returns `session.self_heal_policy.v0.1`.
+- `session request self-heal-policy` returns the same policy through the resident daemon request path.
+- The payload records the Phase C goal: return a session to home or another known-good page without executing game-progress actions.
+- The payload records the self-heal flow as `observe -> diagnose -> plan -> execute`.
+- The payload records supported triggers including stale capture, capture backend unavailable, standby, unexpected page, modal popup, startup login required, and session expired.
+- The payload records recovery order: read-only diagnosis, capture backend recovery, maintenance navigation, startup-login loop, and heavy app lifecycle restart as the last step.
+- The payload records that stale `adb_screencap` alone is not game-freeze evidence and that restart requires diagnosis first.
+- The payload records maintenance boundaries: no destructive action, no premium or paid resource use, no PvP/exercise, no blind confirmation, and navigation-only by default.
+- The payload records scheduler/lease policy: scheduler owns arbitration, Session Layer owns device mechanism, and execution requires a matching lease.
+- The payload tells interactive streams to report recovery state but not execute recovery input without a lease.
+- `session bootstrap`, `session api`, `session contract`, `session command-check`, and command capabilities now advertise or classify the self-heal-policy surface.
+- The surface guarantees it does not enqueue, capture, start MaaTouch, touch devices, start apps, start listeners, or read resource repositories.
+
+Live-device and operator validation remain deferred for this round as `requires-live-device`. No live result is faked or marked passed by this implementation.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Capture Freshness Policy Surface
 
