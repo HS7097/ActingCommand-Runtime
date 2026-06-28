@@ -2670,6 +2670,7 @@ fn session_api_contract() -> Value {
                 "lease_gate_field": "lease_gate",
                 "queue_gate_field": "queue_gate",
                 "instance_gate_field": "instance_gate",
+                "throat_gate_field": "throat_gate",
                 "routing_field": "routing",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
@@ -8384,6 +8385,15 @@ fn session_command_check_payload(
             "local_override": local_override,
             "strict_session_required": strict_session_required
         },
+        "throat_gate": session_command_check_throat_gate(
+            classification,
+            daemon_route_ok,
+            daemon_alive,
+            explicit_daemon,
+            local_override,
+            strict_session_required,
+            would_route_via_daemon,
+        ),
         "lease_gate": lease_gate,
         "queue_gate": queue_gate,
         "instance_gate": instance_gate,
@@ -8456,6 +8466,10 @@ fn session_submit_plan_payload(
             "selected_instance_status": readiness.pointer("/instances/selected_status").cloned().unwrap_or(Value::Null),
             "command_class": command_check.get("command_class").cloned().unwrap_or(Value::Null),
             "requires_lease": command_check.get("requires_lease").cloned().unwrap_or(Value::Null),
+            "throat_status": command_check.pointer("/throat_gate/status").cloned().unwrap_or(Value::Null),
+            "session_layer_required": command_check.pointer("/throat_gate/session_layer_required").cloned().unwrap_or(Value::Null),
+            "daemon_route_required": command_check.pointer("/throat_gate/daemon_route_required").cloned().unwrap_or(Value::Null),
+            "local_override_allowed": command_check.pointer("/throat_gate/local_override_allowed").cloned().unwrap_or(Value::Null),
             "lease_status": command_check.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
             "queue_status": queue.pointer("/admission/status").cloned().unwrap_or(Value::Null),
             "instance_gate_status": command_check.pointer("/instance_gate/status").cloned().unwrap_or(Value::Null),
@@ -8477,6 +8491,48 @@ fn session_submit_plan_payload(
             "does_not_start_listener": true
         }
     }))
+}
+
+fn session_command_check_throat_gate(
+    classification: SessionCommandCheckClass,
+    daemon_route_ok: bool,
+    daemon_alive: bool,
+    explicit_daemon: bool,
+    local_override: bool,
+    strict_session_required: bool,
+    would_route_via_daemon: bool,
+) -> Value {
+    let local_override_allowed = !strict_session_required;
+    json!({
+        "schema_version": "session.command_throat_gate.v0.1",
+        "status": if daemon_route_ok { "ready" } else { "blocked" },
+        "blocked_code": if daemon_route_ok {
+            Value::Null
+        } else {
+            json!("daemon_route_unavailable")
+        },
+        "command_class": classification.command_class,
+        "device_affecting": classification.device_affecting,
+        "session_layer_required": classification.device_affecting,
+        "session_layer_entrypoint": "actinglab",
+        "clients_must_not_directly_touch_adb_or_devices": classification.device_affecting,
+        "direct_adb_or_device_access_allowed": false,
+        "device_control_requires_lease": classification.requires_lease,
+        "daemon_route_required": strict_session_required,
+        "daemon_route_selected": would_route_via_daemon,
+        "daemon_route_ok": daemon_route_ok,
+        "daemon_alive": daemon_alive,
+        "explicit_daemon_requested": explicit_daemon,
+        "local_override_requested": local_override,
+        "local_override_allowed": local_override_allowed,
+        "local_override_status": if local_override && !local_override_allowed {
+            "blocked"
+        } else if local_override {
+            "allowed"
+        } else {
+            "not_requested"
+        }
+    })
 }
 
 fn session_validation_plan_payload(
@@ -22630,6 +22686,25 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/throat_gate/schema_version")
+                .and_then(Value::as_str),
+            Some("session.command_throat_gate.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/status").and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/local_override_allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/queue_gate/status").and_then(Value::as_str),
             Some("not_checked")
         );
@@ -22936,6 +23011,25 @@ mod tests {
             Some("daemon_liveness")
         );
         assert_eq!(
+            data.pointer("/throat_gate/status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/daemon_route_selected")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/daemon_route_ok")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/blocked_code")
+                .and_then(Value::as_str),
+            Some("daemon_route_unavailable")
+        );
+        assert_eq!(
             data.pointer("/queue_gate/status").and_then(Value::as_str),
             Some("not_checked")
         );
@@ -23033,6 +23127,24 @@ mod tests {
                 .and_then(Value::as_str),
             Some("lab_lease_required")
         );
+        assert_eq!(
+            missing_data
+                .pointer("/throat_gate/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            missing_data
+                .pointer("/throat_gate/device_control_requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            missing_data
+                .pointer("/throat_gate/direct_adb_or_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
 
         assert_eq!(matching.exit_code(), 0);
         let matching_data = matching.envelope.data.as_ref().unwrap();
@@ -23053,6 +23165,12 @@ mod tests {
         assert_eq!(
             matching_data
                 .pointer("/lease_gate/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            matching_data
+                .pointer("/throat_gate/status")
                 .and_then(Value::as_str),
             Some("ready")
         );
@@ -23286,6 +23404,21 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/preflight_summary/throat_status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/local_override_allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/preflight_summary/instance_gate_status")
                 .and_then(Value::as_str),
             Some("not_selected")
@@ -23392,6 +23525,16 @@ mod tests {
             data.pointer("/command_check/lease_gate/code")
                 .and_then(Value::as_str),
             Some("lab_lease_required")
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/preflight_summary/throat_status")
+                .and_then(Value::as_str),
+            Some("ready")
         );
         assert!(
             data.get("blockers")
@@ -40418,6 +40561,11 @@ mod tests {
             data.pointer("/daemon_request_queue/admission_gate/preflight_command")
                 .and_then(Value::as_str),
             Some("session command-check <command...>")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/command_check_view/throat_gate_field")
+                .and_then(Value::as_str),
+            Some("throat_gate")
         );
         assert_eq!(
             data.pointer(

@@ -172,6 +172,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab live validation acceptance matrix: `session validation-plan` now includes Phase A-D/cross-cutting acceptance boundaries and an AK stale-capture validation scope, keeping offline progress separate from `requires-live-device` acceptance.
 - ActingLab pending live acceptance checklist: `session validation-plan` now includes a `pending_live_acceptance` block titled `待真机验收`, listing every skipped live/device/operator validation item and the evidence required before it can be marked passed.
 - ActingLab unique Session throat-policy surface: `session throat-policy` and `session request throat-policy` expose a machine-readable policy that Session Layer is the only device/control throat, while UI, scheduler, and agents must not directly touch adb/devices.
+- ActingLab command-check throat gate summary: `session command-check` now includes a compact `throat_gate`, and `session submit-plan` mirrors its key fields into `preflight_summary` so UI/scheduler clients can see whether a command requires the Session Layer, daemon routing, or a LabLease before submitting.
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
@@ -5507,6 +5508,35 @@ Lab-1y route execution also constrains page evaluation to the relevant operation
 `to: null` operation results are no longer treated as verified success when `verify_template` is also null. Such operations are recorded as `executed_unverified`; `to: null` with `verify_template` still requires template verification.
 
 This phase does not claim that TaskRoute, navigation models, or resource bundles are fully verified. Live validation only covered the `open_terminal` Arknights package path enough to confirm the interpreter no longer fails on namespaced page ids.
+
+## Current ActingLab Command-Check Throat Gate Summary
+
+This increment keeps the Session Layer unique-throat boundary visible at the command-preflight level.
+
+`session command-check <command...>` now exposes `throat_gate` with:
+
+- whether the command is device-affecting;
+- whether the command must go through the Session Layer;
+- whether daemon routing is required, selected, and alive;
+- whether direct ADB/device access is disallowed;
+- whether device control requires a LabLease;
+- whether a local override is allowed or blocked.
+
+`session submit-plan <command...>` mirrors the key throat fields into `preflight_summary`, so UI and scheduler clients can present a compact decision without parsing the whole command-check payload.
+
+This is a contract/discovery increment only:
+
+- no daemon request is enqueued;
+- no device, ADB, capture backend, MaaTouch backend, resource repository, OCR, SQLite, UI, or game logic is touched;
+- no self-heal action is executed;
+- no interactive stream is started;
+- no trusted remote listener, token issuer, TLS layer, or encrypted channel is implemented.
+
+Phase C plan alignment:
+
+- Self-heal should stay observe-first: diagnose capture freshness, queue health, daemon liveness, lease ownership, and selected-instance readiness before recommending or executing maintenance-only recovery.
+- Interaction flow should remain lease-aware and replayable: streams expose bounded events and optional input relay only through Session Layer, and input relay requires matching lease metadata.
+- Trusted encrypted channel should remain reserved until the local CLI/file-IPC contract is stable: future remote access must require authentication, authorization, bounded request admission, and a clear failure code before it can submit Session Layer work.
 
 ## Repo-local planning policy
 
