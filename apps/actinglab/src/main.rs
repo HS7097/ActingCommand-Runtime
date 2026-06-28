@@ -2105,6 +2105,7 @@ fn session_phase_c_plan_payload(
     let interaction_plan = session_phase_c_interaction_plan_payload();
     let transport_plan = session_transport_plan_payload(flags)?;
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
+    let implementation_plan = session_phase_c_implementation_plan_payload();
     let next_actions = session_phase_c_plan_next_actions(
         &self_heal_plan,
         &interaction_plan,
@@ -2174,6 +2175,7 @@ fn session_phase_c_plan_payload(
                 "acceptance": "operator/live evidence is required and offline checks must not mark live items passed"
             }
         ],
+        "implementation_plan": implementation_plan,
         "self_heal": {
             "policy": self_heal_policy,
             "plan": self_heal_plan
@@ -2220,6 +2222,144 @@ fn session_phase_c_plan_payload(
             "does_not_mark_live_validation_passed": true
         }
     }))
+}
+
+fn session_phase_c_implementation_plan_payload() -> Value {
+    json!({
+        "schema_version": "session.phase_c_implementation_plan.v0.1",
+        "status": "offline_plan",
+        "phase": "phase_c",
+        "purpose": "ordered implementation plan for self-heal, interaction flow, trusted channel, and live acceptance",
+        "rollout_order": [
+            {
+                "order": 1,
+                "lane": "self_heal",
+                "entrypoints": [
+                    "session self-heal-policy",
+                    "session self-heal-plan [--trigger <kind>] [--to <page>]",
+                    "session recover --stale-capture",
+                    "session monitor-policy status"
+                ],
+                "implementation_steps": [
+                    "classify trigger without assuming game freeze from adb_screencap alone",
+                    "prefer capture freshness diagnosis and lighter capture backend recovery before app restart",
+                    "gate maintenance execution on daemon readiness, queue admission, and matching lease when control is required",
+                    "journal recovery decisions, blockers, and operator-visible impact"
+                ],
+                "acceptance": [
+                    "stale-frame, standby, expired-session, unexpected-page, and modal-popup cases produce explicit plans",
+                    "maintenance recovery never performs game-progress actions",
+                    "live execution remains deferred until a prepared device validates the path"
+                ]
+            },
+            {
+                "order": 2,
+                "lane": "interaction_flow",
+                "entrypoints": [
+                    "session stream-plan [--endpoint <url>]",
+                    "stream --max-frames <N>",
+                    "session request stream"
+                ],
+                "implementation_steps": [
+                    "keep bounded local stream available for diagnostics and UI preview",
+                    "route daemon stream requests through the Session Layer request queue",
+                    "require matching lease metadata before any input relay is accepted",
+                    "reserve long-lived trusted remote stream until trusted-channel transport is implemented"
+                ],
+                "acceptance": [
+                    "clients can inspect stream readiness before opening a stream",
+                    "input relay cannot bypass the Session Layer or lease gate",
+                    "live UI stream validation remains deferred until a prepared client and device exist"
+                ]
+            },
+            {
+                "order": 3,
+                "lane": "trusted_channel",
+                "entrypoints": [
+                    "session transport plan [--endpoint <url>]",
+                    "session transport check --endpoint <url>",
+                    "session connect-plan [--endpoint <url>]"
+                ],
+                "implementation_steps": [
+                    "keep local CLI and daemon file-IPC as the current local trusted surface",
+                    "require encryption and authentication for every trusted remote endpoint",
+                    "block remote acceptance until listener, TLS, token or client-certificate material, request admission, and audit logging are implemented",
+                    "surface security blockers in status, bootstrap, transport plan, and API contract output"
+                ],
+                "acceptance": [
+                    "remote clients are never accepted from offline planning alone",
+                    "tokens and TLS are not issued or started by the plan command",
+                    "future implementation must pass live security validation before enabling remote control"
+                ]
+            },
+            {
+                "order": 4,
+                "lane": "live_acceptance",
+                "entrypoints": [
+                    "session validation-plan",
+                    "operator live validation"
+                ],
+                "implementation_steps": [
+                    "collect prepared-device evidence for self-heal, stream, and trusted-channel behavior",
+                    "record live blockers separately from offline contract checks",
+                    "do not mark live items passed from unit tests or offline JSON inspection"
+                ],
+                "acceptance": [
+                    "all live-only checks are explicitly marked deferred until operator validation",
+                    "offline test success never claims prepared-device acceptance"
+                ]
+            }
+        ],
+        "self_heal": {
+            "status": "planned",
+            "trigger_scope": [
+                "stale_frame",
+                "session_expired",
+                "standby",
+                "unexpected_page",
+                "modal_popup"
+            ],
+            "observe_first": true,
+            "maintenance_only": true,
+            "game_progress_actions_allowed": false,
+            "requires_matching_lease_for_control": true
+        },
+        "interaction_flow": {
+            "status": "planned",
+            "bounded_local_stream_available": true,
+            "daemon_stream_request_available": true,
+            "input_relay_requires_matching_lease": true,
+            "trusted_remote_long_lived_stream_status": "reserved"
+        },
+        "trusted_channel": {
+            "status": "reserved",
+            "local_cli_requires_encryption": false,
+            "trusted_remote_requires_encryption": true,
+            "trusted_remote_requires_authentication": true,
+            "network_listener_implemented": false,
+            "token_issuer_implemented": false,
+            "tls_layer_implemented": false,
+            "safe_to_accept_remote_clients": false
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_phase_c_plan_next_actions(
@@ -3341,6 +3481,8 @@ fn session_phase_c_plan_view_contract() -> Value {
         "interaction_plan_schema_version": "session.phase_c_interaction_plan.v0.2",
         "interaction_stream_plan_contract_field": "interaction_flow.contract",
         "trusted_channel_field": "trusted_channel",
+        "implementation_plan_field": "implementation_plan",
+        "implementation_plan_schema_version": "session.phase_c_implementation_plan.v0.1",
         "live_validation_field": "live_validation",
         "next_actions_field": "next_actions",
         "milestones_field": "milestones",
@@ -14081,6 +14223,9 @@ fn phase_c_plan_request_data_summary(data: &Value) -> Value {
         "stream_plan_status": data.pointer("/interaction_flow/plan/status").cloned().unwrap_or(Value::Null),
         "trusted_channel_status": data.pointer("/trusted_channel/plan/trusted_remote/status").cloned().unwrap_or(Value::Null),
         "trusted_endpoint": data.pointer("/trusted_channel/plan/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
+        "implementation_plan_status": data.pointer("/implementation_plan/status").cloned().unwrap_or(Value::Null),
+        "implementation_plan_schema_version": data.pointer("/implementation_plan/schema_version").cloned().unwrap_or(Value::Null),
+        "implementation_plan_lane_count": data.pointer("/implementation_plan/rollout_order").and_then(Value::as_array).map(Vec::len),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
@@ -25122,6 +25267,53 @@ mod tests {
             Some("run_instance_stream_plan")
         );
         assert_eq!(
+            data.pointer("/implementation_plan/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_implementation_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/status")
+                .and_then(Value::as_str),
+            Some("offline_plan")
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/rollout_order/0/lane")
+                .and_then(Value::as_str),
+            Some("self_heal")
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/rollout_order/1/lane")
+                .and_then(Value::as_str),
+            Some("interaction_flow")
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/rollout_order/2/lane")
+                .and_then(Value::as_str),
+            Some("trusted_channel")
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/self_heal/maintenance_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer(
+                "/implementation_plan/interaction_flow/input_relay_requires_matching_lease"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/trusted_channel/trusted_remote_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/implementation_plan/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/trusted_channel/requires_encryption")
                 .and_then(Value::as_bool),
             Some(true)
@@ -25276,6 +25468,24 @@ mod tests {
         assert_eq!(
             summary.get("stream_plan_status").and_then(Value::as_str),
             Some("requires_instance_preflight")
+        );
+        assert_eq!(
+            summary
+                .get("implementation_plan_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_implementation_plan.v0.1")
+        );
+        assert_eq!(
+            summary
+                .get("implementation_plan_status")
+                .and_then(Value::as_str),
+            Some("offline_plan")
+        );
+        assert_eq!(
+            summary
+                .get("implementation_plan_lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
         );
         assert_eq!(
             summary
@@ -35794,6 +36004,18 @@ mod tests {
                 .pointer("/envelopes/phase_c_plan_view/interaction_stream_plan_contract_field")
                 .and_then(Value::as_str),
             Some("interaction_flow.contract")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/implementation_plan_field")
+                .and_then(Value::as_str),
+            Some("implementation_plan")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/implementation_plan_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_implementation_plan.v0.1")
         );
         assert_eq!(
             payload

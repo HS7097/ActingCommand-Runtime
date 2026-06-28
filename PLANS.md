@@ -5607,6 +5607,29 @@ This is still a contract/discovery increment only:
 - no daemon request, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, or scheduler runtime work is performed;
 - live validation remains `deferred: requires-live-device`.
 
+## Current ActingLab Phase C Implementation Plan Contract
+
+This increment makes the Phase C roadmap itself machine-readable through `session phase-c-plan`.
+
+`session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]` now embeds `implementation_plan` with:
+
+- `schema_version=session.phase_c_implementation_plan.v0.1`;
+- ordered rollout lanes for `self_heal`, `interaction_flow`, `trusted_channel`, and `live_acceptance`;
+- self-heal implementation steps that classify stale capture before assuming game freeze, prefer lighter capture-backend recovery before app restart, gate maintenance execution on daemon/queue/lease readiness, and journal recovery decisions;
+- interaction-flow implementation steps that keep bounded local streams available, route daemon stream work through Session Layer requests, and require matching lease metadata before any input relay;
+- trusted-channel implementation steps that keep local CLI/file-IPC as the current trusted surface while blocking trusted remote clients until encryption, authentication, listener, token/client-certificate material, request admission, and audit logging are implemented;
+- explicit live-validation deferral for prepared-device checks.
+
+`session api` now advertises the implementation-plan field and schema version under `phase_c_plan_view`.
+
+This is still a contract/discovery increment only:
+
+- no recovery is executed;
+- no daemon request is enqueued;
+- no stream is opened;
+- no capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.
