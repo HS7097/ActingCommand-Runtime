@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab self-heal execution gate
+
+### Current status
+
+- Added `execution_gate` to `session self-heal-plan`.
+- The gate uses `schema_version=session.self_heal_execution_gate.v0.1`.
+- The gate exposes trigger selection, recovery kind, target page, readiness readiness, queue admission, lease requirement, lease readiness, blocked reasons, and `safe_to_execute_maintenance`.
+- The gate mirrors blocker reasons so UI/scheduler clients do not need to reconstruct a maintenance-recovery decision from separate readiness, queue, lease, and blocker fields.
+- `session phase-c-plan` next actions now mirror `execution_gate_status` and `execution_gate_safe` under the self-heal summary.
+- `session api` now advertises `self_heal_plan_view.execution_gate_field=execution_gate` and `execution_gate_schema_version=session.self_heal_execution_gate.v0.1`.
+- Request data summaries now include `execution_gate_status`, `safe_to_execute_maintenance`, and `execution_gate_blocked_reason_count`.
+- This is an offline contract/discovery increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `6ee6002aa93198e71e900ee5fc841a82e7263375`.
+- Milestone source commit: `4131f0ea9c93d6bd0f5b1d245d05e3f09103a046`.
+- Checkpoint tag: `checkpoint/20260628-self-heal-execution-gate`.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Read relevant memory entries for Azur planning/checkpoint expectations and severe-error handling.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Scanned `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for Phase C, self-heal, interaction-flow, trusted-channel, and live-deferred constraints.
+- Inspected self-heal plan, Phase C plan, API contract, request data-summary, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_self_heal_plan`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_phase_c_plan_review`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields and scanning added source lines for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_self_heal_plan` test group passed and covers the new execution gate for observe-first, stale-capture, control-trigger lease, request summary, and journal summary paths.
+- Focused `session_phase_c_plan` test group passed and confirms Phase C summaries still consume self-heal plan output.
+- Focused `session_api_is_offline_api_contract` passed and covers the new `self_heal_plan_view.execution_gate_*` contract fields.
+- Focused `session_status_diagnostics_recommends_phase_c_plan_review` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### Live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab Phase C interaction plan view
 
 ### Current status
