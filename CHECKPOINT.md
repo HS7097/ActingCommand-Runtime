@@ -1,5 +1,90 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C aggregate next-action summary
+
+### Current status
+
+- Added a machine-readable `next_actions` summary to `session phase-c-plan`.
+- `session request phase-c-plan` now returns the same next-action summary through the resident daemon request queue.
+- `next_actions` records ordered follow-up actions for self-heal plan review, interaction stream-plan review, trusted-channel transport review, pending live acceptance review, and status diagnostics review.
+- The self-heal summary records trigger, recovery kind, maintenance readiness, escalation category, and operator/live-validation requirement.
+- The interaction-flow summary keeps long-lived UI stream status reserved and records that input relay requires a matching lease.
+- The trusted-channel summary records reserved transport status, endpoint policy result, token/certificate configuration signals, and no-listener/no-token/no-TLS guarantees.
+- The live-validation summary carries `deferred: requires-live-device` and the pending live acceptance payload from `session validation-plan`.
+- `phase_c_plan` daemon request summaries now retain next-action count and first next action for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `phase_c_plan_view`.
+- The change is a pure no-device Phase C roadmap contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `117ce72134d0d99c64eb8c0fb15811134a89ee0d`.
+- Checkpoint tag: `checkpoint/20260628-phase-c-plan-next-actions`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `27bc853f1cc9110186ba4b2ab4b22b6f0561e224`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `FINDING-AK-game-freeze-2026-06-27.md`, `TASK-Lab-session-layer.md`, `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected existing phase-c-plan, self-heal-plan, transport-plan, validation-plan, request data-summary, Session API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Diff-level prohibited-feature scan excluding negative guarantee/reserved fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Add phase C plan next actions"`
+
+### Test results
+
+- Focused `session_phase_c_plan` tests passed and covered Phase C next actions, self-heal recovery summary, interaction-flow reserved status, trusted-channel no-TLS/no-listener state, deferred live validation, and request summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covered the new `phase_c_plan_view.next_actions_field` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined diff-level prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live phase-c-plan next-action observation through a resident daemon and real UI/scheduler polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep Phase C self-heal execution behind lease/readiness/queue gates.
+4. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab stream-plan next-action summary
 
 ### Current status
