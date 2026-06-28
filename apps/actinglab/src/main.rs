@@ -9323,10 +9323,22 @@ fn session_validation_deferred_live_tasks() -> Value {
             "description": "Operator acceptance that requires manual emulator observation remains outside offline checks."
         },
         {
-            "id": "trusted_ui_api_and_interactive_stream_live_validation",
+            "id": "record_current_frame_authoring_live_validation",
             "status": "deferred",
             "deferred_code": "requires-live-device",
-            "description": "Validate trusted UI/API exposure and long-lived stream behavior only after the live transport exists and is reviewed."
+            "description": "Validate current-frame recording, freshness metadata, and operator-reviewed recording provenance against a live emulator."
+        },
+        {
+            "id": "interactive_stream_input_relay_live_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate bounded stream frames and lease-gated input relay against a prepared UI/client and live session."
+        },
+        {
+            "id": "trusted_channel_security_live_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate trusted UI/API exposure only after encrypted authenticated transport, request admission, and audit logging are reviewed."
         }
     ])
 }
@@ -9398,18 +9410,48 @@ fn session_validation_pending_live_acceptance() -> Value {
                 ]
             },
             {
-                "id": "trusted_ui_api_and_interactive_stream_live_validation",
+                "id": "record_current_frame_authoring_live_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "connected emulator or device",
+                    "running game",
+                    "active recording session"
+                ],
+                "required_evidence": [
+                    "current-frame recording captures the intended live frame",
+                    "freshness/provenance/hash metadata is stored",
+                    "operator reviews region and generated artifact before promotion"
+                ]
+            },
+            {
+                "id": "interactive_stream_input_relay_live_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "prepared UI or CLI stream client",
+                    "live stream-capable session",
+                    "matching active lease when input relay is enabled"
+                ],
+                "required_evidence": [
+                    "stream frames observed by client",
+                    "input relay lease gate blocks missing or mismatched leases",
+                    "input relay journal/audit evidence exists when input is enabled"
+                ]
+            },
+            {
+                "id": "trusted_channel_security_live_validation",
                 "status": "deferred",
                 "deferred_code": "requires-live-device",
                 "required_environment": [
                     "reviewed trusted transport",
                     "UI/API client",
-                    "live stream-capable session"
+                    "live session or approved security test harness"
                 ],
                 "required_evidence": [
                     "TLS or authenticated IPC boundary verified",
-                    "stream frames observed by client",
-                    "input relay lease gate observed when input is enabled"
+                    "token or client-certificate authentication verified",
+                    "request admission and audit logging verified before remote control"
                 ]
             }
         ]
@@ -26434,6 +26476,18 @@ mod tests {
                 .any(|item| item.get("id").and_then(Value::as_str)
                     == Some("ak_stale_capture_fresh_frame_recovery_validation"))
         );
+        for id in [
+            "record_current_frame_authoring_live_validation",
+            "interactive_stream_input_relay_live_validation",
+            "trusted_channel_security_live_validation",
+        ] {
+            assert!(
+                pending_live_items
+                    .iter()
+                    .any(|item| item.get("id").and_then(Value::as_str) == Some(id)),
+                "missing pending live acceptance item {id}"
+            );
+        }
         assert!(pending_live_items.iter().all(|item| {
             item.get("deferred_code").and_then(Value::as_str) == Some("requires-live-device")
         }));
@@ -26545,7 +26599,7 @@ mod tests {
             summary
                 .get("pending_live_item_count")
                 .and_then(Value::as_u64),
-            Some(5)
+            Some(7)
         );
         assert_eq!(
             summary.get("next_action_count").and_then(Value::as_u64),

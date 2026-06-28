@@ -214,6 +214,25 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab readiness diagnostics summary: `session readiness` now exposes a compact `diagnostics_summary` for liveness, queue health, capture freshness, self-heal, interaction flow, trusted channel, and live-validation state without forcing clients to parse the full embedded status view.
 - ActingLab session recording authorization policy: `session record-policy` and `session request record-policy` expose the active recording authorization model, allowed step kinds, frame-source policy, resource-write policy, safety policy, and no-device/no-resource-write guarantees for UI/scheduler/agent clients.
 - ActingLab session recording command-check classification: `session command-check` now distinguishes current-frame recording from local-frame daemon-state work, so `session record step --capture` and `--current-frame` are device-affecting read-only while local `--frame` authoring remains daemon-state.
+- ActingLab live acceptance checklist granularity: `session validation-plan` now lists record current-frame authoring, interactive stream/input relay, and trusted-channel security as separate `deferred: requires-live-device` acceptance items.
+
+## Current ActingLab Live Acceptance Checklist Granularity
+
+This increment makes the skipped live/device/operator work explicit enough for later operator验收 without treating offline checks as live passes.
+
+- `session validation-plan.deferred_live_tasks` now separates:
+  - prepared emulator/session-layer validation;
+  - AK stale-capture fresh-frame recovery validation;
+  - live ADB/device-control/screenshot validation;
+  - operator acceptance observation;
+  - record current-frame authoring live validation;
+  - interactive stream/input-relay live validation;
+  - trusted-channel security live validation.
+- `session validation-plan.pending_live_acceptance.items` mirrors the same split and keeps every item at `status=deferred` with `deferred_code=requires-live-device`.
+- Record current-frame authoring requires live frame capture evidence, freshness/provenance/hash metadata, and operator artifact review before promotion.
+- Interactive stream/input relay requires observed stream frames, lease-gate behavior, and journal/audit evidence before being marked accepted.
+- Trusted-channel security requires reviewed encrypted/authenticated transport plus request admission and audit logging before remote control can be considered accepted.
+- The validation-plan query remains offline: it does not enqueue, capture, touch devices, start MaaTouch, start apps, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
 
 ## Current ActingLab Recording Command Preflight Classification
 

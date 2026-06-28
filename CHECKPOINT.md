@@ -1,5 +1,91 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab live acceptance checklist granularity
+
+### Current status
+
+- Continued the offline-only Session Layer work from:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Refined `session validation-plan` so skipped live/device/operator work is more granular and machine-readable.
+- Split the previous broad trusted UI/API + stream live-validation item into explicit acceptance items for:
+  - record current-frame authoring;
+  - interactive stream/input relay;
+  - trusted-channel security.
+- Every new live-only item remains `status=deferred` with `deferred_code=requires-live-device`.
+- No live validation was run, no live result was faked, and no unverified capability was marked accepted or passed-live.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: AK stale-capture and recovery validation remains live-only and must be operator-confirmed before acceptance.
+- Interaction flow: stream frames and input relay lease behavior now have their own explicit live acceptance item.
+- Trusted channel: encrypted/authenticated remote access now has its own explicit live/security acceptance item; this increment still starts no listener, issues no token, and starts no TLS.
+- Recording: current-frame recording now has its own explicit live acceptance item covering frame capture, freshness/provenance/hash metadata, and operator review.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Inspected Session Layer validation-plan, pending live acceptance, stream/input-relay, trusted-channel, and record/current-frame contract surfaces in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_validation -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_validation_plan_review -- --nocapture`
+- One diagnostic focused-test filter was mistyped and matched 0 tests; it did not change files and was followed by the correct focused test.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_validation` tests passed.
+- Focused status-diagnostics validation-plan recommendation test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue Phase C with the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-28 ActingLab recording command preflight classification
 
 ### Current status
