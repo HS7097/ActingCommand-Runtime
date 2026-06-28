@@ -1,5 +1,95 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab stream input relay preflight contract
+
+### Current status
+
+- Continued offline-only Session Layer work after the live acceptance checklist split.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Locked `session command-check stream --input-event <action,args>` as a lease-gated control preflight.
+- Locked `session command-check stream --relay-event <action,args>` as a lease-gated control preflight.
+- Preserved `session command-check stream check --input-event <action,args>` as a read-only stream preflight.
+- Updated Session Layer capability, access, API, and stream-view contracts so future UI/scheduler clients can discover the input-relay flags and preflight command.
+- Added regression tests proving these preflights do not enqueue, capture, start MaaTouch, start listeners, or touch devices.
+- This increment is offline-only and starts no listener, issues no token, starts no TLS, captures no frame, starts no MaaTouch, touches no emulator/device, and performs no live validation.
+- Runtime baseline before this task: `8faf7cc7573c9c31d1ad976eac1376db7f58a5b3`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: remains observe-first and lease-aware; stale-capture and recovery execution validation remain live-only.
+- Interaction flow: UI/scheduler clients must use `session command-check` or `session submit-plan` before submitting stream input relay events.
+- Interaction flow: `stream --input-event` and `stream --relay-event` are classified as control and require matching Session Layer lease metadata.
+- Interaction flow: `stream check --input-event` stays a read-only preflight path.
+- Trusted channel: encrypted/authenticated remote access remains reserved; this increment only exposes contract/preflight metadata and does not implement a network listener, token issuer, TLS, or remote stream.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- Inspected Session Layer stream/input-relay, command-check, access contract, API contract, stream view contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo run -q -p actingcommand-actinglab -- --json session command-check stream --input-event tap,10,20`
+- `cargo run -q -p actingcommand-actinglab -- --json session command-check stream --relay-event key,back`
+- `cargo run -q -p actingcommand-actinglab -- --json session command-check stream check --input-event tap,10,20`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check_stream -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Manual command-check smoke checks showed:
+  - `stream --input-event tap,10,20` => `command_class=control`, `requires_lease=true`, `safe_to_submit=false`, `lab_lease_required`, no device work.
+  - `stream --relay-event key,back` => `command_class=control`, `requires_lease=true`, `safe_to_submit=false`, `lab_lease_required`, no device work.
+  - `stream check --input-event tap,10,20` => `command_class=read_only`, `requires_lease=false`, `safe_to_submit=true`, no device work.
+- Focused stream command-check tests passed.
+- Focused access-contract and API-contract tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Report the Phase C plan for self-heal, interaction flow, and trusted encrypted channel before continuing the next task.
+
 ## 2026-06-28 ActingLab live acceptance checklist granularity
 
 ### Current status

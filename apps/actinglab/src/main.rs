@@ -1198,7 +1198,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
             }
         },
         "safety": {
@@ -2840,6 +2840,9 @@ fn session_access_contract() -> Value {
                     "long-tap",
                     "key",
                     "text",
+                    "stream --input-relay",
+                    "stream --input-event <action,args>",
+                    "stream --relay-event <action,args>",
                     "tap-target",
                     "navigate",
                     "recover except --stale-capture"
@@ -3430,6 +3433,8 @@ fn session_api_contract() -> Value {
                     "key",
                     "text",
                     "stream --input-relay",
+                    "stream --input-event <action,args>",
+                    "stream --relay-event <action,args>",
                     "tap-target",
                     "navigate",
                     "recover except --stale-capture"
@@ -3585,6 +3590,8 @@ fn session_stream_view_contract() -> Value {
         "input_relay_requires_lease": true,
         "safe_to_start_field": "safe_to_start",
         "input_relay_actions": ["tap", "swipe", "long-tap", "key", "text"],
+        "input_relay_event_flags": ["--input-relay", "--input-event", "--relay-event"],
+        "input_relay_preflight_command": "session command-check stream --input-event <action,args>",
         "trusted_remote_long_lived_stream_status": "reserved"
     })
 }
@@ -24021,6 +24028,215 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_plain_stream_is_device_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(["--json", "session", "command-check", "stream"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_stream_input_event_requires_lease() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "stream",
+                "--input-event",
+                "tap,10,20",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("control")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/lease_gate/code").and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_maatouch")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_stream_relay_event_requires_lease() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "stream",
+                "--relay-event",
+                "key,back",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("control")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/device_control_requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_gate/code").and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_maatouch")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_stream_check_input_event_stays_preflight() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "stream",
+                "check",
+                "--input-event",
+                "tap,10,20",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_maatouch")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_command_check_explicit_daemon_requires_alive_daemon() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -36444,6 +36660,20 @@ mod tests {
                 .iter()
                 .any(|item| item.as_str() == Some("session record step --frame <png>"))
         );
+        let control_examples = payload
+            .pointer("/request_classes/control/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --input-event <action,args>") })
+        );
+        assert!(
+            control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --relay-event <action,args>") })
+        );
         assert_eq!(
             payload
                 .pointer("/daemon_queries/api")
@@ -41981,6 +42211,20 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        let control_examples = data
+            .pointer("/request_classes/control/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --input-event <action,args>") })
+        );
+        assert!(
+            control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --relay-event <action,args>") })
+        );
         assert_eq!(
             data.pointer("/daemon_queries/bootstrap")
                 .and_then(Value::as_str),
@@ -42097,6 +42341,20 @@ mod tests {
             data.pointer("/envelopes/command_check_view/throat_gate_field")
                 .and_then(Value::as_str),
             Some("throat_gate")
+        );
+        let api_control_examples = data
+            .pointer("/command_classes/control/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            api_control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --input-event <action,args>") })
+        );
+        assert!(
+            api_control_examples
+                .iter()
+                .any(|item| { item.as_str() == Some("stream --relay-event <action,args>") })
         );
         let api_readonly_device_examples = data
             .pointer("/command_classes/read_only/device_affecting_examples")
@@ -42619,6 +42877,16 @@ mod tests {
             data.pointer("/envelopes/stream_plan_view/does_not_start_listener")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/envelopes/stream_view/input_relay_preflight_command")
+                .and_then(Value::as_str),
+            Some("session command-check stream --input-event <action,args>")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/stream_view/input_relay_event_flags/1")
+                .and_then(Value::as_str),
+            Some("--input-event")
         );
         assert_eq!(
             data.pointer("/envelopes/queue_view/schema_version")

@@ -158,6 +158,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab daemon request admission queue gate: actual `session request <command>` submissions now fail visibly with `request_queue_needs_attention` before writing a new pending request when daemon queue health needs attention, keeping the command-check preflight and real admission path aligned.
 - ActingLab Session queue view: `session queue` and `session request queue` now expose `session.queue.v0.1` with queue counts, health, previews, admission status, and queue-specific recommended actions for UI/scheduler clients without enqueueing or touching devices.
 - ActingLab submit-plan preflight view: `session submit-plan <command...>` and `session request submit-plan <command...>` now aggregate readiness, command-check, and queue admission into one no-device/no-enqueue submission plan for UI/scheduler clients.
+- ActingLab stream input relay preflight contract: `session command-check stream --input-event <action,args>` and `--relay-event <action,args>` are locked as lease-gated control preflights while `stream check --input-event ...` remains a read-only preflight that does not enqueue, capture, start MaaTouch, or touch devices.
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
@@ -5715,6 +5716,16 @@ This is still a contract/discovery increment only:
 - no MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
 - no resource repository is read or written;
 - live validation remains `deferred: requires-live-device`.
+
+## Current Phase C session-layer direction
+
+- Self-heal remains observe-first: detect stale capture, frozen page, daemon liveness, blocked queue, stale lease, and failed request states before recovery is proposed.
+- Self-heal recovery execution must stay lease-aware and maintenance-only until live validation proves the route for each game/server.
+- Interaction flow uses bounded `stream` plus explicit input relay events, but UI/scheduler clients must call `session command-check` or `session submit-plan` before submitting control input.
+- `stream --input-event <action,args>` and `stream --relay-event <action,args>` are control requests and require a matching Session Layer lease.
+- `stream check --input-event <action,args>` is a read-only preflight surface for reviewing input-relay readiness and must not start capture, MaaTouch, listeners, or device I/O.
+- Trusted remote access remains reserved until authenticated and encrypted transport is implemented; current contract work may expose plans and checks but must not start a network listener, issue tokens, or start TLS.
+- Live validation for self-heal, interactive stream input relay, and trusted encrypted channel remains deferred with `requires-live-device`.
 
 ## Repo-local planning policy
 
