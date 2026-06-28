@@ -12,7 +12,7 @@
 - `session api` now advertises the readiness Phase C summary fields for UI/scheduler clients.
 - This increment only exposes contract/readiness diagnostics and does not execute recovery, enqueue daemon work, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `7402d02be288a61b12bfed6204cb4934a595a186`.
-- Milestone source commit: pending.
+- Milestone source commit: `ac7fd27adac3c132b5ba605278bf89ba4edbe489`.
 
 ### 待真机验收
 
