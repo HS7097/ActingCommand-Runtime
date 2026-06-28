@@ -1,5 +1,91 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab transport-plan next-action summary
+
+### Current status
+
+- Added a machine-readable `next_actions` summary to `session transport plan`.
+- `session request transport plan` now returns the same next-action summary through the resident daemon request queue.
+- `next_actions` records ordered follow-up actions for endpoint policy classification, endpoint-policy blocker review, token/client-certificate preparation, listener/TLS design review, request serialization/audit review, and pending live acceptance review.
+- Missing endpoint policy now starts with `classify_endpoint_policy`.
+- Unsafe remote endpoint policy now starts with `review_endpoint_policy_blocker` and keeps the next-action status `blocked`.
+- Remote HTTPS with configured token or client-certificate auth remains `reserved`, not ready, because the network listener and TLS implementation are still absent.
+- The trusted-remote summary records endpoint policy state, token/certificate configuration state, auth-material readiness, listener readiness, remote-client readiness, and blocker count.
+- `transport_plan` daemon request summaries now retain next-action count, first next action, auth-material configuration state, and deferred live-validation status for journal/events consumers.
+- The Session API contract now advertises `plan_next_actions_field=next_actions` under `transport_view`.
+- The change is a pure no-listener trusted-channel roadmap contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute recovery, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `b38e4e185cccad189d140416f20163c9f77088d5`.
+- Checkpoint tag: `checkpoint/20260628-transport-plan-next-actions`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `30a4b1625bc99299c22a23600d3321a125f009c9`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `FINDING-AK-game-freeze-2026-06-27.md`, `TASK-Lab-session-layer.md`, Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched `MEMORY.md` for ActingCommand repo-state and planning workflow preferences.
+- Inspected existing transport-plan payload, endpoint policy helpers, request data-summary, Session API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_transport_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Initial source-only prohibited-feature scan matched only the negative guarantee field `does_not_issue_tokens`.
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Add transport plan next actions"`
+
+### Test results
+
+- Focused `session_transport_plan` tests passed and covered missing-endpoint classification, remote HTTP endpoint blockers, HTTPS+token reserved state, no-listener guarantees, next-action ordering, and request summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covered the new `transport_view.plan_next_actions_field` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live transport-plan next-action observation through a resident daemon and real UI/scheduler/API polling.
+- `deferred: requires-live-device` - live trusted-channel listener implementation validation after a future implementation milestone.
+- `deferred: requires-live-device` - live TLS/token/client-certificate authentication validation after a future implementation milestone.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+4. Keep Phase C self-heal execution behind lease/readiness/queue gates.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab self-heal-plan next-action summary
 
 ### Current status
