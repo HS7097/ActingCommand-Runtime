@@ -9,6 +9,7 @@
 - Local-only command checks keep `queue_gate.status=not_checked` so local diagnostic commands are not blocked by daemon queue state.
 - Daemon-routed command checks now return `safe_to_submit=false` with a `queue_gate` blocker when pending/running requests are blocked or pending responses are unclaimed.
 - `session api` now documents `command_check_view.queue_gate_field`.
+- Milestone source commit `39184ed125879e1067b343a9a2ed0bca73dae88f` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-command-check-queue-gate`.
 - No daemon execution, enqueueing, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
@@ -42,6 +43,10 @@
 - Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Add command-check queue gate"`
+- `git tag checkpoint/20260628-command-check-queue-gate 39184ed`
+- `git push origin main`
+- `git push origin checkpoint/20260628-command-check-queue-gate`
 
 ### Test results
 
@@ -60,8 +65,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-command-check-queue-gate`.
-2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+1. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
 
 ## 2026-06-28 ActingLab readiness queue summary
 
