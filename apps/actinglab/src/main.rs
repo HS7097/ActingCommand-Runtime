@@ -2775,7 +2775,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -10981,6 +10981,10 @@ fn session_status_recommended_actions(
         state_dir,
         recent_entries,
     ));
+    actions.extend(session_validation_plan_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_last_error_recommended_actions(
         state_dir,
         recent_entries,
@@ -11625,6 +11629,88 @@ fn session_phase_c_plan_recommended_actions(
             "session transport plan [--endpoint <url>]",
             "session validation-plan"
         ]);
+        action["source_request_id"] = json!(entry.request_id);
+        action["source_command"] = json!(entry.command);
+        action["data_summary"] = summary.clone();
+        return vec![action];
+    }
+    Vec::new()
+}
+
+fn session_validation_plan_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    for entry in recent_entries.iter().rev() {
+        let Some(summary) = entry.data_summary.as_ref() else {
+            continue;
+        };
+        if summary.get("kind").and_then(Value::as_str) != Some("validation_plan") {
+            continue;
+        }
+
+        let live_validation_deferred = summary
+            .get("live_validation_status")
+            .and_then(Value::as_str)
+            == Some("deferred");
+        let no_live_pass = summary
+            .get("does_not_mark_live_validation_passed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        if !live_validation_deferred && no_live_pass {
+            return Vec::new();
+        }
+
+        let mut args = vec![
+            "session".to_string(),
+            "validation-plan".to_string(),
+            "--state-dir".to_string(),
+            state_dir_display,
+        ];
+        if let Some(instance) = entry
+            .global
+            .as_ref()
+            .and_then(|global| global.instance.as_ref())
+        {
+            args.extend(["--instance".to_string(), instance.clone()]);
+        }
+
+        let mut action = session_recommended_action_owned(
+            36,
+            "validation_plan_review",
+            "Recent validation planning still has live-only acceptance items; review the checklist before marking Session Layer work accepted.",
+            args,
+        );
+        action["read_only"] = json!(true);
+        action["requires_operator_live_acceptance"] = json!(true);
+        action["requires_live_device"] = json!(live_validation_deferred);
+        action["does_not_touch_device"] = json!(true);
+        action["does_not_mark_live_validation_passed"] = json!(no_live_pass);
+        action["pending_live_item_count"] = summary
+            .get("pending_live_item_count")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["next_action_count"] = summary
+            .get("next_action_count")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["first_next_action"] = summary
+            .get("first_next_action")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["phase_c_self_heal"] = summary
+            .get("phase_c_self_heal")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["phase_c_interaction_flow"] = summary
+            .get("phase_c_interaction_flow")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["phase_c_trusted_channel"] = summary
+            .get("phase_c_trusted_channel")
+            .cloned()
+            .unwrap_or(Value::Null);
         action["source_request_id"] = json!(entry.request_id);
         action["source_command"] = json!(entry.command);
         action["data_summary"] = summary.clone();
@@ -31845,6 +31931,99 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_recommends_validation_plan_review() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "validation-plan-review",
+            "validation_plan",
+            Some("ak"),
+            json!({
+                "schema_version": "session.validation_plan.v0.1",
+                "status": "offline_plan",
+                "live_validation_status": "deferred",
+                "deferred_code": "requires-live-device",
+                "pending_live_acceptance": {
+                    "items": [
+                        {"id": "prepared_emulator_session_layer_validation"},
+                        {"id": "ak_stale_capture_fresh_frame_recovery_validation"}
+                    ]
+                },
+                "next_actions": {
+                    "ordered": [
+                        {"action": "review_pending_live_acceptance"}
+                    ],
+                    "guarantees": {
+                        "does_not_mark_live_validation_passed": true
+                    },
+                    "phase_c": {
+                        "self_heal": "observe_first_plan_review",
+                        "interaction_flow": "stream_plan_review",
+                        "trusted_channel": "transport_plan_review"
+                    }
+                }
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("validation_plan_review")
+        );
+        assert_eq!(
+            actions[0].get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("requires_operator_live_acceptance")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("requires_live_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("pending_live_item_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            actions[0].get("source_request_id").and_then(Value::as_str),
+            Some("validation-plan-review")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("validation-plan")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/4").and_then(Value::as_str),
+            Some("--instance")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/5").and_then(Value::as_str),
+            Some("ak")
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_stale_lease_inspect() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -34110,6 +34289,7 @@ mod tests {
             "connect_plan",
             "stream_plan",
             "transport_plan",
+            "validation_plan",
             "capture_diagnose",
             "stale_capture_recovery",
         ] {
