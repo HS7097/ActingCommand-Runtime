@@ -205,6 +205,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab bootstrap validation diagnostics API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_validation_field="status_diagnostics.validation"`, so startup clients can discover the embedded pending-live validation summary from the API contract.
 - ActingLab capture freshness status diagnostics summary: `session status --diagnostics` now embeds `diagnostics.capture_freshness`, exposing stale-frame policy, backend order, AK stale-screencap classification, and lighter recovery guidance without touching devices.
 - ActingLab bootstrap capture freshness API contract alignment: `session bootstrap` now embeds `status_diagnostics.capture_freshness`, and `session api` advertises both `status_view.capture_freshness_summary_field` and `bootstrap_view.status_diagnostics_capture_freshness_field`.
+- ActingLab interaction/trusted-channel status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `interaction_flow` and `trusted_channel` summaries, and `session api` advertises their status/bootstrap field paths.
+
+## Current ActingLab Interaction And Trusted-Channel Status Diagnostics Summary
+
+This increment makes the Phase C interaction-flow and trusted-channel lanes directly visible from ordinary status diagnostics and startup bootstrap output.
+
+- `session status --diagnostics` now includes `diagnostics.interaction_flow`.
+- `session status --diagnostics` now includes `diagnostics.trusted_channel`.
+- `session bootstrap` now embeds `status_diagnostics.interaction_flow` and `status_diagnostics.trusted_channel`.
+- `session api` now declares `envelopes.status_view.interaction_flow_summary_field=diagnostics.interaction_flow`.
+- `session api` now declares `envelopes.status_view.trusted_channel_summary_field=diagnostics.trusted_channel`.
+- `session api` now declares `envelopes.bootstrap_view.status_diagnostics_interaction_flow_field=status_diagnostics.interaction_flow`.
+- `session api` now declares `envelopes.bootstrap_view.status_diagnostics_trusted_channel_field=status_diagnostics.trusted_channel`.
+- The interaction-flow summary is non-recursive and does not depend on instance configuration; it reports bounded local stream availability, daemon request serialization, lease-gated input relay, reserved trusted remote long-lived stream status, and read-only next actions.
+- The trusted-channel summary reports the local CLI lane, daemon file-IPC lane, reserved trusted remote lane, encryption/authentication requirements, listener/token/TLS non-implementation, and read-only next actions.
+- The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, probe TCP, issue tokens, start TLS, read resource repositories, execute recovery, or perform live validation.
 
 ## Current ActingLab Bootstrap Capture Freshness API Contract Alignment
 

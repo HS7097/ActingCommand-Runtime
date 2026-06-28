@@ -2585,6 +2585,8 @@ fn session_api_contract() -> Value {
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
                 "capture_freshness_summary_field": "diagnostics.capture_freshness",
+                "interaction_flow_summary_field": "diagnostics.interaction_flow",
+                "trusted_channel_summary_field": "diagnostics.trusted_channel",
                 "phase_c_summary_field": "diagnostics.phase_c",
                 "validation_summary_field": "diagnostics.validation",
                 "monitor_policy_lease_actions": [
@@ -3176,6 +3178,8 @@ fn session_bootstrap_view_contract() -> Value {
         "schema_version": "session.bootstrap.v0.1",
         "status_diagnostics_field": "status_diagnostics",
         "status_diagnostics_capture_freshness_field": "status_diagnostics.capture_freshness",
+        "status_diagnostics_interaction_flow_field": "status_diagnostics.interaction_flow",
+        "status_diagnostics_trusted_channel_field": "status_diagnostics.trusted_channel",
         "status_diagnostics_phase_c_field": "status_diagnostics.phase_c",
         "status_diagnostics_validation_field": "status_diagnostics.validation",
         "readiness_field": "readiness",
@@ -8164,6 +8168,8 @@ fn session_bootstrap_diagnostics_summary(
         "liveness": diagnostics.get("liveness").cloned().unwrap_or(Value::Null),
         "queue_health": diagnostics.pointer("/queues/health").cloned().unwrap_or(Value::Null),
         "capture_freshness": diagnostics.get("capture_freshness").cloned().unwrap_or(Value::Null),
+        "interaction_flow": diagnostics.get("interaction_flow").cloned().unwrap_or(Value::Null),
+        "trusted_channel": diagnostics.get("trusted_channel").cloned().unwrap_or(Value::Null),
         "phase_c": diagnostics.get("phase_c").cloned().unwrap_or(Value::Null),
         "validation": diagnostics.get("validation").cloned().unwrap_or(Value::Null),
         "recommended_action_count": recommended_action_kinds.len(),
@@ -10756,6 +10762,8 @@ fn session_status_diagnostics(
         "leases": session_lease_diagnostics(state_dir)?,
         "monitor_policy": monitor_policy,
         "capture_freshness": session_capture_freshness_diagnostics_summary()?,
+        "interaction_flow": session_interaction_flow_diagnostics_summary()?,
+        "trusted_channel": session_trusted_channel_diagnostics_summary()?,
         "phase_c": session_phase_c_diagnostics_summary()?,
         "validation": session_validation_diagnostics_summary(),
         "journal": {
@@ -10841,6 +10849,162 @@ fn session_capture_freshness_diagnostics_summary() -> CliOutcome<Value> {
             .cloned()
             .unwrap_or(Value::Null)
     }))
+}
+
+fn session_interaction_flow_diagnostics_summary() -> CliOutcome<Value> {
+    let stream_safe = false;
+    let input_relay_requested = false;
+    let next_actions = session_interaction_flow_next_actions(stream_safe, input_relay_requested);
+    Ok(json!({
+        "schema_version": "session.interaction_flow_diagnostics.v0.1",
+        "stream_plan_command": "session stream-plan [--endpoint <url>]",
+        "daemon_stream_plan_command": "session request stream-plan [--endpoint <url>]",
+        "stream_check_command": "stream check",
+        "daemon_stream_check_command": "session request stream check",
+        "safe_to_open_stream": stream_safe,
+        "bounded_local_cli": {
+            "status": "available",
+            "command": "stream --max-frames <N>",
+            "long_lived": false,
+            "encryption_required": false
+        },
+        "daemon_request": {
+            "status": "blocked",
+            "command": "session request stream",
+            "check_command": "session request stream check",
+            "serialized_by_daemon": true,
+            "input_relay_requires_matching_lease": true
+        },
+        "trusted_remote_long_lived": {
+            "status": "reserved",
+            "implemented": false,
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "preflight_command": "session transport check --endpoint <url>"
+        },
+        "input_relay": {
+            "requested": input_relay_requested,
+            "action_count": 0,
+            "requires_matching_lease": true
+        },
+        "next_actions": session_compact_next_actions(&next_actions),
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
+fn session_interaction_flow_next_actions(stream_safe: bool, input_relay_requested: bool) -> Value {
+    let mut ordered = Vec::new();
+    if !stream_safe {
+        ordered.push(session_connect_plan_next_action(
+            1,
+            "inspect_stream_preflight",
+            "Inspect bounded stream and input-relay preflight before any UI interaction flow work.",
+            "stream check",
+            true,
+        ));
+    }
+    if input_relay_requested && !stream_safe {
+        ordered.push(session_connect_plan_next_action(
+            2,
+            "resolve_input_relay_lease",
+            "Input relay is requested but not safe to open; inspect the Session Layer lease before relaying input.",
+            "session lease status",
+            true,
+        ));
+    }
+    ordered.push(session_connect_plan_next_action(
+        3,
+        "review_trusted_remote_stream_boundary",
+        "Review trusted remote transport before any long-lived stream, listener, token, or TLS work.",
+        "session transport plan [--endpoint <url>]",
+        true,
+    ));
+    ordered.push(session_connect_plan_next_action(
+        4,
+        "review_phase_c_plan",
+        "Review Phase C self-heal, interaction-flow, trusted-channel, and live-validation boundaries before enabling execution.",
+        "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        true,
+    ));
+    if stream_safe {
+        ordered.push(session_connect_plan_next_action(
+            5,
+            "open_bounded_local_stream",
+            "A bounded local stream can be opened by a separate command after preflight passes.",
+            "stream --max-frames <N>",
+            false,
+        ));
+    }
+    json!({
+        "schema_version": "session.interaction_flow_next_actions.v0.1",
+        "status": if stream_safe { "ready" } else { "blocked" },
+        "ordered": ordered
+    })
+}
+
+fn session_trusted_channel_diagnostics_summary() -> CliOutcome<Value> {
+    let flags = FlagArgs::default();
+    let transport_plan = session_transport_plan_payload(&flags)?;
+    Ok(json!({
+        "schema_version": "session.trusted_channel_diagnostics.v0.1",
+        "transport_plan_command": "session transport plan [--endpoint <url>]",
+        "transport_check_command": "session transport check --endpoint <url>",
+        "daemon_transport_plan_command": "session request transport plan [--endpoint <url>]",
+        "local_cli": transport_plan.get("local_cli").cloned().unwrap_or(Value::Null),
+        "daemon_file_ipc": transport_plan.get("daemon_file_ipc").cloned().unwrap_or(Value::Null),
+        "trusted_remote": transport_plan
+            .get("trusted_remote")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "next_actions": session_compact_next_actions(
+            transport_plan.get("next_actions").unwrap_or(&Value::Null)
+        ),
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": transport_plan
+            .get("guarantees")
+            .cloned()
+            .unwrap_or(Value::Null)
+    }))
+}
+
+fn session_compact_next_actions(next_actions: &Value) -> Value {
+    let ordered = next_actions
+        .pointer("/ordered")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ordered_action_kinds = ordered
+        .iter()
+        .filter_map(|item| item.get("action").cloned())
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": next_actions.get("schema_version").cloned().unwrap_or(Value::Null),
+        "status": next_actions.get("status").cloned().unwrap_or(Value::Null),
+        "action_count": ordered.len(),
+        "first_action": ordered
+            .first()
+            .and_then(|item| item.get("action"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "ordered_action_kinds": ordered_action_kinds
+    })
 }
 
 fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
@@ -23168,6 +23332,50 @@ mod tests {
             Some("requires-live-device")
         );
         assert_eq!(
+            data.pointer("/status_diagnostics/interaction_flow/schema_version")
+                .and_then(Value::as_str),
+            Some("session.interaction_flow_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/interaction_flow/bounded_local_cli/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/interaction_flow/trusted_remote_long_lived/status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/interaction_flow/input_relay/requires_matching_lease"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/trusted_channel/schema_version")
+                .and_then(Value::as_str),
+            Some("session.trusted_channel_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/trusted_channel/trusted_remote/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/trusted_channel/trusted_remote/network_listener_implemented"
+            )
+            .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/trusted_channel/guarantees/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/status_diagnostics/phase_c/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_diagnostics.v0.1")
@@ -34574,6 +34782,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/interaction_flow_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.interaction_flow")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/trusted_channel_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.trusted_channel")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/phase_c_summary_field")
                 .and_then(Value::as_str),
             Some("diagnostics.phase_c")
@@ -38330,6 +38550,70 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .pointer("/interaction_flow/schema_version")
+                .and_then(Value::as_str),
+            Some("session.interaction_flow_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/interaction_flow/stream_plan_command")
+                .and_then(Value::as_str),
+            Some("session stream-plan [--endpoint <url>]")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/interaction_flow/bounded_local_cli/status")
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/interaction_flow/daemon_request/input_relay_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            diagnostics
+                .pointer("/interaction_flow/next_actions/ordered_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("review_trusted_remote_stream_boundary"))
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/trusted_channel/schema_version")
+                .and_then(Value::as_str),
+            Some("session.trusted_channel_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/trusted_channel/trusted_remote/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/trusted_channel/trusted_remote/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            diagnostics
+                .pointer("/trusted_channel/next_actions/ordered_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("review_listener_and_tls_design"))
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/trusted_channel/guarantees/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
                 .pointer("/phase_c/phase_c_plan_command")
                 .and_then(Value::as_str),
             Some("session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]")
@@ -40058,6 +40342,16 @@ mod tests {
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_capture_freshness_field")
                 .and_then(Value::as_str),
             Some("status_diagnostics.capture_freshness")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_interaction_flow_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics.interaction_flow")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_trusted_channel_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics.trusted_channel")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_phase_c_field")
