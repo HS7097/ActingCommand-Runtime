@@ -10,7 +10,7 @@
 - `session api` now advertises `pending_live_acceptance_field` and `phase_acceptance_matrix_field` for validation-plan clients.
 - This is a pure validation/contract projection for UI, scheduler, and operator acceptance workflows.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending final verification.
+- Milestone source commit `f9ca1755f10bcc659eb17225ef8348fe70e3f1e5` was prepared with checkpoint tag `checkpoint/20260628-pending-live-acceptance`.
 
 ### Resource mirrors used
 
@@ -74,8 +74,7 @@
 
 ### Next step
 
-1. Run full formatting, diff, clippy, and workspace test verification.
-2. Commit and push the Runtime source, planning, checkpoint, and checkpoint tag.
+1. Commit and push this checkpoint update and the checkpoint tag.
 
 ## 2026-06-28 ActingLab validation acceptance matrix
 
