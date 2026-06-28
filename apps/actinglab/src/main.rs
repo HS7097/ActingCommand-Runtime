@@ -1150,6 +1150,7 @@ fn session_layer_capability_contract() -> Value {
             "request_command": "session request capabilities",
             "status_command": "session status --diagnostics",
             "readiness_command": "session readiness",
+            "validation_plan_command": "session validation-plan",
             "status_instance_registry_field": "diagnostics.instances",
             "monitor_policy_command": "session monitor-policy status",
             "journal_command": "session journal"
@@ -1179,7 +1180,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session transport check", "session submit-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1244,6 +1245,7 @@ fn session_access_contract() -> Value {
             "readiness": "session request readiness",
             "command_check": "session request command-check <command...>",
             "submit_plan": "session request submit-plan <command...>",
+            "validation_plan": "session request validation-plan",
             "status": "session request status --diagnostics",
             "queue": "session request queue",
             "journal": "session request journal",
@@ -1269,6 +1271,7 @@ fn session_access_contract() -> Value {
                     "readiness",
                     "command-check",
                     "submit-plan",
+                    "validation-plan",
                     "contract",
                     "transport check",
                     "capabilities",
@@ -1626,6 +1629,19 @@ fn session_api_contract() -> Value {
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
             },
+            "validation_plan_view": {
+                "query": "session validation-plan",
+                "daemon_query": "session request validation-plan",
+                "schema_version": "session.validation_plan.v0.1",
+                "live_validation_status_field": "live_validation_status",
+                "deferred_code_field": "deferred_code",
+                "deferred_live_tasks_field": "deferred_live_tasks",
+                "offline_verification_allowed_field": "offline_verification_allowed",
+                "does_not_enqueue": true,
+                "does_not_touch_device": true,
+                "does_not_capture": true,
+                "does_not_start_maatouch": true
+            },
             "lease_view": {
                 "query": "session lease list|status|touch|wait|acquire|release|preempt",
                 "daemon_query": "session request lease list|status|touch|wait|acquire|release|preempt",
@@ -1800,6 +1816,7 @@ fn session_api_contract() -> Value {
                     "readiness",
                     "command-check",
                     "submit-plan",
+                    "validation-plan",
                     "journal",
                     "events",
                     "response",
@@ -5605,6 +5622,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
         "submit-plan" => run_session_submit_plan(global, args),
+        "validation-plan" => run_session_validation_plan(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
         "cleanup" => run_session_cleanup(global, args),
@@ -6103,6 +6121,14 @@ fn run_session_submit_plan(global: &GlobalOptions, args: &[String]) -> CliOutcom
     )
 }
 
+fn run_session_validation_plan(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "validation_plan", args);
+    }
+    session_validation_plan_payload(global, &flags, "session validation-plan")
+}
+
 fn session_command_check_payload(
     global: &GlobalOptions,
     flags: &FlagArgs,
@@ -6260,6 +6286,74 @@ fn session_submit_plan_payload(
     }))
 }
 
+fn session_validation_plan_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    Ok(json!({
+        "schema_version": "session.validation_plan.v0.1",
+        "status": "offline_plan",
+        "live_validation_status": "deferred",
+        "deferred_code": "requires-live-device",
+        "generated_at_unix_ms": current_unix_ms(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "policy": {
+            "generated_for_round": "2026-06-28-session-layer",
+            "no_fake_live_results": true,
+            "live_acceptance_must_be_observed": true,
+            "offline_work_may_continue": true
+        },
+        "offline_verification_allowed": [
+            "unit-tests",
+            "contract-tests",
+            "dry-run",
+            "fixture-frame",
+            "static prohibited-feature scan"
+        ],
+        "deferred_live_tasks": [
+            {
+                "id": "prepared_emulator_session_layer_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "description": "Validate Session Layer behavior against a prepared emulator and running game."
+            },
+            {
+                "id": "ak_stale_capture_fresh_frame_recovery_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "description": "Validate Arknights stale-capture diagnosis and fresh-frame recovery against a real or emulator instance."
+            },
+            {
+                "id": "live_adb_device_control_and_screenshot_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "description": "Validate live ADB device control, live screenshots, and running-game observations."
+            },
+            {
+                "id": "operator_acceptance_observation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "description": "Operator acceptance that requires manual emulator observation remains outside offline checks."
+            }
+        ],
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
 fn session_submit_plan_blockers(
     readiness: &Value,
     command_check: &Value,
@@ -6341,9 +6435,8 @@ fn classify_session_command_for_check(
 
     match first {
         "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
-        | "contract" | "api" | "transport" | "capabilities" | "command-check" | "submit-plan" => {
-            Ok(read_only)
-        }
+        | "contract" | "api" | "transport" | "capabilities" | "command-check" | "submit-plan"
+        | "validation-plan" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -9088,7 +9181,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, readiness, queue, command-check, submit-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -9101,6 +9194,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             submit_readonly_session_request(global, &flags, "command_check", &args[1..])
         }
         "submit-plan" => submit_readonly_session_request(global, &flags, "submit_plan", &args[1..]),
+        "validation-plan" => {
+            submit_readonly_session_request(global, &flags, "validation_plan", &args[1..])
+        }
         "journal" => submit_readonly_session_request(global, &flags, "journal", &args[1..]),
         "events" => submit_readonly_session_request(global, &flags, "events", &args[1..]),
         "response" => submit_readonly_session_request(global, &flags, "response", &args[1..]),
@@ -10166,6 +10262,11 @@ fn execute_session_command_request_inner(
                 Some(&config),
                 "session request submit-plan",
             )
+        }
+        "validation_plan" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            session_validation_plan_payload(&global, &flags, "session request validation-plan")
         }
         "journal" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -15861,6 +15962,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
         command_cap("session submit-plan", ["offline"], "available"),
+        command_cap("session validation-plan", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
         command_cap("session cleanup", ["offline"], "available"),
@@ -15896,6 +15998,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request submit-plan",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request validation-plan",
             ["running_runtime"],
             "available",
         ),
@@ -18401,6 +18508,86 @@ mod tests {
                 .pointer("/command_check/normalized_command")
                 .and_then(Value::as_str),
             Some("status")
+        );
+    }
+
+    #[test]
+    fn session_validation_plan_reports_deferred_live_policy_without_device_work() {
+        let result = run_cli(["--json", "session", "validation-plan", "--local"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.validation_plan.v0.1")
+        );
+        assert_eq!(
+            data.get("live_validation_status").and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.get("deferred_code").and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/policy/no_fake_live_results")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.get("deferred_live_tasks")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .all(|task| task.get("deferred_code").and_then(Value::as_str)
+                    == Some("requires-live-device"))
+        );
+    }
+
+    #[test]
+    fn session_validation_plan_request_returns_payload() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "validation-plan-query".to_string(),
+            command: "validation_plan".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.validation_plan.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/scope/instance").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload
+                .pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -32744,6 +32931,22 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session validation-plan"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request validation-plan"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request events"))
         );
         assert!(
@@ -32822,6 +33025,11 @@ mod tests {
             data.pointer("/daemon_queries/submit_plan")
                 .and_then(Value::as_str),
             Some("session request submit-plan <command...>")
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/validation_plan")
+                .and_then(Value::as_str),
+            Some("session request validation-plan")
         );
         assert_eq!(
             data.pointer("/daemon_queries/transport")
@@ -33210,6 +33418,16 @@ mod tests {
             data.pointer("/envelopes/submit_plan_view/preflight_summary_field")
                 .and_then(Value::as_str),
             Some("preflight_summary")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/validation_plan_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.validation_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/validation_plan_view/deferred_code_field")
+                .and_then(Value::as_str),
+            Some("deferred_code")
         );
         assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")
@@ -33751,6 +33969,7 @@ mod tests {
         for command in [
             "session status",
             "session submit-plan",
+            "session validation-plan",
             "session journal",
             "session events",
             "session events wait",
@@ -33777,6 +33996,7 @@ mod tests {
             "session recover --stale-capture",
             "session request status",
             "session request submit-plan",
+            "session request validation-plan",
             "session request journal",
             "session request events",
             "session request events wait",

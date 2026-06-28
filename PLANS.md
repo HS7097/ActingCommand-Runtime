@@ -167,6 +167,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab readiness instance summary: `session readiness` and `session request readiness` now expose top-level `instances` with registry availability, selected instance, missing required fields, and configured instance summaries for UI/scheduler consumers.
 - ActingLab readiness selected-instance gate: `session readiness` and `session request readiness` now mark selected missing or incomplete instances as `ready=false` with explicit instance blockers, so UI/scheduler consumers do not submit work against unusable instance config.
 - ActingLab command-check instance gate: `session command-check` and `session request command-check` now gate device-affecting commands on selected-instance configuration, and `session submit-plan` exposes a compact `preflight_summary` for UI/scheduler consumers.
+- ActingLab live validation plan surface: `session validation-plan` and `session request validation-plan` now expose deferred live-validation policy, allowed offline checks, and no-device guarantees as machine-readable data for UI/scheduler clients.
+
+## Current ActingLab Live Validation Plan Surface
+
+This increment turns the current live-validation deferral into a stable Session Layer query instead of relying on checkpoint prose. Future UI/scheduler clients can distinguish offline verification progress from live acceptance work without touching devices.
+
+- `session validation-plan` returns `session.validation_plan.v0.1`.
+- `session request validation-plan` returns the same schema through the resident daemon request path.
+- The payload reports `live_validation_status=deferred` and `deferred_code=requires-live-device`.
+- Deferred live tasks include prepared-emulator Session Layer validation, AK stale-capture/fresh-frame recovery validation, live ADB/device/screenshot validation, and operator acceptance observation.
+- Offline verification remains allowed for unit tests, contract tests, dry-runs, fixture-frame tests, and static prohibited-feature scans.
+- The surface guarantees it does not enqueue, capture, start MaaTouch, touch devices, start apps, start listeners, or read resource repositories.
+
+Live-device and operator validation remain deferred for this round as `requires-live-device`. No live result is faked or marked passed by this implementation.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Command-Check Instance Gate
 
