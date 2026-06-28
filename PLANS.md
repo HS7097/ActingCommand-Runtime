@@ -182,6 +182,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal lease-gate alignment: `session self-heal-plan` now makes the embedded `lease_gate` follow the selected recovery candidate, so stale-capture/read-only recovery reports `required=false` while standby/modal/unexpected-page/login/session-expired maintenance control remains lease-gated.
 - ActingLab Phase C self-heal escalation preflight: `session self-heal-plan` now exposes escalation policy for repeated transient capture failures and maintenance-control loops without executing heavy recovery.
 - ActingLab Phase C self-heal event summary: daemon request data summaries now carry self-heal escalation category, heavy-recovery candidate, no-execute guarantee, and operator/live-validation requirement for journal/events consumers.
+- ActingLab Phase C self-heal escalation recommended action: `session status --diagnostics` now turns recent self-heal-plan escalation summaries into a read-only `self_heal_escalation_review` action for UI/scheduler clients.
+
+## Current ActingLab Phase C Self-Heal Escalation Recommended Action
+
+This increment connects the self-heal escalation summary to the existing status diagnostics recommendation surface.
+
+- `session status --diagnostics` inspects recent request journal entries for `data_summary.kind=self_heal_plan`.
+- When the latest self-heal plan reaches a heavy-recovery candidate while preserving `does_not_execute_heavy_recovery=true`, status diagnostics emits `self_heal_escalation_review`.
+- The recommended action is read-only and routes back to `session self-heal-plan --trigger <kind>`.
+- The action records the source request id, source command, escalation category, heavy-recovery candidate, operator/live-validation requirement, and full data summary.
+- UI and scheduler clients can now see that repeated transient failures need review without executing app restart or other heavy recovery.
+- The Session API contract advertises `self_heal_escalation_actions` under `status_view`.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, resource repository read, network listener, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Phase C Self-Heal Event Summary
 

@@ -2150,6 +2150,9 @@ fn session_api_contract() -> Value {
                     "stale_capture_recover",
                     "capture_backend_health_check"
                 ],
+                "self_heal_escalation_actions": [
+                    "self_heal_escalation_review"
+                ],
                 "queue_health_actions": [
                     "blocked_request_inspect",
                     "blocked_request_cancel_dry_run",
@@ -9891,6 +9894,10 @@ fn session_status_recommended_actions(
         state_dir,
         recent_entries,
     ));
+    actions.extend(session_self_heal_escalation_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_last_error_recommended_actions(
         state_dir,
         recent_entries,
@@ -10235,6 +10242,72 @@ fn session_capture_health_signal(summary: &Value) -> Option<&'static str> {
         return Some("capture_backend_unavailable");
     }
     None
+}
+
+fn session_self_heal_escalation_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    for entry in recent_entries.iter().rev() {
+        let Some(summary) = entry.data_summary.as_ref() else {
+            continue;
+        };
+        if summary.get("kind").and_then(Value::as_str) != Some("self_heal_plan") {
+            continue;
+        }
+        let Some(category) = summary.get("escalation_category").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(heavy_recovery_candidate) = summary
+            .get("heavy_recovery_candidate")
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if !summary
+            .get("does_not_execute_heavy_recovery")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let mut args = vec!["session".to_string(), "self-heal-plan".to_string()];
+        if let Some(trigger) = summary.get("trigger").and_then(Value::as_str) {
+            args.extend(["--trigger".to_string(), trigger.to_string()]);
+        }
+        args.extend(["--state-dir".to_string(), state_dir_display]);
+        if let Some(instance) = entry
+            .global
+            .as_ref()
+            .and_then(|global| global.instance.as_ref())
+        {
+            args.extend(["--instance".to_string(), instance.clone()]);
+        }
+
+        let mut action = session_recommended_action_owned(
+            32,
+            "self_heal_escalation_review",
+            "Recent self-heal planning reached a heavy-recovery candidate; inspect the preflight before any scheduler or operator escalation.",
+            args,
+        );
+        action["read_only"] = json!(true);
+        action["requires_scheduler_decision"] = json!(true);
+        action["operator_live_validation_required"] = summary
+            .get("operator_live_validation_required")
+            .cloned()
+            .unwrap_or(Value::Null);
+        action["executes_heavy_recovery"] = json!(false);
+        action["executes_app_restart"] = json!(false);
+        action["escalation_category"] = json!(category);
+        action["heavy_recovery_candidate"] = json!(heavy_recovery_candidate);
+        action["source_request_id"] = json!(entry.request_id);
+        action["source_command"] = json!(entry.command);
+        action["data_summary"] = summary.clone();
+        return vec![action];
+    }
+    Vec::new()
 }
 
 fn session_last_error_recommended_actions(
@@ -29361,6 +29434,79 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_recommends_self_heal_escalation_review() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "self-heal-plan-escalation",
+            "self_heal_plan",
+            Some("ak"),
+            json!({
+                "status": "blocked",
+                "trigger": {"kind": "capture_stale_suspected"},
+                "target": {"page": "home"},
+                "recovery": {"kind": "capture_backend_recovery"},
+                "escalation": {
+                    "category": "transient_capture_path",
+                    "heavy_recovery_candidate": "app_restart",
+                    "does_not_execute_heavy_recovery": true,
+                    "operator_live_validation_required": true
+                },
+                "ready_to_execute_maintenance": false,
+                "lease_gate": {"status": "not_required"},
+                "blockers": []
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("self_heal_escalation_review")
+        );
+        assert_eq!(
+            actions[0].get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0]
+                .get("executes_heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            actions[0]
+                .get("operator_live_validation_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            actions[0].get("source_request_id").and_then(Value::as_str),
+            Some("self-heal-plan-escalation")
+        );
+        assert_eq!(
+            actions[0]
+                .pointer("/data_summary/escalation_category")
+                .and_then(Value::as_str),
+            Some("transient_capture_path")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/1").and_then(Value::as_str),
+            Some("self-heal-plan")
+        );
+        assert_eq!(
+            actions[0].pointer("/args/3").and_then(Value::as_str),
+            Some("capture_stale_suspected")
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_stale_lease_inspect() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -31695,6 +31841,12 @@ mod tests {
                 .pointer("/envelopes/status_view/queue_health_field")
                 .and_then(Value::as_str),
             Some("diagnostics.queues.health")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/self_heal_escalation_actions/0")
+                .and_then(Value::as_str),
+            Some("self_heal_escalation_review")
         );
         assert_eq!(
             payload
