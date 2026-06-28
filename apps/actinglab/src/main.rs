@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15019,6 +15019,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         "submit_plan" => Some(submit_plan_request_data_summary(data)),
         "capture_policy" => Some(capture_policy_request_data_summary(data)),
         "record_policy" => Some(record_policy_request_data_summary(data)),
+        "self_heal_policy" => Some(self_heal_policy_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
         "phase_c_plan" => Some(phase_c_plan_request_data_summary(data)),
         "connect_plan" => Some(connect_plan_request_data_summary(data)),
@@ -15495,6 +15496,38 @@ fn record_policy_request_data_summary(data: &Value) -> Value {
         "destructive_operation_requires_explicit_flag": data.pointer("/safety_policy/destructive_operation_requires_explicit_flag").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn self_heal_policy_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "self_heal_policy",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "target_state": data.pointer("/phase_c/target_state").cloned().unwrap_or(Value::Null),
+        "live_acceptance_status": data.pointer("/phase_c/live_acceptance_status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/phase_c/deferred_code").cloned().unwrap_or(Value::Null),
+        "flow_stage_count": data.get("flow").and_then(Value::as_array).map(Vec::len),
+        "supported_trigger_count": data.pointer("/trigger_policy/supported_triggers").and_then(Value::as_array).map(Vec::len),
+        "stale_adb_screencap_alone_is_not_game_freeze": data.pointer("/trigger_policy/stale_adb_screencap_alone_is_not_game_freeze").cloned().unwrap_or(Value::Null),
+        "must_diagnose_before_restart": data.pointer("/trigger_policy/must_diagnose_before_restart").cloned().unwrap_or(Value::Null),
+        "recovery_order_count": data.get("recovery_order").and_then(Value::as_array).map(Vec::len),
+        "first_recovery_kind": data.pointer("/recovery_order/0/kind").cloned().unwrap_or(Value::Null),
+        "heavy_recovery_kind": data.pointer("/recovery_order/4/kind").cloned().unwrap_or(Value::Null),
+        "game_progress_actions_allowed": data.pointer("/maintenance_boundary/game_progress_actions_allowed").cloned().unwrap_or(Value::Null),
+        "destructive_actions_allowed": data.pointer("/maintenance_boundary/destructive_actions_allowed").cloned().unwrap_or(Value::Null),
+        "premium_or_paid_resource_use_allowed": data.pointer("/maintenance_boundary/premium_or_paid_resource_use_allowed").cloned().unwrap_or(Value::Null),
+        "control_execution_requires_matching_lease": data.pointer("/lease_and_scheduler_policy/control_execution_requires_matching_lease").cloned().unwrap_or(Value::Null),
+        "scheduler_owns_arbitration": data.pointer("/lease_and_scheduler_policy/scheduler_owns_arbitration").cloned().unwrap_or(Value::Null),
+        "ui_must_not_bypass_session_layer": data.pointer("/lease_and_scheduler_policy/ui_must_not_bypass_session_layer").cloned().unwrap_or(Value::Null),
+        "interactive_stream_should_report_recovery_state_but_not_execute_without_lease": data.pointer("/client_guidance/interactive_stream_should_report_recovery_state_but_not_execute_without_lease").cloned().unwrap_or(Value::Null),
+        "does_not_enqueue": data.pointer("/guarantees/does_not_enqueue").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
+        "does_not_start_apps": data.pointer("/guarantees/does_not_start_apps").cloned().unwrap_or(Value::Null),
+        "does_not_read_resource_repositories": data.pointer("/guarantees/does_not_read_resource_repositories").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -27237,6 +27270,162 @@ mod tests {
                 .pointer("/client_guidance/interactive_stream_should_report_recovery_state_but_not_execute_without_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("self_heal_policy")
+        );
+        assert_eq!(
+            summary.get("target_state").and_then(Value::as_str),
+            Some("home_or_known_good_page")
+        );
+        assert_eq!(
+            summary.get("flow_stage_count").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            summary
+                .get("stale_adb_screencap_alone_is_not_game_freeze")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("control_execution_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("ui_must_not_bypass_session_layer")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary.get("does_not_capture").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_events_filters_self_heal_policy_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let policy_request = SessionCommandRequest {
+            request_id: "self-heal-policy-event".to_string(),
+            command: "self_heal_policy".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let policy_payload =
+            execute_session_command_request_inner(&policy_request, state_dir).unwrap();
+        let policy_response = SessionCommandResponse {
+            request_id: policy_request.request_id.clone(),
+            command: policy_request.command.clone(),
+            ok: true,
+            data: Some(policy_payload),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &policy_request, &policy_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-self-heal-policy-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "self_heal_policy".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 13,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("self-heal-policy-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("self_heal_policy")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/stale_adb_screencap_alone_is_not_game_freeze")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/control_execution_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("self_heal_policy")
         );
     }
 
@@ -39131,6 +39320,7 @@ mod tests {
             "submit_plan",
             "capture_policy",
             "record_policy",
+            "self_heal_policy",
             "connect_plan",
             "stream_plan",
             "transport_plan",

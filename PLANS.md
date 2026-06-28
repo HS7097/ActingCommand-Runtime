@@ -226,6 +226,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording command-check classification: `session command-check` now distinguishes current-frame recording from local-frame daemon-state work, so `session record step --capture` and `--current-frame` are device-affecting read-only while local `--frame` authoring remains daemon-state.
 - ActingLab live acceptance checklist granularity: `session validation-plan` now lists record current-frame authoring, interactive stream/input relay, and trusted-channel security as separate `deferred: requires-live-device` acceptance items.
 - ActingLab queue event summary: daemon request journals and `session events --data-summary-kind queue` now expose compact queue health, admission, request counts, recommended actions, and no-device/no-capture guarantees for UI/scheduler clients.
+- ActingLab self-heal policy event summary: daemon request journals and `session events --data-summary-kind self_heal_policy` now expose compact maintenance-only recovery policy, trigger guard, lease/scheduler boundary, and no-device/no-resource guarantees for UI/scheduler clients.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
@@ -5792,6 +5793,39 @@ This is still a contract/discovery increment only:
 - `session connect-plan` mirrors the same Phase C gate state into `phase_c_preflight`, so future UI/scheduler clients can make a single client-start decision while still seeing self-heal, interaction-flow, trusted-channel, and live-validation blockers.
 - `session submit-plan` now mirrors Phase C execution-readiness into `phase_c_execution_preflight`, so UI/scheduler clients can inspect self-heal, interaction-flow, trusted-channel, lease, queue, and live-deferred gates before submitting a command.
 - `session queue` and `session events --data-summary-kind queue` expose the queue/admission slice used by Phase C preflights, so UI/scheduler clients can see blocked work before they propose recovery, stream input, or future trusted remote control.
+- `session self-heal-policy` and `session events --data-summary-kind self_heal_policy` expose the maintenance-only self-heal policy slice used before any recovery plan or execution request is accepted.
+
+## Current ActingLab self-heal policy event summary
+
+This increment makes the Phase C self-heal policy discoverable from daemon request journals and event filters.
+
+`session request self-heal-policy` summaries now expose:
+
+- self-heal target state and live-validation deferral;
+- observe/diagnose/plan/execute flow stage count;
+- supported trigger count and the stale-ADB-screencap classification guard;
+- recovery order count, first recovery kind, and heavy recovery kind;
+- maintenance boundary fields that forbid game progress, destructive actions, and paid-resource use;
+- scheduler/lease policy requiring matching lease control execution;
+- UI and interactive-stream guidance that forbids bypassing the Session Layer;
+- no-enqueue/no-device/no-capture/no-MaaTouch/no-listener/no-app/no-resource-read guarantees.
+
+`session events --data-summary-kind self_heal_policy` can now return this self-heal policy slice without forcing UI/scheduler clients to parse the full policy payload.
+
+Phase C alignment:
+
+- Self-heal: policy events expose observe-first and maintenance-only recovery boundaries before any recovery plan is submitted.
+- Interaction flow: policy events expose that streams may report recovery state but must not execute recovery or input relay without a matching lease.
+- Trusted channel: policy events keep UI/remote clients behind the Session Layer boundary and do not start listeners, issue tokens, or start TLS.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; offline policy summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no daemon work is enqueued;
+- no recovery is executed;
+- no stream is opened;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab queue event summary
 
