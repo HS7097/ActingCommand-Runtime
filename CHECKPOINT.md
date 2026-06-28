@@ -10,7 +10,7 @@
 - A selected instance that does not exist in the registry now returns `ready=false`, `status=not_ready`, and an `instance_not_found` blocker.
 - `session api` now advertises `readiness_view.selected_instance_status_field` and `readiness_view.selected_instance_missing_required_field`.
 - The change is a pure status/config projection; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual instance health/connect behavior.
-- Milestone source commit is pending until final validation and commit.
+- Milestone source commit `228606ae36ffbac048a0446a83db015070e5fba9` was prepared with checkpoint tag `checkpoint/20260628-readiness-selected-instance-gate`.
 
 ### Resource mirrors used
 
@@ -49,6 +49,8 @@
 - Second `cargo test --workspace` failed because `tap_target_dry_run_requires_visible_target_and_returns_point` could run while another env-mutating test held temporary config; the test now takes `ENV_LOCK` and clears config/session env before invoking the CLI.
 - Final `cargo test --workspace`
 - Final source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `git commit -m "Gate readiness on selected instance"`
+- `git tag checkpoint/20260628-readiness-selected-instance-gate 228606ae36ffbac048a0446a83db015070e5fba9`
 
 ### Test results
 
@@ -67,8 +69,7 @@
 
 ### Next step
 
-1. Commit and push Runtime repository changes.
-2. Tag a meaningful checkpoint for rollback/provenance.
+1. Push Runtime repository changes and checkpoint tag.
 
 ## 2026-06-28 ActingLab readiness instance summary
 
