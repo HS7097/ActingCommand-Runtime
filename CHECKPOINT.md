@@ -10,6 +10,7 @@
 - Queue admission is checked in the combined plan even when the target command's command-check route would otherwise skip the queue gate.
 - Control commands still require matching Session Layer lease metadata through the existing command-check lease gate.
 - `session api`, `session contract`, and `capabilities` now advertise/classify the submit-plan view.
+- Milestone source commit `f9b5d720aaa23b0b8f403545bb061a6e35c6201f` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-session-submit-plan`.
 - No daemon execution, device actions, capture, MaaTouch startup, resource access, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
