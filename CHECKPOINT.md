@@ -17,7 +17,7 @@
 - `session api` now advertises `phase_c_plan_view.acceptance_gates_field` and `phase_c_plan_view.acceptance_gates_schema_version`.
 - This increment is offline-only and starts no listener, issues no token, starts no TLS, captures no frame, starts no MaaTouch, touches no emulator/device, reads no resource repository, and performs no live validation.
 - Runtime baseline before this task: `99321b856c3a343758bfd2250065ec943bb6d483`.
-- Milestone source commit: pending.
+- Milestone source commit: `dcd45f8bee68ce3339f025ad55fc549c87e01c19`.
 
 ### 待真机验收
 
