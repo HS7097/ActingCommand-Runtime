@@ -13,7 +13,7 @@
 - Added regression tests proving these preflights do not enqueue, capture, start MaaTouch, start listeners, or touch devices.
 - This increment is offline-only and starts no listener, issues no token, starts no TLS, captures no frame, starts no MaaTouch, touches no emulator/device, and performs no live validation.
 - Runtime baseline before this task: `8faf7cc7573c9c31d1ad976eac1376db7f58a5b3`.
-- Milestone source commit: pending.
+- Milestone source commit: `292e8cbc4b9aad609e2e4bd502bf014221495a9f`.
 
 ### 待真机验收
 
