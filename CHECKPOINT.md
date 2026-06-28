@@ -13,7 +13,7 @@
 - `session api` now advertises the `submit_plan_view.phase_c_execution_preflight_field` and schema version for UI/scheduler clients.
 - This increment only exposes submission preflight diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `4e7bfc326edb68e57ed0532f6d78ba35f48a25d9`.
-- Milestone source commit: pending.
+- Milestone source commit: `f7e11e6122e50f07736597d59399db5e49b6c4f4`.
 
 ### 待真机验收
 
