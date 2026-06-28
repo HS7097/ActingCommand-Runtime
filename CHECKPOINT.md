@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C self-heal escalation preflight
+
+### Current status
+
+- Extended `session self-heal-plan` with an `escalation` field for UI/scheduler/agent clients.
+- Capture stale and capture-backend unavailable triggers now expose `category=transient_capture_path`, lightweight capture-backend recovery as the current step, and app restart only as a heavy-recovery review candidate.
+- Capture-path escalation explicitly records that stale ADB screencap alone must not be treated as a game freeze.
+- Standby, unexpected page, modal popup, and session-expired triggers now expose `category=maintenance_control_path`.
+- Startup-login triggers now expose `category=startup_login_path`, a bounded startup-login loop, and `resource_required=STARTUP-LOGIN.md`.
+- Heavy recovery remains non-executing in this preflight and requires matching lease metadata plus operator/live validation before any future acceptance.
+- Repeated transient failures must be fully logged and escalate visibly rather than looping silently.
+- The change is a pure no-device preflight contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending.
+- Checkpoint tag: pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `5508dac9e8e48b5ca4ad9a47e25cb7b5cabb7a97`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `PLANS.md`, `CHECKPOINT.md`, and confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected the current `apps/actinglab/src/main.rs` self-heal-plan diff.
+- `cargo test -p actingcommand-actinglab self_heal_plan -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session self-heal-plan --local --trigger capture_stale_suspected`
+- `cargo run -q -p actingcommand-actinglab -- --json session self-heal-plan --local --trigger startup_login_required`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only prohibited-feature scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, and direct navigation execution.
+- Source-only scan for capture/MaaTouch/touch execution references in the added `apps/actinglab/src/main.rs` diff lines.
+
+### Test results
+
+- Focused `self_heal_plan` tests passed.
+- CLI smoke `session self-heal-plan --local --trigger capture_stale_suspected` passed and returned `escalation.category=transient_capture_path`, `heavy_recovery_candidate=app_restart`, `does_not_execute_heavy_recovery=true`, and `must_not_mark_game_frozen_from_adb_screencap_alone=true`.
+- CLI smoke `session self-heal-plan --local --trigger startup_login_required` passed and returned `escalation.category=startup_login_path`, `resource_required=STARTUP-LOGIN.md`, `operator_live_validation_required=true`, and `does_not_execute_heavy_recovery=true`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only prohibited-feature scan passed with no matches for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, or direct navigation execution.
+- Source-only capture/MaaTouch/touch scan passed with no matches in the source diff.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live self-heal-plan validation against a resident daemon and configured instances.
+- `deferred: requires-live-device` - live repeated transient failure escalation validation for stale or unavailable capture paths.
+- `deferred: requires-live-device` - live maintenance recovery execution for standby, unexpected page, modal popup, startup-login, and session-expired triggers.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device and operator validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit Runtime changes and record the milestone commit/tag.
+2. Push Runtime changes and checkpoint tag.
+3. Continue the next offline Session Layer Phase C increment before live validation.
+
 ## 2026-06-28 ActingLab Phase C self-heal lease-gate alignment
 
 ### Current status

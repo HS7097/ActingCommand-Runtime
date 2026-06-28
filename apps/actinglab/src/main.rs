@@ -1520,6 +1520,7 @@ fn session_self_heal_plan_payload(
     let readiness = session_readiness_payload(global, flags, state_dir, config, command_name)?;
     let queue = session_queue_payload(state_dir)?;
     let recovery = session_self_heal_plan_recovery(&trigger, &target_page);
+    let escalation = session_self_heal_plan_escalation(&trigger);
     let recovery_requires_lease = recovery
         .get("requires_matching_lease")
         .and_then(Value::as_bool)
@@ -1578,6 +1579,7 @@ fn session_self_heal_plan_payload(
             }
         ],
         "recovery": recovery,
+        "escalation": escalation,
         "readiness": readiness,
         "queue": queue,
         "lease_gate": lease_gate,
@@ -1658,6 +1660,57 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "requires_matching_lease": false,
             "executes_control": false,
             "next": "run observation and diagnosis before selecting a recovery trigger"
+        }),
+    }
+}
+
+fn session_self_heal_plan_escalation(trigger: &str) -> Value {
+    match trigger {
+        "capture_stale_suspected" | "capture_backend_unavailable" => json!({
+            "category": "transient_capture_path",
+            "current_step": "lightweight_capture_backend_recovery",
+            "repeat_limit_before_escalation": 2,
+            "next_if_repeated": "heavy_recovery_review",
+            "heavy_recovery_candidate": "app_restart",
+            "heavy_recovery_requires_matching_lease": true,
+            "operator_live_validation_required": true,
+            "must_not_mark_game_frozen_from_adb_screencap_alone": true,
+            "must_log_repeated_transient_failures": true,
+            "does_not_execute_heavy_recovery": true
+        }),
+        "standby" | "unexpected_page" | "modal_popup" | "session_expired" => json!({
+            "category": "maintenance_control_path",
+            "current_step": "lease_gated_maintenance_recovery",
+            "repeat_limit_before_escalation": 2,
+            "next_if_repeated": "operator_review_or_heavy_recovery_review",
+            "heavy_recovery_candidate": "app_restart",
+            "heavy_recovery_requires_matching_lease": true,
+            "operator_live_validation_required": true,
+            "must_log_repeated_transient_failures": true,
+            "does_not_execute_heavy_recovery": true
+        }),
+        "startup_login_required" => json!({
+            "category": "startup_login_path",
+            "current_step": "bounded_startup_login_loop",
+            "repeat_limit_before_escalation": 1,
+            "next_if_repeated": "operator_review_or_resource_update",
+            "resource_required": "STARTUP-LOGIN.md",
+            "heavy_recovery_candidate": "app_restart",
+            "heavy_recovery_requires_matching_lease": true,
+            "operator_live_validation_required": true,
+            "must_log_repeated_transient_failures": true,
+            "does_not_execute_heavy_recovery": true
+        }),
+        _ => json!({
+            "category": "observation_required",
+            "current_step": "observe_and_diagnose",
+            "repeat_limit_before_escalation": 0,
+            "next_if_repeated": "select_concrete_trigger",
+            "heavy_recovery_candidate": null,
+            "heavy_recovery_requires_matching_lease": true,
+            "operator_live_validation_required": true,
+            "must_log_repeated_transient_failures": true,
+            "does_not_execute_heavy_recovery": true
         }),
     }
 }
@@ -2608,6 +2661,7 @@ fn session_self_heal_plan_view_contract() -> Value {
         "status_field": "status",
         "trigger_field": "trigger",
         "recovery_field": "recovery",
+        "escalation_field": "escalation",
         "readiness_field": "readiness",
         "queue_field": "queue",
         "lease_gate_field": "lease_gate",
@@ -21516,6 +21570,25 @@ mod tests {
             data.pointer("/lease_gate/status").and_then(Value::as_str),
             Some("not_required")
         );
+        assert_eq!(
+            data.pointer("/escalation/category").and_then(Value::as_str),
+            Some("transient_capture_path")
+        );
+        assert_eq!(
+            data.pointer("/escalation/heavy_recovery_candidate")
+                .and_then(Value::as_str),
+            Some("app_restart")
+        );
+        assert_eq!(
+            data.pointer("/escalation/does_not_execute_heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/escalation/must_not_mark_game_frozen_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         let blockers = data
             .get("blockers")
             .and_then(Value::as_array)
@@ -21565,6 +21638,20 @@ mod tests {
         assert_eq!(
             data.pointer("/lease_gate/status").and_then(Value::as_str),
             Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/escalation/category").and_then(Value::as_str),
+            Some("maintenance_control_path")
+        );
+        assert_eq!(
+            data.pointer("/escalation/heavy_recovery_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/escalation/operator_live_validation_required")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert!(
             data.get("blockers")

@@ -180,6 +180,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab trusted-channel transport plan: `session transport plan` now exposes a no-listener/no-TCP-probe plan for local CLI, daemon file-IPC, and reserved encrypted trusted remote access.
 - ActingLab Phase C self-heal plan preflight: `session self-heal-plan` and `session request self-heal-plan` expose a no-device maintenance recovery plan that turns observed triggers into lease/queue/readiness-gated recovery candidates without executing input.
 - ActingLab Phase C self-heal lease-gate alignment: `session self-heal-plan` now makes the embedded `lease_gate` follow the selected recovery candidate, so stale-capture/read-only recovery reports `required=false` while standby/modal/unexpected-page/login/session-expired maintenance control remains lease-gated.
+- ActingLab Phase C self-heal escalation preflight: `session self-heal-plan` now exposes escalation policy for repeated transient capture failures and maintenance-control loops without executing heavy recovery.
+
+## Current ActingLab Phase C Self-Heal Escalation Preflight
+
+This increment extends `session.self_heal_plan.v0.1` with an `escalation` field so UI, scheduler, and agent clients can reason about repeated transient failures without guessing.
+
+- Capture stale or capture-backend unavailable triggers report `category=transient_capture_path`.
+- Capture-path escalation keeps lightweight capture-backend recovery first and only names app restart as a heavy-recovery review candidate.
+- Capture-path escalation explicitly says stale ADB screencap alone must not be treated as a game freeze.
+- Standby, unexpected-page, modal, and session-expired triggers report `category=maintenance_control_path`.
+- Startup login reports `category=startup_login_path`, a bounded startup-login loop, and the required `STARTUP-LOGIN.md` resource.
+- Heavy recovery remains non-executing in this preflight and requires matching lease metadata plus operator/live validation before any future execution path can be accepted.
+- Repeated transient failures must be fully logged and escalated visibly instead of looping silently.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, resource repository read, network listener, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Phase C Self-Heal Lease-Gate Alignment
 
