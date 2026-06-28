@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab daemon request admission queue gate
+
+### Current status
+
+- Added real daemon request admission queue gating before `session request <command>` writes a new pending request file.
+- Admission now reuses Session queue health and allows `clear` / `active` queue states while blocking `needs_attention`.
+- Blocked admission returns visible `request_queue_needs_attention` instead of silently adding more work to a blocked queue.
+- `session api` now documents the daemon request queue admission gate and points clients to `session command-check <command...>` as the matching preflight.
+- No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `7c4f56feee411954c83ab750609b450ca218af92`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the cooperation task document `TASK-Lab-session-layer.md`.
+- Re-read the cooperation finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Searched Codex memory for ActingCommand planning and verification rules.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- Inspected Session Layer request submission, queue health, command-check queue gate, and no-wait tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_no_wait -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused no-wait request tests passed, including the new blocked-queue admission regression.
+- Focused Session API contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-request-admission-queue-gate`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab command-check queue gate
 
 ### Current status

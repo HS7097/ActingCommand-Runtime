@@ -1500,6 +1500,12 @@ fn session_api_contract() -> Value {
             "cancel_error_code": "request_cancelled",
             "cancel_records_journal": true,
             "cancel_dry_run_preserves_queue": true,
+            "admission_gate": {
+                "queue_health_field": "diagnostics.queues.health",
+                "blocks_status": "needs_attention",
+                "error_code": "request_queue_needs_attention",
+                "preflight_command": "session command-check <command...>"
+            },
             "response_fields": [
                 "request_id",
                 "command",
@@ -8687,6 +8693,7 @@ fn submit_session_command_request_with_lease_admission(
     if requires_lease {
         validate_control_session_request_lease(global, flags, &state_dir)?;
     }
+    validate_session_request_queue_admission(&state_dir)?;
     let request_id = format!("{}-{}", current_unix_ms(), std::process::id());
     let request = SessionCommandRequest {
         request_id: request_id.clone(),
@@ -8745,6 +8752,39 @@ fn submit_session_command_request_with_lease_admission(
         "session daemon request {request_id} timed out after {} ms",
         timeout.as_millis()
     )))
+}
+
+fn validate_session_request_queue_admission(state_dir: &Path) -> CliOutcome<()> {
+    let health = session_queue_health(
+        state_dir,
+        current_unix_ms(),
+        SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+    )?;
+    let status = health
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "request_queue_status_missing",
+                "session request admission could not read queue health status",
+                &["request_queue"],
+            )
+        })?;
+    match status {
+        "clear" | "active" => Ok(()),
+        "needs_attention" => Err(CliError::safety_blocked(
+            "request_queue_needs_attention",
+            "session daemon request queue needs attention before enqueueing another request",
+            &["request_queue"],
+        )),
+        other => Err(CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "request_queue_status_unknown",
+            format!("session request admission received unknown queue health status: {other}"),
+            &["request_queue"],
+        )),
+    }
 }
 
 fn validate_control_session_request_lease(
@@ -28241,6 +28281,55 @@ mod tests {
     }
 
     #[test]
+    fn session_request_no_wait_blocks_when_queue_needs_attention() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let stale = SessionCommandRequest {
+            request_id: "stale-before-submit".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("stale-before-submit.json"),
+            &stale,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "status",
+                "--no-wait",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "request_queue_needs_attention"
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            1
+        );
+    }
+
+    #[test]
     fn session_control_request_without_lease_is_blocked_before_queueing() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -31545,6 +31634,16 @@ mod tests {
             data.pointer("/daemon_request_queue/cancel_dry_run_preserves_queue")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/admission_gate/error_code")
+                .and_then(Value::as_str),
+            Some("request_queue_needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/admission_gate/preflight_command")
+                .and_then(Value::as_str),
+            Some("session command-check <command...>")
         );
         assert_eq!(
             data.pointer(
