@@ -1,5 +1,88 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab validation-plan diagnostics routing
+
+### Current status
+
+- Added `validation_plan` to the Session event view `data_summary_kinds` contract so UI/scheduler clients can filter daemon journal events for validation-plan summaries.
+- Added a read-only `validation_plan_review` recommended action in `session status --diagnostics` when a recent daemon request journal entry contains a validation-plan data summary.
+- The recommendation preserves pending live item count, next-action count, first next action, Phase C lane summaries, source request id, and source command.
+- The recommendation is explicitly operator/live-environment work and keeps `does_not_mark_live_validation_passed=true`.
+- The change is a diagnostics and API-discovery routing increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `a58d492d2ec223135f7796a397976e4898156f6f`.
+- Checkpoint tag: `checkpoint/20260628-validation-plan-diagnostics-routing`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `1dfc5dc9dd7a415fdae4bbecb61cad1622738dd4`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content` on `FINDING-AK-game-freeze-2026-06-27.md` and `TASK-Lab-session-layer.md`.
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; confirmed `LICENSE_POLICY.md` is not present in this Runtime repository during the prior same-goal increment.
+- Inspected existing transport/stream/self-heal/phase-c/validation-plan surfaces, event data-summary kinds, status recommended-action helpers, and diagnostics tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_validation_plan_review`
+- Initial focused validation-plan diagnostics test failed because the new test expected the wrong `args` indexes for `--instance`; implementation already included the instance argument.
+- Corrected the assertion indexes.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_recommends_validation_plan_review`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Add validation plan diagnostics routing"`
+
+### Test results
+
+- Focused `session_status_diagnostics_recommends_validation_plan_review` passed after correcting test assertions and covers the new read-only recommendation, live-device requirement, pending live item count, source request id, and instance-scoped args.
+- Focused `session_api_is_offline_api_contract` passed and covers `validation_plan` in the event-view data-summary kind list.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live validation-plan diagnostics observation through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep Phase C self-heal execution behind observe-first, readiness, queue, and lease gates.
+4. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab validation-plan next-action summary
 
 ### Current status
