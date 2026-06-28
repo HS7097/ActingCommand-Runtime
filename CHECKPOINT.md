@@ -1,5 +1,97 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab session record policy contract
+
+### Current status
+
+- Added `session record-policy` as an offline policy/discovery command.
+- Added `session request record-policy` so resident daemon clients can query the same policy through the Session Layer request queue.
+- The policy uses `schema_version=session.record_policy.v0.1`.
+- The policy records active authorization requirements for recording/resource authoring.
+- Passive full recording is explicitly not allowed.
+- Allowed step kinds are `anchor`, `operation`, `color-probe`, and `verify-template`.
+- Frame-source policy distinguishes local PNG input from explicitly requested current-frame capture.
+- Resource-write policy requires explicit draft build and explicit `session record promote` before repository promotion.
+- Safety policy blocks blind confirmation, game-progress actions, and paid-resource use.
+- `session api`, `session bootstrap`, `session command-check`, `session capabilities`, request summaries, and event data-summary discovery now advertise the record-policy route and view contract.
+- This is an offline contract/discovery increment only.
+- It does not create a recording session, enqueue daemon requests from the local policy command, capture frames, open streams, start MaaTouch, touch devices, start apps, read resources, write resources, start listeners, probe TCP, issue tokens, start TLS, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `af644fe1daf1ab72bb478ec17ffb6c9b4dda65fa`.
+- Milestone source commit: `69b948788c8ff11264b6568112eda60ddbbc19c7`.
+
+### Phase C plan alignment
+
+- Self-heal remains observe-first: stale capture and game-freeze classifications must be diagnosed before any heavy recovery is considered.
+- Interaction flow remains lease-aware and auditable: UI/agent clients should inspect `session record-policy` before authoring recorded steps and must not rely on passive full recording.
+- Trusted encrypted channel remains reserved: this increment does not start a network listener, issue tokens, implement TLS, or accept remote clients.
+- Future trusted remote/UI transport must add encryption, authentication, request admission, audit logging, and live validation before it can submit Session Layer work.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Inspected Session Layer policy, API contract, request data-summary, record command routing, command-check classification, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_policy`
+- `cargo test -p actingcommand-actinglab session_command_check_record_policy_is_read_only`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo test -p actingcommand-actinglab session_bootstrap_request_returns_payload`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_record_policy` test group passed and covers local policy payload plus daemon request summary.
+- Focused `session_command_check_record_policy_is_read_only` passed.
+- Focused `session_api_is_offline_api_contract` passed and covers `record_policy_view` plus `record_policy` event data-summary discovery.
+- Focused `session_bootstrap_request_returns_payload` passed.
+- Focused `capabilities_are_offline` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### Live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live current-frame recording policy validation through a real capture backend.
+- `deferred: requires-live-device` - UI/operator confirmation flow for active recording authorization.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab capture freeze classification gate
 
 ### Current status
