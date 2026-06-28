@@ -13,7 +13,7 @@
 - `session api` now advertises `command_check` under `event_view.data_summary_kinds`.
 - This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `b548985c79e31fa68fcd40209dd87dc5e9362052`.
-- Milestone source commit: pending until commit is created.
+- Milestone source commit: `1a43229ffe9e0eec034bd648a4ba3ab12765e21e`.
 
 ### 待真机验收
 
