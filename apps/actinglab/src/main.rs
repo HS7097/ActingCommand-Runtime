@@ -10748,6 +10748,7 @@ fn session_status_diagnostics(
         "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
         "monitor_policy": monitor_policy,
+        "phase_c": session_phase_c_diagnostics_summary()?,
         "validation": session_validation_diagnostics_summary(),
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
@@ -10768,6 +10769,60 @@ fn session_status_diagnostics(
                 "exists": session_request_journal_archive_path(state_dir).exists(),
                 "bytes": file_size_if_exists(&session_request_journal_archive_path(state_dir))?
             }
+        }
+    }))
+}
+
+fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
+    let global = GlobalOptions::default();
+    let flags = FlagArgs::default();
+    let self_heal_plan = json!({
+        "status": "blocked",
+        "trigger": {
+            "kind": "observe_required"
+        },
+        "recovery": {
+            "kind": "observe_first"
+        },
+        "ready_to_execute_maintenance": false,
+        "escalation": {
+            "category": "observe_first",
+            "operator_live_validation_required": true
+        }
+    });
+    let transport_plan = session_transport_plan_payload(&flags)?;
+    let validation_plan =
+        session_validation_plan_payload(&global, &flags, "session validation-plan")?;
+    let next_actions =
+        session_phase_c_plan_next_actions(&self_heal_plan, &transport_plan, &validation_plan);
+    let ordered = next_actions
+        .pointer("/ordered")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ordered_action_kinds: Vec<Value> = ordered
+        .iter()
+        .filter_map(|item| item.get("action").cloned())
+        .collect();
+
+    Ok(json!({
+        "schema_version": "session.phase_c_diagnostics.v0.1",
+        "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "next_actions": {
+            "schema_version": next_actions.get("schema_version").cloned().unwrap_or(Value::Null),
+            "status": next_actions.get("status").cloned().unwrap_or(Value::Null),
+            "action_count": ordered.len(),
+            "first_action": ordered
+                .first()
+                .and_then(|item| item.get("action"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "ordered_action_kinds": ordered_action_kinds,
+            "self_heal": next_actions.get("self_heal").cloned().unwrap_or(Value::Null),
+            "interaction_flow": next_actions.get("interaction_flow").cloned().unwrap_or(Value::Null),
+            "trusted_channel": next_actions.get("trusted_channel").cloned().unwrap_or(Value::Null),
+            "live_validation": next_actions.get("live_validation").cloned().unwrap_or(Value::Null),
+            "guarantees": next_actions.get("guarantees").cloned().unwrap_or(Value::Null)
         }
     }))
 }
@@ -38060,6 +38115,86 @@ mod tests {
             .unwrap()
             .get("diagnostics")
             .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/phase_c_plan_command")
+                .and_then(Value::as_str),
+            Some("session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/first_action")
+                .and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        assert!(
+            diagnostics
+                .pointer("/phase_c/next_actions/action_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 5)
+        );
+        let phase_c_action_kinds = diagnostics
+            .pointer("/phase_c/next_actions/ordered_action_kinds")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            phase_c_action_kinds
+                .iter()
+                .any(|item| item.as_str() == Some("review_interaction_stream_plan"))
+        );
+        assert!(
+            phase_c_action_kinds
+                .iter()
+                .any(|item| item.as_str() == Some("review_trusted_channel_transport"))
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/self_heal/recovery_kind")
+                .and_then(Value::as_str),
+            Some("observe_first")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/interaction_flow/long_lived_ui_stream_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/trusted_channel/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/trusted_channel/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/next_actions/guarantees/does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             diagnostics
                 .pointer("/validation/schema_version")

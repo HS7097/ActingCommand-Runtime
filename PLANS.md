@@ -198,6 +198,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab validation-plan diagnostics routing: request-journal validation-plan summaries are now discoverable through event data-summary filters and can produce a read-only `validation_plan_review` status recommendation for UI/scheduler/operator clients.
 - ActingLab validation-plan status-view contract alignment: `session api` now advertises `status_view.validation_plan_actions=["validation_plan_review"]`, so UI/scheduler clients can discover the validation-plan diagnostics action without hard-coding it.
 - ActingLab validation diagnostics next-action summary: `session status --diagnostics` now embeds a compact validation `next_actions` summary even without a recent validation-plan journal entry, exposing action count, first action, ordered action kinds, Phase C lane summaries, live-validation deferral, and no-live-pass guarantees.
+- ActingLab Phase C diagnostics next-action summary: `session status --diagnostics` now embeds a compact `diagnostics.phase_c.next_actions` summary even without a recent Phase C journal entry, exposing self-heal, interaction-flow, trusted-channel, live-validation, and no-device/no-listener guarantees.
+
+## Current ActingLab Phase C Diagnostics Next-Action Summary
+
+This increment makes the Phase C roadmap visible from the ordinary status diagnostics startup path, without requiring clients to first create a `phase-c-plan` journal entry.
+
+- `session status --diagnostics` now includes `diagnostics.phase_c` with schema `session.phase_c_diagnostics.v0.1`.
+- `diagnostics.phase_c.next_actions` is derived from the same Phase C next-action contract used by `session phase-c-plan`.
+- The compact summary exposes action count, first action, ordered action kinds, self-heal summary, interaction-flow summary, trusted-channel summary, live-validation deferral, and guarantees.
+- The self-heal lane remains observe-first and reports `recovery_kind=observe_first` in this compact status context.
+- The interaction-flow lane keeps long-lived UI stream status reserved and records that input relay requires a matching lease.
+- The trusted-channel lane records encryption/authentication requirements plus no-listener, no-token, and no-TLS guarantees.
+- Live validation remains `deferred: requires-live-device`; offline diagnostics must not mark live validation passed.
+- The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, execute recovery, or perform live validation.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
