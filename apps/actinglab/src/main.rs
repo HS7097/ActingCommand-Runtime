@@ -1581,6 +1581,8 @@ fn session_api_contract() -> Value {
                 "queue_health_field": "queues.health",
                 "instances_field": "instances",
                 "instance_status_field": "instances.status",
+                "selected_instance_status_field": "instances.selected_status",
+                "selected_instance_missing_required_field": "instances.selected_missing_required",
                 "transport_ready_field": "transport.safe_to_connect",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
@@ -5787,9 +5789,15 @@ fn session_readiness_payload(
         .filter_map(|action| action.get("action").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    let blockers =
-        session_readiness_blockers(can_accept_requests, liveness_status, transport.as_ref());
-    let ready = can_accept_requests && transport_safe;
+    let blockers = session_readiness_blockers(
+        global,
+        can_accept_requests,
+        liveness_status,
+        transport.as_ref(),
+        &instance_summary,
+    );
+    let instance_ready = session_readiness_instance_ready(&instance_summary);
+    let ready = can_accept_requests && transport_safe && instance_ready;
     let status = if ready && recommended_actions.is_empty() {
         "ready"
     } else if ready {
@@ -5867,6 +5875,16 @@ fn session_readiness_instance_summary(
             .find(|entry| entry.get("id").and_then(Value::as_str) == Some(selected))
             .cloned()
     });
+    let selected_missing_required = selected_instance
+        .as_ref()
+        .and_then(readiness_instance_missing_required_fields);
+    let selected_status = match (global.instance.as_deref(), selected_instance.as_ref()) {
+        (None, _) => "not_selected",
+        (Some(_), _) if !available => "registry_unavailable",
+        (Some(_), None) => "not_found",
+        (Some(_), Some(_)) if selected_missing_required.is_some() => "needs_configuration",
+        (Some(_), Some(_)) => "ready",
+    };
     let missing_required = entries
         .iter()
         .filter_map(readiness_instance_missing_required_fields)
@@ -5885,7 +5903,9 @@ fn session_readiness_instance_summary(
         "available": available,
         "count": count,
         "status": status,
+        "selected_status": selected_status,
         "selected_instance": selected_instance,
+        "selected_missing_required": selected_missing_required,
         "missing_required": missing_required,
         "instances": entries
     }))
@@ -5962,9 +5982,11 @@ fn session_readiness_transport_check(endpoint: &str) -> Value {
 }
 
 fn session_readiness_blockers(
+    global: &GlobalOptions,
     can_accept_requests: bool,
     liveness_status: &str,
     transport: Option<&Value>,
+    instance_summary: &Value,
 ) -> Vec<Value> {
     let mut blockers = Vec::new();
     if !can_accept_requests {
@@ -5990,7 +6012,60 @@ fn session_readiness_blockers(
             "message": "Transport endpoint is not safe to connect"
         }));
     }
+    if let Some(blocker) = session_readiness_instance_blocker(global, instance_summary) {
+        blockers.push(blocker);
+    }
     blockers
+}
+
+fn session_readiness_instance_ready(instance_summary: &Value) -> bool {
+    matches!(
+        instance_summary
+            .get("selected_status")
+            .and_then(Value::as_str),
+        Some("not_selected" | "ready")
+    )
+}
+
+fn session_readiness_instance_blocker(
+    global: &GlobalOptions,
+    instance_summary: &Value,
+) -> Option<Value> {
+    let selected = global.instance.as_ref()?;
+    match instance_summary
+        .get("selected_status")
+        .and_then(Value::as_str)
+    {
+        Some("ready" | "not_selected") => None,
+        Some("needs_configuration") => Some(json!({
+            "kind": "instance_configuration",
+            "instance": selected,
+            "missing_required": instance_summary.get("selected_missing_required"),
+            "message": "Selected instance is missing required configuration"
+        })),
+        Some("not_found") => Some(json!({
+            "kind": "instance_not_found",
+            "instance": selected,
+            "available_instances": instance_summary.get("count"),
+            "message": "Selected instance is not present in the instance registry"
+        })),
+        Some("registry_unavailable") => Some(json!({
+            "kind": "instance_registry",
+            "instance": selected,
+            "message": "Instance registry is unavailable"
+        })),
+        Some(status) => Some(json!({
+            "kind": "instance_configuration",
+            "instance": selected,
+            "status": status,
+            "message": "Selected instance readiness status is not usable"
+        })),
+        None => Some(json!({
+            "kind": "instance_configuration",
+            "instance": selected,
+            "message": "Selected instance readiness status is missing"
+        })),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -17106,6 +17181,11 @@ mod tests {
             Some("empty")
         );
         assert_eq!(
+            data.pointer("/instances/selected_status")
+                .and_then(Value::as_str),
+            Some("not_selected")
+        );
+        assert_eq!(
             data.pointer("/instances/count").and_then(Value::as_u64),
             Some(0)
         );
@@ -17211,6 +17291,11 @@ mod tests {
 
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("not_ready")
+        );
         assert_eq!(
             data.pointer("/instances/schema_version")
                 .and_then(Value::as_str),
@@ -17225,7 +17310,17 @@ mod tests {
             Some(2)
         );
         assert_eq!(
+            data.pointer("/instances/selected_status")
+                .and_then(Value::as_str),
+            Some("needs_configuration")
+        );
+        assert_eq!(
             data.pointer("/instances/selected_instance/id")
+                .and_then(Value::as_str),
+            Some("ba-jp")
+        );
+        assert_eq!(
+            data.pointer("/instances/selected_missing_required/id")
                 .and_then(Value::as_str),
             Some("ba-jp")
         );
@@ -17240,6 +17335,76 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|field| field.as_str() == Some("serial"))
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("instance_configuration")
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/instance").and_then(Value::as_str),
+            Some("ba-jp")
+        );
+    }
+
+    #[test]
+    fn session_readiness_blocks_unknown_selected_instance() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "missing",
+                "session",
+                "readiness",
+                "--local",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.pointer("/instances/selected_status")
+                .and_then(Value::as_str),
+            Some("not_found")
+        );
+        assert!(
+            data.pointer("/instances/selected_instance")
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("instance_not_found")
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/instance").and_then(Value::as_str),
+            Some("missing")
         );
     }
 
@@ -17971,9 +18136,23 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
+        let config_path = temp.path().join("config.json");
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            env::set_var(CONFIG_ENV, &config_path);
         }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
         let query = SessionCommandRequest {
             request_id: "submit-plan-query".to_string(),
             command: "submit_plan".to_string(),
@@ -17991,6 +18170,9 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
 
         assert_eq!(
             payload.get("schema_version").and_then(Value::as_str),
@@ -32767,6 +32949,16 @@ mod tests {
             Some("instances.status")
         );
         assert_eq!(
+            data.pointer("/envelopes/readiness_view/selected_instance_status_field")
+                .and_then(Value::as_str),
+            Some("instances.selected_status")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/selected_instance_missing_required_field")
+                .and_then(Value::as_str),
+            Some("instances.selected_missing_required")
+        );
+        assert_eq!(
             data.pointer("/envelopes/queue_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.queue.v0.1")
@@ -33906,6 +34098,11 @@ mod tests {
 
     #[test]
     fn tap_target_dry_run_requires_visible_target_and_returns_point() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+            env::remove_var(SESSION_STATE_ENV);
+        }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();

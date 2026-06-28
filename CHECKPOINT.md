@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab readiness selected-instance gate
+
+### Current status
+
+- Extended `session readiness` and daemon-routed `session request readiness` so selected instance usability affects the top-level readiness decision.
+- Added `instances.selected_status` with `not_selected`, `ready`, `needs_configuration`, `not_found`, and `registry_unavailable` states.
+- A selected instance with missing required fields now returns `ready=false`, `status=not_ready`, and an `instance_configuration` blocker with `selected_missing_required` details.
+- A selected instance that does not exist in the registry now returns `ready=false`, `status=not_ready`, and an `instance_not_found` blocker.
+- `session api` now advertises `readiness_view.selected_instance_status_field` and `readiness_view.selected_instance_missing_required_field`.
+- The change is a pure status/config projection; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual instance health/connect behavior.
+- Milestone source commit is pending until final validation and commit.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `75bc77c40ddcf23b02a5ce8befdf6c095eab3d76`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for task context only.
+- Read Runtime `AGENTS.md`, `NOTICE.md`, `PLANS.md`, and `CHECKPOINT.md`; `LICENSE_POLICY.md` is absent in this repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand remote/source-of-truth and planning-file rules.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer readiness, instance diagnostics, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace` failed because `session_submit_plan_request_returns_submit_plan_payload` supplied a selected instance without test registry config; the test was updated to create a matching `ak` instance config.
+- Focused `cargo test -p actingcommand-actinglab session_submit_plan_request_returns_submit_plan_payload -- --nocapture`
+- Focused `cargo test -p actingcommand-actinglab tap_target_dry_run_requires_visible_target_and_returns_point -- --nocapture`
+- Second `cargo test --workspace` failed because `tap_target_dry_run_requires_visible_target_and_returns_point` could run while another env-mutating test held temporary config; the test now takes `ENV_LOCK` and clears config/session env before invoking the CLI.
+- Final `cargo test --workspace`
+- Final source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+
+### Test results
+
+- Focused `session_readiness` tests passed.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed; no source path added actual fallback, reconnect loop, OCR/OpenCV, SQLite, shell screencap, direct ADB input, new capture/input backend, or MaaTouch startup behavior.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Final `cargo test --workspace` passed after the submit-plan config fixture and tap-target env-lock fixes.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted remote UI/API transport, unbounded interactive stream transport, scheduler integration, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Tag a meaningful checkpoint for rollback/provenance.
+
 ## 2026-06-28 ActingLab readiness instance summary
 
 ### Current status
@@ -8,7 +78,7 @@
 - The new summary returns `schema_version=session.readiness_instances.v0.1`, registry availability, count, status, selected instance, missing required fields, and configured instance entries.
 - `session api` now advertises `readiness_view.instances_field` and `readiness_view.instance_status_field`.
 - The implementation is a pure status projection from existing diagnostics; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual instance health/connect behavior.
-- Milestone source commit `20c270e4e42d45df61a7701981e91c2f1dd9da66` was prepared with checkpoint tag `checkpoint/20260628-readiness-instance-summary`.
+- Milestone source commit `20c270e4e42d45df61a7701981e91c2f1dd9da66` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-readiness-instance-summary`.
 
 ### Resource mirrors used
 
@@ -43,6 +113,8 @@
 - `cargo test --workspace`
 - `git commit -m "Add readiness instance summary"`
 - `git tag checkpoint/20260628-readiness-instance-summary 20c270e4e42d45df61a7701981e91c2f1dd9da66`
+- `git push origin main`
+- `git push origin checkpoint/20260628-readiness-instance-summary`
 
 ### Test results
 
@@ -62,7 +134,7 @@
 
 ### Next step
 
-1. Push Runtime repository changes and checkpoint tag.
+1. Continue Session Layer follow-ups: selected-instance readiness gates, trusted UI/API stream transport, scheduler lease arbitration, live prepared-emulator validation, and scheduler/UI integration.
 
 ## 2026-06-28 ActingLab submit-plan preflight view
 

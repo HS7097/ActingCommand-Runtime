@@ -165,6 +165,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab blocked queue cancel dry-run recommendation: `session status --diagnostics` now emits a non-mutating `blocked_request_cancel_dry_run` recommended action before queue-cancel recommendations, including lease metadata and runnable dry-run arguments for UI/scheduler preflight.
 - ActingLab readiness queue summary: `session readiness` and `session request readiness` now expose top-level `queues` with queue counts, queue health, and blocked-request recommendation kinds so UI/scheduler clients do not need to parse the full embedded status diagnostics for queue state.
 - ActingLab readiness instance summary: `session readiness` and `session request readiness` now expose top-level `instances` with registry availability, selected instance, missing required fields, and configured instance summaries for UI/scheduler consumers.
+- ActingLab readiness selected-instance gate: `session readiness` and `session request readiness` now mark selected missing or incomplete instances as `ready=false` with explicit instance blockers, so UI/scheduler consumers do not submit work against unusable instance config.
+
+## Current ActingLab Readiness Selected-Instance Gate
+
+This increment turns the previous readiness instance summary into an actionable gate for the selected instance. Future UI/scheduler clients can now treat readiness as the single pre-submit source for daemon liveness, transport safety, queue state, and selected-instance usability.
+
+- `session readiness` now reports `instances.selected_status`.
+- `selected_status` values are `not_selected`, `ready`, `needs_configuration`, `not_found`, and `registry_unavailable`.
+- A selected instance with missing required fields makes `ready=false` and emits an `instance_configuration` blocker.
+- A selected instance that is absent from the registry makes `ready=false` and emits an `instance_not_found` blocker.
+- `session api` now advertises `instances.selected_status` and `instances.selected_missing_required`.
+- The selected-instance gate remains a pure status/config projection; it does not enqueue, capture, start MaaTouch, touch devices, start a listener, or read resource repositories.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Readiness Instance Summary
 
