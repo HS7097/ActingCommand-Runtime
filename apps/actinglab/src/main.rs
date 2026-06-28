@@ -1536,6 +1536,17 @@ fn session_self_heal_plan_payload(
             .unwrap_or(false);
     let ready_to_execute_maintenance =
         blockers.is_empty() && trigger != "observe_required" && lease_ready;
+    let execution_gate =
+        session_self_heal_plan_execution_gate(SessionSelfHealPlanExecutionGateInputs {
+            trigger: &trigger,
+            target_page: &target_page,
+            recovery: &recovery,
+            readiness: &readiness,
+            queue: &queue,
+            lease_gate: &lease_gate,
+            blockers: &blockers,
+            ready_to_execute_maintenance,
+        });
     let next_actions = session_self_heal_plan_next_actions(SessionSelfHealPlanNextActionInputs {
         trigger: &trigger,
         target_page: &target_page,
@@ -1595,6 +1606,7 @@ fn session_self_heal_plan_payload(
         "readiness": readiness,
         "queue": queue,
         "lease_gate": lease_gate,
+        "execution_gate": execution_gate,
         "ready_to_execute_maintenance": ready_to_execute_maintenance,
         "blockers": blockers,
         "next_actions": next_actions,
@@ -1783,6 +1795,91 @@ fn session_self_heal_plan_blockers(
         }));
     }
     blockers
+}
+
+struct SessionSelfHealPlanExecutionGateInputs<'a> {
+    trigger: &'a str,
+    target_page: &'a str,
+    recovery: &'a Value,
+    readiness: &'a Value,
+    queue: &'a Value,
+    lease_gate: &'a Value,
+    blockers: &'a [Value],
+    ready_to_execute_maintenance: bool,
+}
+
+fn session_self_heal_plan_execution_gate(
+    input: SessionSelfHealPlanExecutionGateInputs<'_>,
+) -> Value {
+    let readiness_ready = input
+        .readiness
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queue_can_enqueue = input
+        .queue
+        .pointer("/admission/can_enqueue")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let lease_required = input
+        .recovery
+        .get("requires_matching_lease")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let lease_ready = !lease_required
+        || input
+            .lease_gate
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let blocked_reasons = input
+        .blockers
+        .iter()
+        .map(|blocker| {
+            json!({
+                "kind": blocker.get("kind").cloned().unwrap_or(Value::Null),
+                "code": blocker.get("code").cloned().unwrap_or(Value::Null),
+                "message": blocker.get("message").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "schema_version": "session.self_heal_execution_gate.v0.1",
+        "status": if input.ready_to_execute_maintenance { "ready" } else { "blocked" },
+        "trigger_selected": input.trigger != "observe_required",
+        "trigger": input.trigger,
+        "target_page": input.target_page,
+        "recovery_kind": input.recovery.pointer("/kind").cloned().unwrap_or(Value::Null),
+        "readiness_ready": readiness_ready,
+        "queue_admission_ok": queue_can_enqueue,
+        "lease_required": lease_required,
+        "lease_ready": lease_ready,
+        "safe_to_execute_maintenance": input.ready_to_execute_maintenance,
+        "maintenance_only": true,
+        "game_progress_actions_allowed": false,
+        "requires_session_layer": true,
+        "submit_plan_command": session_self_heal_plan_submit_plan_command(input.trigger, input.target_page),
+        "blocked_reason_count": blocked_reasons.len(),
+        "blocked_reasons": blocked_reasons,
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device"
+        },
+        "guarantees": {
+            "does_not_execute": true,
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 struct SessionSelfHealPlanNextActionInputs<'a> {
@@ -2178,6 +2275,8 @@ fn session_phase_c_plan_next_actions(
             "trigger": self_heal_plan.pointer("/trigger/kind").cloned().unwrap_or(Value::Null),
             "recovery_kind": self_heal_plan.pointer("/recovery/kind").cloned().unwrap_or(Value::Null),
             "ready_to_execute_maintenance": self_heal_plan.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
+            "execution_gate_status": self_heal_plan.pointer("/execution_gate/status").cloned().unwrap_or(Value::Null),
+            "execution_gate_safe": self_heal_plan.pointer("/execution_gate/safe_to_execute_maintenance").cloned().unwrap_or(Value::Null),
             "escalation_category": self_heal_plan.pointer("/escalation/category").cloned().unwrap_or(Value::Null),
             "operator_live_validation_required": self_heal_plan.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null)
         },
@@ -3216,6 +3315,8 @@ fn session_self_heal_plan_view_contract() -> Value {
         "readiness_field": "readiness",
         "queue_field": "queue",
         "lease_gate_field": "lease_gate",
+        "execution_gate_field": "execution_gate",
+        "execution_gate_schema_version": "session.self_heal_execution_gate.v0.1",
         "blockers_field": "blockers",
         "ready_to_execute_field": "ready_to_execute_maintenance",
         "next_actions_field": "next_actions",
@@ -13856,6 +13957,9 @@ fn self_heal_plan_request_data_summary(data: &Value) -> Value {
         "does_not_execute_heavy_recovery": data.pointer("/escalation/does_not_execute_heavy_recovery").cloned().unwrap_or(Value::Null),
         "operator_live_validation_required": data.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null),
         "ready_to_execute_maintenance": data.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
+        "execution_gate_status": data.pointer("/execution_gate/status").cloned().unwrap_or(Value::Null),
+        "safe_to_execute_maintenance": data.pointer("/execution_gate/safe_to_execute_maintenance").cloned().unwrap_or(Value::Null),
+        "execution_gate_blocked_reason_count": data.pointer("/execution_gate/blocked_reason_count").cloned().unwrap_or(Value::Null),
         "lease_status": data.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
         "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
@@ -24347,6 +24451,41 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/execution_gate/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_execution_gate.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/trigger_selected")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/safe_to_execute_maintenance")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/guarantees/does_not_execute")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/execution_gate/blocked_reasons")
+                .and_then(Value::as_array)
+                .expect("self-heal execution gate must report blockers")
+                .iter()
+                .any(|blocker| {
+                    blocker.get("code").and_then(Value::as_str)
+                        == Some("self_heal_trigger_required")
+                })
+        );
+        assert_eq!(
             data.pointer("/next_actions/schema_version")
                 .and_then(Value::as_str),
             Some("session.self_heal_next_actions.v0.1")
@@ -24411,6 +24550,21 @@ mod tests {
         assert_eq!(
             data.pointer("/lease_gate/status").and_then(Value::as_str),
             Some("not_required")
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/lease_required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/lease_ready")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/submit_plan_command")
+                .and_then(Value::as_str),
+            Some("session submit-plan session recover --stale-capture")
         );
         assert_eq!(
             data.pointer("/escalation/category").and_then(Value::as_str),
@@ -24499,6 +24653,21 @@ mod tests {
             Some("blocked")
         );
         assert_eq!(
+            data.pointer("/execution_gate/lease_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/lease_ready")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/safe_to_execute_maintenance")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
             data.pointer("/escalation/category").and_then(Value::as_str),
             Some("maintenance_control_path")
         );
@@ -24528,6 +24697,16 @@ mod tests {
             data.get("blockers")
                 .and_then(Value::as_array)
                 .expect("self-heal-plan blockers must be an array")
+                .iter()
+                .any(|blocker| {
+                    blocker.get("kind").and_then(Value::as_str) == Some("lease")
+                        && blocker.get("code").and_then(Value::as_str) == Some("lab_lease_required")
+                })
+        );
+        assert!(
+            data.pointer("/execution_gate/blocked_reasons")
+                .and_then(Value::as_array)
+                .expect("self-heal execution gate must mirror blockers")
                 .iter()
                 .any(|blocker| {
                     blocker.get("kind").and_then(Value::as_str) == Some("lease")
@@ -24603,6 +24782,22 @@ mod tests {
                 .get("operator_live_validation_required")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            summary.get("execution_gate_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            summary
+                .get("safe_to_execute_maintenance")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            summary
+                .get("execution_gate_blocked_reason_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 1)
         );
         assert!(
             summary
@@ -41048,6 +41243,16 @@ mod tests {
             data.pointer("/envelopes/self_heal_plan_view/next_actions_field")
                 .and_then(Value::as_str),
             Some("next_actions")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/self_heal_plan_view/execution_gate_field")
+                .and_then(Value::as_str),
+            Some("execution_gate")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/self_heal_plan_view/execution_gate_schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_execution_gate.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/status_view/queue_health_actions/1")

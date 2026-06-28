@@ -195,6 +195,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
 - ActingLab stream-plan next-action summary: `session stream-plan` and `session request stream-plan` now expose a machine-readable `next_actions` interaction decision list for UI/scheduler clients, covering connect blockers, input-relay lease review, trusted remote stream boundaries, Phase C review, and deferred live-validation boundaries.
 - ActingLab self-heal-plan next-action summary: `session self-heal-plan` and `session request self-heal-plan` now expose a machine-readable `next_actions` recovery decision list for UI/scheduler clients, covering observe-first selection, stale-capture diagnosis, readiness/queue/lease blockers, recovery review, Phase C review, and deferred live-validation boundaries.
+- ActingLab self-heal execution gate: `session self-heal-plan` now exposes `execution_gate` as a compact maintenance-recovery gate for UI/scheduler clients, mirroring trigger selection, readiness, queue admission, lease readiness, blocker reasons, and safe-to-execute state.
 - ActingLab transport-plan next-action summary: `session transport plan` and `session request transport plan` now expose a machine-readable `next_actions` trusted-channel decision list for UI/API clients, covering endpoint classification, endpoint-policy blockers, token/certificate preparation, listener/TLS design review, request serialization/audit review, and deferred live-validation boundaries.
 - ActingLab validation-plan next-action summary: `session validation-plan` and `session request validation-plan` now expose a machine-readable `next_actions` live-acceptance decision list for UI/scheduler/operator clients, covering pending live acceptance review, readiness, capture freshness, Phase C self-heal, interaction stream, trusted-channel transport, and status diagnostics.
 - ActingLab validation-plan diagnostics routing: request-journal validation-plan summaries are now discoverable through event data-summary filters and can produce a read-only `validation_plan_review` status recommendation for UI/scheduler/operator clients.
@@ -5557,6 +5558,27 @@ Phase C plan alignment:
 - Self-heal should stay observe-first: diagnose capture freshness, queue health, daemon liveness, lease ownership, and selected-instance readiness before recommending or executing maintenance-only recovery.
 - Interaction flow should remain lease-aware and replayable: streams expose bounded events and optional input relay only through Session Layer, and input relay requires matching lease metadata.
 - Trusted encrypted channel should remain reserved until the local CLI/file-IPC contract is stable: future remote access must require authentication, authorization, bounded request admission, and a clear failure code before it can submit Session Layer work.
+
+## Current ActingLab Self-Heal Execution Gate
+
+This increment keeps Phase C self-heal planning readable by UI and scheduler clients without requiring them to reconstruct readiness, queue, lease, and blocker state from separate fields.
+
+`session self-heal-plan [--trigger <kind>] [--to <page>]` now exposes `execution_gate` with:
+
+- `schema_version=session.self_heal_execution_gate.v0.1`;
+- trigger selection state;
+- recovery kind and target page;
+- readiness, queue-admission, and lease readiness booleans;
+- `safe_to_execute_maintenance`;
+- mirrored blocked reasons;
+- the submit-plan command for the selected recovery path.
+
+This is still a contract/discovery increment only:
+
+- no recovery is executed;
+- no daemon request is enqueued;
+- no capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Repo-local planning policy
 
