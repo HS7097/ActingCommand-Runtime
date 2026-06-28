@@ -181,6 +181,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
 - ActingLab command-check Phase C scope: `session command-check` now includes `phase_c_scope`, classifying self-heal, interaction-flow, trusted-channel, and live-validation relevance before clients submit or enqueue work.
 - ActingLab command-check Phase C event summary: daemon request journals and `session events --data-summary-kind command_check` now expose compact command-check Phase C scope for UI/scheduler event consumers.
+- ActingLab submit-plan Phase C event summary: daemon request journals and `session events --data-summary-kind submit_plan` now expose compact submit-plan admission and Phase C execution-preflight summaries for UI/scheduler event consumers.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
@@ -261,6 +262,17 @@ This increment makes command-check Phase C scope discoverable from daemon reques
 - Interaction-flow preflights such as `stream --input-event <action,args>` can now be retrieved with `session events --data-summary-kind command_check`.
 - The event summary preserves no-device guarantees: no enqueue, no capture, no MaaTouch, no listener, no token issuer, no TLS startup, and no live-validation pass marker.
 - `session api` now advertises `command_check` in `event_view.data_summary_kinds`.
+- This is an offline journal/event contract increment only; it does not execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, touch devices, read resource repositories, write SQLite, or run game logic.
+
+## Current ActingLab Submit-Plan Phase C Event Summary
+
+This increment makes submit-plan admission and Phase C execution preflight discoverable from daemon request journals and event filters.
+
+- `session_request_data_summary` now emits `kind=submit_plan` for successful `session request submit-plan ...` responses.
+- The submit-plan summary carries readiness, command-check, queue admission, lease, Session throat, instance gate, and compact Phase C execution-preflight fields.
+- Interaction-flow preflights such as `session request submit-plan stream --input-event <action,args>` can now be retrieved with `session events --data-summary-kind submit_plan`.
+- The summary preserves no-device guarantees: no enqueue from the query, no capture, no MaaTouch, no listener, no token issuer, no TLS startup, and no live-validation pass marker.
+- `session api` now advertises `submit_plan` in `event_view.data_summary_kinds`.
 - This is an offline journal/event contract increment only; it does not execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, touch devices, read resource repositories, write SQLite, or run game logic.
 
 ## Current ActingLab Recording Command Preflight Classification
@@ -661,6 +673,13 @@ Phase C should stay split into three explicit surfaces so UI, scheduler, and tru
 - Self-heal flow: keep recovery as `observe -> diagnose -> plan -> execute`, with execution allowed only under a matching lease and only for maintenance-safe recovery. Repeated transient failures should escalate visibly instead of looping forever or silently falling back.
 - Interaction flow: UI and agent clients should consume compact session state, readiness, events, stream-plan, transport-plan, and command-check envelopes. User-approved commands should travel through explicit Session Layer requests rather than importing device, MaaTouch, or recognition internals.
 - Trusted encrypted channel: keep remote access reserved until a reviewed listener, TLS or mutually authenticated IPC, token or client-certificate authentication, request serialization, and audit logging exist. Preflight commands may classify endpoint policy, but must not start listeners, probe TCP, issue tokens, or claim remote readiness.
+
+Execution plan:
+
+- Self-heal lane: continue building read-only diagnosis and submit-plan event summaries first, then add lease-gated maintenance execution only for bounded recovery actions such as stale-capture handling, standby wake, modal close, login/startup continuation, or safe navigation back to a known page. Any repeated transient failure must surface as an escalation recommendation before a heavier action is allowed.
+- Interaction-flow lane: keep the UI/agent path as `bootstrap/readiness -> command-check -> submit-plan -> request queue -> event/journal observation`. Input relay must stay lease-gated, serialized through the Session Layer, and visible in event summaries before a real stream is opened.
+- Trusted-channel lane: keep remote control closed by default while the offline contract matures. The future implementation must add reviewed listener ownership, encrypted/authenticated transport, token or certificate material, request serialization, replay/audit records, and live security validation before any remote channel is marked ready.
+- Cross-lane rule: Phase C offline surfaces may advertise plans, blockers, and no-device guarantees, but they must not mark live validation passed, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, or directly touch devices.
 
 Current offline implementation status:
 

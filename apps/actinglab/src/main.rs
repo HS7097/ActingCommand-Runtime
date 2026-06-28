@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "command_check", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15013,6 +15013,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
         "command_check" => Some(command_check_request_data_summary(data)),
+        "submit_plan" => Some(submit_plan_request_data_summary(data)),
         "capture_policy" => Some(capture_policy_request_data_summary(data)),
         "record_policy" => Some(record_policy_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
@@ -15032,6 +15033,47 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         }
         _ => None,
     }
+}
+
+fn submit_plan_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "submit_plan",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "normalized_command": data.get("normalized_command").cloned().unwrap_or(Value::Null),
+        "ready_to_submit": data.get("ready_to_submit").cloned().unwrap_or(Value::Null),
+        "readiness_ready": data.pointer("/preflight_summary/readiness_ready").cloned().unwrap_or(Value::Null),
+        "command_safe": data.pointer("/preflight_summary/command_safe").cloned().unwrap_or(Value::Null),
+        "queue_can_enqueue": data.pointer("/preflight_summary/queue_can_enqueue").cloned().unwrap_or(Value::Null),
+        "selected_instance_status": data.pointer("/preflight_summary/selected_instance_status").cloned().unwrap_or(Value::Null),
+        "command_class": data.pointer("/preflight_summary/command_class").cloned().unwrap_or(Value::Null),
+        "requires_lease": data.pointer("/preflight_summary/requires_lease").cloned().unwrap_or(Value::Null),
+        "throat_status": data.pointer("/preflight_summary/throat_status").cloned().unwrap_or(Value::Null),
+        "session_layer_required": data.pointer("/preflight_summary/session_layer_required").cloned().unwrap_or(Value::Null),
+        "lease_status": data.pointer("/preflight_summary/lease_status").cloned().unwrap_or(Value::Null),
+        "queue_status": data.pointer("/preflight_summary/queue_status").cloned().unwrap_or(Value::Null),
+        "instance_gate_status": data.pointer("/preflight_summary/instance_gate_status").cloned().unwrap_or(Value::Null),
+        "phase_c_execution_preflight_schema_version": data.pointer("/phase_c_execution_preflight/schema_version").cloned().unwrap_or(Value::Null),
+        "phase_c_relevant": data.pointer("/phase_c_execution_preflight/phase_c_relevant").cloned().unwrap_or(Value::Null),
+        "phase_c_lane_count": data.pointer("/phase_c_execution_preflight/relevant_lanes").and_then(Value::as_array).map(Vec::len),
+        "phase_c_relevant_lanes": data.pointer("/phase_c_execution_preflight/relevant_lanes").cloned().unwrap_or(Value::Null),
+        "self_heal_relevant": data.pointer("/phase_c_execution_preflight/self_heal/relevant").cloned().unwrap_or(Value::Null),
+        "interaction_flow_relevant": data.pointer("/phase_c_execution_preflight/interaction_flow/relevant").cloned().unwrap_or(Value::Null),
+        "trusted_channel_relevant": data.pointer("/phase_c_execution_preflight/trusted_channel/relevant").cloned().unwrap_or(Value::Null),
+        "direct_adb_or_device_access_allowed": data.pointer("/phase_c_execution_preflight/admission/direct_adb_or_device_access_allowed").cloned().unwrap_or(Value::Null),
+        "clients_must_not_directly_touch_adb_or_devices": data.pointer("/phase_c_execution_preflight/admission/clients_must_not_directly_touch_adb_or_devices").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/phase_c_execution_preflight/live_validation/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/phase_c_execution_preflight/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len),
+        "does_not_enqueue": data.pointer("/guarantees/does_not_enqueue").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/phase_c_execution_preflight/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
+        "does_not_issue_tokens": data.pointer("/phase_c_execution_preflight/guarantees/does_not_issue_tokens").cloned().unwrap_or(Value::Null),
+        "does_not_start_tls": data.pointer("/phase_c_execution_preflight/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null),
+        "does_not_mark_live_validation_passed": data.pointer("/phase_c_execution_preflight/guarantees/does_not_mark_live_validation_passed").cloned().unwrap_or(Value::Null)
+    })
 }
 
 fn command_check_request_data_summary(data: &Value) -> Value {
@@ -25683,6 +25725,30 @@ mod tests {
                 .pointer("/command_check/normalized_command")
                 .and_then(Value::as_str),
             Some("status")
+        );
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("submit_plan")
+        );
+        assert_eq!(
+            summary.get("ready_to_submit").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -37116,6 +37182,149 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_submit_plan_phase_c_data_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        write_test_session_files(state_dir);
+        let config_path = state_dir.join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let submit_plan_request = SessionCommandRequest {
+            request_id: "submit-plan-stream-event".to_string(),
+            command: "submit_plan".to_string(),
+            global: global.clone(),
+            args: vec![
+                "stream".to_string(),
+                "--input-event".to_string(),
+                "tap,10,20".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 100,
+        };
+        let submit_plan_payload =
+            execute_session_command_request_inner(&submit_plan_request, state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let submit_plan_response = SessionCommandResponse {
+            request_id: submit_plan_request.request_id.clone(),
+            command: submit_plan_request.command.clone(),
+            ok: true,
+            data: Some(submit_plan_payload),
+            error: None,
+            started_at_unix_ms: 101,
+            completed_at_unix_ms: 102,
+        };
+        append_session_request_journal(state_dir, &submit_plan_request, &submit_plan_response)
+            .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-submit-plan-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "submit_plan".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 103,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("submit-plan-stream-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("submit_plan")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/phase_c_execution_preflight_schema_version")
+                .and_then(Value::as_str),
+            Some("session.submit_phase_c_execution_preflight.v0.1")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/phase_c_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/interaction_flow_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/direct_adb_or_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_events_filters_by_status_after_cursor() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -37905,6 +38114,7 @@ mod tests {
             .unwrap();
         for kind in [
             "command_check",
+            "submit_plan",
             "capture_policy",
             "record_policy",
             "connect_plan",
@@ -45258,6 +45468,11 @@ mod tests {
 
     #[test]
     fn current_page_resolves_semantic_page() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+            env::remove_var(SESSION_STATE_ENV);
+        }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();

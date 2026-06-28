@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab submit-plan Phase C event summary
+
+### Current status
+
+- Continued offline-only Session Layer work after command-check Phase C event summaries.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added `submit_plan` request data summaries for successful `session request submit-plan ...` responses.
+- `session events --data-summary-kind submit_plan` can now return compact submit-plan admission and Phase C execution-preflight summaries for UI/scheduler event consumers.
+- The summary exposes readiness, command-check, queue admission, selected-instance state, lease requirement, Session throat status, Phase C lane relevance, direct ADB/device access prohibition, blocker count, live-validation deferral, and no-device/no-listener/no-token/no-TLS guarantees.
+- Interaction-flow preflights such as `session request submit-plan stream --input-event <action,args>` now produce event summaries with `interaction_flow_relevant=true`, `requires_lease=true`, `deferred_code=requires-live-device`, and no listener/token/TLS guarantees.
+- `session api` now advertises `submit_plan` under `event_view.data_summary_kinds`.
+- Phase C plan direction is recorded: self-heal remains observe/diagnose/plan-first with bounded lease-gated maintenance execution later; interaction flow remains command-check/submit-plan/request-queue/event driven; trusted encrypted channel remains closed by default until listener, authentication, TLS or equivalent IPC security, token/certificate material, request serialization, audit logging, and live validation are implemented and reviewed.
+- Added a small test-isolation fix for `current_page_resolves_semantic_page`: it now takes the shared env lock and clears Session config/state env vars before running, matching nearby semantic CLI tests and avoiding parallel test pollution.
+- This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `fa4303e0a52891049fe2ac583647f59e9fa0e55c`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: submit-plan summaries can show whether a planned submission belongs to the self-heal lane without executing recovery.
+- Interaction flow: submit-plan summaries make input-relay lease requirements and request-queue admission visible from journal/events before any stream/input work starts.
+- Trusted channel: submit-plan summaries preserve trusted-channel reserved/closed-by-default guarantees and record no listener/token/TLS startup from this surface.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; event summaries must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer submit-plan, request data-summary, journal/events, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_submit_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_filters_submit_plan_phase_c_data_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session api`
+- First `cargo test --workspace --quiet` exposed parallel env pollution in `current_page_resolves_semantic_page`.
+- `cargo test -p actingcommand-actinglab current_page_resolves_semantic_page -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused submit-plan tests passed.
+- Focused submit-plan Phase C event-summary test passed.
+- Focused API contract test passed.
+- Manual JSON smoke for `session api` showed `event_view.data_summary_kinds` includes `submit_plan`.
+- Focused `current_page_resolves_semantic_page` test passed after env isolation.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab command-check Phase C event summary
 
 ### Current status
