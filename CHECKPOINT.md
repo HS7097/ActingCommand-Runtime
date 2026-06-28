@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab self-heal status diagnostics summary
+
+### Current status
+
+- Added `diagnostics.self_heal` to `session status --diagnostics`.
+- Added `status_diagnostics.self_heal` to `session bootstrap`.
+- Added `status_view.self_heal_summary_field="diagnostics.self_heal"` to the Session API contract.
+- Added `bootstrap_view.status_diagnostics_self_heal_field="status_diagnostics.self_heal"` to the Session API contract.
+- The self-heal diagnostics helper reuses `session self-heal-policy` and intentionally does not call the full `session self-heal-plan`, so status/readiness/bootstrap cannot recurse into themselves.
+- The summary exposes trigger policy, recovery order, maintenance-only boundaries, lease/scheduler coordination, a blocked observe-first default plan, next action kinds, and deferred live validation state.
+- The change is an offline diagnostics/API-discovery alignment increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `34d493d7f105f76c9f36b883b9d81c5df1f64bc4`.
+- Checkpoint tag: `checkpoint/20260628-self-heal-diagnostics`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `c0be91d5eaa896e2d6e0a066fc25588a3b6f618e`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Read `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace using UTF-8.
+- Inspected `session self-heal-policy`, status diagnostics, bootstrap diagnostics, and API contract code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary`
+- `cargo test -p actingcommand-actinglab session_bootstrap_reports_client_contract_without_device_work`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_status_diagnostics_reports_queue_and_journal_summary` passed and covers the new `diagnostics.self_heal` fields.
+- Focused `session_bootstrap_reports_client_contract_without_device_work` passed and covers the embedded startup self-heal summary.
+- Focused `session_api_is_offline_api_contract` passed and covers the new status-view and bootstrap-view field contracts.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C self-heal diagnostics and next-action observation through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab interaction and trusted-channel diagnostics summary
 
 ### Current status
