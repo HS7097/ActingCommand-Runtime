@@ -2698,6 +2698,7 @@ fn session_connect_plan_view_contract() -> Value {
         "readiness_field": "readiness",
         "transport_field": "transport",
         "stream_preflight_field": "stream_preflight",
+        "next_actions_field": "next_actions",
         "safe_to_start_client_field": "safe_to_start_client",
         "blocked_reason_field": "blockers",
         "does_not_enqueue": true,
@@ -6968,6 +6969,14 @@ fn session_connect_plan_payload(
         .unwrap_or(true);
     let blockers = session_connect_plan_blockers(&readiness, &stream_preflight);
     let safe_to_start_client = readiness_ready && stream_safe && transport_safe;
+    let next_actions = session_connect_plan_next_actions(
+        &readiness,
+        &stream_preflight,
+        readiness_ready,
+        stream_safe,
+        transport_safe,
+        safe_to_start_client,
+    );
     Ok(json!({
         "schema_version": "session.connect_plan.v0.1",
         "status": if safe_to_start_client { "ready" } else { "blocked" },
@@ -7001,6 +7010,7 @@ fn session_connect_plan_payload(
         "transport": readiness.get("transport").cloned().unwrap_or(Value::Null),
         "stream_preflight": stream_preflight,
         "blockers": blockers,
+        "next_actions": next_actions,
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -7011,6 +7021,120 @@ fn session_connect_plan_payload(
             "does_not_read_resource_repositories": true
         }
     }))
+}
+
+fn session_connect_plan_next_actions(
+    readiness: &Value,
+    stream_preflight: &Value,
+    readiness_ready: bool,
+    stream_safe: bool,
+    transport_safe: bool,
+    safe_to_start_client: bool,
+) -> Value {
+    let mut ordered = Vec::new();
+    if !readiness_ready {
+        ordered.push(session_connect_plan_next_action(
+            1,
+            "resolve_readiness_blockers",
+            "Inspect readiness, queue, lease, instance, and daemon liveness before opening a client.",
+            "session readiness",
+            true,
+        ));
+    }
+    if !transport_safe {
+        ordered.push(session_connect_plan_next_action(
+            2,
+            "review_trusted_transport_policy",
+            "Fix trusted remote transport policy before any remote UI/API channel is considered.",
+            "session transport check --endpoint <url>",
+            true,
+        ));
+    }
+    if !stream_safe {
+        ordered.push(session_connect_plan_next_action(
+            3,
+            "inspect_stream_preflight",
+            "Inspect stream and input-relay preflight before any interactive stream work.",
+            "stream check",
+            true,
+        ));
+    }
+    ordered.push(session_connect_plan_next_action(
+        4,
+        "review_phase_c_plan",
+        "Review self-heal, interaction-flow, trusted-channel, and live-validation boundaries before implementing Phase C execution.",
+        "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        true,
+    ));
+    if safe_to_start_client {
+        ordered.push(session_connect_plan_next_action(
+            5,
+            "open_bounded_local_stream_if_needed",
+            "A bounded local stream can be opened by a separate command if the client needs frame events.",
+            "stream --max-frames <N>",
+            false,
+        ));
+    }
+    json!({
+        "schema_version": "session.connect_next_actions.v0.1",
+        "status": if safe_to_start_client { "ready" } else { "blocked" },
+        "ordered": ordered,
+        "readiness": {
+            "ready": readiness_ready,
+            "status": readiness.get("status").cloned().unwrap_or(Value::Null),
+            "recommended_action_kinds": readiness
+                .get("recommended_action_kinds")
+                .cloned()
+                .unwrap_or_else(|| json!([]))
+        },
+        "stream": {
+            "safe_to_start": stream_safe,
+            "input_relay_requested": stream_preflight
+                .pointer("/input_relay/requested")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "input_relay_requires_matching_lease": true
+        },
+        "trusted_channel": {
+            "transport_safe": transport_safe,
+            "remote_status": "reserved",
+            "requires_security_review": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_connect_plan_next_action(
+    priority: u8,
+    action: &str,
+    reason: &str,
+    command: &str,
+    read_only: bool,
+) -> Value {
+    json!({
+        "priority": priority,
+        "action": action,
+        "reason": reason,
+        "command": command,
+        "read_only": read_only
+    })
 }
 
 fn session_stream_plan_payload(
@@ -12346,6 +12470,10 @@ fn connect_plan_request_data_summary(data: &Value) -> Value {
         "safe_to_connect_transport": data.get("safe_to_connect_transport").cloned().unwrap_or(Value::Null),
         "readiness_status": data.pointer("/readiness/status").cloned().unwrap_or(Value::Null),
         "stream_preflight_status": data.pointer("/stream_preflight/safe_to_start").cloned().unwrap_or(Value::Null),
+        "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
+        "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
+        "trusted_remote_status": data.pointer("/next_actions/trusted_channel/remote_status").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/next_actions/live_validation/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
 }
@@ -20030,6 +20158,39 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("resolve_readiness_blockers")
+        );
+        assert!(
+            data.pointer("/next_actions/ordered")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.get("action").and_then(Value::as_str)
+                    == Some("review_phase_c_plan"))
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/remote_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -20083,6 +20244,19 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|item| item.get("kind").and_then(Value::as_str) == Some("transport"))
+        );
+        assert!(
+            data.pointer("/next_actions/ordered")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.get("action").and_then(Value::as_str)
+                    == Some("review_trusted_transport_policy"))
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/transport_safe")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 
@@ -20788,12 +20962,32 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            payload
+                .pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("resolve_readiness_blockers")
+        );
+        assert_eq!(
             summary.get("kind").and_then(Value::as_str),
             Some("connect_plan")
         );
         assert_eq!(
             summary.get("safe_to_start_client").and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("resolve_readiness_blockers")
+        );
+        assert_eq!(
+            summary.get("trusted_remote_status").and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
         );
     }
 
@@ -38281,6 +38475,11 @@ mod tests {
             data.pointer("/envelopes/connect_plan_view/stream_preflight_field")
                 .and_then(Value::as_str),
             Some("stream_preflight")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
         );
         assert_eq!(
             data.pointer("/envelopes/connect_plan_view/does_not_start_listener")

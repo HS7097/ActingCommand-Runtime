@@ -189,6 +189,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
 - ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
 - ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
+- ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -214,6 +215,21 @@ This increment connects the aggregate Phase C planning surface to the status dia
 - The action records the source request id, source command, next review queries, and full data summary.
 - The Session API contract advertises `phase_c_plan_actions` under `status_view`.
 - The action explicitly records that it does not touch devices, start a listener, issue tokens, start TLS, or mark live validation passed.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Connect-Plan Next-Action Summary
+
+This increment gives future UI and scheduler clients a deterministic startup decision list after they call `session connect-plan`.
+
+- `session connect-plan` now embeds `next_actions` with schema `session.connect_next_actions.v0.1`.
+- `session request connect-plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders read-only follow-up actions for readiness blockers, trusted transport policy, stream preflight, and Phase C aggregate review.
+- The summary records readiness status and recommended-action kinds, stream safety, input-relay lease requirements, trusted remote reserved status, and live-validation deferred status.
+- `connect_plan` daemon request summaries now retain next-action count, first next action, trusted-remote status, and live-validation status for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `connect_plan_view`.
+- Trusted remote remains reserved: the next-action summary does not start a listener, issue tokens, start TLS, probe TCP, or accept remote clients.
+- Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
 
 No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
 
