@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab connect-plan Phase C preflight summary
+
+### Current status
+
+- Continued offline-only Session Layer Phase C work after the acceptance diagnostics summary.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added `session.connect_phase_c_preflight.v0.1` under `session connect-plan`.
+- `phase_c_preflight` aggregates self-heal, interaction-flow, trusted-channel, and live-acceptance gate status from the existing readiness/status diagnostics.
+- The `connect-plan` request data summary now carries compact Phase C preflight fields for daemon journal/event consumers.
+- `session api` now advertises the `connect_plan_view.phase_c_preflight_field` and schema version for UI/scheduler clients.
+- This increment only exposes client-start preflight diagnostics and does not execute recovery, enqueue daemon work, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `20ced546a354f609295dd31f477d5a1808ff2050`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: `connect-plan` now shows the self-heal gate before any client stream or recovery work is attempted.
+- Interaction flow: `connect-plan` now shows stream/input-relay readiness and the interaction-flow acceptance lane together.
+- Trusted channel: `connect-plan` now shows encrypted/authenticated remote-channel blockers while still refusing to start listeners, issue tokens, or start TLS.
+- Live validation: all live-only gates remain `deferred` with `requires-live-device`; offline tests must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Inspected Session Layer connect-plan, readiness, stream-plan, transport, Phase C diagnostics, request summaries, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_connect_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_stream_plan_reports_interactive_preflight_without_device_work -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused connect-plan tests passed.
+- Focused API contract test passed.
+- Focused stream-plan preflight test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab Phase C acceptance diagnostics summary
 
 ### Current status

@@ -161,6 +161,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stream input relay preflight contract: `session command-check stream --input-event <action,args>` and `--relay-event <action,args>` are locked as lease-gated control preflights while `stream check --input-event ...` remains a read-only preflight that does not enqueue, capture, start MaaTouch, or touch devices.
 - ActingLab Phase C acceptance gates contract: `session phase-c-plan` now embeds `session.phase_c_acceptance_gates.v0.1`, separating offline-verifiable gates from live-device gates for self-heal, interaction flow, trusted channel, and live acceptance.
 - ActingLab Phase C acceptance diagnostics summary: `session status --diagnostics`, `session bootstrap`, and `session readiness` now expose compact Phase C acceptance-gate status for UI/scheduler clients without requiring them to call the full `session phase-c-plan` payload first.
+- ActingLab connect-plan Phase C preflight summary: `session connect-plan` now exposes `session.connect_phase_c_preflight.v0.1`, aggregating self-heal, interaction-flow, trusted-channel, and live-acceptance readiness for UI/scheduler clients before they open bounded streams or trusted remote channels.
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
@@ -5731,6 +5732,7 @@ This is still a contract/discovery increment only:
 - `session phase-c-plan` exposes `acceptance_gates` so UI/scheduler clients can distinguish offline gates from live gates before they interpret readiness, stream, self-heal, or trusted-channel status.
 - The acceptance gate contract keeps all live gates tied to `requires-live-device`; offline checks may prove contracts and preflights, but they must not mark live validation as accepted.
 - `session status --diagnostics`, `session bootstrap`, and `session readiness` mirror compact Phase C acceptance-gate fields so normal health/readiness clients can see self-heal, interaction-flow, trusted-channel, and live-acceptance blockers without executing recovery, stream, listener, token, TLS, capture, MaaTouch, app, resource, SQLite, UI, or live-device work.
+- `session connect-plan` mirrors the same Phase C gate state into `phase_c_preflight`, so future UI/scheduler clients can make a single client-start decision while still seeing self-heal, interaction-flow, trusted-channel, and live-validation blockers.
 
 ## Repo-local planning policy
 

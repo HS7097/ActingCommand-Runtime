@@ -3680,6 +3680,8 @@ fn session_connect_plan_view_contract() -> Value {
         "readiness_field": "readiness",
         "transport_field": "transport",
         "stream_preflight_field": "stream_preflight",
+        "phase_c_preflight_field": "phase_c_preflight",
+        "phase_c_preflight_schema_version": "session.connect_phase_c_preflight.v0.1",
         "next_actions_field": "next_actions",
         "safe_to_start_client_field": "safe_to_start_client",
         "blocked_reason_field": "blockers",
@@ -8003,6 +8005,14 @@ fn session_connect_plan_payload(
         .unwrap_or(true);
     let blockers = session_connect_plan_blockers(&readiness, &stream_preflight);
     let safe_to_start_client = readiness_ready && stream_safe && transport_safe;
+    let phase_c_preflight = session_connect_phase_c_preflight(
+        &readiness,
+        &stream_preflight,
+        readiness_ready,
+        stream_safe,
+        transport_safe,
+        safe_to_start_client,
+    );
     let next_actions = session_connect_plan_next_actions(
         &readiness,
         &stream_preflight,
@@ -8043,6 +8053,7 @@ fn session_connect_plan_payload(
         "readiness": readiness,
         "transport": readiness.get("transport").cloned().unwrap_or(Value::Null),
         "stream_preflight": stream_preflight,
+        "phase_c_preflight": phase_c_preflight,
         "blockers": blockers,
         "next_actions": next_actions,
         "guarantees": {
@@ -8055,6 +8066,115 @@ fn session_connect_plan_payload(
             "does_not_read_resource_repositories": true
         }
     }))
+}
+
+fn session_connect_phase_c_preflight(
+    readiness: &Value,
+    stream_preflight: &Value,
+    readiness_ready: bool,
+    stream_safe: bool,
+    transport_safe: bool,
+    safe_to_start_client: bool,
+) -> Value {
+    let acceptance_gates = readiness
+        .pointer("/status_view/diagnostics/phase_c/acceptance_gates")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    json!({
+        "schema_version": "session.connect_phase_c_preflight.v0.1",
+        "status": if safe_to_start_client { "ready_for_bounded_local_client" } else { "blocked" },
+        "source_field": "readiness.status_view.diagnostics.phase_c.acceptance_gates",
+        "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "acceptance_gates_schema_version": acceptance_gates
+            .get("schema_version")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "acceptance_gate_lane_count": acceptance_gates
+            .get("lanes")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        "all_live_gates_deferred_code": acceptance_gates
+            .get("all_live_gates_deferred_code")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "self_heal": session_connect_phase_c_lane_summary(&acceptance_gates, "self_heal"),
+        "interaction_flow": session_connect_phase_c_lane_summary(&acceptance_gates, "interaction_flow"),
+        "trusted_channel": session_connect_phase_c_lane_summary(&acceptance_gates, "trusted_channel"),
+        "live_acceptance": session_connect_phase_c_lane_summary(&acceptance_gates, "live_acceptance"),
+        "readiness": {
+            "ready": readiness_ready,
+            "status": readiness.get("status").cloned().unwrap_or(Value::Null)
+        },
+        "stream": {
+            "safe_to_start": stream_safe,
+            "input_relay_requested": stream_preflight
+                .pointer("/input_relay/requested")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "input_relay_requires_matching_lease": true
+        },
+        "trusted_channel_gate": {
+            "transport_safe": transport_safe,
+            "remote_status": "reserved",
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_connect_phase_c_lane_summary(gates: &Value, lane_name: &str) -> Value {
+    let lane = gates
+        .get("lanes")
+        .and_then(Value::as_array)
+        .and_then(|lanes| {
+            lanes
+                .iter()
+                .find(|lane| lane.get("lane").and_then(Value::as_str) == Some(lane_name))
+        });
+
+    json!({
+        "lane": lane_name,
+        "current_status": lane
+            .and_then(|lane| lane.get("current_status"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "offline_gate_count": lane
+            .and_then(|lane| lane.get("offline_gates"))
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        "live_gate_count": lane
+            .and_then(|lane| lane.get("live_gates"))
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        "blocking_codes": lane
+            .and_then(|lane| lane.get("blocking_codes"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "next_preflight_command": lane
+            .and_then(|lane| lane.get("next_preflight_command"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    })
 }
 
 fn session_connect_plan_next_actions(
@@ -14823,6 +14943,10 @@ fn connect_plan_request_data_summary(data: &Value) -> Value {
         "safe_to_connect_transport": data.get("safe_to_connect_transport").cloned().unwrap_or(Value::Null),
         "readiness_status": data.pointer("/readiness/status").cloned().unwrap_or(Value::Null),
         "stream_preflight_status": data.pointer("/stream_preflight/safe_to_start").cloned().unwrap_or(Value::Null),
+        "phase_c_preflight_schema_version": data.pointer("/phase_c_preflight/schema_version").cloned().unwrap_or(Value::Null),
+        "phase_c_acceptance_gate_lane_count": data.pointer("/phase_c_preflight/acceptance_gate_lane_count").cloned().unwrap_or(Value::Null),
+        "phase_c_live_deferred_code": data.pointer("/phase_c_preflight/all_live_gates_deferred_code").cloned().unwrap_or(Value::Null),
+        "phase_c_trusted_channel_status": data.pointer("/phase_c_preflight/trusted_channel/current_status").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
         "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
         "trusted_remote_status": data.pointer("/next_actions/trusted_channel/remote_status").cloned().unwrap_or(Value::Null),
@@ -22719,6 +22843,46 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/phase_c_preflight/schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_phase_c_preflight.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/acceptance_gates_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/acceptance_gate_lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/self_heal/current_status")
+                .and_then(Value::as_str),
+            Some("plan_available_offline")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/interaction_flow/current_status")
+                .and_then(Value::as_str),
+            Some("preflight_available_offline")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/trusted_channel/current_status")
+                .and_then(Value::as_str),
+            Some("reserved_contract")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_preflight/guarantees/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/next_actions/schema_version")
                 .and_then(Value::as_str),
             Some("session.connect_next_actions.v0.1")
@@ -23631,6 +23795,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/phase_c_preflight/schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_phase_c_preflight.v0.1")
+        );
+        assert_eq!(
+            payload
                 .pointer("/next_actions/ordered/0/action")
                 .and_then(Value::as_str),
             Some("resolve_readiness_blockers")
@@ -23646,6 +23816,30 @@ mod tests {
         assert_eq!(
             summary.get("first_next_action").and_then(Value::as_str),
             Some("resolve_readiness_blockers")
+        );
+        assert_eq!(
+            summary
+                .get("phase_c_preflight_schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_phase_c_preflight.v0.1")
+        );
+        assert_eq!(
+            summary
+                .get("phase_c_acceptance_gate_lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            summary
+                .get("phase_c_live_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            summary
+                .get("phase_c_trusted_channel_status")
+                .and_then(Value::as_str),
+            Some("reserved_contract")
         );
         assert_eq!(
             summary.get("trusted_remote_status").and_then(Value::as_str),
@@ -43235,6 +43429,16 @@ mod tests {
             data.pointer("/envelopes/connect_plan_view/stream_preflight_field")
                 .and_then(Value::as_str),
             Some("stream_preflight")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/phase_c_preflight_field")
+                .and_then(Value::as_str),
+            Some("phase_c_preflight")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/phase_c_preflight_schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_phase_c_preflight.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/connect_plan_view/next_actions_field")
