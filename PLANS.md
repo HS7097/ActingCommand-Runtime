@@ -178,6 +178,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
 - ActingLab trusted-channel transport plan: `session transport plan` now exposes a no-listener/no-TCP-probe plan for local CLI, daemon file-IPC, and reserved encrypted trusted remote access.
+- ActingLab Phase C self-heal plan preflight: `session self-heal-plan` and `session request self-heal-plan` expose a no-device maintenance recovery plan that turns observed triggers into lease/queue/readiness-gated recovery candidates without executing input.
+
+## Current ActingLab Phase C Self-Heal Plan Preflight
+
+This increment gives UI, scheduler, and agent clients a concrete Phase C recovery preflight between the static `session self-heal-policy` and actual `session recover` execution.
+
+- `session self-heal-plan` returns `session.self_heal_plan.v0.1`.
+- `session request self-heal-plan` returns the same schema through the resident daemon request path.
+- The payload accepts optional `--trigger <kind>` and `--to <page>`.
+- Supported triggers are `capture_stale_suspected`, `capture_backend_unavailable`, `standby`, `unexpected_page`, `modal_popup`, `startup_login_required`, and `session_expired`; omitting `--trigger` returns an observe-first plan.
+- The payload reports observe/diagnose/plan/execute stages, target page, recovery candidate, readiness, queue admission, lease gate, blockers, and no-side-effect guarantees.
+- Stale-capture recovery remains read-only and does not require a lease.
+- Standby, unexpected page, modal popup, startup-login, and session-expired maintenance recovery require a matching lease before execution.
+- Request journal summaries now support `data_summary.kind=self_heal_plan`.
+- `session api`, `session bootstrap`, `session contract`, `session command-check`, command capabilities, and readiness policy summary now advertise the self-heal-plan surface.
+
+No device input, capture, MaaTouch startup, app lifecycle action, resource repository read, network listener, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Trusted-Channel Transport Plan
 
