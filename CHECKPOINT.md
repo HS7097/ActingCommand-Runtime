@@ -11,8 +11,8 @@
 - The Session API contract now advertises `self_heal_escalation_actions` under `status_view`.
 - The change is a pure no-device diagnostics/recommendation contract extension.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending.
-- Checkpoint tag: pending.
+- Milestone source commit: `52603023d3c44af6841c79b49d65c6b66482cb98`.
+- Checkpoint tag: `checkpoint/20260628-self-heal-escalation-review`.
 
 ### Resource mirrors used
 
@@ -75,9 +75,8 @@
 
 ### Next step
 
-1. Commit Runtime changes and record the milestone commit/tag.
-2. Push Runtime changes and checkpoint tag.
-3. Continue the next offline Session Layer Phase C increment before live validation.
+1. Push Runtime changes and checkpoint tag.
+2. Continue the next offline Session Layer Phase C increment before live validation.
 
 ## 2026-06-28 ActingLab Phase C self-heal event summary
 
