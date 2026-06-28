@@ -1786,6 +1786,8 @@ fn session_phase_c_plan_payload(
         session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
     let transport_plan = session_transport_plan_payload(flags)?;
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
+    let next_actions =
+        session_phase_c_plan_next_actions(&self_heal_plan, &transport_plan, &validation_plan);
 
     Ok(json!({
         "schema_version": "session.phase_c_plan.v0.1",
@@ -1875,6 +1877,7 @@ fn session_phase_c_plan_payload(
             "deferred_code": "requires-live-device",
             "must_not_mark_live_pass_from_offline_checks": true
         },
+        "next_actions": next_actions,
         "client_guidance": {
             "ui_should_read": ["session bootstrap", "session phase-c-plan", "session status --diagnostics"],
             "scheduler_should_read": ["session readiness", "session queue", "session submit-plan <command...>", "session validation-plan"],
@@ -1895,6 +1898,100 @@ fn session_phase_c_plan_payload(
             "does_not_mark_live_validation_passed": true
         }
     }))
+}
+
+fn session_phase_c_plan_next_actions(
+    self_heal_plan: &Value,
+    transport_plan: &Value,
+    validation_plan: &Value,
+) -> Value {
+    let ordered = vec![
+        session_connect_plan_next_action(
+            1,
+            "review_self_heal_plan",
+            "Inspect the maintenance-only self-heal candidate before any recovery execution path is enabled.",
+            "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            true,
+        ),
+        session_connect_plan_next_action(
+            2,
+            "review_interaction_stream_plan",
+            "Inspect the interaction-flow stream preflight before UI frame relay or input relay work.",
+            "session stream-plan [--endpoint <url>]",
+            true,
+        ),
+        session_connect_plan_next_action(
+            3,
+            "review_trusted_channel_transport",
+            "Inspect trusted-channel transport policy before any remote listener, token, or TLS implementation work.",
+            "session transport plan [--endpoint <url>]",
+            true,
+        ),
+        session_connect_plan_next_action(
+            4,
+            "review_live_acceptance_checklist",
+            "Inspect pending live-device acceptance items; offline checks must not mark them passed.",
+            "session validation-plan",
+            true,
+        ),
+        session_connect_plan_next_action(
+            5,
+            "review_status_diagnostics",
+            "Inspect current daemon liveness, queue health, leases, and recent journal summaries before scheduling Phase C work.",
+            "session status --diagnostics",
+            true,
+        ),
+    ];
+
+    json!({
+        "schema_version": "session.phase_c_next_actions.v0.1",
+        "status": "offline_plan",
+        "ordered": ordered,
+        "self_heal": {
+            "status": self_heal_plan.get("status").cloned().unwrap_or(Value::Null),
+            "trigger": self_heal_plan.pointer("/trigger/kind").cloned().unwrap_or(Value::Null),
+            "recovery_kind": self_heal_plan.pointer("/recovery/kind").cloned().unwrap_or(Value::Null),
+            "ready_to_execute_maintenance": self_heal_plan.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
+            "escalation_category": self_heal_plan.pointer("/escalation/category").cloned().unwrap_or(Value::Null),
+            "operator_live_validation_required": self_heal_plan.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null)
+        },
+        "interaction_flow": {
+            "status": "reserved_contract",
+            "stream_plan_command": "session stream-plan [--endpoint <url>]",
+            "input_relay_requires_matching_lease": true,
+            "long_lived_ui_stream_status": "reserved"
+        },
+        "trusted_channel": {
+            "status": transport_plan.pointer("/trusted_remote/status").cloned().unwrap_or(Value::Null),
+            "endpoint_policy_safe": transport_plan.pointer("/trusted_remote/endpoint_policy/safe_for_policy").cloned().unwrap_or(Value::Null),
+            "token_configured": transport_plan.pointer("/trusted_remote/token_configured").cloned().unwrap_or(Value::Null),
+            "client_certificate_configured": transport_plan.pointer("/trusted_remote/client_certificate_configured").cloned().unwrap_or(Value::Null),
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
+        },
+        "live_validation": {
+            "status": validation_plan.get("live_validation_status").cloned().unwrap_or(Value::Null),
+            "deferred_code": validation_plan.get("deferred_code").cloned().unwrap_or(Value::Null),
+            "pending_live_acceptance": validation_plan.get("pending_live_acceptance").cloned().unwrap_or(Value::Null),
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_access_contract() -> Value {
@@ -2831,6 +2928,7 @@ fn session_phase_c_plan_view_contract() -> Value {
         "interaction_flow_field": "interaction_flow",
         "trusted_channel_field": "trusted_channel",
         "live_validation_field": "live_validation",
+        "next_actions_field": "next_actions",
         "milestones_field": "milestones",
         "does_not_enqueue": true,
         "does_not_touch_device": true,
@@ -12571,6 +12669,8 @@ fn phase_c_plan_request_data_summary(data: &Value) -> Value {
         "trusted_endpoint": data.pointer("/trusted_channel/plan/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
+        "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
         "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
         "does_not_issue_tokens": data.pointer("/guarantees/does_not_issue_tokens").cloned().unwrap_or(Value::Null),
         "does_not_start_tls": data.pointer("/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null)
@@ -23028,6 +23128,49 @@ mod tests {
             Some("requires-live-device")
         );
         assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        let next_actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("review_interaction_stream_plan")
+        }));
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("review_trusted_channel_transport")
+        }));
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("review_live_acceptance_checklist")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/self_heal/recovery_kind")
+                .and_then(Value::as_str),
+            Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/interaction_flow/long_lived_ui_stream_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -23110,6 +23253,14 @@ mod tests {
         assert_eq!(
             summary.get("deferred_code").and_then(Value::as_str),
             Some("requires-live-device")
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        assert_eq!(
+            summary.get("next_action_count").and_then(Value::as_u64),
+            Some(5)
         );
         assert_eq!(
             summary
@@ -33383,6 +33534,12 @@ mod tests {
                 .pointer("/envelopes/phase_c_plan_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_plan.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
         );
         assert_eq!(
             payload

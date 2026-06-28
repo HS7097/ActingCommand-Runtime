@@ -187,6 +187,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending-live validation diagnostics summary: `session status --diagnostics` now exposes the `待真机验收` summary from `session validation-plan` for UI/scheduler clients without marking live checks passed.
 
 - ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
+- ActingLab Phase C aggregate next-action summary: `session phase-c-plan` and `session request phase-c-plan` now expose a machine-readable `next_actions` roadmap for self-heal review, interaction-flow review, trusted-channel transport review, pending live acceptance, and status diagnostics.
 - ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
 - ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
 - ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
@@ -205,6 +206,22 @@ This increment gives UI, scheduler, and agent clients one Phase C planning envel
 - `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters now advertise the Phase C plan surface.
 
 No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Phase C Aggregate Next-Action Summary
+
+This increment turns the aggregate `session phase-c-plan` view into an actionable no-device roadmap for UI, scheduler, and agent clients.
+
+- `session phase-c-plan` now embeds `next_actions` with schema `session.phase_c_next_actions.v0.1`.
+- `session request phase-c-plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders read-only follow-up actions for self-heal plan review, interaction stream-plan review, trusted-channel transport review, pending live acceptance review, and current status diagnostics.
+- The self-heal summary records trigger, recovery kind, maintenance readiness, escalation category, and operator/live-validation requirement.
+- The interaction-flow summary keeps long-lived UI stream status reserved and records that input relay requires a matching lease.
+- The trusted-channel summary records reserved transport status, endpoint policy result, token/certificate configuration signals, and no-listener/no-token/no-TLS guarantees.
+- The live-validation summary carries `deferred: requires-live-device` and the pending live acceptance payload from `session validation-plan`.
+- `phase_c_plan` daemon request summaries now retain next-action count and first next action for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `phase_c_plan_view`.
+
+No device input, capture, MaaTouch startup, app lifecycle action, self-heal execution, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
 
 ## Current ActingLab Phase C Plan Diagnostics Recommended Action
 
