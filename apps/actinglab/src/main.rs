@@ -1184,7 +1184,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session transport check", "session connect-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -2029,7 +2029,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "connect_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -2120,6 +2120,7 @@ fn session_api_contract() -> Value {
                     "status",
                     "bootstrap",
                     "readiness",
+                    "connect-plan",
                     "throat-policy",
                     "capture-policy",
                     "self-heal-policy",
@@ -2216,6 +2217,14 @@ fn session_api_contract() -> Value {
         .and_then(Value::as_object_mut)
         .expect("session api contract envelopes must be an object")
         .insert(
+            "connect_plan_view".to_string(),
+            session_connect_plan_view_contract(),
+        );
+    contract
+        .pointer_mut("/envelopes")
+        .and_then(Value::as_object_mut)
+        .expect("session api contract envelopes must be an object")
+        .insert(
             "throat_policy_view".to_string(),
             session_throat_policy_view_contract(),
         );
@@ -2236,6 +2245,24 @@ fn session_api_contract() -> Value {
             session_self_heal_policy_view_contract(),
         );
     contract
+}
+
+fn session_connect_plan_view_contract() -> Value {
+    json!({
+        "query": "session connect-plan [--endpoint <url>] [stream check flags]",
+        "daemon_query": "session request connect-plan [--endpoint <url>] [stream check flags]",
+        "schema_version": "session.connect_plan.v0.1",
+        "readiness_field": "readiness",
+        "transport_field": "transport",
+        "stream_preflight_field": "stream_preflight",
+        "safe_to_start_client_field": "safe_to_start_client",
+        "blocked_reason_field": "blockers",
+        "does_not_enqueue": true,
+        "does_not_touch_device": true,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true,
+        "does_not_start_listener": true
+    })
 }
 
 fn session_throat_policy_view_contract() -> Value {
@@ -6036,6 +6063,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "capture-policy" => run_session_capture_policy(global, args),
         "self-heal-policy" => run_session_self_heal_policy(global, args),
         "readiness" => run_session_readiness(global, args),
+        "connect-plan" => run_session_connect_plan(global, args),
         "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
         "submit-plan" => run_session_submit_plan(global, args),
@@ -6135,6 +6163,22 @@ fn run_session_readiness(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         &state_dir,
         Some(&config),
         "session readiness",
+    )
+}
+
+fn run_session_connect_plan(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "connect_plan", args);
+    }
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    let config = read_user_config()?;
+    session_connect_plan_payload(
+        global,
+        &flags,
+        &state_dir,
+        Some(&config),
+        "session connect-plan",
     )
 }
 
@@ -6321,6 +6365,98 @@ fn session_readiness_payload(
         "blockers": blockers,
         "status_view": status_view
     }))
+}
+
+fn session_connect_plan_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    state_dir: &Path,
+    config: Option<&UserConfig>,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    let readiness = session_readiness_payload(global, flags, state_dir, config, command_name)?;
+    let stream_preflight = run_stream_check(global, flags)?;
+    let readiness_ready = readiness
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stream_safe = stream_preflight
+        .get("safe_to_start")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let transport_safe = readiness
+        .pointer("/transport/safe_to_connect")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let blockers = session_connect_plan_blockers(&readiness, &stream_preflight);
+    let safe_to_start_client = readiness_ready && stream_safe && transport_safe;
+    Ok(json!({
+        "schema_version": "session.connect_plan.v0.1",
+        "status": if safe_to_start_client { "ready" } else { "blocked" },
+        "safe_to_start_client": safe_to_start_client,
+        "safe_to_start_stream": stream_safe,
+        "safe_to_connect_transport": transport_safe,
+        "mode": "client_connect_preflight",
+        "client_surfaces": {
+            "local_cli": {
+                "available": true,
+                "encryption_required": false,
+                "authentication_required": false
+            },
+            "daemon_file_ipc": {
+                "available_when_daemon_alive": true,
+                "serialized_by_daemon": true
+            },
+            "bounded_stream": {
+                "preflight_schema_version": "session.stream_check.v0.1",
+                "safe_to_start": stream_safe,
+                "input_relay_requires_matching_lease": true
+            },
+            "trusted_remote": {
+                "status": "reserved",
+                "requires_encryption": true,
+                "requires_authentication": true,
+                "safe_to_connect_transport": transport_safe
+            }
+        },
+        "readiness": readiness,
+        "transport": readiness.get("transport").cloned().unwrap_or(Value::Null),
+        "stream_preflight": stream_preflight,
+        "blockers": blockers,
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
+fn session_connect_plan_blockers(readiness: &Value, stream_preflight: &Value) -> Vec<Value> {
+    let mut blockers = readiness
+        .get("blockers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !stream_preflight
+        .get("safe_to_start")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        blockers.push(json!({
+            "kind": "stream_preflight",
+            "schema_version": stream_preflight.get("schema_version"),
+            "input_relay_requested": stream_preflight.pointer("/input_relay/requested"),
+            "lease_gate": stream_preflight.pointer("/input_relay/lease_gate"),
+            "routing": stream_preflight.get("routing"),
+            "message": "Stream preflight is not safe to start"
+        }));
+    }
+    blockers
 }
 
 fn session_readiness_policy_summary() -> Value {
@@ -6672,6 +6808,7 @@ fn session_bootstrap_payload(
             "capture_policy": "session capture-policy",
             "self_heal_policy": "session self-heal-policy",
             "readiness": "session readiness",
+            "connect_plan": "session connect-plan",
             "queue": "session queue",
             "validation_plan": "session validation-plan",
             "command_check": "session command-check <command...>",
@@ -6684,6 +6821,7 @@ fn session_bootstrap_payload(
             "capture_policy": "session request capture-policy",
             "self_heal_policy": "session request self-heal-policy",
             "readiness": "session request readiness",
+            "connect_plan": "session request connect-plan",
             "queue": "session request queue",
             "validation_plan": "session request validation-plan",
             "command_check": "session request command-check <command...>",
@@ -7256,10 +7394,10 @@ fn classify_session_command_for_check(
     };
 
     match first {
-        "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
-        | "contract" | "api" | "transport" | "capabilities" | "bootstrap" | "command-check"
-        | "submit-plan" | "validation-plan" | "throat-policy" | "capture-policy"
-        | "self-heal-policy" => Ok(read_only),
+        "status" | "readiness" | "connect-plan" | "queue" | "journal" | "events" | "response"
+        | "request-state" | "contract" | "api" | "transport" | "capabilities" | "bootstrap"
+        | "command-check" | "submit-plan" | "validation-plan" | "throat-policy"
+        | "capture-policy" | "self-heal-policy" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -10004,7 +10142,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, self-heal-policy, readiness, connect-plan, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -10022,6 +10160,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             submit_readonly_session_request(global, &flags, "self_heal_policy", &args[1..])
         }
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
+        "connect-plan" => {
+            submit_readonly_session_request(global, &flags, "connect_plan", &args[1..])
+        }
         "queue" => submit_readonly_session_request(global, &flags, "queue", &args[1..]),
         "command-check" => {
             submit_readonly_session_request(global, &flags, "command_check", &args[1..])
@@ -10914,6 +11055,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     let data = response.data.as_ref()?;
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
+        "connect_plan" => Some(connect_plan_request_data_summary(data)),
         "capture_diagnose" => Some(capture_diagnose_request_data_summary(data)),
         "recover" if data.get("mode").and_then(Value::as_str) == Some("stale_capture_recovery") => {
             Some(stale_capture_recovery_request_data_summary(data))
@@ -10939,6 +11081,20 @@ fn stream_request_data_summary(data: &Value) -> Value {
             "status": data.pointer("/trusted_channel/status").cloned().unwrap_or(Value::Null),
             "long_lived_stream_implemented": data.pointer("/trusted_channel/long_lived_stream_implemented").cloned().unwrap_or(Value::Null)
         }
+    })
+}
+
+fn connect_plan_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "connect_plan",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "safe_to_start_client": data.get("safe_to_start_client").cloned().unwrap_or(Value::Null),
+        "safe_to_start_stream": data.get("safe_to_start_stream").cloned().unwrap_or(Value::Null),
+        "safe_to_connect_transport": data.get("safe_to_connect_transport").cloned().unwrap_or(Value::Null),
+        "readiness_status": data.pointer("/readiness/status").cloned().unwrap_or(Value::Null),
+        "stream_preflight_status": data.pointer("/stream_preflight/safe_to_start").cloned().unwrap_or(Value::Null),
+        "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
 }
 
@@ -11092,6 +11248,18 @@ fn execute_session_command_request_inner(
                 state_dir,
                 Some(&config),
                 "session request readiness",
+            )
+        }
+        "connect_plan" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let config = read_user_config()?;
+            let global = request.global.to_global()?;
+            session_connect_plan_payload(
+                &global,
+                &flags,
+                state_dir,
+                Some(&config),
+                "session request connect-plan",
             )
         }
         "queue" => {
@@ -16823,6 +16991,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture-policy", ["offline"], "available"),
         command_cap("session self-heal-policy", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
+        command_cap("session connect-plan", ["offline"], "available"),
         command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
         command_cap("session submit-plan", ["offline"], "available"),
@@ -16871,6 +17040,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request readiness",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request connect-plan",
             ["running_runtime"],
             "available",
         ),
@@ -18235,13 +18409,15 @@ mod tests {
     fn session_readiness_without_daemon_reports_not_ready() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            env::set_var(CONFIG_ENV, &config);
         }
         let result = run_cli(["--json", "session", "readiness"], true);
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -18304,6 +18480,124 @@ mod tests {
         assert_eq!(
             data.pointer("/instances/count").and_then(Value::as_u64),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn session_connect_plan_reports_client_preflight_without_device_work() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config);
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "connect-plan",
+                "--local",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.connect_plan.v0.1")
+        );
+        assert_eq!(
+            data.get("safe_to_start_client").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("safe_to_start_stream").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/readiness/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/stream_preflight/schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream_check.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/stream_preflight/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/client_surfaces/trusted_remote/requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_connect_plan_blocks_untrusted_remote_transport() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config);
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "connect-plan",
+                "--local",
+                "--endpoint",
+                "http://192.0.2.1:4317",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_connect_transport")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/transport/check/error_code")
+                .and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.get("kind").and_then(Value::as_str) == Some("transport"))
         );
     }
 
@@ -18815,6 +19109,69 @@ mod tests {
     }
 
     #[test]
+    fn session_connect_plan_request_returns_payload_and_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let query = SessionCommandRequest {
+            request_id: "connect-plan-query".to_string(),
+            command: "connect_plan".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: true,
+            },
+            args: vec!["--max-frames".to_string(), "2".to_string()],
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload.clone()),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.connect_plan.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/stream_preflight/capture/requested_max_frames")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload.get("safe_to_start_client").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("connect_plan")
+        );
+        assert_eq!(
+            summary.get("safe_to_start_client").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn session_command_check_readonly_local_is_safe_without_daemon() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -18975,6 +19332,40 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_connect_plan_is_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "command-check", "connect-plan"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -29779,18 +30170,18 @@ mod tests {
                 .and_then(Value::as_str),
             Some("events[].data_summary")
         );
-        assert_eq!(
-            payload
-                .pointer("/envelopes/event_view/data_summary_kinds/1")
-                .and_then(Value::as_str),
-            Some("capture_diagnose")
-        );
-        assert_eq!(
-            payload
-                .pointer("/envelopes/event_view/data_summary_kinds/2")
-                .and_then(Value::as_str),
-            Some("stale_capture_recovery")
-        );
+        let data_summary_kinds = payload
+            .pointer("/envelopes/event_view/data_summary_kinds")
+            .and_then(Value::as_array)
+            .unwrap();
+        for kind in ["connect_plan", "capture_diagnose", "stale_capture_recovery"] {
+            assert!(
+                data_summary_kinds
+                    .iter()
+                    .any(|item| item.as_str() == Some(kind)),
+                "missing data summary kind {kind}"
+            );
+        }
         assert_eq!(
             payload
                 .pointer("/envelopes/event_view/data_summary_kind_filter_repeats")
@@ -35080,6 +35471,21 @@ mod tests {
             data.pointer("/envelopes/readiness_view/policy_summary_schema_version")
                 .and_then(Value::as_str),
             Some("session.readiness_policy_summary.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.connect_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/stream_preflight_field")
+                .and_then(Value::as_str),
+            Some("stream_preflight")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/connect_plan_view/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/envelopes/queue_view/schema_version")

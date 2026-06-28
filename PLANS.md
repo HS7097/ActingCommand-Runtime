@@ -175,6 +175,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
+- ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
+
+## Current ActingLab Client Connect-Plan Preflight
+
+This increment gives UI, scheduler, and agent clients a single no-device preflight for client startup and interaction planning.
+
+- `session connect-plan` returns `session.connect_plan.v0.1`.
+- `session request connect-plan` returns the same schema through the resident daemon request path.
+- The payload aggregates `session readiness`, optional trusted transport endpoint checks, and `stream check`.
+- The payload reports `safe_to_start_client`, `safe_to_start_stream`, `safe_to_connect_transport`, `client_surfaces`, and `blockers`.
+- Untrusted remote HTTP remains blocked by `trusted_remote_transport_blocked`.
+- Stream input relay remains lease-gated by the existing stream preflight.
+- Request journal summaries now support `data_summary.kind=connect_plan`.
+- `session api`, `session contract`, `session bootstrap`, `session command-check`, and capabilities now advertise or classify the connect-plan surface.
+
+No network listener, TLS implementation, token issuance, long-lived trusted remote stream, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Readiness Client Policy Summary
 

@@ -1,5 +1,99 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab client connect-plan preflight
+
+### Current status
+
+- Added `session connect-plan` as a no-device client startup preflight.
+- Added daemon-routed `session request connect-plan` support through the resident request handler.
+- The payload returns `schema_version=session.connect_plan.v0.1`.
+- The payload aggregates `session readiness`, optional trusted transport endpoint checks, and `stream check`.
+- The payload reports `safe_to_start_client`, `safe_to_start_stream`, `safe_to_connect_transport`, `client_surfaces`, and `blockers`.
+- Untrusted remote HTTP remains blocked by `trusted_remote_transport_blocked`.
+- Stream input relay remains lease-gated by the existing stream preflight.
+- Request journal summaries now support `data_summary.kind=connect_plan`.
+- `session api`, `session contract`, `session bootstrap`, `session command-check`, and command capabilities now advertise or classify the connect-plan surface.
+- The change is a pure no-device/no-listener preflight for UI, scheduler, and agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending.
+- Checkpoint tag: `checkpoint/20260628-session-connect-plan` pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `bff3400ede1b85e42aaeca930c16cb00ee02cc18`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand source-of-truth, planning-file, and error-handling rules.
+- Inspected Session Layer readiness, bootstrap, API contract, access contract, stream preflight, transport contract, request routing, command-check classification, capabilities, request summaries, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_connect_plan -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_command_check_connect_plan_is_read_only -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture --test-threads=1`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session connect-plan --local`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session connect-plan --local --endpoint http://192.0.2.1:4317`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines for direct ADB input, shell screencap, SQLite, OCR/OpenCV, listener startup, TLS implementation, token issuance, long-lived trusted remote streams, fallback, and reconnect.
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace` run failed in `session_api_request_returns_api_contract` because the test assumed fixed ordering for `data_summary_kinds`; fixed the test to assert required kinds by membership.
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture --test-threads=1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_connect_plan` tests passed.
+- Focused command-check connect-plan classification test passed.
+- Focused Session API contract test passed.
+- Focused capabilities test passed.
+- CLI smoke `session connect-plan --local` passed and returned `schema_version=session.connect_plan.v0.1` with visible blockers for stopped daemon and missing selected instance.
+- CLI smoke `session connect-plan --local --endpoint http://192.0.2.1:4317` passed and returned `safe_to_connect_transport=false` with `trusted_remote_transport_blocked`.
+- The initial full workspace test found one order-sensitive API contract test assertion; it was fixed without changing production behavior.
+- Focused API contract request regression test passed after the assertion fix.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- `deferred: requires-live-device` - live connect-plan validation against a resident daemon and configured instances.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and push Runtime `main` and checkpoint tag `checkpoint/20260628-session-connect-plan`.
+2. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab readiness client policy summary
 
 ### Current status
