@@ -193,6 +193,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
 - ActingLab stream-plan next-action summary: `session stream-plan` and `session request stream-plan` now expose a machine-readable `next_actions` interaction decision list for UI/scheduler clients, covering connect blockers, input-relay lease review, trusted remote stream boundaries, Phase C review, and deferred live-validation boundaries.
 - ActingLab self-heal-plan next-action summary: `session self-heal-plan` and `session request self-heal-plan` now expose a machine-readable `next_actions` recovery decision list for UI/scheduler clients, covering observe-first selection, stale-capture diagnosis, readiness/queue/lease blockers, recovery review, Phase C review, and deferred live-validation boundaries.
+- ActingLab transport-plan next-action summary: `session transport plan` and `session request transport plan` now expose a machine-readable `next_actions` trusted-channel decision list for UI/API clients, covering endpoint classification, endpoint-policy blockers, token/certificate preparation, listener/TLS design review, request serialization/audit review, and deferred live-validation boundaries.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -404,6 +405,22 @@ This increment gives UI/API clients a stable no-device, no-listener plan for the
 - Remote `https://` endpoints with token or client certificate auth are policy-safe, but `ready_to_accept_remote_clients` remains false because the listener is still reserved.
 - Request journal summaries now support `data_summary.kind=transport_plan`.
 - `session api`, `session transport`, `session contract`, command capabilities, and access-channel contracts now advertise the transport-plan surface.
+
+No network listener, TLS implementation, token issuance, long-lived trusted remote stream, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, resource repository sync, or TCP reachability probe was added.
+
+## Current ActingLab Trusted-Channel Transport Next-Action Summary
+
+This increment turns `session transport plan` into an actionable no-listener roadmap for the future encrypted trusted channel.
+
+- `session transport plan` now embeds `next_actions` with schema `session.transport_next_actions.v0.1`.
+- `session request transport plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders follow-up actions for endpoint policy classification, blocked endpoint review, token/client-certificate preparation, listener/TLS design review, request serialization/audit review, and live acceptance review.
+- Missing endpoint policy produces `classify_endpoint_policy` before any remote-channel design work is considered ready.
+- Remote HTTP or otherwise unsafe endpoints produce `review_endpoint_policy_blocker` and keep the status `blocked`.
+- Remote HTTPS with configured token or client-certificate auth remains `reserved`, not ready, because no listener/TLS implementation exists yet.
+- The trusted-remote summary records endpoint policy state, token/certificate configuration state, listener readiness, remote-client readiness, and blocker count.
+- `transport_plan` daemon request summaries now retain next-action count, first next action, auth-material configuration state, and deferred live-validation status for journal/events consumers.
+- The Session API contract now advertises `plan_next_actions_field=next_actions` under `transport_view`.
 
 No network listener, TLS implementation, token issuance, long-lived trusted remote stream, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, resource repository sync, or TCP reachability probe was added.
 

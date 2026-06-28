@@ -2567,6 +2567,7 @@ fn session_api_contract() -> Value {
                 "plan_query": "session transport plan [--endpoint <url>]",
                 "daemon_plan_query": "session request transport plan [--endpoint <url>]",
                 "plan_schema_version": "session.transport_plan.v0.1",
+                "plan_next_actions_field": "next_actions",
                 "check_query": "session transport check --endpoint <url>",
                 "daemon_check_query": "session request transport check --endpoint <url>",
                 "check_schema_version": "session.transport_check.v0.1"
@@ -9031,6 +9032,7 @@ fn session_transport_plan_payload(flags: &FlagArgs) -> CliOutcome<Value> {
         .and_then(Value::as_bool);
     let has_endpoint_policy_blocker = endpoint_policy_safe == Some(false);
     let blockers = session_transport_plan_blockers(&endpoint_policy);
+    let next_actions = session_transport_plan_next_actions(&endpoint_policy, &blockers);
     Ok(json!({
         "schema_version": "session.transport_plan.v0.1",
         "status": if has_endpoint_policy_blocker { "blocked" } else { "reserved" },
@@ -9068,6 +9070,7 @@ fn session_transport_plan_payload(flags: &FlagArgs) -> CliOutcome<Value> {
             ]
         },
         "blockers": blockers,
+        "next_actions": next_actions,
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -9131,6 +9134,132 @@ fn session_transport_plan_blockers(endpoint_policy: &Value) -> Vec<Value> {
         }));
     }
     blockers
+}
+
+fn session_transport_plan_next_actions(endpoint_policy: &Value, blockers: &[Value]) -> Value {
+    let endpoint_checked = endpoint_policy
+        .get("checked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let endpoint_safe = endpoint_policy
+        .get("safe_for_policy")
+        .and_then(Value::as_bool);
+    let token_configured = env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV);
+    let client_certificate_configured = env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+    let auth_material_configured = token_configured || client_certificate_configured;
+    let mut ordered = Vec::new();
+    let mut priority = 1;
+
+    if !endpoint_checked {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "classify_endpoint_policy",
+            "Classify the intended trusted remote endpoint before any listener or client transport work.",
+            "session transport check --endpoint <url>",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if endpoint_safe == Some(false) {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "review_endpoint_policy_blocker",
+            "Fix the trusted remote endpoint policy before any remote channel can be enabled.",
+            "session transport check --endpoint <url>",
+            true,
+        ));
+        priority += 1;
+    }
+
+    if !auth_material_configured {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "prepare_remote_auth_material",
+            "Configure a token or client certificate before remote clients can authenticate.",
+            "configure ACTINGLAB_TRUSTED_REMOTE_TOKEN or ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT",
+            false,
+        ));
+        priority += 1;
+    }
+
+    ordered.push(session_connect_plan_next_action(
+        priority,
+        "review_listener_and_tls_design",
+        "Review the network listener, TLS boundary, and authentication model before implementation.",
+        "session transport plan [--endpoint <url>]",
+        true,
+    ));
+    priority += 1;
+
+    ordered.push(session_connect_plan_next_action(
+        priority,
+        "review_request_serialization_and_audit",
+        "Remote commands must serialize through the resident Session Layer and leave an audit trail.",
+        "session api",
+        true,
+    ));
+    priority += 1;
+
+    ordered.push(session_connect_plan_next_action(
+        priority,
+        "review_live_acceptance_checklist",
+        "Trusted remote transport still requires live listener, TLS, auth, and operator validation later.",
+        "session validation-plan",
+        true,
+    ));
+
+    json!({
+        "schema_version": "session.transport_next_actions.v0.1",
+        "status": if endpoint_safe == Some(false) { "blocked" } else { "reserved" },
+        "ordered": ordered,
+        "trusted_remote": {
+            "status": "reserved",
+            "network_listener_implemented": false,
+            "ready_to_accept_remote_clients": false,
+            "endpoint_policy_checked": endpoint_checked,
+            "endpoint_policy_safe": endpoint_safe,
+            "endpoint": endpoint_policy.get("endpoint").cloned().unwrap_or(Value::Null),
+            "token_configured": token_configured,
+            "client_certificate_configured": client_certificate_configured,
+            "auth_material_configured": auth_material_configured,
+            "blocker_count": blockers.len()
+        },
+        "required_before_enable": [
+            "reviewed network listener implementation",
+            "TLS or mutually authenticated local IPC",
+            "token or client certificate authentication",
+            "request serialization through the resident Session Layer",
+            "audit logging for accepted remote commands"
+        ],
+        "local_cli": {
+            "status": "available",
+            "encryption_required": false,
+            "authentication_required": false
+        },
+        "daemon_file_ipc": {
+            "status": "available",
+            "serialized_by_daemon": true,
+            "control_requests_require_matching_lease": true
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_transport_check_payload(flags: &FlagArgs) -> CliOutcome<Value> {
@@ -12971,6 +13100,10 @@ fn transport_plan_request_data_summary(data: &Value) -> Value {
         "endpoint_policy_checked": data.pointer("/trusted_remote/endpoint_policy/checked").cloned().unwrap_or(Value::Null),
         "endpoint": data.pointer("/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
         "endpoint_policy_safe": data.pointer("/trusted_remote/endpoint_policy/safe_for_policy").cloned().unwrap_or(Value::Null),
+        "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
+        "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
+        "auth_material_configured": data.pointer("/next_actions/trusted_remote/auth_material_configured").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/next_actions/live_validation/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
 }
@@ -19619,6 +19752,21 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.transport_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("classify_endpoint_policy")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_remote/auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_start_listener")
                 .and_then(Value::as_bool),
             Some(true)
@@ -19675,6 +19823,20 @@ mod tests {
                 .any(|blocker| blocker.get("kind").and_then(Value::as_str)
                     == Some("trusted_remote_endpoint_policy"))
         );
+        assert_eq!(
+            data.pointer("/next_actions/status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("review_endpoint_policy_blocker")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/guarantees/does_not_probe_tcp")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -19721,6 +19883,20 @@ mod tests {
             data.pointer("/trusted_remote/ready_to_accept_remote_clients")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/status").and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_remote/auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("review_listener_and_tls_design")
         );
     }
 
@@ -39022,6 +39198,11 @@ mod tests {
             Some("session.transport_plan.v0.1")
         );
         assert_eq!(
+            data.pointer("/envelopes/transport_view/plan_next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
+        );
+        assert_eq!(
             data.pointer("/envelopes/transport_view/check_schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_check.v0.1")
@@ -39385,6 +39566,22 @@ mod tests {
                 .get("ready_to_accept_remote_clients")
                 .and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("review_endpoint_policy_blocker")
+        );
+        assert_eq!(
+            summary
+                .get("auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
         );
     }
 
