@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab validation acceptance matrix
+
+### Current status
+
+- Extended `session validation-plan` and daemon-routed `session request validation-plan` with a machine-readable acceptance matrix for the current Session Layer task.
+- `phase_acceptance_matrix` now covers Phase A, Phase B, Phase C, Phase D, and cross-cutting Session Layer work.
+- `ak_stale_capture_validation` records the 2026-06-27 AK finding boundary: stale `adb_screencap` output must not be treated as proof of game freeze by itself, and lighter capture-backend diagnosis/recovery remains preferred before app restart.
+- This is a pure validation/contract projection for future UI, scheduler, and operator acceptance workflows.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending final verification.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `89c61d4d873cd9fd22e245ecdb85c63d9b0f6255`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Inspected Session Layer transport, validation-plan, instance, semantic command, request routing, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_validation_plan -- --nocapture --test-threads=1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only prohibited-feature scan over the changed diff for direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, listener startup, new capture/input backend terms, and resource-root access.
+
+### Test results
+
+- Focused `session_validation_plan` tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only prohibited-feature scan passed.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Run full formatting, diff, clippy, and workspace test verification.
+2. Commit and push the Runtime source, planning, checkpoint, and checkpoint tag.
+
 ## 2026-06-28 ActingLab client bootstrap surface
 
 ### Current status

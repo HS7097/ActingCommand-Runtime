@@ -6420,32 +6420,9 @@ fn session_validation_plan_payload(
             "fixture-frame",
             "static prohibited-feature scan"
         ],
-        "deferred_live_tasks": [
-            {
-                "id": "prepared_emulator_session_layer_validation",
-                "status": "deferred",
-                "deferred_code": "requires-live-device",
-                "description": "Validate Session Layer behavior against a prepared emulator and running game."
-            },
-            {
-                "id": "ak_stale_capture_fresh_frame_recovery_validation",
-                "status": "deferred",
-                "deferred_code": "requires-live-device",
-                "description": "Validate Arknights stale-capture diagnosis and fresh-frame recovery against a real or emulator instance."
-            },
-            {
-                "id": "live_adb_device_control_and_screenshot_validation",
-                "status": "deferred",
-                "deferred_code": "requires-live-device",
-                "description": "Validate live ADB device control, live screenshots, and running-game observations."
-            },
-            {
-                "id": "operator_acceptance_observation",
-                "status": "deferred",
-                "deferred_code": "requires-live-device",
-                "description": "Operator acceptance that requires manual emulator observation remains outside offline checks."
-            }
-        ],
+        "phase_acceptance_matrix": session_validation_phase_matrix(),
+        "ak_stale_capture_validation": ak_stale_capture_validation_scope(),
+        "deferred_live_tasks": session_validation_deferred_live_tasks(),
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -6456,6 +6433,183 @@ fn session_validation_plan_payload(
             "does_not_read_resource_repositories": true
         }
     }))
+}
+
+fn session_validation_phase_matrix() -> Value {
+    json!([
+        {
+            "phase": "A",
+            "name": "resident daemon and primitive throat",
+            "offline_status": "contract_and_cli_surfaces_available",
+            "offline_evidence": [
+                "session start|stop|status",
+                "session instance list|registry|health|keep-alive|reconnect",
+                "session app launch|stop|force-stop|restart",
+                "capture diagnose --require-fresh",
+                "key",
+                "text"
+            ],
+            "live_status": "deferred",
+            "deferred_code": "requires-live-device",
+            "live_requirements": [
+                "prepared emulator",
+                "running game",
+                "live capture freshness",
+                "live input execution"
+            ]
+        },
+        {
+            "phase": "B",
+            "name": "semantic page and navigation layer",
+            "offline_status": "dry_run_and_fixture_surfaces_available",
+            "offline_evidence": [
+                "current-page",
+                "is-visible",
+                "locate",
+                "tap-target --dry-run --scene",
+                "navigate --dry-run --scene"
+            ],
+            "live_status": "deferred",
+            "deferred_code": "requires-live-device",
+            "live_requirements": [
+                "live target recognition",
+                "navigation-only tap execution",
+                "arrival verification on device"
+            ]
+        },
+        {
+            "phase": "C",
+            "name": "self-heal and stale capture recovery",
+            "offline_status": "diagnosis_and_recovery_plan_surfaces_available",
+            "offline_evidence": [
+                "monitor --once",
+                "session monitor-policy status",
+                "session recover --stale-capture",
+                "session recover --startup-login --dry-run"
+            ],
+            "live_status": "deferred",
+            "deferred_code": "requires-live-device",
+            "live_requirements": [
+                "stale frame reproduction",
+                "backend recovery validation",
+                "standby or modal recovery",
+                "operator-observed home recovery"
+            ]
+        },
+        {
+            "phase": "D",
+            "name": "authorized recording and resource draft generation",
+            "offline_status": "local_frame_and_package_draft_surfaces_available",
+            "offline_evidence": [
+                "session record start|status|stop",
+                "session record step --kind anchor|operation|color-probe|verify-template",
+                "session record candidates",
+                "session record amend",
+                "session record build-task",
+                "session record promote"
+            ],
+            "live_status": "deferred",
+            "deferred_code": "requires-live-device",
+            "live_requirements": [
+                "current-frame recording against emulator",
+                "operator region review",
+                "generated bundle live validation"
+            ]
+        },
+        {
+            "phase": "cross_cutting",
+            "name": "lease, queue, events, stream, and trusted transport contracts",
+            "offline_status": "contract_and_preflight_surfaces_available",
+            "offline_evidence": [
+                "session lease acquire|release|preempt|status|list|wait|touch",
+                "session queue",
+                "session command-check",
+                "session submit-plan",
+                "session events",
+                "session response wait",
+                "session request-state list|wait",
+                "session transport check",
+                "stream check"
+            ],
+            "live_status": "deferred",
+            "deferred_code": "requires-live-device",
+            "live_requirements": [
+                "scheduler-owned lease arbitration",
+                "trusted UI/API exposure",
+                "long-lived interactive stream validation"
+            ]
+        }
+    ])
+}
+
+fn ak_stale_capture_validation_scope() -> Value {
+    json!({
+        "finding_id": "ak_stale_capture_2026_06_27",
+        "status": "deferred",
+        "deferred_code": "requires-live-device",
+        "classification": {
+            "stale_screencap_is_capture_backend_fault": true,
+            "must_not_classify_as_game_freeze_from_adb_screencap_alone": true,
+            "adb_disconnect_reconnect_is_not_sufficient_evidence_of_recovery": true
+        },
+        "preferred_diagnosis_order": [
+            "capture fresh-frame probe",
+            "compare repeated frame hashes and timestamps",
+            "try faster independent capture backends before app restart",
+            "report app restart only as heavier recovery"
+        ],
+        "preferred_backend_order": [
+            "nemu_ipc",
+            "droidcast_raw",
+            "adb_screencap"
+        ],
+        "offline_evidence": [
+            "capture diagnose reports stale or unavailable states explicitly",
+            "session recover --stale-capture plans lighter capture recovery before restart",
+            "session status --diagnostics can recommend stale-capture recovery"
+        ],
+        "live_requirements": [
+            "reproduce or observe stale ADB screencap on AK instance",
+            "verify a non-ADB capture backend produces fresh frames",
+            "verify recovery does not fake success when frames remain stale",
+            "operator confirms real game state on emulator"
+        ]
+    })
+}
+
+fn session_validation_deferred_live_tasks() -> Value {
+    json!([
+        {
+            "id": "prepared_emulator_session_layer_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate Session Layer behavior against a prepared emulator and running game."
+        },
+        {
+            "id": "ak_stale_capture_fresh_frame_recovery_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate Arknights stale-capture diagnosis and fresh-frame recovery against a real or emulator instance."
+        },
+        {
+            "id": "live_adb_device_control_and_screenshot_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate live ADB device control, live screenshots, and running-game observations."
+        },
+        {
+            "id": "operator_acceptance_observation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Operator acceptance that requires manual emulator observation remains outside offline checks."
+        },
+        {
+            "id": "trusted_ui_api_and_interactive_stream_live_validation",
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "description": "Validate trusted UI/API exposure and long-lived stream behavior only after the live transport exists and is reviewed."
+        }
+    ])
 }
 
 fn session_submit_plan_blockers(
@@ -18782,6 +18936,32 @@ mod tests {
             data.pointer("/guarantees/does_not_read_resource_repositories")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        let phase_matrix = data
+            .get("phase_acceptance_matrix")
+            .and_then(Value::as_array)
+            .unwrap();
+        for phase in ["A", "B", "C", "D", "cross_cutting"] {
+            assert!(
+                phase_matrix
+                    .iter()
+                    .any(|item| item.get("phase").and_then(Value::as_str) == Some(phase)),
+                "missing validation phase {phase}"
+            );
+        }
+        assert_eq!(
+            data.pointer(
+                "/ak_stale_capture_validation/classification/must_not_classify_as_game_freeze_from_adb_screencap_alone"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/ak_stale_capture_validation/preferred_backend_order")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|backend| backend.as_str() == Some("nemu_ipc"))
         );
         assert!(
             data.get("deferred_live_tasks")
