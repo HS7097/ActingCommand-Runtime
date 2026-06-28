@@ -12,7 +12,7 @@
 - `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the throat-policy surface.
 - The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending until this checkpoint is committed and tagged.
+- Milestone source commit `ae8a9650b110d8e1fa00223b0b45bd68ce30753e` was prepared with checkpoint tag `checkpoint/20260628-session-throat-policy`.
 
 ### Resource mirrors used
 
@@ -83,7 +83,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime increment and a checkpoint tag.
+1. Push this checkpoint update and the checkpoint tag.
 2. Keep live/emulator validation deferred as `requires-live-device` until Alice provides a live validation window.
 
 ## 2026-06-28 ActingLab pending live acceptance checklist
