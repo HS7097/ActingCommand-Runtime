@@ -2138,6 +2138,7 @@ fn session_api_contract() -> Value {
                 "pending_response_preview_field": "diagnostics.queues.pending_response_preview",
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
+                "validation_summary_field": "diagnostics.validation",
                 "monitor_policy_lease_actions": [
                     "monitor_policy_inspect_lease",
                     "monitor_policy_acquire_lease",
@@ -9694,6 +9695,7 @@ fn session_status_diagnostics(
         "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
         "monitor_policy": monitor_policy,
+        "validation": session_validation_diagnostics_summary(),
         "journal": {
             "exists": session_request_journal_path(state_dir).exists(),
             "path": session_request_journal_path(state_dir).display().to_string(),
@@ -9715,6 +9717,25 @@ fn session_status_diagnostics(
             }
         }
     }))
+}
+
+fn session_validation_diagnostics_summary() -> Value {
+    let pending = session_validation_pending_live_acceptance();
+    json!({
+        "schema_version": "session.validation_diagnostics.v0.1",
+        "validation_plan_command": "session validation-plan",
+        "pending_live_acceptance": {
+            "title": pending.get("title").cloned().unwrap_or(Value::Null),
+            "status": pending.get("status").cloned().unwrap_or(Value::Null),
+            "deferred_code": pending.get("deferred_code").cloned().unwrap_or(Value::Null),
+            "owner": pending.get("owner").cloned().unwrap_or(Value::Null),
+            "item_count": pending.get("items").and_then(Value::as_array).map(Vec::len),
+            "must_not_be_marked_passed_by_offline_checks": pending
+                .get("must_not_be_marked_passed_by_offline_checks")
+                .cloned()
+                .unwrap_or(Value::Null)
+        }
+    })
 }
 
 fn session_instance_registry_diagnostics(config: Option<&UserConfig>) -> Value {
@@ -32119,6 +32140,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/validation_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.validation")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/lease_freshness_actions/0")
                 .and_then(Value::as_str),
             Some("stale_lease_inspect")
@@ -35747,6 +35774,42 @@ mod tests {
             .unwrap()
             .get("diagnostics")
             .unwrap();
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/schema_version")
+                .and_then(Value::as_str),
+            Some("session.validation_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/validation_plan_command")
+                .and_then(Value::as_str),
+            Some("session validation-plan")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/pending_live_acceptance/title")
+                .and_then(Value::as_str),
+            Some("待真机验收")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/pending_live_acceptance/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert!(
+            diagnostics
+                .pointer("/validation/pending_live_acceptance/item_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 5)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/pending_live_acceptance/must_not_be_marked_passed_by_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             diagnostics
                 .pointer("/queues/pending_requests")

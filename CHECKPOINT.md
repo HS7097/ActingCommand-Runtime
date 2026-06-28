@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab pending-live validation diagnostics summary
+
+### Current status
+
+- Added a lightweight validation summary to `session status --diagnostics`.
+- `diagnostics.validation` now points UI/scheduler clients toward `session validation-plan` as the source of truth for skipped live/device/operator acceptance.
+- The summary exposes the pending-live title `待真机验收`, status, deferred code, owner, item count, and `must_not_be_marked_passed_by_offline_checks`.
+- The Session API contract now advertises `validation_summary_field=diagnostics.validation` under `status_view`.
+- The change is a pure no-device diagnostics contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending.
+- Checkpoint tag: pending.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a7de309fe86c9bd0db77d0edda8cd38b4c85a510`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and Runtime task documents.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected `session status --diagnostics`, `session validation-plan`, Session API contract, validation-plan tests, and status diagnostics tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_validation_plan_reports_deferred_live_policy_without_device_work -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only prohibited-feature scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, and direct navigation execution.
+- Source-only scan for capture/MaaTouch/touch execution references in the added `apps/actinglab/src/main.rs` diff lines.
+
+### Test results
+
+- Focused `session_status_diagnostics_reports_queue_and_journal_summary` test passed and covered `diagnostics.validation`.
+- Focused `session_api` tests passed and covered the new `validation_summary_field` contract entry.
+- Focused `session_validation_plan_reports_deferred_live_policy_without_device_work` test passed and confirmed the pending-live title remains `待真机验收`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only prohibited-feature scan passed with no matches for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, or direct navigation execution.
+- Source-only capture/MaaTouch/touch execution scan passed with no matches in the source diff.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live validation-plan observation through status diagnostics under a resident daemon and real UI/scheduler polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device and operator validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit Runtime changes and record the milestone commit/tag.
+2. Push Runtime changes and checkpoint tag.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab interaction/trusted-channel diagnostics recommendation
 
 ### Current status

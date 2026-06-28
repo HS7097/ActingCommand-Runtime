@@ -184,6 +184,19 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal event summary: daemon request data summaries now carry self-heal escalation category, heavy-recovery candidate, no-execute guarantee, and operator/live-validation requirement for journal/events consumers.
 - ActingLab Phase C self-heal escalation recommended action: `session status --diagnostics` now turns recent self-heal-plan escalation summaries into a read-only `self_heal_escalation_review` action for UI/scheduler clients.
 - ActingLab interaction/trusted-channel diagnostics recommended actions: `session status --diagnostics` now turns recent `stream_plan` and `transport_plan` summaries into read-only `interactive_stream_preflight_review` and `trusted_channel_preflight_review` actions for UI/scheduler clients.
+- ActingLab pending-live validation diagnostics summary: `session status --diagnostics` now exposes the `待真机验收` summary from `session validation-plan` for UI/scheduler clients without marking live checks passed.
+
+## Current ActingLab Pending-Live Validation Diagnostics Summary
+
+This increment makes the skipped live-device acceptance list visible from the main status diagnostics surface.
+
+- `session validation-plan` remains the source of truth for pending live acceptance.
+- `session status --diagnostics` now exposes `diagnostics.validation`.
+- The diagnostics summary includes the validation-plan command, pending-live title, status, deferred code, owner, item count, and the rule that offline checks must not mark live items passed.
+- The Session API contract advertises `validation_summary_field=diagnostics.validation` under `status_view`.
+- This keeps the 2026-06-28 requirement to collect skipped live/device/operator work into a visible "待真机验收" lane while offline implementation continues.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, resource repository read, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Interaction And Trusted-Channel Recommended Actions
 
