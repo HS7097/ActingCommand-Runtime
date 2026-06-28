@@ -7641,12 +7641,12 @@ fn session_queue_health_recommended_actions(
             .cloned()
             .unwrap_or(Value::Null);
         actions.push(action);
-        if let Some(action) = session_blocked_request_cancel_recommended_action(
+        if let Some(cancel_actions) = session_blocked_request_cancel_recommended_actions(
             state_dir,
             request_id,
             &state_dir_display,
         )? {
-            actions.push(action);
+            actions.extend(cancel_actions);
         }
     }
     if let Some(request_id) =
@@ -7714,11 +7714,11 @@ fn queue_health_oldest_id<'a>(
     section.get("oldest_request_id").and_then(Value::as_str)
 }
 
-fn session_blocked_request_cancel_recommended_action(
+fn session_blocked_request_cancel_recommended_actions(
     state_dir: &Path,
     request_id: &str,
     state_dir_display: &str,
-) -> CliOutcome<Option<Value>> {
+) -> CliOutcome<Option<Vec<Value>>> {
     let request_path = session_requests_dir(state_dir).join(format!("{request_id}.json"));
     let Some(request) = read_pending_session_request(&request_path)? else {
         return Ok(None);
@@ -7727,30 +7727,99 @@ fn session_blocked_request_cancel_recommended_action(
         .lease
         .as_ref()
         .is_some_and(|lease| !lease.holder.is_empty());
-    let mut action = session_recommended_action_owned(
+    let real_cancel_action = if requires_matching_lease {
+        "blocked_request_cancel_requires_lease"
+    } else {
+        "blocked_request_cancel"
+    };
+    let mut preflight = session_recommended_action_owned(
         23,
-        if requires_matching_lease {
-            "blocked_request_cancel_requires_lease"
-        } else {
-            "blocked_request_cancel"
-        },
+        "blocked_request_cancel_dry_run",
+        "Dry-run cancellation of the oldest blocked queued daemon request before mutating the request queue.",
+        session_blocked_request_cancel_args(
+            request_id,
+            state_dir_display,
+            true,
+            request.lease.as_ref(),
+        ),
+    );
+    decorate_blocked_request_cancel_action(
+        &mut preflight,
+        request_id,
+        &request,
+        &request_path,
+        requires_matching_lease,
+    );
+    preflight["read_only"] = json!(true);
+    preflight["dry_run"] = json!(true);
+    preflight["mutates_queue"] = json!(false);
+    preflight["next_action"] = json!(real_cancel_action);
+
+    let mut action = session_recommended_action_owned(
+        24,
+        real_cancel_action,
         if requires_matching_lease {
             "A blocked queued request may be cancelled only by the matching lease holder."
         } else {
             "A blocked queued request without lease metadata can be cancelled after inspection."
         },
-        vec![
-            "session".to_string(),
-            "request".to_string(),
-            "cancel".to_string(),
-            request_id.to_string(),
-            "--reason".to_string(),
-            "blocked_queue_manual_cancel".to_string(),
-            "--state-dir".to_string(),
-            state_dir_display.to_string(),
-        ],
+        session_blocked_request_cancel_args(
+            request_id,
+            state_dir_display,
+            false,
+            request.lease.as_ref(),
+        ),
+    );
+    decorate_blocked_request_cancel_action(
+        &mut action,
+        request_id,
+        &request,
+        &request_path,
+        requires_matching_lease,
     );
     action["read_only"] = json!(false);
+    action["dry_run"] = json!(false);
+    action["mutates_queue"] = json!(true);
+    Ok(Some(vec![preflight, action]))
+}
+
+fn session_blocked_request_cancel_args(
+    request_id: &str,
+    state_dir_display: &str,
+    dry_run: bool,
+    lease: Option<&SessionCommandLease>,
+) -> Vec<String> {
+    let mut args = vec![
+        "session".to_string(),
+        "request".to_string(),
+        "cancel".to_string(),
+        request_id.to_string(),
+    ];
+    if dry_run {
+        args.push("--dry-run".to_string());
+    }
+    args.extend([
+        "--reason".to_string(),
+        "blocked_queue_manual_cancel".to_string(),
+        "--state-dir".to_string(),
+        state_dir_display.to_string(),
+    ]);
+    if let Some(lease) = lease.filter(|lease| !lease.holder.is_empty()) {
+        args.extend(["--lease-holder".to_string(), lease.holder.clone()]);
+        if let Some(lease_id) = lease.lease_id.as_ref().filter(|value| *value != "true") {
+            args.extend(["--lease-id".to_string(), lease_id.clone()]);
+        }
+    }
+    args
+}
+
+fn decorate_blocked_request_cancel_action(
+    action: &mut Value,
+    request_id: &str,
+    request: &SessionCommandRequest,
+    request_path: &Path,
+    requires_matching_lease: bool,
+) {
     action["does_not_touch_device"] = json!(true);
     action["requires_scheduler_decision"] = json!(true);
     action["queue"] = json!("pending_requests");
@@ -7759,7 +7828,6 @@ fn session_blocked_request_cancel_recommended_action(
     action["cancel_requires_matching_lease"] = json!(requires_matching_lease);
     action["request_lease"] = json!(request.lease);
     action["request_path"] = json!(request_path.display().to_string());
-    Ok(Some(action))
 }
 
 fn session_capture_health_recommended_actions(
@@ -30231,6 +30299,91 @@ mod tests {
             pending_action.pointer("/args/3").and_then(Value::as_str),
             Some("pending-1")
         );
+        let cancel_preflight = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str)
+                    == Some("blocked_request_cancel_dry_run")
+            })
+            .unwrap();
+        assert_eq!(
+            cancel_preflight.get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_preflight.get("dry_run").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_preflight
+                .get("mutates_queue")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            cancel_preflight
+                .get("does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_preflight
+                .get("cancel_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_preflight.get("next_action").and_then(Value::as_str),
+            Some("blocked_request_cancel_requires_lease")
+        );
+        assert_eq!(
+            cancel_preflight
+                .pointer("/request_lease/holder")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
+        assert_eq!(
+            cancel_preflight
+                .pointer("/request_lease/lease_id")
+                .and_then(Value::as_str),
+            Some("lease-1")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/1").and_then(Value::as_str),
+            Some("request")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/2").and_then(Value::as_str),
+            Some("cancel")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/3").and_then(Value::as_str),
+            Some("pending-1")
+        );
+        assert!(
+            cancel_preflight
+                .get("args")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|arg| arg.as_str() == Some("--dry-run"))
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/9").and_then(Value::as_str),
+            Some("--lease-holder")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/10").and_then(Value::as_str),
+            Some("ui")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/11").and_then(Value::as_str),
+            Some("--lease-id")
+        );
+        assert_eq!(
+            cancel_preflight.pointer("/args/12").and_then(Value::as_str),
+            Some("lease-1")
+        );
         let cancel_action = actions
             .iter()
             .find(|action| {
@@ -30283,6 +30436,14 @@ mod tests {
         assert_eq!(
             cancel_action.pointer("/args/3").and_then(Value::as_str),
             Some("pending-1")
+        );
+        assert_eq!(
+            cancel_action.get("mutates_queue").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_action.get("dry_run").and_then(Value::as_bool),
+            Some(false)
         );
         let running_action = actions
             .iter()
