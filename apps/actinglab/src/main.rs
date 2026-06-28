@@ -1179,7 +1179,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "journal", "capabilities", "devices", "session transport check", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session transport check", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1244,6 +1244,7 @@ fn session_access_contract() -> Value {
             "readiness": "session request readiness",
             "command_check": "session request command-check <command...>",
             "status": "session request status --diagnostics",
+            "queue": "session request queue",
             "journal": "session request journal",
             "events": "session request events",
             "instance_registry": "session request instance registry",
@@ -1262,6 +1263,7 @@ fn session_access_contract() -> Value {
                 "requires_lease": false,
                 "examples": [
                     "status",
+                    "queue",
                     "journal",
                     "readiness",
                     "command-check",
@@ -1578,6 +1580,19 @@ fn session_api_contract() -> Value {
                 "transport_ready_field": "transport.safe_to_connect",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
+            },
+            "queue_view": {
+                "query": "session queue",
+                "daemon_query": "session request queue",
+                "schema_version": "session.queue.v0.1",
+                "health_field": "health",
+                "counts_field": "counts",
+                "previews_field": "previews",
+                "recommended_actions_field": "recommended_actions",
+                "admission_field": "admission",
+                "local_query_inspects_blocked_queue": true,
+                "does_not_enqueue": true,
+                "does_not_touch_device": true
             },
             "command_check_view": {
                 "query": "session command-check <command...>",
@@ -5562,6 +5577,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
     match sub {
         "status" => run_session_status(global, args),
         "readiness" => run_session_readiness(global, args),
+        "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
         "start" => run_session_start(args),
         "stop" => run_session_stop(args),
@@ -5619,6 +5635,98 @@ fn run_session_readiness(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         Some(&config),
         "session readiness",
     )
+}
+
+fn run_session_queue(args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    flags.expect_positionals("session queue", 0)?;
+    let state_dir = session_state_dir_from_flags(&flags)?;
+    session_queue_payload(&state_dir)
+}
+
+fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
+    let now_ms = current_unix_ms();
+    let health = session_queue_health(state_dir, now_ms, SESSION_DAEMON_REQUEST_TIMEOUT_MS)?;
+    let status = health
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "session_queue_status_missing",
+                "session queue could not read queue health status",
+                &["request_queue"],
+            )
+        })?;
+    let can_enqueue = match status {
+        "clear" | "active" => true,
+        "needs_attention" => false,
+        other => {
+            return Err(CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "session_queue_status_unknown",
+                format!("session queue received unknown queue health status: {other}"),
+                &["request_queue"],
+            ));
+        }
+    };
+    let recommended_actions = session_queue_health_recommended_actions(state_dir, &health)?;
+    let recommended_action_kinds = recommended_actions
+        .iter()
+        .filter_map(|action| action.get("action").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let pending_requests = count_files_with_extension(&session_requests_dir(state_dir), "json")?;
+    let running_requests = count_files_with_extension(&session_running_dir(state_dir), "json")?;
+    let pending_responses = count_files_with_extension(&session_responses_dir(state_dir), "json")?;
+
+    Ok(json!({
+        "schema_version": "session.queue.v0.1",
+        "state_dir": state_dir.display().to_string(),
+        "generated_at_unix_ms": now_ms,
+        "status": status,
+        "counts": {
+            "pending_requests": pending_requests,
+            "running_requests": running_requests,
+            "pending_responses": pending_responses
+        },
+        "admission": {
+            "can_enqueue": can_enqueue,
+            "status": if can_enqueue { "ready" } else { "blocked" },
+            "blocked_code": if can_enqueue { Value::Null } else { json!("request_queue_needs_attention") },
+            "preflight_command": "session command-check <command...>",
+            "message": if can_enqueue {
+                "daemon request queue can accept another request"
+            } else {
+                "daemon request queue needs attention before enqueueing another request"
+            }
+        },
+        "health": health,
+        "previews": {
+            "preview_limit": SESSION_PENDING_REQUEST_PREVIEW_LIMIT,
+            "pending_requests": session_pending_request_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?,
+            "running_requests": session_running_request_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?,
+            "pending_responses": session_pending_response_preview(
+                state_dir,
+                SESSION_PENDING_REQUEST_PREVIEW_LIMIT
+            )?
+        },
+        "recommended_action_kinds": recommended_action_kinds,
+        "recommended_actions": recommended_actions,
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true
+        }
+    }))
 }
 
 fn session_readiness_payload(
@@ -5910,7 +6018,7 @@ fn classify_session_command_for_check(
     };
 
     match first {
-        "status" | "readiness" | "journal" | "events" | "response" | "request-state"
+        "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
         | "contract" | "api" | "transport" | "capabilities" | "command-check" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
@@ -8578,7 +8686,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, readiness, command-check, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, readiness, queue, command-check, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -8586,6 +8694,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "cancel" => run_session_request_cancel(global, &flags),
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
+        "queue" => submit_readonly_session_request(global, &flags, "queue", &args[1..]),
         "command-check" => {
             submit_readonly_session_request(global, &flags, "command_check", &args[1..])
         }
@@ -9625,6 +9734,11 @@ fn execute_session_command_request_inner(
                 Some(&config),
                 "session request readiness",
             )
+        }
+        "queue" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            flags.expect_positionals("session request queue", 0)?;
+            session_queue_payload(state_dir)
         }
         "command_check" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -15327,6 +15441,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("text", ["device"], "available"),
         command_cap("session status", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
+        command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
         command_cap("session start", ["offline"], "available"),
         command_cap("session stop", ["offline"], "available"),
@@ -15355,6 +15470,7 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime"],
             "available",
         ),
+        command_cap("session request queue", ["running_runtime"], "available"),
         command_cap(
             "session request command-check",
             ["running_runtime"],
@@ -16860,6 +16976,164 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|action| action.as_str() == Some("blocked_request_cancel_dry_run"))
+        );
+    }
+
+    #[test]
+    fn session_queue_reports_clear_admission_without_daemon() {
+        let temp = TempDir::new().unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "queue",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.queue.v0.1")
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("clear"));
+        assert_eq!(
+            data.pointer("/admission/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/counts/pending_requests")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            data.pointer("/previews/pending_requests/schema_version")
+                .and_then(Value::as_str),
+            Some("session.pending_requests.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.get("recommended_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn session_queue_reports_blocked_queue_actions_without_enqueueing() {
+        let temp = TempDir::new().unwrap();
+        let pending = SessionCommandRequest {
+            request_id: "pending-queue-view".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("pending-queue-view.json"),
+            &pending,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "queue",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/admission/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/admission/blocked_code")
+                .and_then(Value::as_str),
+            Some("request_queue_needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/health/pending_requests/oldest_request_id")
+                .and_then(Value::as_str),
+            Some("pending-queue-view")
+        );
+        assert_eq!(
+            data.pointer("/previews/pending_requests/requests/0/request_id")
+                .and_then(Value::as_str),
+            Some("pending-queue-view")
+        );
+        assert!(
+            data.get("recommended_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|action| action.as_str() == Some("blocked_request_cancel_dry_run"))
+        );
+    }
+
+    #[test]
+    fn session_queue_request_returns_queue_payload() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "queue-query".to_string(),
+            command: "queue".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.queue.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/admission/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
@@ -31510,6 +31784,22 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session queue"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session request queue"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session request events"))
         );
         assert!(
@@ -31578,6 +31868,11 @@ mod tests {
         assert_eq!(
             data.pointer("/daemon_queries/api").and_then(Value::as_str),
             Some("session request api")
+        );
+        assert_eq!(
+            data.pointer("/daemon_queries/queue")
+                .and_then(Value::as_str),
+            Some("session request queue")
         );
         assert_eq!(
             data.pointer("/daemon_queries/transport")
@@ -31901,6 +32196,21 @@ mod tests {
             data.pointer("/envelopes/readiness_view/queue_health_field")
                 .and_then(Value::as_str),
             Some("queues.health")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/queue_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.queue.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/queue_view/query")
+                .and_then(Value::as_str),
+            Some("session queue")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/queue_view/local_query_inspects_blocked_queue")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/envelopes/command_check_view/queue_gate_field")

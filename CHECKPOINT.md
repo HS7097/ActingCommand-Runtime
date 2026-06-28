@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Session queue view
+
+### Current status
+
+- Added a local `session queue` inspection surface that returns `session.queue.v0.1`.
+- Added a daemon handler for `session request queue` so the same payload can be returned through the resident request path when queue admission is healthy.
+- The queue view reports queue counts, full queue health, bounded pending/running/response previews, queue-specific recommended actions, and an admission summary.
+- Blocked queue admission is visible through `admission.can_enqueue=false` and `admission.blocked_code=request_queue_needs_attention`.
+- `session api`, `session contract`, `capabilities`, and `session command-check` now advertise/classify the queue view.
+- No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `b5112f40d4da93b882d3593954ee82e49d19a0a4`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read the cooperation task document `TASK-Lab-session-layer.md`.
+- Re-read the cooperation finding document `FINDING-AK-game-freeze-2026-06-27.md`.
+- Read Runtime `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` was not present in this repository.
+- Searched Codex memory for ActingCommand planning and verification rules.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer readiness, command-check, queue health, request-state, request submission, API contract, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_queue -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- Attempted `cargo test -p actingcommand-actinglab capabilities_are_offline session_contract_is_offline_access_contract -- --nocapture`; Cargo rejected multiple bare test filters, so the two tests were rerun separately.
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_queue` tests passed.
+- Focused Session API contract test passed.
+- Focused capabilities test passed.
+- Focused Session access contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-queue-view`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab daemon request admission queue gate
 
 ### Current status

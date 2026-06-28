@@ -156,12 +156,26 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab command-check surface: `session command-check <command...>` and `session request command-check <command...>` now classify a target command, report daemon-route readiness and lease-gate status, and return `safe_to_submit` without enqueueing, capturing, starting MaaTouch, or touching devices.
 - ActingLab command-check queue gate: `session command-check` now includes `queue_gate` and treats blocked daemon queues or unclaimed daemon responses as `safe_to_submit=false` before UI/scheduler clients enqueue more work into the Session Layer.
 - ActingLab daemon request admission queue gate: actual `session request <command>` submissions now fail visibly with `request_queue_needs_attention` before writing a new pending request when daemon queue health needs attention, keeping the command-check preflight and real admission path aligned.
+- ActingLab Session queue view: `session queue` and `session request queue` now expose `session.queue.v0.1` with queue counts, health, previews, admission status, and queue-specific recommended actions for UI/scheduler clients without enqueueing or touching devices.
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
 - ActingLab request cancellation dry-run: `session request cancel <request-id> --dry-run` now performs the same queue-state and lease checks without deleting the queued request or writing a cancellation journal, giving UI/scheduler clients a safe preflight before queue mutation.
 - ActingLab blocked queue cancel dry-run recommendation: `session status --diagnostics` now emits a non-mutating `blocked_request_cancel_dry_run` recommended action before queue-cancel recommendations, including lease metadata and runnable dry-run arguments for UI/scheduler preflight.
 - ActingLab readiness queue summary: `session readiness` and `session request readiness` now expose top-level `queues` with queue counts, queue health, and blocked-request recommendation kinds so UI/scheduler clients do not need to parse the full embedded status diagnostics for queue state.
+
+## Current ActingLab Session Queue View
+
+This increment gives future UI/scheduler clients a direct queue inspection surface. It advances the Session Layer unique-throat and admission-safety work by making queue state inspectable without requiring clients to parse the full status diagnostics payload.
+
+- `session queue` returns `session.queue.v0.1`.
+- `session request queue` returns the same schema through the resident daemon request handler when queue admission is healthy enough to accept the diagnostic request.
+- The payload reports queue counts, full queue health, bounded pending/running/response previews, recommended action kinds, and queue-specific recommended actions.
+- The payload includes an `admission` object with `can_enqueue=false` and `request_queue_needs_attention` when pending, running, or response queues need operator/scheduler attention before another request is submitted.
+- The local `session queue` query is the blocked-queue inspection path; it does not enqueue, capture, start MaaTouch, touch devices, or start a listener.
+- `session api`, `session contract`, and `capabilities` now advertise the queue view.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Command-Check Surface
 
