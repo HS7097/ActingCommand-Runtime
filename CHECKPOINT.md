@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab self-heal-plan next-action summary
+
+### Current status
+
+- Added a machine-readable `next_actions` summary to `session self-heal-plan`.
+- `session request self-heal-plan` now returns the same next-action summary through the resident daemon request queue.
+- `next_actions` records ordered follow-up actions for observe-first trigger selection, stale-capture freshness diagnosis, session readiness, request queue inspection, maintenance lease resolution, recovery-candidate review, submission preflight, status diagnostics, and Phase C aggregate review.
+- Stale-capture and capture-backend-unavailable triggers now put `inspect_capture_freshness` before any heavy recovery review, preserving the rule that stale `adb_screencap` evidence alone must not be treated as game-freeze proof.
+- Maintenance-control triggers expose `resolve_maintenance_lease` when a matching Session Layer lease is missing.
+- The recovery summary records trigger, target page, recovery kind, matching-lease requirement, maintenance readiness, heavy-recovery candidate, and no-heavy-recovery guarantee.
+- `self_heal_plan` daemon request summaries now retain next-action count, first next action, and deferred live-validation status for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `self_heal_plan_view`.
+- The change is a pure no-device Phase C self-heal roadmap contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `415b6cbb698700f4df0b6e6deaa674030bf16115`.
+- Checkpoint tag: `checkpoint/20260628-self-heal-plan-next-actions`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `b110a2ed80a11bb08385b65142bf34ae2e91d659`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Inspected existing self-heal-plan payload, recovery/escalation/blocker helpers, request data-summary, Session API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_self_heal_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Initial diff-level prohibited-feature scan over source plus planning docs matched only the new `PLANS.md` no-feature-added boundary statement.
+- Refined source-only prohibited-feature scan for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Add self-heal plan next actions"`
+
+### Test results
+
+- Focused `session_self_heal_plan` tests passed and covered observe-first next action, stale-capture freshness next action, lease-resolution next action, request summary fields, and journal summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covered the new `self_heal_plan_view.next_actions_field` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live self-heal-plan next-action observation through a resident daemon and real UI/scheduler polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep Phase C self-heal execution behind lease/readiness/queue gates.
+4. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab Phase C aggregate next-action summary
 
 ### Current status
