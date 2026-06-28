@@ -15,6 +15,7 @@
 - Documentation close-out for `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` is complete: the target files are now split into 56 explicit chronological subtasks.
 - Detailed status counts: `已完成` 46, `待真机验收` 6, `未完成` 1, `未来范围` 2, `待资源补齐` 1.
 - This documentation close-out changed only `PLANS.md` and `CHECKPOINT.md`; no business code was modified.
+- Documentation close-out source commit: `0ced8bd8763d372482d217d70d85d1e167d4726f`.
 
 ### Detailed task-file status table
 
