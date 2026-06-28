@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab capture freshness policy surface
+
+### Current status
+
+- Added `session capture-policy` as a local no-device Session Layer policy query.
+- Added daemon-routed `session request capture-policy` support through the resident request handler.
+- The payload returns `schema_version=session.capture_policy.v0.1`.
+- The policy records fresh-frame commands, stale-frame visibility requirements, backend preference order, fallback logging requirements, stale-capture classification, and recovery ordering.
+- The policy records the AK stale screencap boundary from `FINDING-AK-game-freeze-2026-06-27`: stale `adb_screencap` alone must not be treated as proof of game freeze.
+- The policy records that lighter capture-backend recovery should be considered before heavy app restart.
+- `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the capture-policy surface.
+- The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending until the source commit is created and tagged.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `055aa72b89738cb3d375ac7f413bba7f9cc6a87b`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand source-of-truth, planning-file, and error-handling rules.
+- Inspected Session Layer bootstrap, throat-policy, validation-plan, API contract, access contract, request routing, command-check classification, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_capture_policy -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_command_check_capture_policy_is_read_only -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture --test-threads=1`
+- `cargo run -q -p actingcommand-actinglab -- --json session capture-policy --local`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_capture_policy` tests passed.
+- Focused command-check capture-policy classification test passed.
+- Focused `session_bootstrap` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Focused capability registration test passed.
+- CLI smoke `session capture-policy --local` passed and returned `schema_version=session.capture_policy.v0.1`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and push this Runtime increment.
+2. Create and push a checkpoint tag for this milestone.
+3. Record the source commit hash in this checkpoint.
+4. Continue offline Session Layer planning for self-heal, interaction streams, and encrypted transport.
+
 ## 2026-06-28 ActingLab unique Session throat-policy surface
 
 ### Current status

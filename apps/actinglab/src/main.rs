@@ -1150,6 +1150,7 @@ fn session_layer_capability_contract() -> Value {
             "request_command": "session request capabilities",
             "bootstrap_command": "session bootstrap",
             "throat_policy_command": "session throat-policy",
+            "capture_policy_command": "session capture-policy",
             "status_command": "session status --diagnostics",
             "readiness_command": "session readiness",
             "validation_plan_command": "session validation-plan",
@@ -1182,7 +1183,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session transport check", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1297,6 +1298,79 @@ fn session_throat_policy_payload(
     }))
 }
 
+fn session_capture_policy_payload(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    command_name: &str,
+) -> CliOutcome<Value> {
+    flags.expect_positionals(command_name, 0)?;
+    Ok(json!({
+        "schema_version": "session.capture_policy.v0.1",
+        "status": "offline_policy",
+        "purpose": "machine-readable fresh-frame and stale-capture policy for Session Layer clients",
+        "generated_at_unix_ms": current_unix_ms(),
+        "scope": {
+            "instance": global.instance.clone(),
+            "game": global.game.clone(),
+            "server": global.server.clone()
+        },
+        "fresh_frame_policy": {
+            "require_fresh_flag": "--require-fresh",
+            "diagnostic_command": "capture diagnose --require-fresh",
+            "session_diagnostic_command": "session capture diagnose --require-fresh",
+            "instance_health_command": "session instance health --capture-diagnose",
+            "stale_frame_must_be_visible": true,
+            "stale_frame_must_not_be_treated_as_success": true
+        },
+        "backend_policy": {
+            "preferred_order": ["nemu_ipc", "droidcast_raw", "adb_screencap"],
+            "adb_screencap_is_last_resort": true,
+            "fallback_allowed_for_transient_capture_failures": true,
+            "fallback_requires_full_logging": true,
+            "fallback_log_context": [
+                "trigger_reason",
+                "source_backend",
+                "fallback_backend",
+                "instance",
+                "game",
+                "server",
+                "user_visible_impact"
+            ]
+        },
+        "stale_classification": {
+            "must_not_classify_as_game_freeze_from_adb_screencap_alone": true,
+            "must_compare_or_diagnose_before_freeze_conclusion": true,
+            "stale_capture_status": "capture_stale_suspected",
+            "game_freeze_status": "unverified_without_fresh_backend_evidence",
+            "ak_known_stale_md5": "202752fa3e5cab706774819168639b6c",
+            "finding": "FINDING-AK-game-freeze-2026-06-27"
+        },
+        "recovery_policy": {
+            "read_only_plan": "session recover --stale-capture",
+            "diagnosis_first": true,
+            "try_lighter_capture_backend_recovery_before_app_restart": true,
+            "app_restart_is_heavy_recovery": true,
+            "maintenance_recovery_requires_matching_lease_when_it_executes_control": true,
+            "does_not_mark_recovery_live_pass_without_operator_observation": true
+        },
+        "client_guidance": {
+            "ui_should_show_degraded_capture_state": true,
+            "scheduler_should_not_submit_navigation_on_stale_frame": true,
+            "agents_should_recheck_with_capture_policy_before_declaring_game_frozen": true,
+            "operator_live_acceptance_deferred_code": "requires-live-device"
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
 fn session_access_contract() -> Value {
     json!({
         "schema_version": "session.access.v0.1",
@@ -1331,6 +1405,7 @@ fn session_access_contract() -> Value {
         "daemon_queries": {
             "bootstrap": "session request bootstrap",
             "throat_policy": "session request throat-policy",
+            "capture_policy": "session request capture-policy",
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
@@ -1362,6 +1437,7 @@ fn session_access_contract() -> Value {
                     "status",
                     "bootstrap",
                     "throat-policy",
+                    "capture-policy",
                     "queue",
                     "journal",
                     "readiness",
@@ -1916,6 +1992,7 @@ fn session_api_contract() -> Value {
                     "bootstrap",
                     "readiness",
                     "throat-policy",
+                    "capture-policy",
                     "command-check",
                     "submit-plan",
                     "validation-plan",
@@ -2013,6 +2090,14 @@ fn session_api_contract() -> Value {
             session_throat_policy_view_contract(),
         );
     contract
+        .pointer_mut("/envelopes")
+        .and_then(Value::as_object_mut)
+        .expect("session api contract envelopes must be an object")
+        .insert(
+            "capture_policy_view".to_string(),
+            session_capture_policy_view_contract(),
+        );
+    contract
 }
 
 fn session_throat_policy_view_contract() -> Value {
@@ -2032,6 +2117,22 @@ fn session_throat_policy_view_contract() -> Value {
     })
 }
 
+fn session_capture_policy_view_contract() -> Value {
+    json!({
+        "query": "session capture-policy",
+        "daemon_query": "session request capture-policy",
+        "schema_version": "session.capture_policy.v0.1",
+        "fresh_frame_policy_field": "fresh_frame_policy",
+        "backend_policy_field": "backend_policy",
+        "stale_classification_field": "stale_classification",
+        "recovery_policy_field": "recovery_policy",
+        "does_not_enqueue": true,
+        "does_not_touch_device": true,
+        "does_not_capture": true,
+        "does_not_start_maatouch": true
+    })
+}
+
 fn session_bootstrap_view_contract() -> Value {
     json!({
         "query": "session bootstrap",
@@ -2040,6 +2141,7 @@ fn session_bootstrap_view_contract() -> Value {
         "readiness_field": "readiness",
         "queue_field": "queue",
         "throat_policy_field": "throat_policy",
+        "capture_policy_field": "capture_policy",
         "validation_plan_field": "validation_plan",
         "api_contract_field": "api_contract",
         "access_contract_field": "access_contract",
@@ -5774,6 +5876,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "status" => run_session_status(global, args),
         "bootstrap" => run_session_bootstrap(global, args),
         "throat-policy" => run_session_throat_policy(global, args),
+        "capture-policy" => run_session_capture_policy(global, args),
         "readiness" => run_session_readiness(global, args),
         "queue" => run_session_queue(args),
         "command-check" => run_session_command_check(global, args),
@@ -5843,6 +5946,14 @@ fn run_session_throat_policy(global: &GlobalOptions, args: &[String]) -> CliOutc
         return submit_readonly_session_request(global, &flags, "throat_policy", args);
     }
     session_throat_policy_payload(global, &flags, "session throat-policy")
+}
+
+fn run_session_capture_policy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    if should_route_readonly_via_session_daemon(global, &flags)? {
+        return submit_readonly_session_request(global, &flags, "capture_policy", args);
+    }
+    session_capture_policy_payload(global, &flags, "session capture-policy")
 }
 
 fn run_session_readiness(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6321,6 +6432,7 @@ fn session_bootstrap_payload(
     let queue = session_queue_payload(state_dir)?;
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
     let throat_policy = session_throat_policy_payload(global, flags, command_name)?;
+    let capture_policy = session_capture_policy_payload(global, flags, command_name)?;
     Ok(json!({
         "schema_version": "session.bootstrap.v0.1",
         "generated_at_unix_ms": current_unix_ms(),
@@ -6334,6 +6446,7 @@ fn session_bootstrap_payload(
             "local_cli": "actinglab",
             "status": "session status --diagnostics",
             "throat_policy": "session throat-policy",
+            "capture_policy": "session capture-policy",
             "readiness": "session readiness",
             "queue": "session queue",
             "validation_plan": "session validation-plan",
@@ -6344,6 +6457,7 @@ fn session_bootstrap_payload(
             "bootstrap": "session request bootstrap",
             "status": "session request status --diagnostics",
             "throat_policy": "session request throat-policy",
+            "capture_policy": "session request capture-policy",
             "readiness": "session request readiness",
             "queue": "session request queue",
             "validation_plan": "session request validation-plan",
@@ -6355,6 +6469,7 @@ fn session_bootstrap_payload(
         "session_layer": session_layer_capability_contract(),
         "commands": command_capabilities(),
         "throat_policy": throat_policy,
+        "capture_policy": capture_policy,
         "readiness": readiness,
         "queue": queue,
         "validation_plan": validation_plan,
@@ -6917,7 +7032,7 @@ fn classify_session_command_for_check(
     match first {
         "status" | "readiness" | "queue" | "journal" | "events" | "response" | "request-state"
         | "contract" | "api" | "transport" | "capabilities" | "bootstrap" | "command-check"
-        | "submit-plan" | "validation-plan" | "throat-policy" => Ok(read_only),
+        | "submit-plan" | "validation-plan" | "throat-policy" | "capture-policy" => Ok(read_only),
         "devices" | "capture" | "capture-diagnose" | "recognize" | "detect-page"
         | "current-page" | "is-visible" | "locate" | "monitor-once" => Ok(device_read_only),
         "stream" => {
@@ -9662,7 +9777,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         .map(String::as_str)
         .ok_or_else(|| {
             CliError::usage(
-                "session request requires cancel, status, bootstrap, throat-policy, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
+                "session request requires cancel, status, bootstrap, throat-policy, capture-policy, readiness, queue, command-check, submit-plan, validation-plan, journal, events, response, request-state, contract, api, transport, capabilities, devices, lease, record, monitor-policy, capture, capture-diagnose, stream, recognize, detect-page, current-page, is-visible, locate, monitor, monitor-once, instance, app, lab-run, package-run, operation-run, tap, swipe, long-tap, key, text, tap-target, navigate, or recover",
             )
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
@@ -9672,6 +9787,9 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         "bootstrap" => submit_readonly_session_request(global, &flags, "bootstrap", &args[1..]),
         "throat-policy" => {
             submit_readonly_session_request(global, &flags, "throat_policy", &args[1..])
+        }
+        "capture-policy" => {
+            submit_readonly_session_request(global, &flags, "capture_policy", &args[1..])
         }
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
         "queue" => submit_readonly_session_request(global, &flags, "queue", &args[1..]),
@@ -10723,6 +10841,11 @@ fn execute_session_command_request_inner(
             let flags = FlagArgs::parse(&request.args)?;
             let global = request.global.to_global()?;
             session_throat_policy_payload(&global, &flags, "session request throat-policy")
+        }
+        "capture_policy" => {
+            let flags = FlagArgs::parse(&request.args)?;
+            let global = request.global.to_global()?;
+            session_capture_policy_payload(&global, &flags, "session request capture-policy")
         }
         "readiness" => {
             let flags = FlagArgs::parse(&request.args)?;
@@ -16462,6 +16585,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session status", ["offline"], "available"),
         command_cap("session bootstrap", ["offline"], "available"),
         command_cap("session throat-policy", ["offline"], "available"),
+        command_cap("session capture-policy", ["offline"], "available"),
         command_cap("session readiness", ["offline"], "available"),
         command_cap("session queue", ["offline"], "available"),
         command_cap("session command-check", ["offline"], "available"),
@@ -16496,6 +16620,11 @@ fn command_capabilities() -> Vec<Value> {
         ),
         command_cap(
             "session request throat-policy",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request capture-policy",
             ["running_runtime"],
             "available",
         ),
@@ -18500,6 +18629,48 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_capture_policy_is_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "capture-policy",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_command_check_explicit_daemon_requires_alive_daemon() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -19123,6 +19294,16 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/capture_policy/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/capture_policy/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -19147,6 +19328,14 @@ mod tests {
                 .iter()
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session throat-policy"))
+        );
+        assert!(
+            data.get("commands")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|command| command.get("command").and_then(Value::as_str)
+                    == Some("session capture-policy"))
         );
     }
 
@@ -19200,6 +19389,18 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/daemon_queries/capture_policy")
+                .and_then(Value::as_str),
+            Some("session request capture-policy")
+        );
+        assert_eq!(
+            payload
+                .pointer("/capture_policy/backend_policy/preferred_order/0")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            payload
                 .pointer("/validation_plan/live_validation_status")
                 .and_then(Value::as_str),
             Some("deferred")
@@ -19207,6 +19408,115 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_capture_policy_reports_stale_policy_without_device_work() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(["--json", "session", "capture-policy", "--local"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.capture_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/fresh_frame_policy/require_fresh_flag")
+                .and_then(Value::as_str),
+            Some("--require-fresh")
+        );
+        assert_eq!(
+            data.pointer("/backend_policy/preferred_order/0")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            data.pointer("/backend_policy/preferred_order/2")
+                .and_then(Value::as_str),
+            Some("adb_screencap")
+        );
+        assert_eq!(
+            data.pointer("/backend_policy/fallback_requires_full_logging")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer(
+                "/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/stale_classification/finding")
+                .and_then(Value::as_str),
+            Some("FINDING-AK-game-freeze-2026-06-27")
+        );
+        assert_eq!(
+            data.pointer(
+                "/recovery_policy/try_lighter_capture_backend_recovery_before_app_restart"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_capture_policy_request_returns_payload() {
+        let temp = TempDir::new().unwrap();
+        let query = SessionCommandRequest {
+            request_id: "capture-policy-query".to_string(),
+            command: "capture_policy".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 4,
+        };
+
+        let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+
+        assert_eq!(
+            payload.get("schema_version").and_then(Value::as_str),
+            Some("session.capture_policy.v0.1")
+        );
+        assert_eq!(
+            payload.pointer("/scope/instance").and_then(Value::as_str),
+            Some("ak")
+        );
+        assert_eq!(
+            payload
+                .pointer("/stale_classification/game_freeze_status")
+                .and_then(Value::as_str),
+            Some("unverified_without_fresh_backend_evidence")
+        );
+        assert_eq!(
+            payload
+                .pointer("/guarantees/does_not_read_resource_repositories")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -33893,6 +34203,11 @@ mod tests {
             Some("session request throat-policy")
         );
         assert_eq!(
+            data.pointer("/daemon_queries/capture_policy")
+                .and_then(Value::as_str),
+            Some("session request capture-policy")
+        );
+        assert_eq!(
             data.pointer("/daemon_queries/api").and_then(Value::as_str),
             Some("session request api")
         );
@@ -34248,6 +34563,16 @@ mod tests {
             data.pointer("/envelopes/throat_policy_view/only_control_throat_field")
                 .and_then(Value::as_str),
             Some("session_layer.only_control_throat")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/capture_policy_view/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_policy.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/capture_policy_view/stale_classification_field")
+                .and_then(Value::as_str),
+            Some("stale_classification")
         );
         assert_eq!(
             data.pointer("/envelopes/status_view/queue_health_actions/1")
@@ -34885,6 +35210,7 @@ mod tests {
             "session status",
             "session bootstrap",
             "session throat-policy",
+            "session capture-policy",
             "session submit-plan",
             "session validation-plan",
             "session journal",
@@ -34914,6 +35240,7 @@ mod tests {
             "session request status",
             "session request bootstrap",
             "session request throat-policy",
+            "session request capture-policy",
             "session request submit-plan",
             "session request validation-plan",
             "session request journal",
