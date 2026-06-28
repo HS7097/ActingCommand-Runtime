@@ -9,6 +9,7 @@
 - The queue view reports queue counts, full queue health, bounded pending/running/response previews, queue-specific recommended actions, and an admission summary.
 - Blocked queue admission is visible through `admission.can_enqueue=false` and `admission.blocked_code=request_queue_needs_attention`.
 - `session api`, `session contract`, `capabilities`, and `session command-check` now advertise/classify the queue view.
+- Milestone source commit `9bc74395b60b79b295f14834598c20b8d108d600` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-session-queue-view`.
 - No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
@@ -46,6 +47,10 @@
 - Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Add session queue view"`
+- `git tag checkpoint/20260628-session-queue-view 9bc74395b60b79b295f14834598c20b8d108d600`
+- `git push origin main`
+- `git push origin checkpoint/20260628-session-queue-view`
 
 ### Test results
 
@@ -66,8 +71,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-session-queue-view`.
-2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+1. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
 
 ## 2026-06-28 ActingLab daemon request admission queue gate
 
