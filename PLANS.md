@@ -188,6 +188,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab pending-live validation diagnostics summary: `session status --diagnostics` now exposes the `待真机验收` summary from `session validation-plan` for UI/scheduler clients without marking live checks passed.
 
 - ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
+- ActingLab Phase C interaction-flow aggregate plan view: `session phase-c-plan` now embeds `session.phase_c_interaction_plan.v0.2`, making the interaction lane explicitly require an instance-scoped `session stream-plan` preflight before UI frame relay or input relay can start.
 - ActingLab Phase C aggregate next-action summary: `session phase-c-plan` and `session request phase-c-plan` now expose a machine-readable `next_actions` roadmap for self-heal review, interaction-flow review, trusted-channel transport review, pending live acceptance, and status diagnostics.
 - ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
 - ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
@@ -209,6 +210,25 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab interaction/trusted-channel status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `interaction_flow` and `trusted_channel` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab self-heal status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `self_heal` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab readiness diagnostics summary: `session readiness` now exposes a compact `diagnostics_summary` for liveness, queue health, capture freshness, self-heal, interaction flow, trusted channel, and live-validation state without forcing clients to parse the full embedded status view.
+
+## Current ActingLab Phase C Interaction Plan View
+
+This increment makes the Phase C aggregate plan more explicit about the interaction-flow lane without requiring a live instance or running stream checks.
+
+- `session phase-c-plan` now embeds `interaction_flow.plan.schema_version=session.phase_c_interaction_plan.v0.2`.
+- The embedded interaction plan reports `status=requires_instance_preflight`.
+- The plan points clients to `session stream-plan [--endpoint <url>]` and `session request stream-plan [--endpoint <url>]` for the actual instance-scoped stream preflight.
+- The plan keeps bounded local CLI stream and daemon-bounded stream request surfaces available, while trusted remote long-lived stream remains `reserved`.
+- Input relay remains lease-gated, and `interaction_flow.plan.next_actions` starts with `run_instance_stream_plan`.
+- `session api` now advertises the interaction plan schema version and stream-plan contract field under `phase_c_plan_view`.
+
+This is an offline contract/discovery increment only:
+
+- no daemon request is enqueued;
+- no stream is opened;
+- no stream check is run;
+- no device, capture backend, MaaTouch backend, app lifecycle, resource repository, UI, scheduler runtime, SQLite, OCR/OpenCV, network listener, token issuer, TLS layer, or game logic is touched;
+- live validation stays `deferred: requires-live-device`.
 
 ## Current ActingLab Readiness Diagnostics Summary
 

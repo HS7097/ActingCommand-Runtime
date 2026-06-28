@@ -2005,10 +2005,23 @@ fn session_phase_c_plan_payload(
     let self_heal_policy = session_self_heal_policy_payload(global, flags, command_name)?;
     let self_heal_plan =
         session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
+    let interaction_plan = session_phase_c_interaction_plan_payload();
     let transport_plan = session_transport_plan_payload(flags)?;
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
-    let next_actions =
-        session_phase_c_plan_next_actions(&self_heal_plan, &transport_plan, &validation_plan);
+    let next_actions = session_phase_c_plan_next_actions(
+        &self_heal_plan,
+        &interaction_plan,
+        &transport_plan,
+        &validation_plan,
+    );
+    let long_lived_ui_stream_status = interaction_plan
+        .pointer("/trusted_remote_long_lived_stream_status")
+        .cloned()
+        .unwrap_or_else(|| json!("reserved"));
+    let input_relay_requires_matching_lease = interaction_plan
+        .pointer("/input_relay_requires_matching_lease")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
 
     Ok(json!({
         "schema_version": "session.phase_c_plan.v0.1",
@@ -2069,19 +2082,10 @@ fn session_phase_c_plan_payload(
             "plan": self_heal_plan
         },
         "interaction_flow": {
-            "plan": {
-                "schema_version": "session.phase_c_interaction_plan.v0.1",
-                "status": "reserved_contract",
-                "stream_plan_query": "session stream-plan [--endpoint <url>]",
-                "daemon_stream_plan_query": "session request stream-plan [--endpoint <url>]",
-                "stream_plan_contract": session_stream_plan_view_contract(),
-                "bounded_local_cli_stream_status": "available",
-                "daemon_bounded_stream_request_status": "available",
-                "trusted_remote_long_lived_stream_status": "reserved",
-                "instance_level_preflight_required": true
-            },
-            "long_lived_ui_stream_status": "reserved",
-            "input_relay_requires_matching_lease": true,
+            "plan": interaction_plan,
+            "contract": session_stream_plan_view_contract(),
+            "long_lived_ui_stream_status": long_lived_ui_stream_status,
+            "input_relay_requires_matching_lease": input_relay_requires_matching_lease,
             "does_not_execute_input_relay": true
         },
         "trusted_channel": {
@@ -2123,6 +2127,7 @@ fn session_phase_c_plan_payload(
 
 fn session_phase_c_plan_next_actions(
     self_heal_plan: &Value,
+    interaction_plan: &Value,
     transport_plan: &Value,
     validation_plan: &Value,
 ) -> Value {
@@ -2177,10 +2182,22 @@ fn session_phase_c_plan_next_actions(
             "operator_live_validation_required": self_heal_plan.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null)
         },
         "interaction_flow": {
-            "status": "reserved_contract",
+            "status": interaction_plan.get("status").cloned().unwrap_or(Value::Null),
             "stream_plan_command": "session stream-plan [--endpoint <url>]",
+            "safe_to_open_stream": interaction_plan.get("safe_to_open_stream").cloned().unwrap_or(Value::Null),
+            "safe_to_start_client": interaction_plan.get("safe_to_start_client").cloned().unwrap_or(Value::Null),
+            "safe_to_start_stream": interaction_plan.get("safe_to_start_stream").cloned().unwrap_or(Value::Null),
+            "input_relay_requested": interaction_plan.get("input_relay_requested").cloned().unwrap_or(Value::Null),
+            "input_relay_action_count": interaction_plan.get("input_relay_action_count").cloned().unwrap_or(Value::Null),
             "input_relay_requires_matching_lease": true,
-            "long_lived_ui_stream_status": "reserved"
+            "long_lived_ui_stream_status": interaction_plan
+                .pointer("/trusted_remote_long_lived_stream_status")
+                .cloned()
+                .unwrap_or_else(|| json!("reserved")),
+            "first_stream_action": interaction_plan
+                .pointer("/next_actions/ordered/0/action")
+                .cloned()
+                .unwrap_or(Value::Null)
         },
         "trusted_channel": {
             "status": transport_plan.pointer("/trusted_remote/status").cloned().unwrap_or(Value::Null),
@@ -2211,6 +2228,61 @@ fn session_phase_c_plan_next_actions(
             "does_not_start_tls": true,
             "does_not_read_resource_repositories": true,
             "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_phase_c_interaction_plan_payload() -> Value {
+    json!({
+        "schema_version": "session.phase_c_interaction_plan.v0.2",
+        "status": "requires_instance_preflight",
+        "stream_plan_query": "session stream-plan [--endpoint <url>]",
+        "daemon_stream_plan_query": "session request stream-plan [--endpoint <url>]",
+        "stream_plan_contract": session_stream_plan_view_contract(),
+        "bounded_local_cli_stream_status": "available",
+        "daemon_bounded_stream_request_status": "available",
+        "trusted_remote_long_lived_stream_status": "reserved",
+        "safe_to_open_stream": Value::Null,
+        "safe_to_start_client": Value::Null,
+        "safe_to_start_stream": Value::Null,
+        "input_relay_requested": Value::Null,
+        "input_relay_action_count": Value::Null,
+        "input_relay_requires_matching_lease": true,
+        "instance_level_preflight_required": true,
+        "preflight_blockers": [
+            {
+                "kind": "instance_scope",
+                "code": "stream_plan_requires_instance_preflight",
+                "message": "Run session stream-plan with the selected instance before opening an interactive stream."
+            }
+        ],
+        "next_actions": {
+            "schema_version": "session.phase_c_interaction_next_actions.v0.1",
+            "ordered": [
+                {
+                    "priority": 1,
+                    "action": "run_instance_stream_plan",
+                    "reason": "Interaction flow requires an instance-scoped stream preflight before UI frame relay or input relay can start.",
+                    "command": "session stream-plan [--endpoint <url>]",
+                    "read_only": true
+                },
+                {
+                    "priority": 2,
+                    "action": "review_trusted_remote_stream_boundary",
+                    "reason": "Trusted remote long-lived streams remain reserved until encrypted authenticated transport is implemented.",
+                    "command": "session transport plan [--endpoint <url>]",
+                    "read_only": true
+                }
+            ]
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
         }
     })
 }
@@ -3161,6 +3233,8 @@ fn session_phase_c_plan_view_contract() -> Value {
         "schema_version": "session.phase_c_plan.v0.1",
         "self_heal_field": "self_heal",
         "interaction_flow_field": "interaction_flow",
+        "interaction_plan_schema_version": "session.phase_c_interaction_plan.v0.2",
+        "interaction_stream_plan_contract_field": "interaction_flow.contract",
         "trusted_channel_field": "trusted_channel",
         "live_validation_field": "live_validation",
         "next_actions_field": "next_actions",
@@ -11293,11 +11367,16 @@ fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
             "operator_live_validation_required": true
         }
     });
+    let interaction_plan = session_phase_c_interaction_plan_payload();
     let transport_plan = session_transport_plan_payload(&flags)?;
     let validation_plan =
         session_validation_plan_payload(&global, &flags, "session validation-plan")?;
-    let next_actions =
-        session_phase_c_plan_next_actions(&self_heal_plan, &transport_plan, &validation_plan);
+    let next_actions = session_phase_c_plan_next_actions(
+        &self_heal_plan,
+        &interaction_plan,
+        &transport_plan,
+        &validation_plan,
+    );
     let ordered = next_actions
         .pointer("/ordered")
         .and_then(Value::as_array)
@@ -24650,6 +24729,31 @@ mod tests {
             Some("reserved")
         );
         assert_eq!(
+            data.pointer("/interaction_flow/plan/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_interaction_plan.v0.2")
+        );
+        assert_eq!(
+            data.pointer("/interaction_flow/plan/status")
+                .and_then(Value::as_str),
+            Some("requires_instance_preflight")
+        );
+        assert_eq!(
+            data.pointer("/interaction_flow/plan/instance_level_preflight_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/interaction_flow/plan/stream_plan_contract/schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream_plan.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/interaction_flow/plan/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("run_instance_stream_plan")
+        );
+        assert_eq!(
             data.pointer("/trusted_channel/requires_encryption")
                 .and_then(Value::as_bool),
             Some(true)
@@ -24706,6 +24810,16 @@ mod tests {
             data.pointer("/next_actions/interaction_flow/long_lived_ui_stream_status")
                 .and_then(Value::as_str),
             Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/interaction_flow/status")
+                .and_then(Value::as_str),
+            Some("requires_instance_preflight")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/interaction_flow/first_stream_action")
+                .and_then(Value::as_str),
+            Some("run_instance_stream_plan")
         );
         assert_eq!(
             data.pointer("/next_actions/trusted_channel/does_not_start_tls")
@@ -24790,6 +24904,10 @@ mod tests {
                 .get("trusted_channel_status")
                 .and_then(Value::as_str),
             Some("reserved")
+        );
+        assert_eq!(
+            summary.get("stream_plan_status").and_then(Value::as_str),
+            Some("requires_instance_preflight")
         );
         assert_eq!(
             summary
@@ -35296,6 +35414,18 @@ mod tests {
                 .pointer("/envelopes/phase_c_plan_view/next_actions_field")
                 .and_then(Value::as_str),
             Some("next_actions")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/interaction_plan_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_interaction_plan.v0.2")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/interaction_stream_plan_contract_field")
+                .and_then(Value::as_str),
+            Some("interaction_flow.contract")
         );
         assert_eq!(
             payload
