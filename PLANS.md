@@ -179,6 +179,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
 - ActingLab trusted-channel transport plan: `session transport plan` now exposes a no-listener/no-TCP-probe plan for local CLI, daemon file-IPC, and reserved encrypted trusted remote access.
 - ActingLab Phase C self-heal plan preflight: `session self-heal-plan` and `session request self-heal-plan` expose a no-device maintenance recovery plan that turns observed triggers into lease/queue/readiness-gated recovery candidates without executing input.
+- ActingLab Phase C self-heal lease-gate alignment: `session self-heal-plan` now makes the embedded `lease_gate` follow the selected recovery candidate, so stale-capture/read-only recovery reports `required=false` while standby/modal/unexpected-page/login/session-expired maintenance control remains lease-gated.
+
+## Current ActingLab Phase C Self-Heal Lease-Gate Alignment
+
+This increment tightens the UI/scheduler-facing self-heal preflight semantics after the initial `session.self_heal_plan.v0.1` surface landed.
+
+- `session self-heal-plan --trigger capture_stale_suspected` reports `recovery.requires_matching_lease=false`.
+- Its embedded `lease_gate` now also reports `required=false` and `status=not_required`.
+- Control-oriented maintenance triggers such as `standby` still report `recovery.requires_matching_lease=true` and a blocking lease gate when no matching lease is provided.
+- This keeps stale capture recovery visibly read-only while preserving the Session Layer rule that real maintenance input must be lease-gated.
+
+No device input, capture, MaaTouch startup, app lifecycle action, resource repository read, network listener, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Phase C Self-Heal Plan Preflight
 

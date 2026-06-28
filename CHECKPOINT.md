@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C self-heal lease-gate alignment
+
+### Current status
+
+- Tightened `session self-heal-plan` lease-gate semantics after the initial preflight surface landed.
+- The selected recovery candidate now determines the embedded `lease_gate.required` value.
+- Stale capture and capture-backend recovery remain read-only and now report `lease_gate.required=false` plus `lease_gate.status=not_required`.
+- Standby, unexpected page, modal popup, startup-login, and session-expired maintenance recovery continue to require a matching lease before any execution path.
+- This keeps UI/scheduler clients from seeing a contradictory blocked lease gate for read-only stale-capture recovery.
+- The change is a pure no-device preflight semantics fix.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending until commit.
+- Checkpoint tag: pending until commit.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `3b7d0067385b780eb657c2ce5de7fb575a5a8035`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and Runtime task documents.
+- Confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected `session_self_heal_plan_payload`, recovery selection, lease gate calculation, and self-heal-plan tests in `apps/actinglab/src/main.rs`.
+- `cargo test -p actingcommand-actinglab self_heal_plan -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session self-heal-plan --local --trigger capture_stale_suspected`
+- `cargo run -q -p actingcommand-actinglab -- --json session self-heal-plan --local --trigger standby`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only prohibited-feature scan over the added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, and direct navigation execution.
+- Source-only scan for capture/MaaTouch/touch execution references in the added `apps/actinglab/src/main.rs` diff lines.
+
+### Test results
+
+- Focused `self_heal_plan` tests passed.
+- CLI smoke `session self-heal-plan --local --trigger capture_stale_suspected` passed and returned `recovery.requires_matching_lease=false`, `lease_gate.required=false`, `lease_gate.status=not_required`, `does_not_touch_device=true`, and `does_not_capture=true`.
+- CLI smoke `session self-heal-plan --local --trigger standby` passed and returned `recovery.requires_matching_lease=true`, `lease_gate.required=true`, and `lease_gate.status=blocked` with `lab_lease_required`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Source-only prohibited-feature scan passed with no matches for listener startup, TCP reachability probes, token/TLS implementation, direct ADB input, SQLite, OCR/OpenCV, fallback calls, reconnect calls, direct recovery execution, semantic input execution, or direct navigation execution.
+- Source-only capture/MaaTouch/touch scan passed with no matches in the source diff.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live self-heal-plan validation against a resident daemon and configured instances.
+- `deferred: requires-live-device` - live maintenance recovery execution for standby, unexpected page, modal popup, startup-login, and session-expired triggers.
+- `deferred: requires-live-device` - live stale-capture validation proving backend recovery before app restart.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device and operator validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit and push Runtime changes.
+2. Record final commit hash and checkpoint tag after commit.
+3. Continue the next offline Session Layer Phase C increment before live validation.
+
 ## 2026-06-28 ActingLab Phase C self-heal plan preflight
 
 ### Current status

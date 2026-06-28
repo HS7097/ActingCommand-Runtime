@@ -1519,13 +1519,14 @@ fn session_self_heal_plan_payload(
 
     let readiness = session_readiness_payload(global, flags, state_dir, config, command_name)?;
     let queue = session_queue_payload(state_dir)?;
-    let lease_gate = session_command_check_lease_gate(state_dir, global, flags, true)?;
     let recovery = session_self_heal_plan_recovery(&trigger, &target_page);
-    let blockers = session_self_heal_plan_blockers(&trigger, &readiness, &queue, &lease_gate);
     let recovery_requires_lease = recovery
         .get("requires_matching_lease")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let lease_gate =
+        session_command_check_lease_gate(state_dir, global, flags, recovery_requires_lease)?;
+    let blockers = session_self_heal_plan_blockers(&trigger, &readiness, &queue, &lease_gate);
     let lease_ready = !recovery_requires_lease
         || lease_gate
             .get("ok")
@@ -21506,6 +21507,15 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+        assert_eq!(
+            data.pointer("/lease_gate/required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/lease_gate/status").and_then(Value::as_str),
+            Some("not_required")
+        );
         let blockers = data
             .get("blockers")
             .and_then(Value::as_array)
@@ -21546,6 +21556,15 @@ mod tests {
             data.pointer("/recovery/requires_matching_lease")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_gate/required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_gate/status").and_then(Value::as_str),
+            Some("blocked")
         );
         assert!(
             data.get("blockers")
