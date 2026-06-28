@@ -2585,6 +2585,7 @@ fn session_api_contract() -> Value {
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
                 "capture_freshness_summary_field": "diagnostics.capture_freshness",
+                "self_heal_summary_field": "diagnostics.self_heal",
                 "interaction_flow_summary_field": "diagnostics.interaction_flow",
                 "trusted_channel_summary_field": "diagnostics.trusted_channel",
                 "phase_c_summary_field": "diagnostics.phase_c",
@@ -3178,6 +3179,7 @@ fn session_bootstrap_view_contract() -> Value {
         "schema_version": "session.bootstrap.v0.1",
         "status_diagnostics_field": "status_diagnostics",
         "status_diagnostics_capture_freshness_field": "status_diagnostics.capture_freshness",
+        "status_diagnostics_self_heal_field": "status_diagnostics.self_heal",
         "status_diagnostics_interaction_flow_field": "status_diagnostics.interaction_flow",
         "status_diagnostics_trusted_channel_field": "status_diagnostics.trusted_channel",
         "status_diagnostics_phase_c_field": "status_diagnostics.phase_c",
@@ -8168,6 +8170,7 @@ fn session_bootstrap_diagnostics_summary(
         "liveness": diagnostics.get("liveness").cloned().unwrap_or(Value::Null),
         "queue_health": diagnostics.pointer("/queues/health").cloned().unwrap_or(Value::Null),
         "capture_freshness": diagnostics.get("capture_freshness").cloned().unwrap_or(Value::Null),
+        "self_heal": diagnostics.get("self_heal").cloned().unwrap_or(Value::Null),
         "interaction_flow": diagnostics.get("interaction_flow").cloned().unwrap_or(Value::Null),
         "trusted_channel": diagnostics.get("trusted_channel").cloned().unwrap_or(Value::Null),
         "phase_c": diagnostics.get("phase_c").cloned().unwrap_or(Value::Null),
@@ -10762,6 +10765,7 @@ fn session_status_diagnostics(
         "leases": session_lease_diagnostics(state_dir)?,
         "monitor_policy": monitor_policy,
         "capture_freshness": session_capture_freshness_diagnostics_summary()?,
+        "self_heal": session_self_heal_diagnostics_summary()?,
         "interaction_flow": session_interaction_flow_diagnostics_summary()?,
         "trusted_channel": session_trusted_channel_diagnostics_summary()?,
         "phase_c": session_phase_c_diagnostics_summary()?,
@@ -10787,6 +10791,90 @@ fn session_status_diagnostics(
             }
         }
     }))
+}
+
+fn session_self_heal_diagnostics_summary() -> CliOutcome<Value> {
+    let global = GlobalOptions::default();
+    let flags = FlagArgs::default();
+    let policy = session_self_heal_policy_payload(&global, &flags, "session self-heal-policy")?;
+    let next_actions = session_self_heal_diagnostics_next_actions();
+    Ok(json!({
+        "schema_version": "session.self_heal_diagnostics.v0.1",
+        "policy_command": "session self-heal-policy",
+        "daemon_policy_command": "session request self-heal-policy",
+        "plan_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+        "daemon_plan_command": "session request self-heal-plan [--trigger <kind>] [--to <page>]",
+        "phase_c": policy.get("phase_c").cloned().unwrap_or(Value::Null),
+        "trigger_policy": policy
+            .get("trigger_policy")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "recovery_order": policy
+            .get("recovery_order")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "maintenance_boundary": policy
+            .get("maintenance_boundary")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "lease_and_scheduler_policy": policy
+            .get("lease_and_scheduler_policy")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "default_plan": {
+            "status": "blocked",
+            "trigger": "observe_required",
+            "recovery_kind": "observe_first",
+            "ready_to_execute_maintenance": false,
+            "execute_requires_matching_lease": true,
+            "plan_command": "session self-heal-plan [--trigger <kind>] [--to <page>]"
+        },
+        "next_actions": session_compact_next_actions(&next_actions),
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "client_guidance": policy
+            .get("client_guidance")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "guarantees": policy.get("guarantees").cloned().unwrap_or(Value::Null)
+    }))
+}
+
+fn session_self_heal_diagnostics_next_actions() -> Value {
+    json!({
+        "schema_version": "session.self_heal_next_actions.v0.1",
+        "status": "blocked",
+        "ordered": [
+            {
+                "order": 1,
+                "action": "inspect_self_heal_policy",
+                "command": "session self-heal-policy",
+                "read_only": true
+            },
+            {
+                "order": 2,
+                "action": "review_self_heal_plan",
+                "command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+                "read_only": true
+            },
+            {
+                "order": 3,
+                "action": "verify_matching_lease_before_execution",
+                "command": "session lease status",
+                "read_only": true
+            },
+            {
+                "order": 4,
+                "action": "defer_live_self_heal_validation",
+                "command": "operator live validation",
+                "read_only": true,
+                "deferred_code": "requires-live-device"
+            }
+        ]
+    })
 }
 
 fn session_capture_freshness_diagnostics_summary() -> CliOutcome<Value> {
@@ -23332,6 +23420,28 @@ mod tests {
             Some("requires-live-device")
         );
         assert_eq!(
+            data.pointer("/status_diagnostics/self_heal/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/self_heal/maintenance_boundary/game_progress_actions_allowed"
+            )
+            .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/self_heal/default_plan/recovery_kind")
+                .and_then(Value::as_str),
+            Some("observe_first")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/self_heal/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/status_diagnostics/interaction_flow/schema_version")
                 .and_then(Value::as_str),
             Some("session.interaction_flow_diagnostics.v0.1")
@@ -34782,6 +34892,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/envelopes/status_view/self_heal_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.self_heal")
+        );
+        assert_eq!(
+            payload
                 .pointer("/envelopes/status_view/interaction_flow_summary_field")
                 .and_then(Value::as_str),
             Some("diagnostics.interaction_flow")
@@ -38550,6 +38666,68 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .pointer("/self_heal/schema_version")
+                .and_then(Value::as_str),
+            Some("session.self_heal_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/trigger_policy/stale_adb_screencap_alone_is_not_game_freeze")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/recovery_order/0/kind")
+                .and_then(Value::as_str),
+            Some("read_only_diagnosis")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/recovery_order/4/kind")
+                .and_then(Value::as_str),
+            Some("app_lifecycle_restart")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/maintenance_boundary/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/default_plan/recovery_kind")
+                .and_then(Value::as_str),
+            Some("observe_first")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/default_plan/ready_to_execute_maintenance")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            diagnostics
+                .pointer("/self_heal/next_actions/ordered_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("review_self_heal_plan"))
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/self_heal/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
                 .pointer("/interaction_flow/schema_version")
                 .and_then(Value::as_str),
             Some("session.interaction_flow_diagnostics.v0.1")
@@ -40342,6 +40520,11 @@ mod tests {
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_capture_freshness_field")
                 .and_then(Value::as_str),
             Some("status_diagnostics.capture_freshness")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_self_heal_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics.self_heal")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_interaction_flow_field")

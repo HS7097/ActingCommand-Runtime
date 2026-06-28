@@ -206,6 +206,19 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab capture freshness status diagnostics summary: `session status --diagnostics` now embeds `diagnostics.capture_freshness`, exposing stale-frame policy, backend order, AK stale-screencap classification, and lighter recovery guidance without touching devices.
 - ActingLab bootstrap capture freshness API contract alignment: `session bootstrap` now embeds `status_diagnostics.capture_freshness`, and `session api` advertises both `status_view.capture_freshness_summary_field` and `bootstrap_view.status_diagnostics_capture_freshness_field`.
 - ActingLab interaction/trusted-channel status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `interaction_flow` and `trusted_channel` summaries, and `session api` advertises their status/bootstrap field paths.
+- ActingLab self-heal status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `self_heal` summaries, and `session api` advertises their status/bootstrap field paths.
+
+## Current ActingLab Self-Heal Status Diagnostics Summary
+
+This increment makes the Phase C self-heal lane directly visible from ordinary status diagnostics and startup bootstrap output without executing recovery.
+
+- `session status --diagnostics` now includes `diagnostics.self_heal`.
+- `diagnostics.self_heal` reuses the offline `session self-heal-policy` boundary and adds a compact default blocked plan.
+- The self-heal summary exposes trigger policy, recovery order, maintenance-only boundaries, lease/scheduler coordination, next action kinds, and deferred live validation state.
+- `session bootstrap` now embeds `status_diagnostics.self_heal`.
+- `session api` now declares `envelopes.status_view.self_heal_summary_field=diagnostics.self_heal`.
+- `session api` now declares `envelopes.bootstrap_view.status_diagnostics_self_heal_field=status_diagnostics.self_heal`.
+- The helper is intentionally non-recursive and does not call the full `session self-heal-plan`; status/readiness/bootstrap remain offline and no-device.
 
 ## Current ActingLab Interaction And Trusted-Channel Status Diagnostics Summary
 
