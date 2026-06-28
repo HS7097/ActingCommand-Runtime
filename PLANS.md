@@ -157,6 +157,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
+- ActingLab request cancellation dry-run: `session request cancel <request-id> --dry-run` now performs the same queue-state and lease checks without deleting the queued request or writing a cancellation journal, giving UI/scheduler clients a safe preflight before queue mutation.
 
 ## Current ActingLab Command-Check Surface
 

@@ -1496,9 +1496,10 @@ fn session_api_contract() -> Value {
                     "consume_query": "session response get <request-id> --consume"
                 }
             },
-            "cancel_query": "session request cancel <request-id> [--reason text]",
+            "cancel_query": "session request cancel <request-id> [--reason text] [--dry-run]",
             "cancel_error_code": "request_cancelled",
             "cancel_records_journal": true,
+            "cancel_dry_run_preserves_queue": true,
             "response_fields": [
                 "request_id",
                 "command",
@@ -8196,18 +8197,25 @@ fn session_lease_paths(state_dir: &Path) -> CliOutcome<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn run_session_request_cancel(flags: &FlagArgs) -> CliOutcome<Value> {
+fn run_session_request_cancel(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     flags.expect_positionals("session request cancel", 1)?;
     let request_id = flags.required_positional(0, "request-id")?;
     validate_session_request_id(request_id)?;
     let reason = parse_optional_string_value(flags, "--reason")?;
     let state_dir = session_state_dir_from_flags(flags)?;
-    session_request_cancel_payload(&state_dir, flags, request_id, reason.as_deref())
+    session_request_cancel_payload(
+        &state_dir,
+        flags,
+        global.dry_run || flags.bool("--dry-run"),
+        request_id,
+        reason.as_deref(),
+    )
 }
 
 fn session_request_cancel_payload(
     state_dir: &Path,
     flags: &FlagArgs,
+    dry_run: bool,
     request_id: &str,
     reason: Option<&str>,
 ) -> CliOutcome<Value> {
@@ -8236,6 +8244,24 @@ fn session_request_cancel_payload(
         )?);
     };
     let lease_authorization = session_request_cancel_lease_authorization(&request, flags)?;
+    if dry_run {
+        return Ok(json!({
+            "schema_version": "session.request_cancel.v0.1",
+            "state_dir": state_dir.display().to_string(),
+            "status": "cancellable",
+            "dry_run": true,
+            "request_id": request_id,
+            "command": request.command,
+            "reason": reason,
+            "lease_authorization": lease_authorization,
+            "would_remove_request": true,
+            "would_record_journal": true,
+            "does_not_touch_device": true,
+            "request_path": request_path.display().to_string(),
+            "response_path": response_path.display().to_string(),
+            "journal": session_request_journal_path(state_dir).display().to_string()
+        }));
+    }
     fs::remove_file(&request_path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             CliError::new(
@@ -8377,7 +8403,7 @@ fn run_session_request(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         })?;
     let flags = FlagArgs::parse(&args[1..])?;
     match command {
-        "cancel" => run_session_request_cancel(&flags),
+        "cancel" => run_session_request_cancel(global, &flags),
         "status" => submit_readonly_session_request(global, &flags, "status", &args[1..]),
         "readiness" => submit_readonly_session_request(global, &flags, "readiness", &args[1..]),
         "command-check" => {
@@ -28110,6 +28136,71 @@ mod tests {
     }
 
     #[test]
+    fn session_request_cancel_dry_run_preserves_queued_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-check".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-check.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-check",
+                "--dry-run",
+                "--reason",
+                "operator_check",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert!(request_path.exists());
+        assert!(!session_request_journal_path(temp.path()).exists());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("cancellable")
+        );
+        assert_eq!(data.get("dry_run").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.get("would_remove_request").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("would_record_journal").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("does_not_touch_device").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_authorization/status")
+                .and_then(Value::as_str),
+            Some("not_required")
+        );
+    }
+
+    #[test]
     fn session_request_cancel_rejects_lease_gated_request_without_holder() {
         let temp = TempDir::new().unwrap();
         let request = SessionCommandRequest {
@@ -28203,6 +28294,69 @@ mod tests {
         );
         assert!(request_path.exists());
         assert!(!session_request_journal_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_request_cancel_dry_run_accepts_matching_lease_without_removing_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-control".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-control.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-control",
+                "--dry-run",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert!(request_path.exists());
+        assert!(!session_request_journal_path(temp.path()).exists());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("cancellable")
+        );
+        assert_eq!(data.get("dry_run").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/lease_authorization/required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_authorization/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
     }
 
     #[test]
@@ -30955,10 +31109,15 @@ mod tests {
         assert_eq!(
             data.pointer("/daemon_request_queue/cancel_query")
                 .and_then(Value::as_str),
-            Some("session request cancel <request-id> [--reason text]")
+            Some("session request cancel <request-id> [--reason text] [--dry-run]")
         );
         assert_eq!(
             data.pointer("/daemon_request_queue/cancel_records_journal")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/cancel_dry_run_preserves_queue")
                 .and_then(Value::as_bool),
             Some(true)
         );

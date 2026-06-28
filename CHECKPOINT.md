@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab request cancel dry-run preflight
+
+### Current status
+
+- Added a non-mutating dry-run preflight to `session request cancel <request-id>`.
+- Dry-run reuses the same queued/running/response state checks as real cancellation.
+- Dry-run reuses the same lease authorization path as real cancellation.
+- Dry-run returns `status=cancellable`, `would_remove_request=true`, `would_record_journal=true`, and `does_not_touch_device=true` when cancellation would be allowed.
+- Dry-run preserves the queued request file and does not write a cancellation journal entry.
+- `session api` now advertises `session request cancel <request-id> [--reason text] [--dry-run]` and `cancel_dry_run_preserves_queue=true`.
+- No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `a920c617b3359d6420f360247cc0a77692d80d5c`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Continued from the already-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Continued from the already-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Inspected Session Layer request-cancel code, Session API contract, and existing request-cancel tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Initial focused request-cancel dry-run tests failed because `--dry-run` is consumed by the global invocation parser before local request-cancel flags are built.
+- Updated request-cancel to accept `GlobalOptions` and treat either global or local `--dry-run` as dry-run mode.
+- Focused Session request-cancel tests passed.
+- Focused Session API contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-request-cancel-dry-run`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab target-scoped request-state list
 
 ### Current status
