@@ -171,6 +171,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab client bootstrap surface: `session bootstrap` and `session request bootstrap` now aggregate API/access contracts, capabilities, readiness, queue, and validation-plan into one no-device startup envelope for UI/scheduler clients.
 - ActingLab live validation acceptance matrix: `session validation-plan` now includes Phase A-D/cross-cutting acceptance boundaries and an AK stale-capture validation scope, keeping offline progress separate from `requires-live-device` acceptance.
 - ActingLab pending live acceptance checklist: `session validation-plan` now includes a `pending_live_acceptance` block titled `待真机验收`, listing every skipped live/device/operator validation item and the evidence required before it can be marked passed.
+- ActingLab unique Session throat-policy surface: `session throat-policy` and `session request throat-policy` expose a machine-readable policy that Session Layer is the only device/control throat, while UI, scheduler, and agents must not directly touch adb/devices.
+
+## Current ActingLab Unique Throat Policy Surface
+
+This increment turns the Session Layer "唯一咽喉" rule into a stable no-device contract query for UI, scheduler, and agent clients.
+
+- `session throat-policy` returns `session.throat_policy.v0.1`.
+- `session request throat-policy` returns the same policy through the resident daemon request path.
+- The payload records that Session Layer is the only control throat and that UI, scheduler, and agents must not directly touch adb or devices.
+- The payload records strict Session Layer routing controls: `--require-session`, `ACTINGLAB_REQUIRE_SESSION_DAEMON`, and `session_daemon_required`.
+- The payload records daemon/control routing policy, lease-gate expectations, trusted-remote reservation, and deferred live acceptance as `requires-live-device`.
+- `session bootstrap`, `session api`, `session contract`, `session command-check`, and command capabilities now advertise or classify the throat-policy surface.
+- The surface guarantees it does not enqueue, capture, start MaaTouch, touch devices, start apps, start listeners, or read resource repositories.
+
+Live-device and operator validation remain deferred for this round as `requires-live-device`. No live result is faked or marked passed by this implementation.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Client Bootstrap Surface
 

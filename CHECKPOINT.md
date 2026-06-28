@@ -1,5 +1,91 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab unique Session throat-policy surface
+
+### Current status
+
+- Added `session throat-policy` as a local no-device Session Layer policy query.
+- Added daemon-routed `session request throat-policy` support through the resident request handler.
+- The payload returns `schema_version=session.throat_policy.v0.1`.
+- The policy states that Session Layer is the only device/control throat and that UI, scheduler, and agents must not directly touch adb/devices.
+- The policy records strict Session Layer routing controls, daemon/control route policy, lease-gate expectations, trusted-remote reservation, failure policy, and live acceptance deferral.
+- `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the throat-policy surface.
+- The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending until this checkpoint is committed and tagged.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `456c8817cdf82a9b307dc72811cbbdfc5d98afba`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand source-of-truth, planning-file, and error-handling rules.
+- Inspected Session Layer bootstrap, validation-plan, API contract, access contract, request routing, command-check classification, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- First focused test compile hit the existing large `session_api_contract` `json!` recursion limit after adding `throat_policy_view`; fixed by moving the view into a small helper inserted after the main contract literal.
+- `cargo test -p actingcommand-actinglab session_throat_policy -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_command_check_throat_policy_is_read_only -- --nocapture --test-threads=1`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json session throat-policy --local`
+- First source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines reported a false positive on the guarantee field `does_not_read_resource_repositories`; no resource read implementation was present.
+- Refined source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for direct ADB input, shell screencap, SQLite, OCR/OpenCV/Tesseract, listener startup, MaaTouch/Capture backend startup, resource-root discovery, retry loop, and reconnect loop.
+
+### Test results
+
+- Focused `session_throat_policy` tests passed.
+- Focused `session_bootstrap` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Focused capability registration test passed.
+- Focused command-check throat-policy classification test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `cargo run -q -p actingcommand-actinglab -- --json session throat-policy --local` passed and returned `schema_version=session.throat_policy.v0.1`.
+- Source-only prohibited-feature scan passed after narrowing one guarantee-field false positive.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and push this Runtime increment and a checkpoint tag.
+2. Keep live/emulator validation deferred as `requires-live-device` until Alice provides a live validation window.
+
 ## 2026-06-28 ActingLab pending live acceptance checklist
 
 ### Current status
