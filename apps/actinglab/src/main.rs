@@ -11699,6 +11699,10 @@ fn self_heal_plan_request_data_summary(data: &Value) -> Value {
         "trigger": data.pointer("/trigger/kind").cloned().unwrap_or(Value::Null),
         "target_page": data.pointer("/target/page").cloned().unwrap_or(Value::Null),
         "recovery_kind": data.pointer("/recovery/kind").cloned().unwrap_or(Value::Null),
+        "escalation_category": data.pointer("/escalation/category").cloned().unwrap_or(Value::Null),
+        "heavy_recovery_candidate": data.pointer("/escalation/heavy_recovery_candidate").cloned().unwrap_or(Value::Null),
+        "does_not_execute_heavy_recovery": data.pointer("/escalation/does_not_execute_heavy_recovery").cloned().unwrap_or(Value::Null),
+        "operator_live_validation_required": data.pointer("/escalation/operator_live_validation_required").cloned().unwrap_or(Value::Null),
         "ready_to_execute_maintenance": data.get("ready_to_execute_maintenance").cloned().unwrap_or(Value::Null),
         "lease_status": data.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
@@ -21710,6 +21714,92 @@ mod tests {
         assert_eq!(
             summary.get("recovery_kind").and_then(Value::as_str),
             Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            summary.get("escalation_category").and_then(Value::as_str),
+            Some("transient_capture_path")
+        );
+        assert_eq!(
+            summary
+                .get("heavy_recovery_candidate")
+                .and_then(Value::as_str),
+            Some("app_restart")
+        );
+        assert_eq!(
+            summary
+                .get("does_not_execute_heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("operator_live_validation_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_self_heal_plan_journal_summary_reports_escalation() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "self-heal-plan-journal".to_string(),
+            command: "self_heal_plan".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "--trigger".to_string(),
+                "startup_login_required".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("self-heal-plan-journal.json"),
+            &request,
+        )
+        .unwrap();
+
+        assert_eq!(process_session_requests(temp.path()).unwrap(), 1);
+        let entries = read_session_request_journal(temp.path(), 10).unwrap();
+        assert_eq!(entries.len(), 1);
+        let summary = entries[0]
+            .data_summary
+            .as_ref()
+            .expect("self-heal-plan request journal entry must carry data summary");
+
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("self_heal_plan")
+        );
+        assert_eq!(
+            summary.get("escalation_category").and_then(Value::as_str),
+            Some("startup_login_path")
+        );
+        assert_eq!(
+            summary
+                .get("heavy_recovery_candidate")
+                .and_then(Value::as_str),
+            Some("app_restart")
+        );
+        assert_eq!(
+            summary
+                .get("does_not_execute_heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("operator_live_validation_required")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

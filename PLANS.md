@@ -181,6 +181,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal plan preflight: `session self-heal-plan` and `session request self-heal-plan` expose a no-device maintenance recovery plan that turns observed triggers into lease/queue/readiness-gated recovery candidates without executing input.
 - ActingLab Phase C self-heal lease-gate alignment: `session self-heal-plan` now makes the embedded `lease_gate` follow the selected recovery candidate, so stale-capture/read-only recovery reports `required=false` while standby/modal/unexpected-page/login/session-expired maintenance control remains lease-gated.
 - ActingLab Phase C self-heal escalation preflight: `session self-heal-plan` now exposes escalation policy for repeated transient capture failures and maintenance-control loops without executing heavy recovery.
+- ActingLab Phase C self-heal event summary: daemon request data summaries now carry self-heal escalation category, heavy-recovery candidate, no-execute guarantee, and operator/live-validation requirement for journal/events consumers.
+
+## Current ActingLab Phase C Self-Heal Event Summary
+
+This increment makes the already-added self-heal escalation policy observable through lightweight request summaries.
+
+- `session.request.data_summary.v0.1` for `kind=self_heal_plan` now includes `escalation_category`.
+- The same summary includes `heavy_recovery_candidate`, `does_not_execute_heavy_recovery`, and `operator_live_validation_required`.
+- UI and scheduler consumers can observe repeated-transient-failure escalation policy through `session journal`, `session events`, and request-state summaries without reading the full response body.
+- This keeps the Phase C self-heal line aligned with the event-stream and queue-inspection surfaces built for UI/API clients.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, resource repository read, network listener, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Phase C Self-Heal Escalation Preflight
 
