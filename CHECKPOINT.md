@@ -1,5 +1,83 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab Phase C implementation plan contract
+
+### Current status
+
+- Added `implementation_plan` to `session phase-c-plan`.
+- The plan uses `schema_version=session.phase_c_implementation_plan.v0.1`.
+- The plan exposes ordered rollout lanes for `self_heal`, `interaction_flow`, `trusted_channel`, and `live_acceptance`.
+- The self-heal lane records the intended observe-first flow: classify stale capture before assuming game freeze, prefer lighter capture-backend recovery before app restart, gate maintenance execution on daemon/queue/lease readiness, and journal recovery decisions.
+- The interaction-flow lane records the intended stream/input-relay flow: bounded local streams remain available, daemon stream work routes through Session Layer requests, and input relay requires matching lease metadata.
+- The trusted-channel lane records the intended security flow: local CLI/file-IPC remains the current local trusted surface, while trusted remote clients remain blocked until encryption, authentication, listener, token/client-certificate material, request admission, audit logging, and live validation are implemented.
+- `session api` now advertises `phase_c_plan_view.implementation_plan_field=implementation_plan` and `implementation_plan_schema_version=session.phase_c_implementation_plan.v0.1`.
+- Request data summaries now include `implementation_plan_status`, `implementation_plan_schema_version`, and `implementation_plan_lane_count`.
+- This is an offline contract/discovery increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, open streams, start MaaTouch, touch devices, start apps, execute self-heal, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `15d5bf983a898976f6d12d12aca582ed940cc125`.
+- Milestone source commit: `336a92d4402861374dc2e7dd0fb2d54f03f4eeb7`.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Scanned `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for Session Layer, Phase C, trusted-channel, and live-deferred constraints.
+- Inspected Phase C plan, self-heal diagnostics, interaction-flow diagnostics, trusted-channel diagnostics, request data-summary, API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields and scanning added source lines for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_phase_c_plan` test group passed and covers the new implementation plan payload plus request data summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covers the new `phase_c_plan_view.implementation_plan_*` contract fields.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### Live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab trusted remote transport gate
 
 ### Current status
