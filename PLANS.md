@@ -197,6 +197,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab self-heal-plan next-action summary: `session self-heal-plan` and `session request self-heal-plan` now expose a machine-readable `next_actions` recovery decision list for UI/scheduler clients, covering observe-first selection, stale-capture diagnosis, readiness/queue/lease blockers, recovery review, Phase C review, and deferred live-validation boundaries.
 - ActingLab self-heal execution gate: `session self-heal-plan` now exposes `execution_gate` as a compact maintenance-recovery gate for UI/scheduler clients, mirroring trigger selection, readiness, queue admission, lease readiness, blocker reasons, and safe-to-execute state.
 - ActingLab transport-plan next-action summary: `session transport plan` and `session request transport plan` now expose a machine-readable `next_actions` trusted-channel decision list for UI/API clients, covering endpoint classification, endpoint-policy blockers, token/certificate preparation, listener/TLS design review, request serialization/audit review, and deferred live-validation boundaries.
+- ActingLab trusted remote gate: `session transport plan` now exposes `trusted_remote_gate` as a compact encrypted-channel readiness gate for UI/API clients, mirroring endpoint policy, auth material, listener/TLS/token implementation state, blocked reasons, and live-validation deferral.
 - ActingLab validation-plan next-action summary: `session validation-plan` and `session request validation-plan` now expose a machine-readable `next_actions` live-acceptance decision list for UI/scheduler/operator clients, covering pending live acceptance review, readiness, capture freshness, Phase C self-heal, interaction stream, trusted-channel transport, and status diagnostics.
 - ActingLab validation-plan diagnostics routing: request-journal validation-plan summaries are now discoverable through event data-summary filters and can produce a read-only `validation_plan_review` status recommendation for UI/scheduler/operator clients.
 - ActingLab validation-plan status-view contract alignment: `session api` now advertises `status_view.validation_plan_actions=["validation_plan_review"]`, so UI/scheduler clients can discover the validation-plan diagnostics action without hard-coding it.
@@ -5578,6 +5579,32 @@ This is still a contract/discovery increment only:
 - no recovery is executed;
 - no daemon request is enqueued;
 - no capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
+
+## Current ActingLab Trusted Remote Gate
+
+This increment keeps the future encrypted trusted-channel lane explicit without starting a remote listener or introducing TLS/token implementation work in this offline milestone.
+
+`session transport plan [--endpoint <url>]` now exposes `trusted_remote_gate` with:
+
+- `schema_version=session.trusted_remote_gate.v0.1`;
+- endpoint-policy checked/safe state;
+- endpoint channel and trusted-remote-requested state;
+- token/client-certificate/auth-material readiness;
+- listener, TLS, and token-issuer implementation flags;
+- request-serialization and audit-log requirements;
+- blocked reasons;
+- live-validation deferral.
+
+The local CLI and daemon file-IPC surfaces remain available without encryption, but trusted remote/UI access remains reserved until later implementation work provides encryption, authentication, request admission, audit logging, and live validation.
+
+This is still a contract/discovery increment only:
+
+- no network listener is started;
+- no TCP endpoint is probed;
+- no token is issued;
+- no TLS layer is implemented;
+- no daemon request, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, or scheduler runtime work is performed;
 - live validation remains `deferred: requires-live-device`.
 
 ## Repo-local planning policy

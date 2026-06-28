@@ -2577,6 +2577,8 @@ fn session_transport_contract() -> Value {
                 "status": "reserved",
                 "network_listener_implemented": false,
                 "plan_command": "session transport plan [--endpoint <url>]",
+                "plan_gate_field": "trusted_remote_gate",
+                "plan_gate_schema_version": "session.trusted_remote_gate.v0.1",
                 "preflight_command": "session transport check --endpoint <url>",
                 "encryption_required": true,
                 "authentication_required": true,
@@ -2739,6 +2741,8 @@ fn session_api_contract() -> Value {
                 "daemon_plan_query": "session request transport plan [--endpoint <url>]",
                 "plan_schema_version": "session.transport_plan.v0.1",
                 "plan_next_actions_field": "next_actions",
+                "plan_trusted_remote_gate_field": "trusted_remote_gate",
+                "plan_trusted_remote_gate_schema_version": "session.trusted_remote_gate.v0.1",
                 "check_query": "session transport check --endpoint <url>",
                 "daemon_check_query": "session request transport check --endpoint <url>",
                 "check_schema_version": "session.transport_check.v0.1"
@@ -9511,6 +9515,8 @@ fn session_transport_plan_payload(flags: &FlagArgs) -> CliOutcome<Value> {
         .and_then(Value::as_bool);
     let has_endpoint_policy_blocker = endpoint_policy_safe == Some(false);
     let blockers = session_transport_plan_blockers(&endpoint_policy);
+    let trusted_remote_gate =
+        session_transport_plan_trusted_remote_gate(&endpoint_policy, &blockers);
     let next_actions = session_transport_plan_next_actions(&endpoint_policy, &blockers);
     Ok(json!({
         "schema_version": "session.transport_plan.v0.1",
@@ -9548,6 +9554,7 @@ fn session_transport_plan_payload(flags: &FlagArgs) -> CliOutcome<Value> {
                 "audit logging for accepted remote commands"
             ]
         },
+        "trusted_remote_gate": trusted_remote_gate,
         "blockers": blockers,
         "next_actions": next_actions,
         "guarantees": {
@@ -9613,6 +9620,99 @@ fn session_transport_plan_blockers(endpoint_policy: &Value) -> Vec<Value> {
         }));
     }
     blockers
+}
+
+fn session_transport_plan_trusted_remote_gate(
+    endpoint_policy: &Value,
+    blockers: &[Value],
+) -> Value {
+    let endpoint_checked = endpoint_policy
+        .get("checked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let endpoint_safe = endpoint_policy
+        .get("safe_for_policy")
+        .and_then(Value::as_bool);
+    let endpoint_channel = endpoint_policy
+        .pointer("/policy/channel")
+        .and_then(Value::as_str);
+    let trusted_remote_requested = endpoint_channel == Some("trusted_remote");
+    let token_configured = env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV);
+    let client_certificate_configured = env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+    let auth_material_configured = token_configured || client_certificate_configured;
+    let mut blocked_reasons = blockers
+        .iter()
+        .map(|blocker| {
+            json!({
+                "kind": blocker.get("kind").cloned().unwrap_or(Value::Null),
+                "code": blocker.get("code").cloned().unwrap_or(Value::Null),
+                "message": blocker.get("message").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if !endpoint_checked {
+        blocked_reasons.push(json!({
+            "kind": "trusted_remote_endpoint_policy",
+            "code": "trusted_remote_endpoint_not_checked",
+            "message": "Run session transport check --endpoint <url> before enabling trusted remote access."
+        }));
+    }
+    if !auth_material_configured {
+        blocked_reasons.push(json!({
+            "kind": "trusted_remote_authentication",
+            "code": "trusted_remote_auth_required",
+            "message": "Configure a token or client certificate before trusted remote clients can authenticate."
+        }));
+    }
+
+    let status = if endpoint_safe == Some(false) {
+        "blocked"
+    } else if endpoint_channel == Some("local_direct") {
+        "not_applicable_local_direct"
+    } else {
+        "reserved"
+    };
+
+    json!({
+        "schema_version": "session.trusted_remote_gate.v0.1",
+        "status": status,
+        "trusted_remote_requested": trusted_remote_requested,
+        "endpoint_policy_checked": endpoint_checked,
+        "endpoint_policy_safe": endpoint_safe,
+        "endpoint": endpoint_policy.get("endpoint").cloned().unwrap_or(Value::Null),
+        "endpoint_channel": endpoint_channel,
+        "requires_encryption": true,
+        "requires_authentication": true,
+        "token_configured": token_configured,
+        "client_certificate_configured": client_certificate_configured,
+        "auth_material_configured": auth_material_configured,
+        "network_listener_implemented": false,
+        "tls_implemented": false,
+        "token_issuer_implemented": false,
+        "request_serialization_required": true,
+        "audit_logging_required": true,
+        "safe_to_start_listener": false,
+        "safe_to_accept_remote_clients": false,
+        "blocked_reason_count": blocked_reasons.len(),
+        "blocked_reasons": blocked_reasons,
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device"
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_transport_plan_next_actions(endpoint_policy: &Value, blockers: &[Value]) -> Value {
@@ -14060,6 +14160,9 @@ fn transport_plan_request_data_summary(data: &Value) -> Value {
         "endpoint_policy_checked": data.pointer("/trusted_remote/endpoint_policy/checked").cloned().unwrap_or(Value::Null),
         "endpoint": data.pointer("/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
         "endpoint_policy_safe": data.pointer("/trusted_remote/endpoint_policy/safe_for_policy").cloned().unwrap_or(Value::Null),
+        "trusted_remote_gate_status": data.pointer("/trusted_remote_gate/status").cloned().unwrap_or(Value::Null),
+        "trusted_remote_gate_auth_material_configured": data.pointer("/trusted_remote_gate/auth_material_configured").cloned().unwrap_or(Value::Null),
+        "trusted_remote_gate_blocked_reason_count": data.pointer("/trusted_remote_gate/blocked_reason_count").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
         "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
         "auth_material_configured": data.pointer("/next_actions/trusted_remote/auth_material_configured").cloned().unwrap_or(Value::Null),
@@ -20750,6 +20853,36 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            data.pointer("/trusted_remote_gate/schema_version")
+                .and_then(Value::as_str),
+            Some("session.trusted_remote_gate.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/safe_to_accept_remote_clients")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.pointer("/trusted_remote_gate/blocked_reasons")
+                .and_then(Value::as_array)
+                .expect("trusted remote gate must expose blocked reasons")
+                .iter()
+                .any(|reason| {
+                    reason.get("code").and_then(Value::as_str)
+                        == Some("trusted_remote_auth_required")
+                })
+        );
+        assert_eq!(
             data.pointer("/next_actions/schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_next_actions.v0.1")
@@ -20807,6 +20940,21 @@ mod tests {
             data.pointer("/trusted_remote/endpoint_policy/error_code")
                 .and_then(Value::as_str),
             Some("trusted_remote_transport_blocked")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/endpoint_policy_safe")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/guarantees/does_not_probe_tcp")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/trusted_remote/endpoint_policy/does_not_probe_tcp")
@@ -20876,6 +21024,31 @@ mod tests {
             data.pointer("/trusted_remote/endpoint_policy/policy/auth_material")
                 .and_then(Value::as_str),
             Some("token")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/trusted_remote_requested")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote_gate/guarantees/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/trusted_remote/ready_to_accept_remote_clients")
@@ -41140,6 +41313,16 @@ mod tests {
             Some("next_actions")
         );
         assert_eq!(
+            data.pointer("/envelopes/transport_view/plan_trusted_remote_gate_field")
+                .and_then(Value::as_str),
+            Some("trusted_remote_gate")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/transport_view/plan_trusted_remote_gate_schema_version")
+                .and_then(Value::as_str),
+            Some("session.trusted_remote_gate.v0.1")
+        );
+        assert_eq!(
             data.pointer("/envelopes/transport_view/check_schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_check.v0.1")
@@ -41548,6 +41731,24 @@ mod tests {
         assert_eq!(
             summary.get("endpoint_policy_safe").and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("trusted_remote_gate_status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            summary
+                .get("trusted_remote_gate_auth_material_configured")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            summary
+                .get("trusted_remote_gate_blocked_reason_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 2)
         );
         assert_eq!(
             summary.get("endpoint").and_then(Value::as_str),
