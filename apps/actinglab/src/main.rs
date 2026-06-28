@@ -1579,6 +1579,8 @@ fn session_api_contract() -> Value {
                 "daemon_ready_field": "daemon.can_accept_requests",
                 "queues_field": "queues",
                 "queue_health_field": "queues.health",
+                "instances_field": "instances",
+                "instance_status_field": "instances.status",
                 "transport_ready_field": "transport.safe_to_connect",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
@@ -5779,6 +5781,7 @@ fn session_readiness_payload(
         .cloned()
         .unwrap_or_default();
     let queue_summary = session_readiness_queue_summary(&status_view)?;
+    let instance_summary = session_readiness_instance_summary(&status_view, global)?;
     let action_kinds = recommended_actions
         .iter()
         .filter_map(|action| action.get("action").and_then(Value::as_str))
@@ -5810,6 +5813,7 @@ fn session_readiness_payload(
             "running": status_view.get("running").and_then(Value::as_bool).unwrap_or(false)
         },
         "queues": queue_summary,
+        "instances": instance_summary,
         "transport": transport.unwrap_or_else(|| json!({
             "checked": false,
             "safe_to_connect": null,
@@ -5831,6 +5835,89 @@ fn session_readiness_payload(
         "blockers": blockers,
         "status_view": status_view
     }))
+}
+
+fn session_readiness_instance_summary(
+    status_view: &Value,
+    global: &GlobalOptions,
+) -> CliOutcome<Value> {
+    let instances = status_view
+        .pointer("/diagnostics/instances")
+        .ok_or_else(|| {
+            CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "readiness_status_view_missing_field",
+                "session readiness could not find diagnostics.instances in status view",
+                &["session_status", "readiness"],
+            )
+        })?;
+    let available = instances
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let count = instances.get("count").and_then(Value::as_u64).unwrap_or(0);
+    let entries = instances
+        .get("instances")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let selected_instance = global.instance.as_deref().and_then(|selected| {
+        entries
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(selected))
+            .cloned()
+    });
+    let missing_required = entries
+        .iter()
+        .filter_map(readiness_instance_missing_required_fields)
+        .collect::<Vec<_>>();
+    let status = if !available {
+        "unavailable"
+    } else if count == 0 {
+        "empty"
+    } else if missing_required.is_empty() {
+        "ready"
+    } else {
+        "needs_configuration"
+    };
+    Ok(json!({
+        "schema_version": "session.readiness_instances.v0.1",
+        "available": available,
+        "count": count,
+        "status": status,
+        "selected_instance": selected_instance,
+        "missing_required": missing_required,
+        "instances": entries
+    }))
+}
+
+fn readiness_instance_missing_required_fields(entry: &Value) -> Option<Value> {
+    let fields = [
+        ("serial_configured", "serial"),
+        ("game_configured", "game"),
+        ("server_configured", "server"),
+    ]
+    .into_iter()
+    .filter_map(|(configured_field, field)| {
+        if entry
+            .get(configured_field)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            None
+        } else {
+            Some(field)
+        }
+    })
+    .collect::<Vec<_>>();
+    if fields.is_empty() {
+        None
+    } else {
+        Some(json!({
+            "id": entry.get("id").cloned().unwrap_or(Value::Null),
+            "fields": fields
+        }))
+    }
 }
 
 fn session_readiness_queue_summary(status_view: &Value) -> CliOutcome<Value> {
@@ -17009,6 +17096,19 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            data.pointer("/instances/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_instances.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/instances/status").and_then(Value::as_str),
+            Some("empty")
+        );
+        assert_eq!(
+            data.pointer("/instances/count").and_then(Value::as_u64),
+            Some(0)
+        );
     }
 
     #[test]
@@ -17056,6 +17156,90 @@ mod tests {
             data.pointer("/queues/pending_requests")
                 .and_then(Value::as_u64),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn session_readiness_reports_instance_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: None,
+                capture_backend: Some("adb_screencap".to_string()),
+            },
+        );
+        config.instances.insert(
+            "ba-jp".to_string(),
+            InstanceConfig {
+                serial: None,
+                game: Some("ba".to_string()),
+                server: Some("jp".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ba-jp",
+                "session",
+                "readiness",
+                "--local",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/instances/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_instances.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/instances/status").and_then(Value::as_str),
+            Some("needs_configuration")
+        );
+        assert_eq!(
+            data.pointer("/instances/count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/instances/selected_instance/id")
+                .and_then(Value::as_str),
+            Some("ba-jp")
+        );
+        assert_eq!(
+            data.pointer("/instances/missing_required/0/id")
+                .and_then(Value::as_str),
+            Some("ba-jp")
+        );
+        assert!(
+            data.pointer("/instances/missing_required/0/fields")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|field| field.as_str() == Some("serial"))
         );
     }
 
@@ -32571,6 +32755,16 @@ mod tests {
             data.pointer("/envelopes/readiness_view/queue_health_field")
                 .and_then(Value::as_str),
             Some("queues.health")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/instances_field")
+                .and_then(Value::as_str),
+            Some("instances")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/instance_status_field")
+                .and_then(Value::as_str),
+            Some("instances.status")
         );
         assert_eq!(
             data.pointer("/envelopes/queue_view/schema_version")

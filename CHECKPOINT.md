@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab readiness instance summary
+
+### Current status
+
+- Added a top-level `instances` summary to `session readiness` and daemon-routed `session request readiness`.
+- The new summary returns `schema_version=session.readiness_instances.v0.1`, registry availability, count, status, selected instance, missing required fields, and configured instance entries.
+- `session api` now advertises `readiness_view.instances_field` and `readiness_view.instance_status_field`.
+- The implementation is a pure status projection from existing diagnostics; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual instance health/connect behavior.
+- Milestone source commit is pending until final validation and commit.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0534a115a70ff6489d9b965d60fdd994253c9978`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for task context only.
+- Confirmed Codex Runtime worktree at `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`.
+- `git status --short --branch`
+- `git rev-parse --show-toplevel`
+- `git rev-parse HEAD`
+- `git rev-parse --abbrev-ref HEAD`
+- Inspected Session Layer readiness, instance diagnostics, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture --test-threads=1`
+- Initial focused readiness test failed because CLI reads a default empty config, so the instance summary status is `empty` rather than `unavailable`; the assertion was corrected to match existing CLI behavior.
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Broad added-line prohibited-feature scan over `apps/actinglab/src/main.rs`, `PLANS.md`, and `CHECKPOINT.md`; it matched only the negative-scope documentation line that explicitly says those features were not added.
+- Source-only prohibited-feature scan over `apps/actinglab/src/main.rs`.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_readiness` tests passed after the assertion correction.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed; no source path added actual fallback, reconnect loop, OCR/OpenCV, SQLite, shell screencap, direct ADB input, new capture/input backend, or MaaTouch startup behavior.
+- Broad prohibited-feature scan hit only negative-scope documentation in `PLANS.md`, not source code.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: trusted remote UI/API transport, unbounded interactive stream transport, scheduler integration, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push Runtime repository changes.
+2. Tag a meaningful checkpoint for rollback/provenance.
+
 ## 2026-06-28 ActingLab submit-plan preflight view
 
 ### Current status

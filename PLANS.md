@@ -164,6 +164,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab request cancellation dry-run: `session request cancel <request-id> --dry-run` now performs the same queue-state and lease checks without deleting the queued request or writing a cancellation journal, giving UI/scheduler clients a safe preflight before queue mutation.
 - ActingLab blocked queue cancel dry-run recommendation: `session status --diagnostics` now emits a non-mutating `blocked_request_cancel_dry_run` recommended action before queue-cancel recommendations, including lease metadata and runnable dry-run arguments for UI/scheduler preflight.
 - ActingLab readiness queue summary: `session readiness` and `session request readiness` now expose top-level `queues` with queue counts, queue health, and blocked-request recommendation kinds so UI/scheduler clients do not need to parse the full embedded status diagnostics for queue state.
+- ActingLab readiness instance summary: `session readiness` and `session request readiness` now expose top-level `instances` with registry availability, selected instance, missing required fields, and configured instance summaries for UI/scheduler consumers.
+
+## Current ActingLab Readiness Instance Summary
+
+This increment gives future UI/scheduler clients a compact instance-registry summary inside the existing readiness envelope, so they can decide whether instance configuration is usable without parsing the full embedded status diagnostics payload.
+
+- `session readiness` now includes `instances.schema_version = session.readiness_instances.v0.1`.
+- `session request readiness` returns the same instance summary through the resident daemon request path.
+- The summary reports registry availability, instance count, status, selected instance, missing required fields, and configured instance entries.
+- Instance summary statuses are `unavailable`, `empty`, `ready`, and `needs_configuration`.
+- `session api` now advertises the readiness `instances` field and `instances.status` field.
+- The readiness instance summary does not enqueue, capture, start MaaTouch, touch devices, start a listener, or read resource repositories.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Submit-Plan Preflight View
 
