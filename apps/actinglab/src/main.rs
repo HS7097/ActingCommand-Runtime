@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "throat_policy", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15015,6 +15015,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         "queue" => Some(queue_request_data_summary(data)),
         "bootstrap" => Some(bootstrap_request_data_summary(data)),
         "readiness" => Some(readiness_request_data_summary(data)),
+        "throat_policy" => Some(throat_policy_request_data_summary(data)),
         "command_check" => Some(command_check_request_data_summary(data)),
         "submit_plan" => Some(submit_plan_request_data_summary(data)),
         "capture_policy" => Some(capture_policy_request_data_summary(data)),
@@ -15379,6 +15380,50 @@ fn readiness_request_data_summary(data: &Value) -> Value {
             .unwrap_or(Value::Null),
     );
     Value::Object(summary)
+}
+
+fn throat_policy_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "throat_policy",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "policy_schema_version": data.get("schema_version").cloned().unwrap_or(Value::Null),
+        "resident_daemon": data.pointer("/session_layer/resident_daemon").cloned().unwrap_or(Value::Null),
+        "only_control_throat": data.pointer("/session_layer/only_control_throat").cloned().unwrap_or(Value::Null),
+        "clients_must_not_directly_touch_adb_or_devices": data.pointer("/session_layer/clients_must_not_directly_touch_adb_or_devices").cloned().unwrap_or(Value::Null),
+        "ui_must_not_directly_touch_adb_or_device": data.pointer("/session_layer/ui_must_not_directly_touch_adb_or_device").cloned().unwrap_or(Value::Null),
+        "scheduler_must_use_session_layer_for_device_control": data.pointer("/session_layer/scheduler_must_use_session_layer_for_device_control").cloned().unwrap_or(Value::Null),
+        "agents_must_use_session_layer_for_device_control": data.pointer("/session_layer/agents_must_use_session_layer_for_device_control").cloned().unwrap_or(Value::Null),
+        "strict_session_throat_flag": data.pointer("/strict_session_throat/flag").cloned().unwrap_or(Value::Null),
+        "strict_session_throat_env": data.pointer("/strict_session_throat/env").cloned().unwrap_or(Value::Null),
+        "strict_session_throat_failure_code": data.pointer("/strict_session_throat/failure_code").cloned().unwrap_or(Value::Null),
+        "strict_session_throat_failure_is_visible": data.pointer("/strict_session_throat/failure_is_visible").cloned().unwrap_or(Value::Null),
+        "local_read_only_prefer_resident_daemon": data.pointer("/route_policy/local_read_only_queries/prefer_resident_daemon_when_alive").cloned().unwrap_or(Value::Null),
+        "local_read_only_override_flag": data.pointer("/route_policy/local_read_only_queries/local_override_flag").cloned().unwrap_or(Value::Null),
+        "control_must_use_resident_daemon_when_available_or_strict": data.pointer("/route_policy/control_requests/must_use_resident_daemon_when_available_or_strict").cloned().unwrap_or(Value::Null),
+        "control_requires_matching_lease": data.pointer("/route_policy/control_requests/requires_matching_lease").cloned().unwrap_or(Value::Null),
+        "control_blocked_without_matching_lease_code": data.pointer("/route_policy/control_requests/blocked_without_matching_lease_code").cloned().unwrap_or(Value::Null),
+        "daemon_internal_forces_local_execution": data.pointer("/route_policy/daemon_internal_execution/forces_local_execution").cloned().unwrap_or(Value::Null),
+        "trusted_remote_status": data.pointer("/route_policy/trusted_remote/status").cloned().unwrap_or(Value::Null),
+        "trusted_remote_requires_encryption": data.pointer("/route_policy/trusted_remote/requires_encryption").cloned().unwrap_or(Value::Null),
+        "trusted_remote_requires_authentication": data.pointer("/route_policy/trusted_remote/requires_authentication").cloned().unwrap_or(Value::Null),
+        "trusted_remote_blocked_without_auth_code": data.pointer("/route_policy/trusted_remote/blocked_without_auth_code").cloned().unwrap_or(Value::Null),
+        "trusted_remote_blocked_without_encryption_code": data.pointer("/route_policy/trusted_remote/blocked_without_encryption_code").cloned().unwrap_or(Value::Null),
+        "lease_required_for_control": data.pointer("/lease_gate/required_for_control").cloned().unwrap_or(Value::Null),
+        "lease_matching_field_count": data.pointer("/lease_gate/matching_fields").and_then(Value::as_array).map(Vec::len),
+        "deferred_live_acceptance_status": data.pointer("/deferred_live_acceptance/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/deferred_live_acceptance/deferred_code").cloned().unwrap_or(Value::Null),
+        "must_not_mark_live_pass_from_offline_checks": data.pointer("/deferred_live_acceptance/must_not_mark_live_pass_from_offline_checks").cloned().unwrap_or(Value::Null),
+        "severe_errors_fail_loud": data.pointer("/failure_policy/severe_errors_fail_loud").cloned().unwrap_or(Value::Null),
+        "silent_failure_allowed": data.pointer("/failure_policy/silent_failure_allowed").cloned().unwrap_or(Value::Null),
+        "does_not_enqueue": data.pointer("/guarantees/does_not_enqueue").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
+        "does_not_start_apps": data.pointer("/guarantees/does_not_start_apps").cloned().unwrap_or(Value::Null),
+        "does_not_read_resource_repositories": data.pointer("/guarantees/does_not_read_resource_repositories").cloned().unwrap_or(Value::Null)
+    })
 }
 
 fn submit_plan_request_data_summary(data: &Value) -> Value {
@@ -28428,6 +28473,174 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("throat_policy")
+        );
+        assert_eq!(
+            summary.get("only_control_throat").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("clients_must_not_directly_touch_adb_or_devices")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("strict_session_throat_failure_code")
+                .and_then(Value::as_str),
+            Some("session_daemon_required")
+        );
+        assert_eq!(
+            summary
+                .get("control_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("trusted_remote_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("trusted_remote_requires_authentication")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("silent_failure_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary.get("deferred_code").and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            summary
+                .get("does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary.get("does_not_capture").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_events_filters_throat_policy_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let policy_request = SessionCommandRequest {
+            request_id: "throat-policy-event".to_string(),
+            command: "throat_policy".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let policy_payload =
+            execute_session_command_request_inner(&policy_request, state_dir).unwrap();
+        let policy_response = SessionCommandResponse {
+            request_id: policy_request.request_id.clone(),
+            command: policy_request.command.clone(),
+            ok: true,
+            data: Some(policy_payload),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &policy_request, &policy_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-throat-policy-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "throat_policy".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 13,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("throat-policy-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("throat_policy")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/only_control_throat")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/clients_must_not_directly_touch_adb_or_devices")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/control_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/trusted_remote_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("throat_policy")
+        );
     }
 
     #[test]
@@ -39316,6 +39529,7 @@ mod tests {
             "queue",
             "bootstrap",
             "readiness",
+            "throat_policy",
             "command_check",
             "submit_plan",
             "capture_policy",

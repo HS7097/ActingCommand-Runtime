@@ -227,6 +227,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab live acceptance checklist granularity: `session validation-plan` now lists record current-frame authoring, interactive stream/input relay, and trusted-channel security as separate `deferred: requires-live-device` acceptance items.
 - ActingLab queue event summary: daemon request journals and `session events --data-summary-kind queue` now expose compact queue health, admission, request counts, recommended actions, and no-device/no-capture guarantees for UI/scheduler clients.
 - ActingLab self-heal policy event summary: daemon request journals and `session events --data-summary-kind self_heal_policy` now expose compact maintenance-only recovery policy, trigger guard, lease/scheduler boundary, and no-device/no-resource guarantees for UI/scheduler clients.
+- ActingLab throat policy event summary: daemon request journals and `session events --data-summary-kind throat_policy` now expose compact unique-control-throat, strict-session, route, lease, trusted-remote, and no-device/no-resource guarantees for UI/scheduler clients.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
@@ -5794,6 +5795,41 @@ This is still a contract/discovery increment only:
 - `session submit-plan` now mirrors Phase C execution-readiness into `phase_c_execution_preflight`, so UI/scheduler clients can inspect self-heal, interaction-flow, trusted-channel, lease, queue, and live-deferred gates before submitting a command.
 - `session queue` and `session events --data-summary-kind queue` expose the queue/admission slice used by Phase C preflights, so UI/scheduler clients can see blocked work before they propose recovery, stream input, or future trusted remote control.
 - `session self-heal-policy` and `session events --data-summary-kind self_heal_policy` expose the maintenance-only self-heal policy slice used before any recovery plan or execution request is accepted.
+- `session throat-policy` and `session events --data-summary-kind throat_policy` expose the unique Session Layer throat slice that every self-heal, interaction-flow, and trusted-channel client must respect.
+
+## Current ActingLab throat policy event summary
+
+This increment makes the unique Session Layer control-throat policy discoverable from daemon request journals and event filters.
+
+`session request throat-policy` summaries now expose:
+
+- resident daemon and only-control-throat flags;
+- client/UI/scheduler/agent no-direct-ADB-or-device rules;
+- strict Session Layer flag, environment variable, visible failure code, and failure visibility;
+- local read-only routing policy and explicit `--local` override;
+- control request routing through the resident daemon and matching lease requirement;
+- daemon-internal local execution guard to avoid recursive request requeue;
+- trusted remote reserved state, encryption/authentication requirements, and blocking codes;
+- lease matching field count and live-validation deferral;
+- severe-error/no-silent-failure policy;
+- no-enqueue/no-device/no-capture/no-MaaTouch/no-listener/no-app/no-resource-read guarantees.
+
+`session events --data-summary-kind throat_policy` can now return this unique-throat policy slice without forcing UI/scheduler clients to parse the full policy payload.
+
+Phase C alignment:
+
+- Self-heal: throat policy events make recovery execution depend on Session Layer routing and matching lease instead of direct device access.
+- Interaction flow: throat policy events make stream/input-relay clients see the same no-bypass rule before they submit input.
+- Trusted channel: throat policy events expose reserved remote status and encryption/authentication blockers before any transport implementation exists.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; offline policy summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no daemon work is enqueued;
+- no recovery is executed;
+- no stream is opened;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab self-heal policy event summary
 
