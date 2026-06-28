@@ -183,6 +183,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal escalation preflight: `session self-heal-plan` now exposes escalation policy for repeated transient capture failures and maintenance-control loops without executing heavy recovery.
 - ActingLab Phase C self-heal event summary: daemon request data summaries now carry self-heal escalation category, heavy-recovery candidate, no-execute guarantee, and operator/live-validation requirement for journal/events consumers.
 - ActingLab Phase C self-heal escalation recommended action: `session status --diagnostics` now turns recent self-heal-plan escalation summaries into a read-only `self_heal_escalation_review` action for UI/scheduler clients.
+- ActingLab interaction/trusted-channel diagnostics recommended actions: `session status --diagnostics` now turns recent `stream_plan` and `transport_plan` summaries into read-only `interactive_stream_preflight_review` and `trusted_channel_preflight_review` actions for UI/scheduler clients.
+
+## Current ActingLab Interaction And Trusted-Channel Recommended Actions
+
+This increment connects the existing stream and transport planning summaries to the status diagnostics recommendation surface.
+
+- `session status --diagnostics` inspects recent request journal entries for `data_summary.kind=stream_plan` and `data_summary.kind=transport_plan`.
+- A blocked or reserved stream plan emits `interactive_stream_preflight_review`.
+- A reserved or blocked trusted-channel transport plan emits `trusted_channel_preflight_review`.
+- Stream review actions route back to `session stream-plan` and preserve instance context.
+- Trusted-channel review actions route back to `session transport plan` and preserve the endpoint when one was summarized.
+- The trusted-channel action explicitly records that it does not start a listener, issue tokens, or start TLS.
+- The Session API contract advertises `interaction_channel_actions` under `status_view`.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, resource repository read, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync, or live validation was added.
 
 ## Current ActingLab Phase C Self-Heal Escalation Recommended Action
 

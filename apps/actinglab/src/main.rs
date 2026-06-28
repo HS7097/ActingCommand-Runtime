@@ -2153,6 +2153,10 @@ fn session_api_contract() -> Value {
                 "self_heal_escalation_actions": [
                     "self_heal_escalation_review"
                 ],
+                "interaction_channel_actions": [
+                    "interactive_stream_preflight_review",
+                    "trusted_channel_preflight_review"
+                ],
                 "queue_health_actions": [
                     "blocked_request_inspect",
                     "blocked_request_cancel_dry_run",
@@ -9898,6 +9902,10 @@ fn session_status_recommended_actions(
         state_dir,
         recent_entries,
     ));
+    actions.extend(session_interaction_channel_recommended_actions(
+        state_dir,
+        recent_entries,
+    ));
     actions.extend(session_last_error_recommended_actions(
         state_dir,
         recent_entries,
@@ -10308,6 +10316,162 @@ fn session_self_heal_escalation_recommended_actions(
         return vec![action];
     }
     Vec::new()
+}
+
+fn session_interaction_channel_recommended_actions(
+    state_dir: &Path,
+    recent_entries: &[SessionRequestJournalEntry],
+) -> Vec<Value> {
+    let state_dir_display = state_dir.display().to_string();
+    let mut actions = Vec::new();
+    let mut saw_stream_plan = false;
+    let mut saw_transport_plan = false;
+
+    for entry in recent_entries.iter().rev() {
+        let Some(summary) = entry.data_summary.as_ref() else {
+            continue;
+        };
+        match summary.get("kind").and_then(Value::as_str) {
+            Some("stream_plan") if !saw_stream_plan => {
+                saw_stream_plan = true;
+                if let Some(action) =
+                    session_stream_plan_recommended_action(&state_dir_display, entry, summary)
+                {
+                    actions.push(action);
+                }
+            }
+            Some("transport_plan") if !saw_transport_plan => {
+                saw_transport_plan = true;
+                if let Some(action) =
+                    session_transport_plan_recommended_action(&state_dir_display, entry, summary)
+                {
+                    actions.push(action);
+                }
+            }
+            _ => {}
+        }
+        if saw_stream_plan && saw_transport_plan {
+            break;
+        }
+    }
+
+    actions
+}
+
+fn session_stream_plan_recommended_action(
+    state_dir_display: &str,
+    entry: &SessionRequestJournalEntry,
+    summary: &Value,
+) -> Option<Value> {
+    let safe_to_open_stream = summary
+        .get("safe_to_open_stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let trusted_remote_reserved = summary
+        .get("trusted_remote_long_lived_stream_status")
+        .and_then(Value::as_str)
+        == Some("reserved");
+    if safe_to_open_stream && !trusted_remote_reserved {
+        return None;
+    }
+
+    let mut args = vec![
+        "session".to_string(),
+        "stream-plan".to_string(),
+        "--state-dir".to_string(),
+        state_dir_display.to_string(),
+    ];
+    if let Some(instance) = entry
+        .global
+        .as_ref()
+        .and_then(|global| global.instance.as_ref())
+    {
+        args.extend(["--instance".to_string(), instance.clone()]);
+    }
+
+    let mut action = session_recommended_action_owned(
+        33,
+        "interactive_stream_preflight_review",
+        "Recent stream planning is blocked or still reserved; inspect the interactive stream preflight before UI input relay or long-lived stream work.",
+        args,
+    );
+    action["read_only"] = json!(true);
+    action["requires_scheduler_decision"] = json!(true);
+    action["requires_matching_lease_for_input_relay"] = summary
+        .get("input_relay_requested")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["safe_to_open_stream"] = summary
+        .get("safe_to_open_stream")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["trusted_remote_long_lived_stream_status"] = summary
+        .get("trusted_remote_long_lived_stream_status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["source_request_id"] = json!(entry.request_id);
+    action["source_command"] = json!(entry.command);
+    action["data_summary"] = summary.clone();
+    Some(action)
+}
+
+fn session_transport_plan_recommended_action(
+    state_dir_display: &str,
+    entry: &SessionRequestJournalEntry,
+    summary: &Value,
+) -> Option<Value> {
+    let listener_implemented = summary
+        .get("network_listener_implemented")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ready_to_accept_remote_clients = summary
+        .get("ready_to_accept_remote_clients")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let endpoint_policy_safe = summary.get("endpoint_policy_safe").and_then(Value::as_bool);
+    if listener_implemented && ready_to_accept_remote_clients && endpoint_policy_safe != Some(false)
+    {
+        return None;
+    }
+
+    let mut args = vec![
+        "session".to_string(),
+        "transport".to_string(),
+        "plan".to_string(),
+        "--state-dir".to_string(),
+        state_dir_display.to_string(),
+    ];
+    if let Some(endpoint) = summary.get("endpoint").and_then(Value::as_str) {
+        args.extend(["--endpoint".to_string(), endpoint.to_string()]);
+    }
+
+    let mut action = session_recommended_action_owned(
+        34,
+        "trusted_channel_preflight_review",
+        "Recent trusted-channel planning is reserved or blocked; inspect transport policy before any listener, token, or TLS implementation work.",
+        args,
+    );
+    action["read_only"] = json!(true);
+    action["requires_security_review"] = json!(true);
+    action["does_not_start_listener"] = json!(true);
+    action["does_not_issue_tokens"] = json!(true);
+    action["does_not_start_tls"] = json!(true);
+    action["network_listener_implemented"] = summary
+        .get("network_listener_implemented")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["ready_to_accept_remote_clients"] = summary
+        .get("ready_to_accept_remote_clients")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["endpoint_policy_safe"] = summary
+        .get("endpoint_policy_safe")
+        .cloned()
+        .unwrap_or(Value::Null);
+    action["source_request_id"] = json!(entry.request_id);
+    action["source_command"] = json!(entry.command);
+    action["data_summary"] = summary.clone();
+    Some(action)
 }
 
 fn session_last_error_recommended_actions(
@@ -11841,6 +12005,7 @@ fn transport_plan_request_data_summary(data: &Value) -> Value {
         "network_listener_implemented": data.pointer("/trusted_remote/network_listener_implemented").cloned().unwrap_or(Value::Null),
         "ready_to_accept_remote_clients": data.pointer("/trusted_remote/ready_to_accept_remote_clients").cloned().unwrap_or(Value::Null),
         "endpoint_policy_checked": data.pointer("/trusted_remote/endpoint_policy/checked").cloned().unwrap_or(Value::Null),
+        "endpoint": data.pointer("/trusted_remote/endpoint_policy/endpoint").cloned().unwrap_or(Value::Null),
         "endpoint_policy_safe": data.pointer("/trusted_remote/endpoint_policy/safe_for_policy").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
@@ -29507,6 +29672,128 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_recommends_interaction_channel_reviews() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        append_test_session_journal_response(
+            temp.path(),
+            "stream-plan-review",
+            "stream_plan",
+            Some("ak"),
+            json!({
+                "schema_version": "session.stream_plan.v0.1",
+                "status": "blocked",
+                "safe_to_open_stream": false,
+                "safe_to_start_client": true,
+                "safe_to_start_stream": true,
+                "safe_to_connect_transport": false,
+                "input_relay_requested": true,
+                "input_relay_action_count": 1,
+                "blockers": [
+                    {"kind": "stream_preflight", "code": "lab_lease_required"}
+                ],
+                "stream_modes": {
+                    "trusted_remote_long_lived": {
+                        "status": "reserved"
+                    }
+                }
+            }),
+        );
+        append_test_session_journal_response(
+            temp.path(),
+            "transport-plan-review",
+            "transport",
+            None,
+            json!({
+                "schema_version": "session.transport_plan.v0.1",
+                "status": "blocked",
+                "trusted_remote": {
+                    "status": "reserved",
+                    "network_listener_implemented": false,
+                    "ready_to_accept_remote_clients": false,
+                    "endpoint_policy": {
+                        "checked": true,
+                        "endpoint": "http://192.0.2.1:4317",
+                        "safe_for_policy": false
+                    }
+                },
+                "blockers": [
+                    {"kind": "trusted_remote_endpoint_policy"}
+                ]
+            }),
+        );
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let actions = status
+            .pointer("/diagnostics/recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        let stream_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str)
+                    == Some("interactive_stream_preflight_review")
+            })
+            .expect("stream preflight review action");
+        assert_eq!(
+            stream_action.get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            stream_action
+                .get("requires_matching_lease_for_input_relay")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            stream_action
+                .get("source_request_id")
+                .and_then(Value::as_str),
+            Some("stream-plan-review")
+        );
+
+        let transport_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str)
+                    == Some("trusted_channel_preflight_review")
+            })
+            .expect("trusted channel review action");
+        assert_eq!(
+            transport_action.get("read_only").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            transport_action
+                .get("does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            transport_action
+                .get("does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            transport_action
+                .pointer("/data_summary/endpoint")
+                .and_then(Value::as_str),
+            Some("http://192.0.2.1:4317")
+        );
+        let transport_args = transport_action
+            .get("args")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            transport_args
+                .iter()
+                .any(|arg| arg.as_str() == Some("--endpoint"))
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_stale_lease_inspect() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -31847,6 +32134,18 @@ mod tests {
                 .pointer("/envelopes/status_view/self_heal_escalation_actions/0")
                 .and_then(Value::as_str),
             Some("self_heal_escalation_review")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/interaction_channel_actions/0")
+                .and_then(Value::as_str),
+            Some("interactive_stream_preflight_review")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/interaction_channel_actions/1")
+                .and_then(Value::as_str),
+            Some("trusted_channel_preflight_review")
         );
         assert_eq!(
             payload
@@ -37312,6 +37611,10 @@ mod tests {
         assert_eq!(
             summary.get("endpoint_policy_safe").and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            summary.get("endpoint").and_then(Value::as_str),
+            Some("http://192.0.2.1:4317")
         );
         assert_eq!(
             summary
