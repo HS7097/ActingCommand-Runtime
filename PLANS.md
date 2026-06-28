@@ -168,6 +168,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab readiness selected-instance gate: `session readiness` and `session request readiness` now mark selected missing or incomplete instances as `ready=false` with explicit instance blockers, so UI/scheduler consumers do not submit work against unusable instance config.
 - ActingLab command-check instance gate: `session command-check` and `session request command-check` now gate device-affecting commands on selected-instance configuration, and `session submit-plan` exposes a compact `preflight_summary` for UI/scheduler consumers.
 - ActingLab live validation plan surface: `session validation-plan` and `session request validation-plan` now expose deferred live-validation policy, allowed offline checks, and no-device guarantees as machine-readable data for UI/scheduler clients.
+- ActingLab client bootstrap surface: `session bootstrap` and `session request bootstrap` now aggregate API/access contracts, capabilities, readiness, queue, and validation-plan into one no-device startup envelope for UI/scheduler clients.
+
+## Current ActingLab Client Bootstrap Surface
+
+This increment gives future UI/scheduler clients a single read-only startup envelope instead of requiring them to independently discover the Session Layer contracts, queue state, readiness state, and live-validation deferral policy.
+
+- `session bootstrap` returns `session.bootstrap.v0.1`.
+- `session request bootstrap` returns the same schema through the resident daemon request path.
+- The payload includes `access_contract`, `api_contract`, `session_layer`, `commands`, `readiness`, `queue`, and `validation_plan`.
+- The API/access/capability contracts now advertise the bootstrap entry point.
+- `session command-check bootstrap` classifies the bootstrap query as read-only.
+- The surface guarantees it does not enqueue, capture, start MaaTouch, touch devices, start apps, start listeners, or read resource repositories.
+
+Live-device and operator validation remain deferred for this round as `requires-live-device`. No live result is faked or marked passed by this implementation.
+
+No trusted remote network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Live Validation Plan Surface
 
