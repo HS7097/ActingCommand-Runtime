@@ -159,6 +159,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
 - ActingLab request cancellation dry-run: `session request cancel <request-id> --dry-run` now performs the same queue-state and lease checks without deleting the queued request or writing a cancellation journal, giving UI/scheduler clients a safe preflight before queue mutation.
 - ActingLab blocked queue cancel dry-run recommendation: `session status --diagnostics` now emits a non-mutating `blocked_request_cancel_dry_run` recommended action before queue-cancel recommendations, including lease metadata and runnable dry-run arguments for UI/scheduler preflight.
+- ActingLab readiness queue summary: `session readiness` and `session request readiness` now expose top-level `queues` with queue counts, queue health, and blocked-request recommendation kinds so UI/scheduler clients do not need to parse the full embedded status diagnostics for queue state.
 
 ## Current ActingLab Command-Check Surface
 

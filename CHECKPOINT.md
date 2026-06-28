@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab readiness queue summary
+
+### Current status
+
+- Added a top-level `queues` summary to `session readiness` and `session request readiness`.
+- The readiness queue summary reports queue counts, queue health status, and the full queue health payload under schema `session.readiness_queues.v0.1`.
+- `session readiness` now reports daemon-alive-but-blocked-queue states as `status=degraded` while preserving `ready=true` when the daemon can still accept requests.
+- `session api` now documents the readiness `queues` field and the expanded queue recommended action set, including `blocked_request_cancel_dry_run`.
+- No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `7ad2924cb324ae6e0cb5e90344853415f1347239`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Searched Codex memory for ActingCommand planning and verification rules.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- Inspected Session Layer readiness, status diagnostics, API contract, and queue-health code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture --test-threads=1`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Initial readiness focused run failed because the expected clear queue status was written as `healthy`; subsequent failures in that parallel run were env-lock poison fallout.
+- Corrected the readiness queue status expectation to `clear`.
+- Focused readiness tests passed with `--test-threads=1`.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-readiness-queue-summary`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab blocked cancel dry-run recommendation
 
 ### Current status

@@ -1550,6 +1550,9 @@ fn session_api_contract() -> Value {
                 ],
                 "queue_health_actions": [
                     "blocked_request_inspect",
+                    "blocked_request_cancel_dry_run",
+                    "blocked_request_cancel",
+                    "blocked_request_cancel_requires_lease",
                     "blocked_running_request_inspect",
                     "unclaimed_response_read"
                 ],
@@ -1564,6 +1567,8 @@ fn session_api_contract() -> Value {
                 "ready_field": "ready",
                 "status_field": "status",
                 "daemon_ready_field": "daemon.can_accept_requests",
+                "queues_field": "queues",
+                "queue_health_field": "queues.health",
                 "transport_ready_field": "transport.safe_to_connect",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
@@ -5638,6 +5643,7 @@ fn session_readiness_payload(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let queue_summary = session_readiness_queue_summary(&status_view)?;
     let action_kinds = recommended_actions
         .iter()
         .filter_map(|action| action.get("action").and_then(Value::as_str))
@@ -5668,6 +5674,7 @@ fn session_readiness_payload(
             "can_accept_requests": can_accept_requests,
             "running": status_view.get("running").and_then(Value::as_bool).unwrap_or(false)
         },
+        "queues": queue_summary,
         "transport": transport.unwrap_or_else(|| json!({
             "checked": false,
             "safe_to_connect": null,
@@ -5689,6 +5696,37 @@ fn session_readiness_payload(
         "blockers": blockers,
         "status_view": status_view
     }))
+}
+
+fn session_readiness_queue_summary(status_view: &Value) -> CliOutcome<Value> {
+    let queues = status_view.pointer("/diagnostics/queues").ok_or_else(|| {
+        CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "readiness_status_view_missing_field",
+            "session readiness could not find diagnostics.queues in status view",
+            &["session_status", "readiness"],
+        )
+    })?;
+    let health = session_readiness_required_queue_field(queues, "health")?;
+    Ok(json!({
+        "schema_version": "session.readiness_queues.v0.1",
+        "status": health.get("status").cloned().unwrap_or(Value::Null),
+        "pending_requests": session_readiness_required_queue_field(queues, "pending_requests")?,
+        "running_requests": session_readiness_required_queue_field(queues, "running_requests")?,
+        "pending_responses": session_readiness_required_queue_field(queues, "pending_responses")?,
+        "health": health
+    }))
+}
+
+fn session_readiness_required_queue_field(queues: &Value, field: &str) -> CliOutcome<Value> {
+    queues.get(field).cloned().ok_or_else(|| {
+        CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "readiness_status_view_missing_field",
+            format!("session readiness could not find diagnostics.queues.{field} in status view"),
+            &["session_status", "readiness"],
+        )
+    })
 }
 
 fn session_readiness_transport_check(endpoint: &str) -> Value {
@@ -16630,6 +16668,91 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert_eq!(
+            data.pointer("/queues/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_queues.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/queues/status").and_then(Value::as_str),
+            Some("clear")
+        );
+        assert_eq!(
+            data.pointer("/queues/pending_requests")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn session_readiness_reports_queue_health_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let pending = SessionCommandRequest {
+            request_id: "pending-readiness".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("pending-readiness.json"),
+            &pending,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "readiness", "--local"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(true));
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("degraded"));
+        assert_eq!(
+            data.pointer("/queues/status").and_then(Value::as_str),
+            Some("needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/queues/pending_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/queues/running_requests")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            data.pointer("/queues/health/pending_requests/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/queues/health/pending_requests/oldest_request_id")
+                .and_then(Value::as_str),
+            Some("pending-readiness")
+        );
+        assert!(
+            data.get("recommended_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|action| action.as_str() == Some("blocked_request_cancel_dry_run"))
+        );
     }
 
     #[test]
@@ -26572,6 +26695,12 @@ mod tests {
             payload
                 .pointer("/envelopes/status_view/queue_health_actions/2")
                 .and_then(Value::as_str),
+            Some("blocked_request_cancel")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/queue_health_actions/5")
+                .and_then(Value::as_str),
             Some("unclaimed_response_read")
         );
         assert_eq!(
@@ -31518,6 +31647,26 @@ mod tests {
             data.pointer("/envelopes/transport_view/check_schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_check.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/status_view/queue_health_actions/1")
+                .and_then(Value::as_str),
+            Some("blocked_request_cancel_dry_run")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/status_view/queue_health_actions/5")
+                .and_then(Value::as_str),
+            Some("unclaimed_response_read")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/queues_field")
+                .and_then(Value::as_str),
+            Some("queues")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/queue_health_field")
+                .and_then(Value::as_str),
+            Some("queues.health")
         );
         assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")
