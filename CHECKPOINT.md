@@ -15,8 +15,8 @@
 - `session api`, `session contract`, `session bootstrap`, `session command-check`, and command capabilities now advertise or classify the connect-plan surface.
 - The change is a pure no-device/no-listener preflight for UI, scheduler, and agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending.
-- Checkpoint tag: `checkpoint/20260628-session-connect-plan` pending.
+- Milestone source commit: `b9d9b66c691195621fc7a1afe2ab6c605120a201`.
+- Checkpoint tag: `checkpoint/20260628-session-connect-plan`.
 
 ### Resource mirrors used
 
