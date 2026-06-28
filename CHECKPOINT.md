@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab client bootstrap surface
+
+### Current status
+
+- Added a local `session bootstrap` read-only Session Layer query.
+- Added daemon-routed `session request bootstrap` support through the resident request handler.
+- The payload returns `schema_version=session.bootstrap.v0.1`.
+- The bootstrap envelope aggregates `access_contract`, `api_contract`, `session_layer`, `commands`, `readiness`, `queue`, and `validation_plan`.
+- `session api`, `session contract`, capabilities, and command-check classification now advertise or recognize the bootstrap surface.
+- The change is a pure local/daemon startup projection for UI/scheduler clients; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start a listener, read resources, or change daemon/device behavior.
+- Milestone source commit `9a843ae5c930fffb1a4b4854a1b8aa1535165e82` was prepared with checkpoint tag `checkpoint/20260628-session-bootstrap`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `22cf57c22e954f9417227818168eedda268b6ebd`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Confirmed Codex Runtime worktree at `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`; Claude workspace contents were ignored per user instruction.
+- `git status --short --branch; git fetch --prune --tags origin; git status --short --branch; git rev-parse HEAD; git rev-parse origin/main`
+- Read Runtime `AGENTS.md`, `NOTICE.md`, `PLANS.md`, and `CHECKPOINT.md`; `LICENSE_POLICY.md` is absent in this repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand remote/source-of-truth and planning-file rules.
+- Inspected Session Layer command routing, request handling, API/access contracts, capabilities, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- First focused test run failed at compile time because the large `session_api_contract` `json!` macro exceeded the default recursion limit after adding `bootstrap_view`; fixed by moving the bootstrap view into a small helper inserted after the main contract literal instead of increasing the crate recursion limit.
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, and new capture/input backend terms.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_bootstrap` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed.
+- Focused capabilities test passed.
+- Focused capability registration test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Push the Runtime source, checkpoint, and checkpoint tag.
+2. Keep live/emulator validation deferred as `requires-live-device` until Alice provides a live validation window.
+
 ## 2026-06-28 ActingLab live validation plan surface
 
 ### Current status
