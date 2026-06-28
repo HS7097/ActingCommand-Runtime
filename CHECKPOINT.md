@@ -8,6 +8,7 @@
 - The readiness queue summary reports queue counts, queue health status, and the full queue health payload under schema `session.readiness_queues.v0.1`.
 - `session readiness` now reports daemon-alive-but-blocked-queue states as `status=degraded` while preserving `ready=true` when the daemon can still accept requests.
 - `session api` now documents the readiness `queues` field and the expanded queue recommended action set, including `blocked_request_cancel_dry_run`.
+- Milestone source commit `50fcd2330c24b42a1c54bc8ebae2c89f709cae5b` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-readiness-queue-summary`.
 - No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
@@ -44,6 +45,10 @@
 - Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Add readiness queue summary"`
+- `git tag checkpoint/20260628-readiness-queue-summary 50fcd23`
+- `git push origin main`
+- `git push origin checkpoint/20260628-readiness-queue-summary`
 
 ### Test results
 
@@ -65,8 +70,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-readiness-queue-summary`.
-2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+1. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
 
 ## 2026-06-28 ActingLab blocked cancel dry-run recommendation
 
