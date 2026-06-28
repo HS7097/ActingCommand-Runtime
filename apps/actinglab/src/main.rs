@@ -2257,6 +2257,7 @@ fn session_phase_c_plan_payload(
     let transport_plan = session_transport_plan_payload(flags)?;
     let validation_plan = session_validation_plan_payload(global, flags, command_name)?;
     let implementation_plan = session_phase_c_implementation_plan_payload();
+    let acceptance_gates = session_phase_c_acceptance_gates_payload();
     let next_actions = session_phase_c_plan_next_actions(
         &self_heal_plan,
         &interaction_plan,
@@ -2327,6 +2328,7 @@ fn session_phase_c_plan_payload(
             }
         ],
         "implementation_plan": implementation_plan,
+        "acceptance_gates": acceptance_gates,
         "self_heal": {
             "policy": self_heal_policy,
             "plan": self_heal_plan
@@ -2373,6 +2375,119 @@ fn session_phase_c_plan_payload(
             "does_not_mark_live_validation_passed": true
         }
     }))
+}
+
+fn session_phase_c_acceptance_gates_payload() -> Value {
+    json!({
+        "schema_version": "session.phase_c_acceptance_gates.v0.1",
+        "status": "offline_contract",
+        "purpose": "separate offline-verifiable Phase C gates from live-device acceptance gates",
+        "all_live_gates_deferred_code": "requires-live-device",
+        "lanes": [
+            {
+                "lane": "self_heal",
+                "current_status": "plan_available_offline",
+                "offline_gates": [
+                    "session self-heal-policy is readable",
+                    "session self-heal-plan returns trigger, recovery, blockers, and execution gate",
+                    "session readiness and session queue expose liveness, lease, and queue blockers",
+                    "session status --diagnostics exposes capture freshness and self-heal recommendations"
+                ],
+                "live_gates": [
+                    "prepared emulator reproduces stale capture or recovery scenario",
+                    "operator confirms recovery route returns to known good page",
+                    "journal records recovery decision, original trigger, and user-visible impact"
+                ],
+                "blocking_codes": [
+                    "requires-live-device",
+                    "lab_lease_required",
+                    "request_queue_needs_attention",
+                    "daemon_route_unavailable"
+                ],
+                "next_preflight_command": "session self-heal-plan --trigger <kind> --to <page>",
+                "must_not_execute_offline": true
+            },
+            {
+                "lane": "interaction_flow",
+                "current_status": "preflight_available_offline",
+                "offline_gates": [
+                    "session stream-plan exposes bounded stream readiness",
+                    "session command-check stream --input-event <action,args> reports lease gate without device work",
+                    "session submit-plan stream --input-event <action,args> aggregates readiness, lease, and queue gates",
+                    "session api exposes stream view and input relay preflight command"
+                ],
+                "live_gates": [
+                    "prepared device emits observed stream frames",
+                    "input relay executes only with matching lease metadata",
+                    "journal records stream/input relay request outcome for operator audit"
+                ],
+                "blocking_codes": [
+                    "requires-live-device",
+                    "lab_lease_required",
+                    "request_queue_needs_attention",
+                    "daemon_route_unavailable"
+                ],
+                "next_preflight_command": "session submit-plan stream --input-event <action,args>",
+                "must_not_execute_offline": true
+            },
+            {
+                "lane": "trusted_channel",
+                "current_status": "reserved_contract",
+                "offline_gates": [
+                    "session transport plan exposes endpoint policy and authentication material status",
+                    "session transport check rejects unsafe trusted-remote endpoints",
+                    "session api marks trusted remote listener, token issuer, and TLS as not implemented",
+                    "session phase-c-plan keeps remote control acceptance blocked until security gates pass"
+                ],
+                "live_gates": [
+                    "encrypted authenticated listener is implemented and reviewed",
+                    "request admission and audit logging are enabled for remote clients",
+                    "operator security validation confirms no unauthenticated remote control path"
+                ],
+                "blocking_codes": [
+                    "requires-live-device",
+                    "trusted_remote_transport_blocked",
+                    "trusted_remote_auth_required"
+                ],
+                "next_preflight_command": "session transport plan --endpoint <url>",
+                "must_not_start_listener_offline": true
+            },
+            {
+                "lane": "live_acceptance",
+                "current_status": "deferred",
+                "offline_gates": [
+                    "session validation-plan lists pending live acceptance items",
+                    "offline tests keep every live-only item deferred",
+                    "checkpoint records skipped live tasks under the pending live acceptance section"
+                ],
+                "live_gates": [
+                    "prepared emulator/session validation",
+                    "AK stale capture fresh-frame recovery validation",
+                    "interactive stream/input relay live validation",
+                    "trusted-channel security live validation",
+                    "operator acceptance observation"
+                ],
+                "blocking_codes": [
+                    "requires-live-device"
+                ],
+                "next_preflight_command": "session validation-plan",
+                "must_not_mark_passed_offline": true
+            }
+        ],
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_phase_c_implementation_plan_payload() -> Value {
@@ -3726,6 +3841,8 @@ fn session_phase_c_plan_view_contract() -> Value {
         "trusted_channel_field": "trusted_channel",
         "implementation_plan_field": "implementation_plan",
         "implementation_plan_schema_version": "session.phase_c_implementation_plan.v0.1",
+        "acceptance_gates_field": "acceptance_gates",
+        "acceptance_gates_schema_version": "session.phase_c_acceptance_gates.v0.1",
         "live_validation_field": "live_validation",
         "next_actions_field": "next_actions",
         "milestones_field": "milestones",
@@ -14588,6 +14705,9 @@ fn phase_c_plan_request_data_summary(data: &Value) -> Value {
         "implementation_plan_status": data.pointer("/implementation_plan/status").cloned().unwrap_or(Value::Null),
         "implementation_plan_schema_version": data.pointer("/implementation_plan/schema_version").cloned().unwrap_or(Value::Null),
         "implementation_plan_lane_count": data.pointer("/implementation_plan/rollout_order").and_then(Value::as_array).map(Vec::len),
+        "acceptance_gates_schema_version": data.pointer("/acceptance_gates/schema_version").cloned().unwrap_or(Value::Null),
+        "acceptance_gate_lane_count": data.pointer("/acceptance_gates/lanes").and_then(Value::as_array).map(Vec::len),
+        "acceptance_gates_deferred_code": data.pointer("/acceptance_gates/all_live_gates_deferred_code").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
@@ -26304,6 +26424,56 @@ mod tests {
             Some("requires-live-device")
         );
         assert_eq!(
+            data.pointer("/acceptance_gates/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/status")
+                .and_then(Value::as_str),
+            Some("offline_contract")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/all_live_gates_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/0/lane")
+                .and_then(Value::as_str),
+            Some("self_heal")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/1/lane")
+                .and_then(Value::as_str),
+            Some("interaction_flow")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/1/next_preflight_command")
+                .and_then(Value::as_str),
+            Some("session submit-plan stream --input-event <action,args>")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/2/lane")
+                .and_then(Value::as_str),
+            Some("trusted_channel")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/2/blocking_codes/1")
+                .and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/lanes/3/current_status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/acceptance_gates/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/trusted_channel/requires_encryption")
                 .and_then(Value::as_bool),
             Some(true)
@@ -26476,6 +26646,24 @@ mod tests {
                 .get("implementation_plan_lane_count")
                 .and_then(Value::as_u64),
             Some(4)
+        );
+        assert_eq!(
+            summary
+                .get("acceptance_gates_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            summary
+                .get("acceptance_gate_lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            summary
+                .get("acceptance_gates_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
         );
         assert_eq!(
             summary
@@ -37057,6 +37245,18 @@ mod tests {
                 .pointer("/envelopes/phase_c_plan_view/implementation_plan_schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_implementation_plan.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/acceptance_gates_field")
+                .and_then(Value::as_str),
+            Some("acceptance_gates")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/phase_c_plan_view/acceptance_gates_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
         );
         assert_eq!(
             payload

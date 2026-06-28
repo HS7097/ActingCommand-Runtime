@@ -159,6 +159,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Session queue view: `session queue` and `session request queue` now expose `session.queue.v0.1` with queue counts, health, previews, admission status, and queue-specific recommended actions for UI/scheduler clients without enqueueing or touching devices.
 - ActingLab submit-plan preflight view: `session submit-plan <command...>` and `session request submit-plan <command...>` now aggregate readiness, command-check, and queue admission into one no-device/no-enqueue submission plan for UI/scheduler clients.
 - ActingLab stream input relay preflight contract: `session command-check stream --input-event <action,args>` and `--relay-event <action,args>` are locked as lease-gated control preflights while `stream check --input-event ...` remains a read-only preflight that does not enqueue, capture, start MaaTouch, or touch devices.
+- ActingLab Phase C acceptance gates contract: `session phase-c-plan` now embeds `session.phase_c_acceptance_gates.v0.1`, separating offline-verifiable gates from live-device gates for self-heal, interaction flow, trusted channel, and live acceptance.
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
 - ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
@@ -5726,6 +5727,8 @@ This is still a contract/discovery increment only:
 - `stream check --input-event <action,args>` is a read-only preflight surface for reviewing input-relay readiness and must not start capture, MaaTouch, listeners, or device I/O.
 - Trusted remote access remains reserved until authenticated and encrypted transport is implemented; current contract work may expose plans and checks but must not start a network listener, issue tokens, or start TLS.
 - Live validation for self-heal, interactive stream input relay, and trusted encrypted channel remains deferred with `requires-live-device`.
+- `session phase-c-plan` exposes `acceptance_gates` so UI/scheduler clients can distinguish offline gates from live gates before they interpret readiness, stream, self-heal, or trusted-channel status.
+- The acceptance gate contract keeps all live gates tied to `requires-live-device`; offline checks may prove contracts and preflights, but they must not mark live validation as accepted.
 
 ## Repo-local planning policy
 
