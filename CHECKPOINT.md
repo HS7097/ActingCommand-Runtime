@@ -1,5 +1,87 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab capture freeze classification gate
+
+### Current status
+
+- Added `freeze_classification_gate` to `session capture-policy`.
+- The gate uses `schema_version=session.capture_freeze_classification_gate.v0.1`.
+- The gate reports `status=blocked_without_fresh_backend_evidence` and `safe_to_classify_game_frozen=false`.
+- The gate explicitly records that `adb_screencap` evidence alone must not classify the game as frozen.
+- Insufficient evidence now includes same-md5 `adb_screencap`, reconnect-same-md5, input-ok-without-fresh-frame, high CPU without stronger evidence, and page detection from a stale frame.
+- Required evidence before a live game-freeze label now includes fresh-frame diagnosis, backend/hash/timestamp or sequence evidence, frame comparison or stale proof, lighter non-ADB screenshot backend checks where available, and operator/live evidence.
+- `session api` now advertises `capture_policy_view.freeze_classification_gate_field=freeze_classification_gate` and `freeze_classification_gate_schema_version=session.capture_freeze_classification_gate.v0.1`.
+- Resident daemon request summaries now include `capture_policy` results with freeze-gate status, safe-to-classify state, required-evidence count, and live-validation deferral.
+- `session events` API data-summary kinds now include `capture_policy`.
+- This is an offline contract/discovery increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, open streams, start MaaTouch, touch devices, start apps, execute self-heal, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `f506371b8f98b8f88970c39c8574b3a9b448e052`.
+- Milestone source commit: `263ae2b3b0d3d8494f206e8c68cd18a2bec075c7`.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and task source files.
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Read relevant memory entries for Azur planning/checkpoint expectations and formal-program error handling.
+- Scanned `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for Session Layer, stale-capture, Phase C, trusted-channel, and live-deferred constraints.
+- Inspected capture policy, self-heal policy/plan, validation plan, API contract, request data-summary, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_capture_policy`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields and scanning added source lines for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_capture_policy` test group passed and covers the new freeze-classification gate plus capture-policy request summary.
+- Focused `session_api_is_offline_api_contract` passed and covers the new `capture_policy_view.freeze_classification_gate_*` contract fields plus `capture_policy` event data-summary kind.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### Live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - verification that same-md5 `adb_screencap` can be avoided by a lighter screenshot backend on the affected AK instance.
+- `deferred: requires-live-device` - operator acceptance before labeling a real game-freeze conclusion.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab Phase C implementation plan contract
 
 ### Current status
