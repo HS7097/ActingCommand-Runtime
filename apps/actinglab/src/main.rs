@@ -1888,6 +1888,8 @@ fn session_api_contract() -> Value {
                 "selected_instance_status_field": "instances.selected_status",
                 "selected_instance_missing_required_field": "instances.selected_missing_required",
                 "transport_ready_field": "transport.safe_to_connect",
+                "policy_summary_field": "policy_summary",
+                "policy_summary_schema_version": "session.readiness_policy_summary.v0.1",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
             },
@@ -6313,11 +6315,67 @@ fn session_readiness_payload(
             "does_not_start_listener": true,
             "requires_separate_instance_and_lease_check": true
         },
+        "policy_summary": session_readiness_policy_summary(),
         "recommended_action_kinds": action_kinds,
         "recommended_actions": recommended_actions,
         "blockers": blockers,
         "status_view": status_view
     }))
+}
+
+fn session_readiness_policy_summary() -> Value {
+    json!({
+        "schema_version": "session.readiness_policy_summary.v0.1",
+        "purpose": "compact client startup policy summary for UI, scheduler, and agent clients",
+        "control_throat": {
+            "policy_command": "session throat-policy",
+            "daemon_policy_command": "session request throat-policy",
+            "only_session_layer_touches_devices": true,
+            "clients_must_not_directly_touch_adb_or_devices": true
+        },
+        "capture_freshness": {
+            "policy_command": "session capture-policy",
+            "daemon_policy_command": "session request capture-policy",
+            "stale_adb_screencap_alone_is_not_game_freeze": true,
+            "require_fresh_flag": "--require-fresh"
+        },
+        "self_heal": {
+            "policy_command": "session self-heal-policy",
+            "daemon_policy_command": "session request self-heal-policy",
+            "flow": ["observe", "diagnose", "plan", "execute"],
+            "execution_requires_matching_lease": true,
+            "game_progress_actions_allowed": false
+        },
+        "stream": {
+            "preflight_command": "stream check",
+            "daemon_preflight_command": "session request stream check",
+            "bounded_local_stream_available": true,
+            "input_relay_requires_matching_lease": true,
+            "trusted_remote_long_lived_stream_status": "reserved"
+        },
+        "transport": {
+            "policy_command": "session transport",
+            "check_command": "session transport check --endpoint <url>",
+            "daemon_check_command": "session request transport check --endpoint <url>",
+            "loopback_without_auth_allowed": true,
+            "trusted_remote_requires_encryption": true,
+            "trusted_remote_requires_authentication": true
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_start_apps": true,
+            "does_not_read_resource_repositories": true
+        }
+    })
 }
 
 fn session_readiness_instance_summary(
@@ -18215,6 +18273,21 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/policy_summary/schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_policy_summary.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/policy_summary/control_throat/only_session_layer_touches_devices")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/policy_summary/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/instances/schema_version")
                 .and_then(Value::as_str),
             Some("session.readiness_instances.v0.1")
@@ -18719,6 +18792,18 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/transport/checked")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_summary/stream/input_relay_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_summary/transport/trusted_remote_requires_encryption")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -34985,6 +35070,16 @@ mod tests {
             data.pointer("/envelopes/readiness_view/selected_instance_missing_required_field")
                 .and_then(Value::as_str),
             Some("instances.selected_missing_required")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/policy_summary_field")
+                .and_then(Value::as_str),
+            Some("policy_summary")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/policy_summary_schema_version")
+                .and_then(Value::as_str),
+            Some("session.readiness_policy_summary.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/queue_view/schema_version")

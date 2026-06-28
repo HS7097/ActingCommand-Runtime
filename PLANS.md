@@ -174,6 +174,24 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab unique Session throat-policy surface: `session throat-policy` and `session request throat-policy` expose a machine-readable policy that Session Layer is the only device/control throat, while UI, scheduler, and agents must not directly touch adb/devices.
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
+- ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
+
+## Current ActingLab Readiness Client Policy Summary
+
+This increment gives UI, scheduler, and agent clients a compact policy summary inside the existing readiness envelope instead of requiring them to independently stitch together every policy surface before deciding whether to connect or submit work.
+
+- `session readiness` still returns `session.readiness.v0.1`.
+- The readiness payload now includes `policy_summary` with `schema_version=session.readiness_policy_summary.v0.1`.
+- The summary points clients to the detailed `session throat-policy`, `session capture-policy`, `session self-heal-policy`, `stream check`, and `session transport check` surfaces.
+- The summary records that only Session Layer may touch devices and clients must not directly touch ADB or devices.
+- The summary records that stale `adb_screencap` alone is not game-freeze evidence.
+- The summary records that self-heal execution requires a matching lease and cannot execute game-progress actions.
+- The summary records that interactive stream input relay requires a matching lease and trusted remote long-lived streams are still reserved.
+- The summary records that trusted remote access requires encryption and authentication, while loopback local checks remain allowed.
+- The summary records that live validation remains `deferred: requires-live-device` and must not be marked passed by offline checks.
+- `session api` now advertises the `policy_summary` readiness field.
+
+No new command, network listener, TLS implementation, token issuance, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Phase C Self-Heal Policy Surface
 

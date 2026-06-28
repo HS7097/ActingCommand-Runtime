@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab readiness client policy summary
+
+### Current status
+
+- Added `policy_summary` to the existing `session readiness` payload.
+- The summary returns `schema_version=session.readiness_policy_summary.v0.1`.
+- The summary gives UI, scheduler, and agent clients a compact startup policy view covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
+- The summary points clients to detailed policy/preflight commands: `session throat-policy`, `session capture-policy`, `session self-heal-policy`, `stream check`, and `session transport check`.
+- The summary records that only Session Layer may touch devices and clients must not directly touch ADB or devices.
+- The summary records that stale `adb_screencap` alone is not game-freeze evidence.
+- The summary records that self-heal and stream input relay require matching lease gates before execution.
+- The summary records trusted remote encryption/authentication requirements and the reserved status of trusted remote long-lived streams.
+- `session api` now advertises `readiness_view.policy_summary_field`.
+- The change is a pure no-device readiness projection for UI/scheduler/agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending until this checkpoint is committed and tagged.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `485fd8b45397c50cdd8d2f6117c496b472180e4d`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected Session Layer readiness, bootstrap, API contract, access contract, stream preflight, transport contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_bootstrap -- --nocapture --test-threads=1`
+- `cargo run -q -p actingcommand-actinglab -- --json session readiness --local`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines for `adb shell input`, `adb shell screencap`, `fallback`, and `reconnect`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused `session_readiness` tests passed.
+- Focused Session API contract test passed.
+- Focused `session_bootstrap` tests passed.
+- CLI smoke `session readiness --local` passed and returned `policy_summary.schema_version=session.readiness_policy_summary.v0.1`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live readiness validation against a running resident daemon and configured instances.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and tag this Runtime increment.
+2. Backfill this checkpoint with the source commit hash.
+3. Push `main` and the checkpoint tag.
+
 ## 2026-06-28 ActingLab Phase C self-heal policy surface
 
 ### Current status
