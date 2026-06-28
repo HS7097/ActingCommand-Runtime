@@ -8159,6 +8159,7 @@ fn session_bootstrap_diagnostics_summary(
         "running": status.get("running").cloned().unwrap_or(Value::Null),
         "liveness": diagnostics.get("liveness").cloned().unwrap_or(Value::Null),
         "queue_health": diagnostics.pointer("/queues/health").cloned().unwrap_or(Value::Null),
+        "phase_c": diagnostics.get("phase_c").cloned().unwrap_or(Value::Null),
         "validation": diagnostics.get("validation").cloned().unwrap_or(Value::Null),
         "recommended_action_count": recommended_action_kinds.len(),
         "recommended_action_kinds": recommended_action_kinds,
@@ -23072,6 +23073,40 @@ mod tests {
             )
             .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/next_actions/first_action")
+                .and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/phase_c/next_actions/trusted_channel/requires_encryption"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/phase_c/next_actions/trusted_channel/does_not_start_tls"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
         );
         assert_eq!(
             data.pointer("/status_diagnostics/validation/pending_live_acceptance/deferred_code")
