@@ -1580,6 +1580,7 @@ fn session_api_contract() -> Value {
                 "safe_to_submit_field": "safe_to_submit",
                 "command_class_field": "command_class",
                 "lease_gate_field": "lease_gate",
+                "queue_gate_field": "queue_gate",
                 "routing_field": "routing",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
@@ -5808,13 +5809,20 @@ fn session_command_check_payload(
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let check_queue = daemon_route_ok && (would_route_via_daemon || strict_session_required);
+    let queue_gate = session_command_check_queue_gate(state_dir, check_queue)?;
+    let queue_gate_ok = queue_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let blockers = session_command_check_blockers(
         daemon_route_ok,
         daemon_alive,
         strict_session_required,
         &lease_gate,
+        &queue_gate,
     );
-    let safe_to_submit = daemon_route_ok && lease_gate_ok;
+    let safe_to_submit = daemon_route_ok && lease_gate_ok && queue_gate_ok;
     Ok(json!({
         "schema_version": "session.command_check.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -5833,6 +5841,7 @@ fn session_command_check_payload(
             "strict_session_required": strict_session_required
         },
         "lease_gate": lease_gate,
+        "queue_gate": queue_gate,
         "blockers": blockers,
         "guarantees": {
             "does_not_enqueue": true,
@@ -6007,11 +6016,58 @@ fn session_command_check_lease_gate(
     }
 }
 
+fn session_command_check_queue_gate(state_dir: &Path, check_queue: bool) -> CliOutcome<Value> {
+    if !check_queue {
+        return Ok(json!({
+            "ok": true,
+            "checked": false,
+            "status": "not_checked",
+            "message": "target command does not require daemon queue admission"
+        }));
+    }
+    let health = session_queue_health(
+        state_dir,
+        current_unix_ms(),
+        SESSION_DAEMON_REQUEST_TIMEOUT_MS,
+    )?;
+    let Some(status) = health.get("status").and_then(Value::as_str) else {
+        return Err(CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "command_check_queue_status_missing",
+            "session command-check could not read queue health status",
+            &["request_queue", "command_check"],
+        ));
+    };
+    match status {
+        "clear" | "active" => Ok(json!({
+            "ok": true,
+            "checked": true,
+            "status": status,
+            "health": health
+        })),
+        "needs_attention" => Ok(json!({
+            "ok": false,
+            "checked": true,
+            "status": status,
+            "code": "request_queue_needs_attention",
+            "message": "daemon request queue needs attention before submitting another request",
+            "health": health
+        })),
+        other => Err(CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "command_check_queue_status_unknown",
+            format!("session command-check received unknown queue health status: {other}"),
+            &["request_queue", "command_check"],
+        )),
+    }
+}
+
 fn session_command_check_blockers(
     daemon_route_ok: bool,
     daemon_alive: bool,
     strict_session_required: bool,
     lease_gate: &Value,
+    queue_gate: &Value,
 ) -> Vec<Value> {
     let mut blockers = Vec::new();
     if !daemon_route_ok {
@@ -6032,6 +6088,18 @@ fn session_command_check_blockers(
             "code": lease_gate.get("code"),
             "message": lease_gate.get("message"),
             "lease_gate": lease_gate
+        }));
+    }
+    if !queue_gate
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        blockers.push(json!({
+            "kind": "queue_gate",
+            "code": queue_gate.get("code"),
+            "message": queue_gate.get("message"),
+            "queue_gate": queue_gate
         }));
     }
     blockers
@@ -16835,6 +16903,10 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/queue_gate/status").and_then(Value::as_str),
+            Some("not_checked")
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -16871,6 +16943,10 @@ mod tests {
         assert_eq!(
             data.pointer("/blockers/0/kind").and_then(Value::as_str),
             Some("daemon_liveness")
+        );
+        assert_eq!(
+            data.pointer("/queue_gate/status").and_then(Value::as_str),
+            Some("not_checked")
         );
     }
 
@@ -16981,6 +17057,65 @@ mod tests {
                 .pointer("/lease_gate/code")
                 .and_then(Value::as_str),
             Some("lease_holder_mismatch")
+        );
+    }
+
+    #[test]
+    fn session_command_check_blocks_daemon_submission_when_queue_needs_attention() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let pending = SessionCommandRequest {
+            request_id: "pending-command-check".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("pending-command-check.json"),
+            &pending,
+        )
+        .unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(["--json", "session", "command-check", "status"], true);
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("safe_to_submit").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/queue_gate/status").and_then(Value::as_str),
+            Some("needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/queue_gate/code").and_then(Value::as_str),
+            Some("request_queue_needs_attention")
+        );
+        assert_eq!(
+            data.pointer("/queue_gate/health/pending_requests/status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            data.pointer("/blockers/0/kind").and_then(Value::as_str),
+            Some("queue_gate")
         );
     }
 
@@ -31667,6 +31802,11 @@ mod tests {
             data.pointer("/envelopes/readiness_view/queue_health_field")
                 .and_then(Value::as_str),
             Some("queues.health")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/command_check_view/queue_gate_field")
+                .and_then(Value::as_str),
+            Some("queue_gate")
         );
         assert_eq!(
             data.pointer("/failure_contract/untrusted_remote_endpoint_code")

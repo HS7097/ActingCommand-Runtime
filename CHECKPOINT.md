@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab command-check queue gate
+
+### Current status
+
+- Added a read-only `queue_gate` to `session command-check` and `session request command-check`.
+- `queue_gate` checks Session daemon queue health only when the target command would route through the resident daemon or strict Session throat is required.
+- Local-only command checks keep `queue_gate.status=not_checked` so local diagnostic commands are not blocked by daemon queue state.
+- Daemon-routed command checks now return `safe_to_submit=false` with a `queue_gate` blocker when pending/running requests are blocked or pending responses are unclaimed.
+- `session api` now documents `command_check_view.queue_gate_field`.
+- No daemon execution, enqueueing, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `6047bf35c1b0496ec32f808f743487e9af0b4d04`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Re-read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Searched Codex memory for ActingCommand planning and verification rules.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- Inspected Session Layer command-check, queue health, status diagnostics, and command-check tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused command-check tests passed, including the new blocked-queue `queue_gate` regression.
+- Focused Session API contract test passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan over source changes passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler body, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-command-check-queue-gate`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab readiness queue summary
 
 ### Current status
