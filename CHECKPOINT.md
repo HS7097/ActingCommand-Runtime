@@ -16,8 +16,8 @@
 - `session api`, `session bootstrap`, `session contract`, `session command-check`, command capabilities, and readiness policy summary now advertise the self-heal-plan surface.
 - The change is a pure no-device preflight for UI/API, scheduler, and agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending until commit.
-- Checkpoint tag: pending until commit.
+- Milestone source commit: `0b7ed3ab3459acffde496f25219b5a607e036864`.
+- Checkpoint tag: `checkpoint/20260628-session-self-heal-plan`.
 
 ### Resource mirrors used
 
@@ -92,9 +92,8 @@
 
 ### Next step
 
-1. Commit and push Runtime changes.
-2. Record final commit hash and checkpoint tag after commit.
-3. Continue the next offline Session Layer Phase C increment before live validation.
+1. Push Runtime changes and checkpoint tag.
+2. Continue the next offline Session Layer Phase C increment before live validation.
 
 ## 2026-06-28 ActingLab trusted-channel transport plan
 
