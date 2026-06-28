@@ -2738,6 +2738,7 @@ fn session_stream_plan_view_contract() -> Value {
         "connect_plan_field": "connect_plan",
         "stream_preflight_field": "stream_preflight",
         "stream_modes_field": "stream_modes",
+        "next_actions_field": "next_actions",
         "trusted_remote_long_lived_status_field": "stream_modes.trusted_remote_long_lived.status",
         "safe_to_open_stream_field": "safe_to_open_stream",
         "blocked_reason_field": "blockers",
@@ -7178,6 +7179,17 @@ fn session_stream_plan_payload(
         .get("transport")
         .cloned()
         .unwrap_or(Value::Null);
+    let next_actions = session_stream_plan_next_actions(SessionStreamPlanNextActionInputs {
+        connect_plan: &connect_plan,
+        stream_preflight: &stream_preflight,
+        transport: &transport,
+        safe_to_start_client,
+        safe_to_start_stream,
+        safe_to_connect_transport,
+        safe_to_open_stream,
+        input_relay_requested,
+        input_relay_action_count,
+    });
 
     Ok(json!({
         "schema_version": "session.stream_plan.v0.1",
@@ -7217,6 +7229,7 @@ fn session_stream_plan_payload(
         "stream_preflight": stream_preflight,
         "transport": transport,
         "blockers": blockers,
+        "next_actions": next_actions,
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -7227,6 +7240,130 @@ fn session_stream_plan_payload(
             "does_not_read_resource_repositories": true
         }
     }))
+}
+
+struct SessionStreamPlanNextActionInputs<'a> {
+    connect_plan: &'a Value,
+    stream_preflight: &'a Value,
+    transport: &'a Value,
+    safe_to_start_client: bool,
+    safe_to_start_stream: bool,
+    safe_to_connect_transport: bool,
+    safe_to_open_stream: bool,
+    input_relay_requested: bool,
+    input_relay_action_count: u64,
+}
+
+fn session_stream_plan_next_actions(input: SessionStreamPlanNextActionInputs<'_>) -> Value {
+    let mut ordered = Vec::new();
+    if !input.safe_to_start_client {
+        ordered.push(session_connect_plan_next_action(
+            1,
+            "resolve_connect_plan_blockers",
+            "Inspect readiness, daemon liveness, queue health, lease state, and transport policy before opening an interactive stream.",
+            "session connect-plan [--endpoint <url>] [stream check flags]",
+            true,
+        ));
+    }
+    if !input.safe_to_start_stream {
+        ordered.push(session_connect_plan_next_action(
+            2,
+            "inspect_stream_preflight",
+            "Inspect bounded stream and input-relay preflight before any UI interaction flow work.",
+            "stream check",
+            true,
+        ));
+    }
+    if input.input_relay_requested && !input.safe_to_open_stream {
+        ordered.push(session_connect_plan_next_action(
+            3,
+            "resolve_input_relay_lease",
+            "Input relay is requested but the stream is not safe to open; inspect the Session Layer lease before relaying clicks or keys.",
+            "session lease status",
+            true,
+        ));
+    }
+    ordered.push(session_connect_plan_next_action(
+        4,
+        "review_trusted_remote_stream_boundary",
+        "Review the trusted remote transport plan before any long-lived stream, listener, token, or TLS work.",
+        "session transport plan [--endpoint <url>]",
+        true,
+    ));
+    ordered.push(session_connect_plan_next_action(
+        5,
+        "review_phase_c_plan",
+        "Review Phase C self-heal, interaction-flow, trusted-channel, and live-validation boundaries before enabling execution.",
+        "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        true,
+    ));
+    if input.safe_to_open_stream {
+        ordered.push(session_connect_plan_next_action(
+            6,
+            "open_bounded_local_stream",
+            "A bounded local stream can be opened by a separate command after preflight passes.",
+            "stream --max-frames <N>",
+            false,
+        ));
+    }
+
+    json!({
+        "schema_version": "session.stream_next_actions.v0.1",
+        "status": if input.safe_to_open_stream { "ready" } else { "blocked" },
+        "ordered": ordered,
+        "connect": {
+            "safe_to_start_client": input.safe_to_start_client,
+            "safe_to_connect_transport": input.safe_to_connect_transport,
+            "status": input.connect_plan.get("status").cloned().unwrap_or(Value::Null),
+            "first_connect_action": input.connect_plan
+                .pointer("/next_actions/ordered/0/action")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "stream": {
+            "safe_to_start_stream": input.safe_to_start_stream,
+            "safe_to_open_stream": input.safe_to_open_stream,
+            "input_relay_requested": input.input_relay_requested,
+            "input_relay_action_count": input.input_relay_action_count,
+            "input_relay_requires_matching_lease": true,
+            "lease_gate": input.stream_preflight
+                .pointer("/input_relay/lease_gate")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "phase_c": {
+            "self_heal_plan_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "interaction_flow_plan_command": "session stream-plan [--endpoint <url>]",
+            "trusted_channel_plan_command": "session transport plan [--endpoint <url>]",
+            "live_validation_status": "deferred",
+            "deferred_code": "requires-live-device"
+        },
+        "trusted_channel": {
+            "transport_safe": input.safe_to_connect_transport,
+            "remote_status": "reserved",
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "transport_endpoint": input.transport.get("endpoint").cloned().unwrap_or(Value::Null),
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
 }
 
 fn session_connect_plan_blockers(readiness: &Value, stream_preflight: &Value) -> Vec<Value> {
@@ -12490,6 +12627,10 @@ fn stream_plan_request_data_summary(data: &Value) -> Value {
         "input_relay_requested": data.get("input_relay_requested").cloned().unwrap_or(Value::Null),
         "input_relay_action_count": data.get("input_relay_action_count").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len),
+        "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
+        "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
+        "trusted_remote_status": data.pointer("/next_actions/trusted_channel/remote_status").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.pointer("/next_actions/live_validation/status").cloned().unwrap_or(Value::Null),
         "trusted_remote_long_lived_stream_status": data.pointer("/stream_modes/trusted_remote_long_lived/status").cloned().unwrap_or(Value::Null)
     })
 }
@@ -20840,6 +20981,52 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.stream_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("resolve_connect_plan_blockers")
+        );
+        let next_actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str)
+                == Some("review_trusted_remote_stream_boundary")
+        }));
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("review_phase_c_plan")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/phase_c/self_heal_plan_command")
+                .and_then(Value::as_str),
+            Some("session self-heal-plan [--trigger <kind>] [--to <page>]")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/phase_c/interaction_flow_plan_command")
+                .and_then(Value::as_str),
+            Some("session stream-plan [--endpoint <url>]")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/remote_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/trusted_channel/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -20906,6 +21093,23 @@ mod tests {
         assert!(blockers.iter().any(|blocker| {
             blocker.get("kind").and_then(Value::as_str) == Some("stream_preflight")
         }));
+        let next_actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(next_actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("resolve_input_relay_lease")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/stream/input_relay_requested")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/stream/input_relay_action_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[test]
@@ -21045,6 +21249,12 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            payload
+                .pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("resolve_connect_plan_blockers")
+        );
+        assert_eq!(
             summary.get("kind").and_then(Value::as_str),
             Some("stream_plan")
         );
@@ -21057,6 +21267,20 @@ mod tests {
                 .get("trusted_remote_long_lived_stream_status")
                 .and_then(Value::as_str),
             Some("reserved")
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("resolve_connect_plan_blockers")
+        );
+        assert_eq!(
+            summary.get("trusted_remote_status").and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
         );
     }
 
@@ -38495,6 +38719,11 @@ mod tests {
             data.pointer("/envelopes/stream_plan_view/safe_to_open_stream_field")
                 .and_then(Value::as_str),
             Some("safe_to_open_stream")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/stream_plan_view/next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
         );
         assert_eq!(
             data.pointer("/envelopes/stream_plan_view/does_not_start_listener")

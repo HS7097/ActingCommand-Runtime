@@ -190,6 +190,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
 - ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
 - ActingLab connect-plan next-action summary: `session connect-plan` and `session request connect-plan` now expose a machine-readable `next_actions` startup decision list for UI/scheduler clients, covering readiness blockers, stream preflight, trusted transport policy, Phase C review, and deferred live-validation boundaries.
+- ActingLab stream-plan next-action summary: `session stream-plan` and `session request stream-plan` now expose a machine-readable `next_actions` interaction decision list for UI/scheduler clients, covering connect blockers, input-relay lease review, trusted remote stream boundaries, Phase C review, and deferred live-validation boundaries.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -228,6 +229,23 @@ This increment gives future UI and scheduler clients a deterministic startup dec
 - The summary records readiness status and recommended-action kinds, stream safety, input-relay lease requirements, trusted remote reserved status, and live-validation deferred status.
 - `connect_plan` daemon request summaries now retain next-action count, first next action, trusted-remote status, and live-validation status for journal/events consumers.
 - The Session API contract now advertises `next_actions_field=next_actions` under `connect_plan_view`.
+- Trusted remote remains reserved: the next-action summary does not start a listener, issue tokens, start TLS, probe TCP, or accept remote clients.
+- Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Stream-Plan Next-Action Summary
+
+This increment gives future UI and scheduler clients a deterministic interaction-flow decision list after they call `session stream-plan`.
+
+- `session stream-plan` now embeds `next_actions` with schema `session.stream_next_actions.v0.1`.
+- `session request stream-plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders follow-up actions for connect-plan blockers, stream preflight review, input-relay lease review, trusted remote stream-boundary review, Phase C aggregate review, and bounded local stream opening when safe.
+- The summary records connect safety, stream safety, input-relay request count, lease gate data, Phase C self-heal/interaction/trusted-channel plan commands, trusted remote reserved status, and live-validation deferred status.
+- `stream_plan` daemon request summaries now retain next-action count, first next action, trusted-remote status, and live-validation status for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `stream_plan_view`.
+- Self-heal remains observe/diagnose/plan first; this summary points clients to `session self-heal-plan` and `session phase-c-plan` without executing recovery.
+- Interaction flow remains gated by Session Layer readiness, queue state, and lease state; the summary does not relay input by itself.
 - Trusted remote remains reserved: the next-action summary does not start a listener, issue tokens, start TLS, probe TCP, or accept remote clients.
 - Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
 
