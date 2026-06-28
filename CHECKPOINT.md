@@ -9,6 +9,7 @@
 - The dry-run recommendation is marked `read_only=true`, `dry_run=true`, `mutates_queue=false`, `does_not_touch_device=true`, and `requires_scheduler_decision=true`.
 - Lease-gated blocked requests include the queued request lease metadata and runnable `--lease-holder` / `--lease-id` arguments in the dry-run recommendation.
 - The existing real cancel recommendation remains a queue-mutating scheduler decision and now follows the dry-run preflight.
+- Milestone source commit `1e51a4b0eef72978d6cf874eab1b5bd419ed6b51` was pushed to `origin/main` with checkpoint tag `checkpoint/20260628-blocked-cancel-dry-run-recommendation`.
 - No daemon execution, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, or retry behavior was changed.
 
 ### Resource mirrors used
@@ -40,6 +41,11 @@
 - Added-line precise prohibited-feature scan over source changes for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
+- `git commit -m "Recommend dry-run for blocked request cancel"`
+- `git tag checkpoint/20260628-blocked-cancel-dry-run-recommendation 1e51a4b`
+- `git push origin main`
+- `git push origin checkpoint/20260628-blocked-cancel-dry-run-recommendation`
+- `git ls-remote origin refs/heads/main refs/tags/checkpoint/20260628-blocked-cancel-dry-run-recommendation`
 
 ### Test results
 
@@ -57,8 +63,7 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-blocked-cancel-dry-run-recommendation`.
-2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
+1. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, self-heal ownership, or live prepared-emulator validation.
 
 ## 2026-06-28 ActingLab request cancel dry-run preflight
 
