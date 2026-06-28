@@ -2845,6 +2845,7 @@ fn session_bootstrap_view_contract() -> Value {
         "query": "session bootstrap",
         "daemon_query": "session request bootstrap",
         "schema_version": "session.bootstrap.v0.1",
+        "status_diagnostics_field": "status_diagnostics",
         "readiness_field": "readiness",
         "queue_field": "queue",
         "throat_policy_field": "throat_policy",
@@ -7474,6 +7475,7 @@ fn session_bootstrap_payload(
         session_self_heal_plan_payload(global, flags, state_dir, config, command_name)?;
     let phase_c_plan =
         session_phase_c_plan_payload(global, flags, state_dir, config, command_name)?;
+    let status_diagnostics = session_bootstrap_diagnostics_summary(state_dir, config)?;
     Ok(json!({
         "schema_version": "session.bootstrap.v0.1",
         "generated_at_unix_ms": current_unix_ms(),
@@ -7524,6 +7526,7 @@ fn session_bootstrap_payload(
         "self_heal_policy": self_heal_policy,
         "self_heal_plan": self_heal_plan,
         "phase_c_plan": phase_c_plan,
+        "status_diagnostics": status_diagnostics,
         "readiness": readiness,
         "queue": queue,
         "validation_plan": validation_plan,
@@ -7535,6 +7538,59 @@ fn session_bootstrap_payload(
             "does_not_start_listener": true,
             "does_not_start_apps": true,
             "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
+fn session_bootstrap_diagnostics_summary(
+    state_dir: &Path,
+    config: Option<&UserConfig>,
+) -> CliOutcome<Value> {
+    let status = session_status_payload_with_config(state_dir, true, config)?;
+    let diagnostics = status.get("diagnostics").ok_or_else(|| {
+        CliError::new(
+            ErrorKind::RuntimeNotRunning,
+            "session_diagnostics_missing",
+            "session status diagnostics were requested but not produced",
+            &["session_diagnostics"],
+        )
+    })?;
+    let recommended_action_kinds = diagnostics
+        .get("recommended_actions")
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter_map(|action| action.get("kind").cloned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "schema_version": "session.bootstrap_diagnostics.v0.1",
+        "status_command": "session status --diagnostics",
+        "daemon_query": "session request status --diagnostics",
+        "running": status.get("running").cloned().unwrap_or(Value::Null),
+        "liveness": diagnostics.get("liveness").cloned().unwrap_or(Value::Null),
+        "queue_health": diagnostics.pointer("/queues/health").cloned().unwrap_or(Value::Null),
+        "validation": diagnostics.get("validation").cloned().unwrap_or(Value::Null),
+        "recommended_action_count": recommended_action_kinds.len(),
+        "recommended_action_kinds": recommended_action_kinds,
+        "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "client_startup_guidance": {
+            "ui_should_read_bootstrap_first": true,
+            "scheduler_should_use_session_layer_only": true,
+            "status_diagnostics_are_embedded": true,
+            "live_validation_remains_deferred": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_mark_live_validation_passed": true
         }
     }))
 }
@@ -21769,6 +21825,43 @@ mod tests {
             Some(true)
         );
         assert_eq!(
+            data.pointer("/status_diagnostics/schema_version")
+                .and_then(Value::as_str),
+            Some("session.bootstrap_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/status_command")
+                .and_then(Value::as_str),
+            Some("session status --diagnostics")
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/client_startup_guidance/status_diagnostics_are_embedded"
+            )
+            .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/validation/pending_live_acceptance/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/guarantees/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/guarantees/does_not_issue_tokens")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/guarantees/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
@@ -21905,6 +21998,26 @@ mod tests {
                 .pointer("/validation_plan/live_validation_status")
                 .and_then(Value::as_str),
             Some("deferred")
+        );
+        assert_eq!(
+            payload
+                .pointer("/status_diagnostics/schema_version")
+                .and_then(Value::as_str),
+            Some("session.bootstrap_diagnostics.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/status_diagnostics/daemon_query")
+                .and_then(Value::as_str),
+            Some("session request status --diagnostics")
+        );
+        assert_eq!(
+            payload
+                .pointer(
+                    "/status_diagnostics/client_startup_guidance/ui_should_read_bootstrap_first"
+                )
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             payload
@@ -38063,6 +38176,11 @@ mod tests {
             data.pointer("/envelopes/bootstrap_view/schema_version")
                 .and_then(Value::as_str),
             Some("session.bootstrap.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/validation_plan_field")

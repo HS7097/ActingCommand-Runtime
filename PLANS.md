@@ -188,6 +188,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 
 - ActingLab Phase C aggregate plan surface: `session phase-c-plan` and `session request phase-c-plan` now expose one read-only roadmap for self-heal, interaction flow, trusted channel, and live-validation boundaries without requiring a live instance.
 - ActingLab Phase C plan diagnostics recommended action: `session status --diagnostics` now turns recent `phase_c_plan` request summaries into a read-only `phase_c_plan_review` action for UI/scheduler clients.
+- ActingLab client bootstrap diagnostics summary: `session bootstrap` and `session request bootstrap` now embed a compact `status_diagnostics` startup summary so UI/scheduler clients can read liveness, queue health, pending live-validation state, and Phase C follow-up hints from the startup envelope.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -213,6 +214,22 @@ This increment connects the aggregate Phase C planning surface to the status dia
 - The action records the source request id, source command, next review queries, and full data summary.
 - The Session API contract advertises `phase_c_plan_actions` under `status_view`.
 - The action explicitly records that it does not touch devices, start a listener, issue tokens, start TLS, or mark live validation passed.
+
+No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Client Bootstrap Diagnostics Summary
+
+This increment makes the bootstrap envelope the first read for future UI and scheduler clients.
+
+- `session bootstrap` now embeds `status_diagnostics` with schema `session.bootstrap_diagnostics.v0.1`.
+- `session request bootstrap` returns the same embedded diagnostics through the resident daemon request queue.
+- The summary is derived from `session status --diagnostics` and exposes daemon running state, liveness, queue health, pending live-validation summary, recommended-action kinds, and the Phase C aggregate-plan command.
+- The Session API contract now advertises `status_diagnostics_field=status_diagnostics` under `bootstrap_view`.
+- UI clients should read bootstrap first, then use `session status --diagnostics`, `session readiness`, `session submit-plan`, or `session phase-c-plan` for deeper views.
+- Scheduler clients should keep using Session Layer as the only control throat and treat the embedded diagnostics as startup state, not permission to bypass lease or queue gates.
+- Self-heal remains observe/diagnose/plan first; maintenance execution still requires the existing lease/queue/readiness gates.
+- Trusted remote remains reserved: no listener is started, no token is issued, and no TLS implementation is started.
+- Live validation remains `deferred: requires-live-device`, and offline checks must not mark live items passed.
 
 No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
 
