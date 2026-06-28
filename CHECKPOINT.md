@@ -9,7 +9,7 @@
 - `ak_stale_capture_validation` records the 2026-06-27 AK finding boundary: stale `adb_screencap` output must not be treated as proof of game freeze by itself, and lighter capture-backend diagnosis/recovery remains preferred before app restart.
 - This is a pure validation/contract projection for future UI, scheduler, and operator acceptance workflows.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending final verification.
+- Milestone source commit `3f8d826e3c3e32641e1d59fda2f180c9fff261a0` was prepared with checkpoint tag `checkpoint/20260628-validation-acceptance-matrix`.
 
 ### Resource mirrors used
 
@@ -65,7 +65,7 @@
 ### Next step
 
 1. Run full formatting, diff, clippy, and workspace test verification.
-2. Commit and push the Runtime source, planning, checkpoint, and checkpoint tag.
+2. Commit and push this checkpoint update and the checkpoint tag.
 
 ## 2026-06-28 ActingLab client bootstrap surface
 
