@@ -199,6 +199,16 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab validation-plan status-view contract alignment: `session api` now advertises `status_view.validation_plan_actions=["validation_plan_review"]`, so UI/scheduler clients can discover the validation-plan diagnostics action without hard-coding it.
 - ActingLab validation diagnostics next-action summary: `session status --diagnostics` now embeds a compact validation `next_actions` summary even without a recent validation-plan journal entry, exposing action count, first action, ordered action kinds, Phase C lane summaries, live-validation deferral, and no-live-pass guarantees.
 - ActingLab Phase C diagnostics next-action summary: `session status --diagnostics` now embeds a compact `diagnostics.phase_c.next_actions` summary even without a recent Phase C journal entry, exposing self-heal, interaction-flow, trusted-channel, live-validation, and no-device/no-listener guarantees.
+- ActingLab Phase C status-view API contract alignment: `session api` now advertises `status_view.phase_c_summary_field="diagnostics.phase_c"`, so UI/scheduler clients can discover the compact Phase C diagnostics summary without hard-coding the field path.
+
+## Current ActingLab Phase C Status-View API Contract Alignment
+
+This increment aligns the machine-readable API contract with the compact Phase C diagnostics summary added to `session status --diagnostics`.
+
+- `session api` now declares `envelopes.status_view.phase_c_summary_field=diagnostics.phase_c`.
+- The field points UI, scheduler, and agent clients to the compact no-device Phase C status summary.
+- The API contract already advertises `phase_c_plan_actions=["phase_c_plan_review"]`; this increment adds the direct summary field path for startup/status consumers.
+- The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, execute recovery, or perform live validation.
 
 ## Current ActingLab Phase C Diagnostics Next-Action Summary
 

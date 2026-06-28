@@ -2584,6 +2584,7 @@ fn session_api_contract() -> Value {
                 "pending_response_preview_field": "diagnostics.queues.pending_response_preview",
                 "journal_field": "diagnostics.journal",
                 "recommended_actions_field": "diagnostics.recommended_actions",
+                "phase_c_summary_field": "diagnostics.phase_c",
                 "validation_summary_field": "diagnostics.validation",
                 "monitor_policy_lease_actions": [
                     "monitor_policy_inspect_lease",
@@ -34436,6 +34437,12 @@ mod tests {
                 .pointer("/envelopes/status_view/recommended_actions_field")
                 .and_then(Value::as_str),
             Some("diagnostics.recommended_actions")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/phase_c_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics.phase_c")
         );
         assert_eq!(
             payload
