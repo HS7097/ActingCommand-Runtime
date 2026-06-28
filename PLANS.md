@@ -194,6 +194,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab stream-plan next-action summary: `session stream-plan` and `session request stream-plan` now expose a machine-readable `next_actions` interaction decision list for UI/scheduler clients, covering connect blockers, input-relay lease review, trusted remote stream boundaries, Phase C review, and deferred live-validation boundaries.
 - ActingLab self-heal-plan next-action summary: `session self-heal-plan` and `session request self-heal-plan` now expose a machine-readable `next_actions` recovery decision list for UI/scheduler clients, covering observe-first selection, stale-capture diagnosis, readiness/queue/lease blockers, recovery review, Phase C review, and deferred live-validation boundaries.
 - ActingLab transport-plan next-action summary: `session transport plan` and `session request transport plan` now expose a machine-readable `next_actions` trusted-channel decision list for UI/API clients, covering endpoint classification, endpoint-policy blockers, token/certificate preparation, listener/TLS design review, request serialization/audit review, and deferred live-validation boundaries.
+- ActingLab validation-plan next-action summary: `session validation-plan` and `session request validation-plan` now expose a machine-readable `next_actions` live-acceptance decision list for UI/scheduler/operator clients, covering pending live acceptance review, readiness, capture freshness, Phase C self-heal, interaction stream, trusted-channel transport, and status diagnostics.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -208,6 +209,17 @@ This increment gives UI, scheduler, and agent clients one Phase C planning envel
 - `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters now advertise the Phase C plan surface.
 
 No device input, capture, MaaTouch startup, app lifecycle action, heavy recovery execution, daemon startup, network listener, TCP probe, TLS implementation, token issuance, UI, scheduler runtime, SQLite, OCR/OpenCV, game logic, direct ADB input fallback, reconnect loop, cooperation-workspace copy, resource repository sync/read, or live validation was added.
+
+## Current ActingLab Validation-Plan Next-Action Summary
+
+This increment turns the live-validation boundary into an ordered no-device checklist for UI, scheduler, and operator clients.
+
+- `session validation-plan` now embeds `next_actions` with schema `session.validation_next_actions.v0.1`.
+- `session request validation-plan` returns the same next-action summary through the resident daemon request queue.
+- The summary orders read-only follow-up actions for pending live acceptance, session readiness, capture freshness policy, Phase C self-heal review, interaction stream review, trusted-channel transport review, and status diagnostics.
+- The pending-live summary keeps every acceptance item marked `deferred: requires-live-device`.
+- Phase C planning remains split into self-heal, interaction flow, and trusted-channel lanes, all referenced from the validation-plan next-action surface.
+- The change does not enqueue requests, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
 
 ## Current ActingLab Phase C Aggregate Next-Action Summary
 

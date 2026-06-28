@@ -2686,6 +2686,7 @@ fn session_api_contract() -> Value {
                 "deferred_live_tasks_field": "deferred_live_tasks",
                 "pending_live_acceptance_field": "pending_live_acceptance",
                 "phase_acceptance_matrix_field": "phase_acceptance_matrix",
+                "next_actions_field": "next_actions",
                 "offline_verification_allowed_field": "offline_verification_allowed",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true,
@@ -8340,6 +8341,8 @@ fn session_validation_plan_payload(
     command_name: &str,
 ) -> CliOutcome<Value> {
     flags.expect_positionals(command_name, 0)?;
+    let pending_live_acceptance = session_validation_pending_live_acceptance();
+    let next_actions = session_validation_plan_next_actions(&pending_live_acceptance);
     Ok(json!({
         "schema_version": "session.validation_plan.v0.1",
         "status": "offline_plan",
@@ -8367,7 +8370,8 @@ fn session_validation_plan_payload(
         "phase_acceptance_matrix": session_validation_phase_matrix(),
         "ak_stale_capture_validation": ak_stale_capture_validation_scope(),
         "deferred_live_tasks": session_validation_deferred_live_tasks(),
-        "pending_live_acceptance": session_validation_pending_live_acceptance(),
+        "pending_live_acceptance": pending_live_acceptance,
+        "next_actions": next_actions,
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -8639,6 +8643,106 @@ fn session_validation_pending_live_acceptance() -> Value {
                 ]
             }
         ]
+    })
+}
+
+fn session_validation_plan_next_actions(pending_live_acceptance: &Value) -> Value {
+    let item_count = pending_live_acceptance
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let ordered = vec![
+        session_connect_plan_next_action(
+            1,
+            "review_pending_live_acceptance",
+            "Review the live-only acceptance checklist before any offline result is marked complete.",
+            "session validation-plan",
+            true,
+        ),
+        session_connect_plan_next_action(
+            2,
+            "inspect_session_readiness",
+            "Inspect daemon liveness, selected instance, queue health, leases, and policy blockers before scheduling live validation.",
+            "session readiness",
+            true,
+        ),
+        session_connect_plan_next_action(
+            3,
+            "review_capture_freshness_policy",
+            "Confirm stale capture and fresh-frame requirements before interpreting live screenshots or game-freeze evidence.",
+            "session capture-policy",
+            true,
+        ),
+        session_connect_plan_next_action(
+            4,
+            "review_phase_c_self_heal_plan",
+            "Review observe-first self-heal boundaries before any maintenance recovery is executed in a live environment.",
+            "session self-heal-plan --trigger capture_stale_suspected",
+            true,
+        ),
+        session_connect_plan_next_action(
+            5,
+            "review_interaction_stream_plan",
+            "Review stream and input-relay lease gates before a UI or scheduler consumes the interaction flow.",
+            "session stream-plan",
+            true,
+        ),
+        session_connect_plan_next_action(
+            6,
+            "review_trusted_channel_plan",
+            "Review endpoint policy, authentication material, and reserved encrypted-channel boundaries before exposing remote access.",
+            "session transport plan",
+            true,
+        ),
+        session_connect_plan_next_action(
+            7,
+            "inspect_status_diagnostics",
+            "Inspect current daemon diagnostics and recent journal summaries before live operator acceptance.",
+            "session status --diagnostics",
+            true,
+        ),
+    ];
+
+    json!({
+        "schema_version": "session.validation_next_actions.v0.1",
+        "status": "deferred",
+        "deferred_code": "requires-live-device",
+        "ordered": ordered,
+        "pending_live_acceptance": {
+            "title": pending_live_acceptance.get("title").cloned().unwrap_or(Value::Null),
+            "status": pending_live_acceptance.get("status").cloned().unwrap_or(Value::Null),
+            "deferred_code": pending_live_acceptance.get("deferred_code").cloned().unwrap_or(Value::Null),
+            "owner": pending_live_acceptance.get("owner").cloned().unwrap_or(Value::Null),
+            "item_count": item_count,
+            "must_not_be_marked_passed_by_offline_checks": pending_live_acceptance
+                .get("must_not_be_marked_passed_by_offline_checks")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "phase_c": {
+            "self_heal": "observe_first_plan_review",
+            "interaction_flow": "stream_plan_review",
+            "trusted_channel": "transport_plan_review"
+        },
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_apps": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
     })
 }
 
@@ -12979,6 +13083,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         {
             Some(transport_plan_request_data_summary(data))
         }
+        "validation_plan" => Some(validation_plan_request_data_summary(data)),
         "capture_diagnose" => Some(capture_diagnose_request_data_summary(data)),
         "recover" if data.get("mode").and_then(Value::as_str) == Some("stale_capture_recovery") => {
             Some(stale_capture_recovery_request_data_summary(data))
@@ -13105,6 +13210,44 @@ fn transport_plan_request_data_summary(data: &Value) -> Value {
         "auth_material_configured": data.pointer("/next_actions/trusted_remote/auth_material_configured").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/next_actions/live_validation/status").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
+    })
+}
+
+fn validation_plan_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "validation_plan",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "live_validation_status": data.get("live_validation_status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.get("deferred_code").cloned().unwrap_or(Value::Null),
+        "pending_live_item_count": data
+            .pointer("/pending_live_acceptance/items")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        "next_action_count": data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        "first_next_action": data
+            .pointer("/next_actions/ordered/0/action")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "does_not_mark_live_validation_passed": data
+            .pointer("/next_actions/guarantees/does_not_mark_live_validation_passed")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "phase_c_self_heal": data
+            .pointer("/next_actions/phase_c/self_heal")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "phase_c_interaction_flow": data
+            .pointer("/next_actions/phase_c/interaction_flow")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "phase_c_trusted_channel": data
+            .pointer("/next_actions/phase_c/trusted_channel")
+            .cloned()
+            .unwrap_or(Value::Null)
     })
 }
 
@@ -23927,6 +24070,45 @@ mod tests {
         assert!(pending_live_items.iter().all(|item| {
             item.get("deferred_code").and_then(Value::as_str) == Some("requires-live-device")
         }));
+        assert_eq!(
+            data.pointer("/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.validation_next_actions.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/status").and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/ordered/0/action")
+                .and_then(Value::as_str),
+            Some("review_pending_live_acceptance")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/pending_live_acceptance/item_count")
+                .and_then(Value::as_u64),
+            Some(pending_live_items.len() as u64)
+        );
+        assert_eq!(
+            data.pointer("/next_actions/phase_c/self_heal")
+                .and_then(Value::as_str),
+            Some("observe_first_plan_review")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/phase_c/interaction_flow")
+                .and_then(Value::as_str),
+            Some("stream_plan_review")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/phase_c/trusted_channel")
+                .and_then(Value::as_str),
+            Some("transport_plan_review")
+        );
+        assert_eq!(
+            data.pointer("/next_actions/guarantees/does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         assert!(
             data.get("deferred_live_tasks")
                 .and_then(Value::as_array)
@@ -23969,6 +24151,46 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let response = SessionCommandResponse {
+            request_id: query.request_id,
+            command: query.command,
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("validation_plan")
+        );
+        assert_eq!(
+            summary
+                .get("live_validation_status")
+                .and_then(Value::as_str),
+            Some("deferred")
+        );
+        assert_eq!(
+            summary
+                .get("pending_live_item_count")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            summary.get("next_action_count").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            summary.get("first_next_action").and_then(Value::as_str),
+            Some("review_pending_live_acceptance")
+        );
+        assert_eq!(
+            summary
+                .get("does_not_mark_live_validation_passed")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -39216,6 +39438,11 @@ mod tests {
             data.pointer("/envelopes/validation_plan_view/phase_acceptance_matrix_field")
                 .and_then(Value::as_str),
             Some("phase_acceptance_matrix")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/validation_plan_view/next_actions_field")
+                .and_then(Value::as_str),
+            Some("next_actions")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/schema_version")
