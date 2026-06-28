@@ -15,7 +15,7 @@
 - `session api` now advertises the `command_check_view.phase_c_scope_field` and schema version for UI/scheduler clients.
 - This increment only exposes command preflight diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `f93dcc90094c050a83cdde8dd8ee866f5fc03827`.
-- Milestone source commit: pending until commit is created.
+- Milestone source commit: `54a1cecc2f8cfbfd38b956ca4d02b0b2a8c26d4a`.
 
 ### 待真机验收
 
