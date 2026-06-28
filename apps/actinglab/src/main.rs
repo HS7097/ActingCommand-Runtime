@@ -3174,6 +3174,7 @@ fn session_bootstrap_view_contract() -> Value {
         "daemon_query": "session request bootstrap",
         "schema_version": "session.bootstrap.v0.1",
         "status_diagnostics_field": "status_diagnostics",
+        "status_diagnostics_phase_c_field": "status_diagnostics.phase_c",
         "readiness_field": "readiness",
         "queue_field": "queue",
         "throat_policy_field": "throat_policy",
@@ -39888,6 +39889,11 @@ mod tests {
             data.pointer("/envelopes/bootstrap_view/status_diagnostics_field")
                 .and_then(Value::as_str),
             Some("status_diagnostics")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/bootstrap_view/status_diagnostics_phase_c_field")
+                .and_then(Value::as_str),
+            Some("status_diagnostics.phase_c")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/validation_plan_field")

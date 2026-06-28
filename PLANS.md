@@ -201,6 +201,16 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C diagnostics next-action summary: `session status --diagnostics` now embeds a compact `diagnostics.phase_c.next_actions` summary even without a recent Phase C journal entry, exposing self-heal, interaction-flow, trusted-channel, live-validation, and no-device/no-listener guarantees.
 - ActingLab Phase C status-view API contract alignment: `session api` now advertises `status_view.phase_c_summary_field="diagnostics.phase_c"`, so UI/scheduler clients can discover the compact Phase C diagnostics summary without hard-coding the field path.
 - ActingLab Phase C bootstrap diagnostics summary: `session bootstrap` now embeds the compact `status_diagnostics.phase_c` summary so UI/scheduler startup clients can read self-heal, interaction-flow, trusted-channel, and live-validation next actions from the first no-device startup envelope.
+- ActingLab Phase C bootstrap-view API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_phase_c_field="status_diagnostics.phase_c"`, so startup clients can discover the embedded Phase C diagnostics summary from the API contract.
+
+## Current ActingLab Phase C Bootstrap-View API Contract Alignment
+
+This increment aligns the bootstrap API contract with the compact Phase C diagnostics summary embedded in `session bootstrap`.
+
+- `session api` now declares `envelopes.bootstrap_view.status_diagnostics_phase_c_field=status_diagnostics.phase_c`.
+- The field points UI, scheduler, and agent startup clients to the embedded no-device Phase C status summary.
+- This complements `bootstrap_view.status_diagnostics_field=status_diagnostics` and `status_view.phase_c_summary_field=diagnostics.phase_c`.
+- The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, execute recovery, or perform live validation.
 
 ## Current ActingLab Phase C Bootstrap Diagnostics Summary
 
