@@ -1,5 +1,91 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab submit-plan Phase C execution preflight
+
+### Current status
+
+- Continued offline-only Session Layer work after the connect-plan Phase C preflight summary.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added `session.submit_phase_c_execution_preflight.v0.1` under `session submit-plan <command...>`.
+- `phase_c_execution_preflight` identifies whether a command is Phase C relevant and reports relevant lanes for self-heal, interaction flow, trusted channel, and live acceptance.
+- The preflight mirrors command class, device-affecting status, lease requirement, readiness state, queue admission, throat status, direct-device-access prohibition, lease status, and queue status.
+- The preflight exposes lane-specific commands for self-heal, interaction flow, and trusted channel, while keeping live validation `deferred` with `requires-live-device`.
+- `session api` now advertises the `submit_plan_view.phase_c_execution_preflight_field` and schema version for UI/scheduler clients.
+- This increment only exposes submission preflight diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `4e7bfc326edb68e57ed0532f6d78ba35f48a25d9`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: `submit-plan` now makes self-heal-related command admission visible before maintenance recovery is submitted.
+- Interaction flow: `submit-plan stream --input-event <action,args>` now reports the interaction-flow lane, matching lease requirement, direct-device-access prohibition, and live-validation deferral.
+- Trusted channel: trusted-channel-related submissions can expose the reserved encrypted/authenticated remote-channel lane without starting listeners, issuing tokens, or starting TLS.
+- Live validation: all live-only gates remain `deferred` with `requires-live-device`; offline tests must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Inspected Session Layer command-check, submit-plan, Phase C, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_submit_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session submit-plan stream --input-event tap,10,20`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused submit-plan tests passed.
+- Focused API contract test passed.
+- Manual JSON smoke for `session submit-plan stream --input-event tap,10,20` showed `phase_c_execution_preflight.schema_version=session.submit_phase_c_execution_preflight.v0.1`, `relevant_lanes=["interaction_flow"]`, direct ADB/device access blocked, and live validation deferred with `requires-live-device`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- Initial `cargo clippy --workspace -- -D warnings` found a local `manual_contains` issue in the new helper; it was fixed.
+- Final `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab connect-plan Phase C preflight summary
 
 ### Current status

@@ -5733,6 +5733,28 @@ This is still a contract/discovery increment only:
 - The acceptance gate contract keeps all live gates tied to `requires-live-device`; offline checks may prove contracts and preflights, but they must not mark live validation as accepted.
 - `session status --diagnostics`, `session bootstrap`, and `session readiness` mirror compact Phase C acceptance-gate fields so normal health/readiness clients can see self-heal, interaction-flow, trusted-channel, and live-acceptance blockers without executing recovery, stream, listener, token, TLS, capture, MaaTouch, app, resource, SQLite, UI, or live-device work.
 - `session connect-plan` mirrors the same Phase C gate state into `phase_c_preflight`, so future UI/scheduler clients can make a single client-start decision while still seeing self-heal, interaction-flow, trusted-channel, and live-validation blockers.
+- `session submit-plan` now mirrors Phase C execution-readiness into `phase_c_execution_preflight`, so UI/scheduler clients can inspect self-heal, interaction-flow, trusted-channel, lease, queue, and live-deferred gates before submitting a command.
+
+## Current ActingLab Submit-Plan Phase C execution preflight
+
+This increment keeps the unique-throat and Phase C gates visible at the final command submission preflight boundary.
+
+`session submit-plan <command...>` now exposes `phase_c_execution_preflight` with:
+
+- `schema_version=session.submit_phase_c_execution_preflight.v0.1`;
+- whether the target command is Phase C relevant;
+- the relevant lanes: `self_heal`, `interaction_flow`, `trusted_channel`, and/or `live_acceptance`;
+- command class, device-affecting status, and lease requirement;
+- readiness, command safety, queue admission, throat status, direct-device-access prohibition, lease status, and queue status;
+- lane-specific preflight commands for self-heal, interaction flow, and trusted channel;
+- live validation status fixed to `deferred` with `requires-live-device`;
+- guarantees that the preflight does not enqueue, touch devices, capture frames, start MaaTouch, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
+
+This is still a contract/discovery increment only:
+
+- no daemon request is enqueued;
+- no device, ADB, capture backend, MaaTouch backend, app lifecycle, resource repository, SQLite, OCR, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Repo-local planning policy
 

@@ -3295,6 +3295,8 @@ fn session_api_contract() -> Value {
                 "schema_version": "session.submit_plan.v0.1",
                 "ready_to_submit_field": "ready_to_submit",
                 "preflight_summary_field": "preflight_summary",
+                "phase_c_execution_preflight_field": "phase_c_execution_preflight",
+                "phase_c_execution_preflight_schema_version": "session.submit_phase_c_execution_preflight.v0.1",
                 "readiness_field": "readiness",
                 "command_check_field": "command_check",
                 "queue_field": "queue",
@@ -9294,6 +9296,13 @@ fn session_submit_plan_payload(
         .get("recommended_actions")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let phase_c_execution_preflight = session_submit_plan_phase_c_execution_preflight(
+        &tokens,
+        &command_check,
+        &readiness,
+        &queue,
+        ready_to_submit,
+    );
 
     Ok(json!({
         "schema_version": "session.submit_plan.v0.1",
@@ -9318,6 +9327,7 @@ fn session_submit_plan_payload(
             "instance_gate_status": command_check.pointer("/instance_gate/status").cloned().unwrap_or(Value::Null),
             "instance_gate_code": command_check.pointer("/instance_gate/code").cloned().unwrap_or(Value::Null)
         },
+        "phase_c_execution_preflight": phase_c_execution_preflight,
         "readiness": readiness,
         "command_check": command_check,
         "queue": queue,
@@ -9334,6 +9344,133 @@ fn session_submit_plan_payload(
             "does_not_start_listener": true
         }
     }))
+}
+
+fn session_submit_plan_phase_c_execution_preflight(
+    tokens: &[String],
+    command_check: &Value,
+    readiness: &Value,
+    queue: &Value,
+    ready_to_submit: bool,
+) -> Value {
+    let lanes = session_submit_plan_phase_c_lanes(tokens);
+    let relevant = !lanes.is_empty();
+    json!({
+        "schema_version": "session.submit_phase_c_execution_preflight.v0.1",
+        "status": if ready_to_submit { "ready" } else { "blocked" },
+        "phase_c_relevant": relevant,
+        "relevant_lanes": lanes,
+        "normalized_command": tokens.join(" "),
+        "command_class": command_check.get("command_class").cloned().unwrap_or(Value::Null),
+        "device_affecting": command_check.get("device_affecting").cloned().unwrap_or(Value::Null),
+        "requires_lease": command_check.get("requires_lease").cloned().unwrap_or(Value::Null),
+        "admission": {
+            "readiness_ready": readiness.get("ready").cloned().unwrap_or(Value::Null),
+            "command_safe": command_check.get("safe_to_submit").cloned().unwrap_or(Value::Null),
+            "queue_can_enqueue": queue.pointer("/admission/can_enqueue").cloned().unwrap_or(Value::Null),
+            "throat_status": command_check.pointer("/throat_gate/status").cloned().unwrap_or(Value::Null),
+            "session_layer_required": command_check.pointer("/throat_gate/session_layer_required").cloned().unwrap_or(Value::Null),
+            "direct_adb_or_device_access_allowed": command_check.pointer("/throat_gate/direct_adb_or_device_access_allowed").cloned().unwrap_or(Value::Null),
+            "clients_must_not_directly_touch_adb_or_devices": command_check.pointer("/throat_gate/clients_must_not_directly_touch_adb_or_devices").cloned().unwrap_or(Value::Null),
+            "lease_status": command_check.pointer("/lease_gate/status").cloned().unwrap_or(Value::Null),
+            "queue_status": queue.pointer("/admission/status").cloned().unwrap_or(Value::Null)
+        },
+        "self_heal": {
+            "relevant": session_lane_present(&lanes, "self_heal"),
+            "preflight_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "execution_must_use_submit_plan": true,
+            "maintenance_only": true,
+            "game_progress_actions_allowed": false
+        },
+        "interaction_flow": {
+            "relevant": session_lane_present(&lanes, "interaction_flow"),
+            "preflight_command": "session submit-plan stream --input-event <action,args>",
+            "input_relay_requires_matching_lease": true,
+            "stream_must_use_session_layer": true
+        },
+        "trusted_channel": {
+            "relevant": session_lane_present(&lanes, "trusted_channel"),
+            "preflight_command": "session transport plan [--endpoint <url>]",
+            "trusted_remote_status": "reserved_contract",
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "safe_to_accept_remote_clients": false
+        },
+        "live_validation": {
+            "relevant": session_lane_present(&lanes, "live_acceptance") || relevant,
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_submit_plan": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_submit_plan_phase_c_lanes(tokens: &[String]) -> Vec<&'static str> {
+    let mut lanes = Vec::new();
+    if session_tokens_contain(tokens, "phase-c-plan") {
+        session_push_unique_lane(&mut lanes, "self_heal");
+        session_push_unique_lane(&mut lanes, "interaction_flow");
+        session_push_unique_lane(&mut lanes, "trusted_channel");
+        session_push_unique_lane(&mut lanes, "live_acceptance");
+        return lanes;
+    }
+    if session_tokens_contain_any(
+        tokens,
+        &[
+            "recover",
+            "self-heal-plan",
+            "--stale-capture",
+            "--startup-login",
+        ],
+    ) {
+        session_push_unique_lane(&mut lanes, "self_heal");
+    }
+    if session_tokens_contain_any(
+        tokens,
+        &["stream", "stream-plan", "--input-event", "--relay-event"],
+    ) {
+        session_push_unique_lane(&mut lanes, "interaction_flow");
+    }
+    if session_tokens_contain_any(tokens, &["transport", "connect-plan", "--endpoint"]) {
+        session_push_unique_lane(&mut lanes, "trusted_channel");
+    }
+    if session_tokens_contain_any(tokens, &["validation-plan"]) {
+        session_push_unique_lane(&mut lanes, "live_acceptance");
+    }
+    lanes
+}
+
+fn session_tokens_contain_any(tokens: &[String], needles: &[&str]) -> bool {
+    needles
+        .iter()
+        .any(|needle| session_tokens_contain(tokens, needle))
+}
+
+fn session_tokens_contain(tokens: &[String], needle: &str) -> bool {
+    tokens
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case(needle))
+}
+
+fn session_push_unique_lane(lanes: &mut Vec<&'static str>, lane: &'static str) {
+    if !session_lane_present(lanes, lane) {
+        lanes.push(lane);
+    }
+}
+
+fn session_lane_present(lanes: &[&'static str], lane: &str) -> bool {
+    lanes.contains(&lane)
 }
 
 fn session_command_check_throat_gate(
@@ -25216,6 +25353,82 @@ mod tests {
         assert_eq!(
             count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn session_submit_plan_stream_input_reports_phase_c_execution_preflight() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "submit-plan",
+                "stream",
+                "--input-event",
+                "tap,10,20",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/schema_version")
+                .and_then(Value::as_str),
+            Some("session.submit_phase_c_execution_preflight.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/phase_c_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/phase_c_execution_preflight/relevant_lanes")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|lane| lane.as_str() == Some("interaction_flow"))
+        );
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/interaction_flow/relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/admission/clients_must_not_directly_touch_adb_or_devices")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer(
+                "/phase_c_execution_preflight/admission/direct_adb_or_device_access_allowed"
+            )
+            .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_execution_preflight/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/ready_to_submit").and_then(Value::as_bool),
+            Some(false)
         );
     }
 
@@ -43524,6 +43737,16 @@ mod tests {
             data.pointer("/envelopes/submit_plan_view/preflight_summary_field")
                 .and_then(Value::as_str),
             Some("preflight_summary")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/phase_c_execution_preflight_field")
+                .and_then(Value::as_str),
+            Some("phase_c_execution_preflight")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/submit_plan_view/phase_c_execution_preflight_schema_version")
+                .and_then(Value::as_str),
+            Some("session.submit_phase_c_execution_preflight.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/validation_plan_view/schema_version")
