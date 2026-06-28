@@ -225,6 +225,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab session recording authorization policy: `session record-policy` and `session request record-policy` expose the active recording authorization model, allowed step kinds, frame-source policy, resource-write policy, safety policy, and no-device/no-resource-write guarantees for UI/scheduler/agent clients.
 - ActingLab session recording command-check classification: `session command-check` now distinguishes current-frame recording from local-frame daemon-state work, so `session record step --capture` and `--current-frame` are device-affecting read-only while local `--frame` authoring remains daemon-state.
 - ActingLab live acceptance checklist granularity: `session validation-plan` now lists record current-frame authoring, interactive stream/input relay, and trusted-channel security as separate `deferred: requires-live-device` acceptance items.
+- ActingLab queue event summary: daemon request journals and `session events --data-summary-kind queue` now expose compact queue health, admission, request counts, recommended actions, and no-device/no-capture guarantees for UI/scheduler clients.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
@@ -5790,6 +5791,36 @@ This is still a contract/discovery increment only:
 - `session status --diagnostics`, `session bootstrap`, and `session readiness` mirror compact Phase C acceptance-gate fields so normal health/readiness clients can see self-heal, interaction-flow, trusted-channel, and live-acceptance blockers without executing recovery, stream, listener, token, TLS, capture, MaaTouch, app, resource, SQLite, UI, or live-device work.
 - `session connect-plan` mirrors the same Phase C gate state into `phase_c_preflight`, so future UI/scheduler clients can make a single client-start decision while still seeing self-heal, interaction-flow, trusted-channel, and live-validation blockers.
 - `session submit-plan` now mirrors Phase C execution-readiness into `phase_c_execution_preflight`, so UI/scheduler clients can inspect self-heal, interaction-flow, trusted-channel, lease, queue, and live-deferred gates before submitting a command.
+- `session queue` and `session events --data-summary-kind queue` expose the queue/admission slice used by Phase C preflights, so UI/scheduler clients can see blocked work before they propose recovery, stream input, or future trusted remote control.
+
+## Current ActingLab queue event summary
+
+This increment makes queue health and request admission discoverable from daemon request journals and event filters.
+
+`session request queue` summaries now expose:
+
+- queue status and pending/running/response counts;
+- queue health status for pending requests, running requests, and pending responses;
+- admission status, enqueue permission, and blocked code;
+- recommended action count and action kinds;
+- no-enqueue/no-device/no-capture/no-MaaTouch/no-listener guarantees.
+
+`session events --data-summary-kind queue` can now return this scheduler queue slice without forcing UI/scheduler clients to parse the full queue payload.
+
+Phase C alignment:
+
+- Self-heal: queue events expose blocked queue state before any maintenance recovery is considered.
+- Interaction flow: queue events expose request pressure and admission state before stream/input-relay work is submitted.
+- Trusted channel: queue events keep remote-control admission visible through the Session Layer instead of letting a future transport bypass the request queue.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; offline queue summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no daemon work is enqueued;
+- no recovery is executed;
+- no stream is opened;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab bootstrap event summary
 

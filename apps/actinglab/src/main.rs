@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "queue", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15012,6 +15012,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     let data = response.data.as_ref()?;
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
+        "queue" => Some(queue_request_data_summary(data)),
         "bootstrap" => Some(bootstrap_request_data_summary(data)),
         "readiness" => Some(readiness_request_data_summary(data)),
         "command_check" => Some(command_check_request_data_summary(data)),
@@ -15035,6 +15036,64 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         }
         _ => None,
     }
+}
+
+fn queue_request_data_summary(data: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    summary.insert(
+        "schema_version".to_string(),
+        Value::String("session.request.data_summary.v0.1".to_string()),
+    );
+    summary.insert("kind".to_string(), Value::String("queue".to_string()));
+    for (key, pointer) in [
+        ("queue_schema_version", "/schema_version"),
+        ("status", "/status"),
+        ("pending_requests", "/counts/pending_requests"),
+        ("running_requests", "/counts/running_requests"),
+        ("pending_responses", "/counts/pending_responses"),
+        ("health_schema_version", "/health/schema_version"),
+        ("health_status", "/health/status"),
+        ("pending_requests_status", "/health/pending_requests/status"),
+        ("running_requests_status", "/health/running_requests/status"),
+        (
+            "pending_responses_status",
+            "/health/pending_responses/status",
+        ),
+        ("admission_status", "/admission/status"),
+        ("can_enqueue", "/admission/can_enqueue"),
+        ("admission_blocked_code", "/admission/blocked_code"),
+        ("does_not_enqueue", "/guarantees/does_not_enqueue"),
+        ("does_not_touch_device", "/guarantees/does_not_touch_device"),
+        ("does_not_capture", "/guarantees/does_not_capture"),
+        (
+            "does_not_start_maatouch",
+            "/guarantees/does_not_start_maatouch",
+        ),
+        (
+            "does_not_start_listener",
+            "/guarantees/does_not_start_listener",
+        ),
+    ] {
+        summary.insert(
+            key.to_string(),
+            data.pointer(pointer).cloned().unwrap_or(Value::Null),
+        );
+    }
+    summary.insert(
+        "recommended_action_count".to_string(),
+        data.get("recommended_actions")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    summary.insert(
+        "recommended_action_kinds".to_string(),
+        data.get("recommended_action_kinds")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    Value::Object(summary)
 }
 
 fn bootstrap_request_data_summary(data: &Value) -> Value {
@@ -24021,6 +24080,150 @@ mod tests {
                 .pointer("/guarantees/does_not_touch_device")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(summary.get("kind").and_then(Value::as_str), Some("queue"));
+        assert_eq!(summary.get("status").and_then(Value::as_str), Some("clear"));
+        assert_eq!(
+            summary.get("pending_requests").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            summary.get("health_status").and_then(Value::as_str),
+            Some("clear")
+        );
+        assert_eq!(
+            summary.get("admission_status").and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            summary.get("can_enqueue").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary.get("does_not_capture").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_start_maatouch")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_events_filters_queue_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let queue_request = SessionCommandRequest {
+            request_id: "queue-health-event".to_string(),
+            command: "queue".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let queue_payload =
+            execute_session_command_request_inner(&queue_request, state_dir).unwrap();
+        let queue_response = SessionCommandResponse {
+            request_id: queue_request.request_id.clone(),
+            command: queue_request.command.clone(),
+            ok: true,
+            data: Some(queue_payload),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &queue_request, &queue_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-queue-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "queue".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 13,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("queue-health-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("queue")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/health_status")
+                .and_then(Value::as_str),
+            Some("clear")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/can_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("queue")
         );
     }
 
@@ -38921,6 +39124,7 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         for kind in [
+            "queue",
             "bootstrap",
             "readiness",
             "command_check",
