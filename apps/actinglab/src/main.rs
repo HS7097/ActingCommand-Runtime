@@ -1639,6 +1639,8 @@ fn session_api_contract() -> Value {
                 "live_validation_status_field": "live_validation_status",
                 "deferred_code_field": "deferred_code",
                 "deferred_live_tasks_field": "deferred_live_tasks",
+                "pending_live_acceptance_field": "pending_live_acceptance",
+                "phase_acceptance_matrix_field": "phase_acceptance_matrix",
                 "offline_verification_allowed_field": "offline_verification_allowed",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true,
@@ -6423,6 +6425,7 @@ fn session_validation_plan_payload(
         "phase_acceptance_matrix": session_validation_phase_matrix(),
         "ak_stale_capture_validation": ak_stale_capture_validation_scope(),
         "deferred_live_tasks": session_validation_deferred_live_tasks(),
+        "pending_live_acceptance": session_validation_pending_live_acceptance(),
         "guarantees": {
             "does_not_enqueue": true,
             "does_not_touch_device": true,
@@ -6610,6 +6613,91 @@ fn session_validation_deferred_live_tasks() -> Value {
             "description": "Validate trusted UI/API exposure and long-lived stream behavior only after the live transport exists and is reviewed."
         }
     ])
+}
+
+fn session_validation_pending_live_acceptance() -> Value {
+    json!({
+        "title": "待真机验收",
+        "status": "deferred",
+        "deferred_code": "requires-live-device",
+        "owner": "operator",
+        "must_not_be_marked_passed_by_offline_checks": true,
+        "items": [
+            {
+                "id": "prepared_emulator_session_layer_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "connected emulator or device",
+                    "running game",
+                    "resident Session Layer"
+                ],
+                "required_evidence": [
+                    "operator-observed command behavior",
+                    "daemon/request journal entries",
+                    "no direct client adb/device bypass"
+                ]
+            },
+            {
+                "id": "ak_stale_capture_fresh_frame_recovery_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "Arknights instance",
+                    "live capture backends",
+                    "operator-visible emulator state"
+                ],
+                "required_evidence": [
+                    "stale adb_screencap is detected or ruled out",
+                    "fresh non-ADB backend evidence if available",
+                    "no false game-freeze conclusion from stale ADB frames"
+                ]
+            },
+            {
+                "id": "live_adb_device_control_and_screenshot_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "connected emulator or device",
+                    "ADB transport",
+                    "running game"
+                ],
+                "required_evidence": [
+                    "live screenshot result",
+                    "live input or app lifecycle result when permitted",
+                    "visible failure if the device path is unavailable"
+                ]
+            },
+            {
+                "id": "operator_acceptance_observation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "human operator",
+                    "visible emulator window"
+                ],
+                "required_evidence": [
+                    "operator confirms observed state",
+                    "operator confirms no unapproved paid/destructive action"
+                ]
+            },
+            {
+                "id": "trusted_ui_api_and_interactive_stream_live_validation",
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "required_environment": [
+                    "reviewed trusted transport",
+                    "UI/API client",
+                    "live stream-capable session"
+                ],
+                "required_evidence": [
+                    "TLS or authenticated IPC boundary verified",
+                    "stream frames observed by client",
+                    "input relay lease gate observed when input is enabled"
+                ]
+            }
+        ]
+    })
 }
 
 fn session_submit_plan_blockers(
@@ -18963,6 +19051,29 @@ mod tests {
                 .iter()
                 .any(|backend| backend.as_str() == Some("nemu_ipc"))
         );
+        assert_eq!(
+            data.pointer("/pending_live_acceptance/title")
+                .and_then(Value::as_str),
+            Some("待真机验收")
+        );
+        assert_eq!(
+            data.pointer("/pending_live_acceptance/must_not_be_marked_passed_by_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let pending_live_items = data
+            .pointer("/pending_live_acceptance/items")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            pending_live_items
+                .iter()
+                .any(|item| item.get("id").and_then(Value::as_str)
+                    == Some("ak_stale_capture_fresh_frame_recovery_validation"))
+        );
+        assert!(pending_live_items.iter().all(|item| {
+            item.get("deferred_code").and_then(Value::as_str) == Some("requires-live-device")
+        }));
         assert!(
             data.get("deferred_live_tasks")
                 .and_then(Value::as_array)
@@ -33420,6 +33531,10 @@ mod tests {
 
     #[test]
     fn session_contract_is_offline_access_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
         let result = run_cli(["--json", "session", "contract"], true);
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
@@ -33773,6 +33888,16 @@ mod tests {
             data.pointer("/envelopes/transport_view/check_schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_check.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/validation_plan_view/pending_live_acceptance_field")
+                .and_then(Value::as_str),
+            Some("pending_live_acceptance")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/validation_plan_view/phase_acceptance_matrix_field")
+                .and_then(Value::as_str),
+            Some("phase_acceptance_matrix")
         );
         assert_eq!(
             data.pointer("/envelopes/bootstrap_view/schema_version")

@@ -1,5 +1,82 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab pending live acceptance checklist
+
+### Current status
+
+- Extended `session validation-plan` and daemon-routed `session request validation-plan` with an explicit `pending_live_acceptance` block titled `待真机验收`.
+- The block lists skipped live/device/operator validation items with `status=deferred` and `deferred_code=requires-live-device`.
+- Each pending item records required live environment and required evidence so offline tests cannot be mistaken for live acceptance.
+- `session api` now advertises `pending_live_acceptance_field` and `phase_acceptance_matrix_field` for validation-plan clients.
+- This is a pure validation/contract projection for UI, scheduler, and operator acceptance workflows.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit is pending final verification.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `65d03559924c05da21ea7db09369fd313ef8f3cc`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md` and `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md` for task context only.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand source-of-truth, planning-file, and error-handling rules.
+- Inspected Session Layer validation-plan, API contract, throat policy, and pending-live fields in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_validation_plan -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- First full `cargo test --workspace` failed because `session_contract_is_offline_access_contract` could inherit the strict-session environment from another env-mutating test; fixed by guarding the test with `ENV_LOCK` and clearing `ACTINGLAB_REQUIRE_SESSION_DAEMON`.
+- `cargo test -p actingcommand-actinglab session_contract_is_offline_access_contract -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_validation_plan -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Source-only prohibited-feature scan over the changed diff for direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, listener startup, new capture/input backend terms, and resource-root access.
+
+### Test results
+
+- Focused `session_validation_plan` tests passed.
+- Focused Session API contract test passed.
+- Focused Session access contract test passed after env isolation.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Final `cargo test --workspace` passed.
+- Source-only prohibited-feature scan passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Run full formatting, diff, clippy, and workspace test verification.
+2. Commit and push the Runtime source, planning, checkpoint, and checkpoint tag.
+
 ## 2026-06-28 ActingLab validation acceptance matrix
 
 ### Current status

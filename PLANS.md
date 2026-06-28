@@ -170,6 +170,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab live validation plan surface: `session validation-plan` and `session request validation-plan` now expose deferred live-validation policy, allowed offline checks, and no-device guarantees as machine-readable data for UI/scheduler clients.
 - ActingLab client bootstrap surface: `session bootstrap` and `session request bootstrap` now aggregate API/access contracts, capabilities, readiness, queue, and validation-plan into one no-device startup envelope for UI/scheduler clients.
 - ActingLab live validation acceptance matrix: `session validation-plan` now includes Phase A-D/cross-cutting acceptance boundaries and an AK stale-capture validation scope, keeping offline progress separate from `requires-live-device` acceptance.
+- ActingLab pending live acceptance checklist: `session validation-plan` now includes a `pending_live_acceptance` block titled `待真机验收`, listing every skipped live/device/operator validation item and the evidence required before it can be marked passed.
 
 ## Current ActingLab Client Bootstrap Surface
 
@@ -195,6 +196,7 @@ This increment turns the current live-validation deferral into a stable Session 
 - The payload reports `live_validation_status=deferred` and `deferred_code=requires-live-device`.
 - The payload includes `phase_acceptance_matrix` entries for Phase A, Phase B, Phase C, Phase D, and cross-cutting Session Layer work.
 - The payload includes `ak_stale_capture_validation`, which records that stale `adb_screencap` output must not be treated as proof of a game freeze by itself and that lighter capture-backend recovery should be considered before app restart.
+- The payload includes `pending_live_acceptance` titled `待真机验收`; each item remains `deferred: requires-live-device` and lists the required live environment plus evidence.
 - Deferred live tasks include prepared-emulator Session Layer validation, AK stale-capture/fresh-frame recovery validation, live ADB/device/screenshot validation, and operator acceptance observation.
 - Offline verification remains allowed for unit tests, contract tests, dry-runs, fixture-frame tests, and static prohibited-feature scans.
 - The surface guarantees it does not enqueue, capture, start MaaTouch, touch devices, start apps, start listeners, or read resource repositories.
