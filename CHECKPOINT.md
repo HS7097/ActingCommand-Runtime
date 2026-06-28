@@ -1,5 +1,79 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab command-check throat gate summary
+
+### Current status
+
+- Added `throat_gate` to `session command-check <command...>`.
+- Added `throat_gate_field="throat_gate"` to the Session API `command_check_view` contract.
+- Added compact throat fields to `session submit-plan <command...>` `preflight_summary`.
+- The throat gate exposes command class, device-affecting status, Session Layer requirement, daemon-route requirement/selection/readiness, LabLease requirement, direct ADB/device access denial, and local override status.
+- The change is an offline contract/discovery increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start streams, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `5fe87c303e346a1fe67783d4f5b560e027ff5655`.
+- Milestone source commit: `4c271f57b9dc4e23ce8d7a369fc591f04e1b9233`.
+- Checkpoint tag: `checkpoint/20260628-command-throat-gate`.
+
+### Resource mirrors used
+
+- Runtime was confirmed dirty only for the current `apps/actinglab/src/main.rs` working change before this checkpoint update.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- `git status --short --branch`
+- `git diff -- apps/actinglab/src/main.rs`
+- Inspected focused command-check, submit-plan, and API contract tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check`
+- `cargo test -p actingcommand-actinglab session_submit_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_command_check` test group passed and covers `throat_gate` for read-only local, explicit daemon blocked, and control/lease paths.
+- Focused `session_submit_plan` test group passed and covers compact throat fields in `preflight_summary`.
+- Focused `session_api_is_offline_api_contract` passed and covers the new `command_check_view.throat_gate_field`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed.
+
+### 待真机验收
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab readiness diagnostics summary
 
 ### Current status
