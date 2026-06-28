@@ -1,5 +1,98 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab bootstrap event summary
+
+### Current status
+
+- Continued offline-only Session Layer work after readiness event summaries.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added `bootstrap` request data summaries for successful `session request bootstrap` responses.
+- `session events --data-summary-kind bootstrap` can now return compact startup envelope state for UI/scheduler event consumers.
+- The summary exposes readiness state, queue health, validation-plan state, pending live-acceptance count, Session throat state, AK stale-capture guard state, liveness diagnostics, Phase C next action, self-heal/interaction/trusted-channel fields, and no-device/no-resource guarantees.
+- Phase C boundaries remain unchanged: self-heal stays observe/plan-first, interaction flow stays lease-gated and preflighted, and trusted remote control stays reserved until encryption/authentication/listener/token/TLS/audit work is explicitly implemented and live-validated.
+- This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `3df1a3a8c5dd612e96b0652a9a67ae7d26ff35bf`.
+- Milestone source commit: pending.
+
+### Pending live validation
+
+- `prepared_emulator_session_layer_validation` deferred: `requires-live-device`.
+- `ak_stale_capture_fresh_frame_recovery_validation` deferred: `requires-live-device`.
+- `live_adb_device_control_and_screenshot_validation` deferred: `requires-live-device`.
+- `operator_acceptance_observation` deferred: `requires-live-device`.
+- `record_current_frame_authoring_live_validation` deferred: `requires-live-device`.
+- `interactive_stream_input_relay_live_validation` deferred: `requires-live-device`.
+- `trusted_channel_security_live_validation` deferred: `requires-live-device`.
+
+### Phase C plan alignment
+
+- Self-heal: bootstrap summaries expose the first self-heal review action and capture-staleness guard without executing recovery.
+- Interaction flow: bootstrap summaries expose stream/input-relay preflight status without opening streams or relaying input.
+- Trusted channel: bootstrap summaries expose encryption/authentication requirements and listener-not-implemented state while preserving no listener/token/TLS startup.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; event summaries must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Inspected Session Layer bootstrap payload, request data-summary, journal/events, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo run -q -p actingcommand-actinglab -- --json session bootstrap --local`
+- `cargo fmt --all`
+- Initial focused bootstrap request-summary test exposed a test-scenario mismatch: no selected instance with test session files reports `readiness_status=ready`, while the event test with selected missing instance reports `not_ready`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_bootstrap_request_returns_payload -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_filters_bootstrap_startup_data_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace --quiet` run exposed a transient/parallel test failure in unrelated `lab_run::tests::lab_validate_accepts_minimal_self_contained_package`.
+- `cargo test -p actingcommand-actinglab lab_run::tests::lab_validate_accepts_minimal_self_contained_package -- --nocapture`
+- `cargo test --workspace --quiet`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- Focused bootstrap request-summary test passed.
+- Focused bootstrap event-summary test passed.
+- Focused API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- First `cargo test --workspace --quiet` run failed in unrelated `lab_run::tests::lab_validate_accepts_minimal_self_contained_package` with exit code mismatch; the focused test immediately passed on rerun.
+- Second `cargo test --workspace --quiet` passed with workspace tests green, including 449 `actinglab` tests.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab readiness event summary
 
 ### Current status

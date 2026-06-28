@@ -3404,7 +3404,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "bootstrap", "readiness", "command_check", "submit_plan", "capture_policy", "record_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -15012,6 +15012,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     let data = response.data.as_ref()?;
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
+        "bootstrap" => Some(bootstrap_request_data_summary(data)),
         "readiness" => Some(readiness_request_data_summary(data)),
         "command_check" => Some(command_check_request_data_summary(data)),
         "submit_plan" => Some(submit_plan_request_data_summary(data)),
@@ -15034,6 +15035,140 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         }
         _ => None,
     }
+}
+
+fn bootstrap_request_data_summary(data: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    summary.insert(
+        "schema_version".to_string(),
+        Value::String("session.request.data_summary.v0.1".to_string()),
+    );
+    summary.insert("kind".to_string(), Value::String("bootstrap".to_string()));
+    for (key, pointer) in [
+        ("bootstrap_schema_version", "/schema_version"),
+        ("readiness_schema_version", "/readiness/schema_version"),
+        ("readiness_status", "/readiness/status"),
+        ("readiness_ready", "/readiness/ready"),
+        ("queue_schema_version", "/queue/schema_version"),
+        ("queue_status", "/queue/status"),
+        ("queue_health_status", "/queue/health/status"),
+        (
+            "validation_schema_version",
+            "/validation_plan/schema_version",
+        ),
+        ("validation_status", "/validation_plan/status"),
+        ("validation_deferred_code", "/validation_plan/deferred_code"),
+        (
+            "pending_live_acceptance_item_count",
+            "/validation_plan/pending_live_acceptance/item_count",
+        ),
+        (
+            "throat_only_control_throat",
+            "/throat_policy/session_layer/only_control_throat",
+        ),
+        (
+            "capture_stale_status",
+            "/capture_policy/stale_classification/stale_capture_status",
+        ),
+        (
+            "must_not_classify_game_freeze_from_adb_screencap_alone",
+            "/capture_policy/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone",
+        ),
+        (
+            "diagnostics_schema_version",
+            "/status_diagnostics/schema_version",
+        ),
+        ("diagnostics_running", "/status_diagnostics/running"),
+        (
+            "diagnostics_liveness_status",
+            "/status_diagnostics/liveness/status",
+        ),
+        (
+            "diagnostics_queue_health_status",
+            "/status_diagnostics/queue_health/status",
+        ),
+        (
+            "self_heal_first_next_action",
+            "/status_diagnostics/self_heal/next_actions/first_action",
+        ),
+        (
+            "interaction_flow_next_status",
+            "/status_diagnostics/interaction_flow/next_actions/status",
+        ),
+        (
+            "interaction_flow_first_next_action",
+            "/status_diagnostics/interaction_flow/next_actions/first_action",
+        ),
+        (
+            "trusted_channel_status",
+            "/status_diagnostics/trusted_channel/trusted_remote/status",
+        ),
+        (
+            "trusted_channel_requires_encryption",
+            "/status_diagnostics/trusted_channel/trusted_remote/requires_encryption",
+        ),
+        (
+            "trusted_channel_requires_authentication",
+            "/status_diagnostics/trusted_channel/trusted_remote/requires_authentication",
+        ),
+        (
+            "trusted_channel_network_listener_implemented",
+            "/status_diagnostics/trusted_channel/trusted_remote/network_listener_implemented",
+        ),
+        (
+            "trusted_channel_first_next_action",
+            "/status_diagnostics/trusted_channel/next_actions/first_action",
+        ),
+        (
+            "phase_c_next_actions_schema_version",
+            "/status_diagnostics/phase_c/next_actions/schema_version",
+        ),
+        (
+            "phase_c_first_next_action",
+            "/status_diagnostics/phase_c/next_actions/first_action",
+        ),
+        (
+            "phase_c_acceptance_gate_lane_count",
+            "/status_diagnostics/phase_c/acceptance_gates/lane_count",
+        ),
+        (
+            "phase_c_all_live_gates_deferred_code",
+            "/status_diagnostics/phase_c/acceptance_gates/all_live_gates_deferred_code",
+        ),
+        (
+            "validation_first_next_action",
+            "/status_diagnostics/validation/next_actions/first_action",
+        ),
+        (
+            "must_not_mark_live_pass_from_offline_checks",
+            "/status_diagnostics/validation/next_actions/live_validation/must_not_mark_live_pass_from_offline_checks",
+        ),
+        (
+            "recommended_action_count",
+            "/status_diagnostics/recommended_action_count",
+        ),
+        ("does_not_enqueue", "/guarantees/does_not_enqueue"),
+        ("does_not_touch_device", "/guarantees/does_not_touch_device"),
+        ("does_not_capture", "/guarantees/does_not_capture"),
+        (
+            "does_not_start_maatouch",
+            "/guarantees/does_not_start_maatouch",
+        ),
+        (
+            "does_not_start_listener",
+            "/guarantees/does_not_start_listener",
+        ),
+        (
+            "does_not_read_resource_repositories",
+            "/guarantees/does_not_read_resource_repositories",
+        ),
+    ] {
+        summary.insert(
+            key.to_string(),
+            data.pointer(pointer).cloned().unwrap_or(Value::Null),
+        );
+    }
+    Value::Object(summary)
 }
 
 fn readiness_request_data_summary(data: &Value) -> Value {
@@ -26417,6 +26552,53 @@ mod tests {
         assert_eq!(
             payload
                 .pointer("/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let response = SessionCommandResponse {
+            request_id: query.request_id.clone(),
+            command: query.command.clone(),
+            ok: true,
+            data: Some(payload),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("bootstrap")
+        );
+        assert_eq!(
+            summary.get("readiness_status").and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            summary.get("queue_health_status").and_then(Value::as_str),
+            Some("clear")
+        );
+        assert_eq!(
+            summary
+                .get("phase_c_first_next_action")
+                .and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        assert_eq!(
+            summary
+                .get("trusted_channel_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("must_not_mark_live_pass_from_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_read_resource_repositories")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -37836,6 +38018,121 @@ mod tests {
     }
 
     #[test]
+    fn session_events_filters_bootstrap_startup_data_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        write_test_session_files(state_dir);
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let bootstrap_request = SessionCommandRequest {
+            request_id: "bootstrap-startup-event".to_string(),
+            command: "bootstrap".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 112,
+        };
+        let bootstrap_payload =
+            execute_session_command_request_inner(&bootstrap_request, state_dir).unwrap();
+        let bootstrap_response = SessionCommandResponse {
+            request_id: bootstrap_request.request_id.clone(),
+            command: bootstrap_request.command.clone(),
+            ok: true,
+            data: Some(bootstrap_payload),
+            error: None,
+            started_at_unix_ms: 113,
+            completed_at_unix_ms: 114,
+        };
+        append_session_request_journal(state_dir, &bootstrap_request, &bootstrap_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-bootstrap-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "bootstrap".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 115,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("bootstrap-startup-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("bootstrap")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/readiness_status")
+                .and_then(Value::as_str),
+            Some("not_ready")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/phase_c_next_actions_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/phase_c_first_next_action")
+                .and_then(Value::as_str),
+            Some("review_self_heal_plan")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/trusted_channel_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/trusted_channel_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/must_not_mark_live_pass_from_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_read_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn session_events_filters_by_status_after_cursor() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
@@ -38624,6 +38921,7 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         for kind in [
+            "bootstrap",
             "readiness",
             "command_check",
             "submit_plan",
