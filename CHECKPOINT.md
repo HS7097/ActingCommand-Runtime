@@ -15,7 +15,8 @@
 - `session api` now advertises `readiness_view.policy_summary_field`.
 - The change is a pure no-device readiness projection for UI/scheduler/agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending until this checkpoint is committed and tagged.
+- Milestone source commit: `428109c33b943556f3a7715150f9b0f2ba4a8d91`.
+- Checkpoint tag: `checkpoint/20260628-readiness-policy-summary`.
 
 ### Resource mirrors used
 
@@ -76,9 +77,8 @@
 
 ### Next step
 
-1. Commit and tag this Runtime increment.
-2. Backfill this checkpoint with the source commit hash.
-3. Push `main` and the checkpoint tag.
+1. Push `main` and checkpoint tag `checkpoint/20260628-readiness-policy-summary`.
+2. Continue the next offline Session Layer Phase C increment before live validation.
 
 ## 2026-06-28 ActingLab Phase C self-heal policy surface
 
