@@ -182,6 +182,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab command-check Phase C scope: `session command-check` now includes `phase_c_scope`, classifying self-heal, interaction-flow, trusted-channel, and live-validation relevance before clients submit or enqueue work.
 - ActingLab command-check Phase C event summary: daemon request journals and `session events --data-summary-kind command_check` now expose compact command-check Phase C scope for UI/scheduler event consumers.
 - ActingLab submit-plan Phase C event summary: daemon request journals and `session events --data-summary-kind submit_plan` now expose compact submit-plan admission and Phase C execution-preflight summaries for UI/scheduler event consumers.
+- ActingLab Phase C plan event summary: daemon request journals and `session events --data-summary-kind phase_c_plan` now expose compact Phase C next-action lane summaries for UI/scheduler event consumers.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
@@ -273,6 +274,15 @@ This increment makes submit-plan admission and Phase C execution preflight disco
 - Interaction-flow preflights such as `session request submit-plan stream --input-event <action,args>` can now be retrieved with `session events --data-summary-kind submit_plan`.
 - The summary preserves no-device guarantees: no enqueue from the query, no capture, no MaaTouch, no listener, no token issuer, no TLS startup, and no live-validation pass marker.
 - `session api` now advertises `submit_plan` in `event_view.data_summary_kinds`.
+- This is an offline journal/event contract increment only; it does not execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, touch devices, read resource repositories, write SQLite, or run game logic.
+
+## Current ActingLab Phase C Plan Event Summary
+
+This increment makes the aggregate Phase C roadmap discoverable from daemon request journals and event filters.
+
+- `phase_c_plan` request summaries now carry compact `next_actions` lane fields for self-heal, interaction flow, trusted channel, and pending live acceptance.
+- `session events --data-summary-kind phase_c_plan` can now return the aggregate Phase C plan with next-action schema, first action, lane statuses, trusted-channel encryption/authentication requirements, pending live-acceptance count, and no-live-pass guarantees.
+- The event summary preserves the three Phase C boundaries: self-heal stays observe/plan-first, interaction flow stays lease-gated and instance-preflighted, and trusted remote control stays reserved until encryption/authentication/listener/token/TLS/audit work is explicitly implemented and live-validated.
 - This is an offline journal/event contract increment only; it does not execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, touch devices, read resource repositories, write SQLite, or run game logic.
 
 ## Current ActingLab Recording Command Preflight Classification

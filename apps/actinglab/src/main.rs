@@ -15198,11 +15198,25 @@ fn phase_c_plan_request_data_summary(data: &Value) -> Value {
         "acceptance_gates_deferred_code": data.pointer("/acceptance_gates/all_live_gates_deferred_code").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
         "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "next_actions_schema_version": data.pointer("/next_actions/schema_version").cloned().unwrap_or(Value::Null),
+        "next_actions_status": data.pointer("/next_actions/status").cloned().unwrap_or(Value::Null),
         "next_action_count": data.pointer("/next_actions/ordered").and_then(Value::as_array).map(Vec::len),
         "first_next_action": data.pointer("/next_actions/ordered/0/action").cloned().unwrap_or(Value::Null),
+        "self_heal_next_status": data.pointer("/next_actions/self_heal/status").cloned().unwrap_or(Value::Null),
+        "self_heal_execution_gate_status": data.pointer("/next_actions/self_heal/execution_gate_status").cloned().unwrap_or(Value::Null),
+        "self_heal_operator_live_validation_required": data.pointer("/next_actions/self_heal/operator_live_validation_required").cloned().unwrap_or(Value::Null),
+        "interaction_flow_next_status": data.pointer("/next_actions/interaction_flow/status").cloned().unwrap_or(Value::Null),
+        "interaction_flow_long_lived_ui_stream_status": data.pointer("/next_actions/interaction_flow/long_lived_ui_stream_status").cloned().unwrap_or(Value::Null),
+        "interaction_flow_input_relay_requires_matching_lease": data.pointer("/next_actions/interaction_flow/input_relay_requires_matching_lease").cloned().unwrap_or(Value::Null),
+        "trusted_channel_next_status": data.pointer("/next_actions/trusted_channel/status").cloned().unwrap_or(Value::Null),
+        "trusted_channel_requires_encryption": data.pointer("/next_actions/trusted_channel/requires_encryption").cloned().unwrap_or(Value::Null),
+        "trusted_channel_requires_authentication": data.pointer("/next_actions/trusted_channel/requires_authentication").cloned().unwrap_or(Value::Null),
+        "pending_live_acceptance_item_count": data.pointer("/next_actions/live_validation/pending_live_acceptance/items").and_then(Value::as_array).map(Vec::len),
+        "must_not_mark_live_pass_from_offline_checks": data.pointer("/next_actions/live_validation/must_not_mark_live_pass_from_offline_checks").cloned().unwrap_or(Value::Null),
         "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null),
         "does_not_issue_tokens": data.pointer("/guarantees/does_not_issue_tokens").cloned().unwrap_or(Value::Null),
-        "does_not_start_tls": data.pointer("/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null)
+        "does_not_start_tls": data.pointer("/guarantees/does_not_start_tls").cloned().unwrap_or(Value::Null),
+        "does_not_mark_live_validation_passed": data.pointer("/next_actions/guarantees/does_not_mark_live_validation_passed").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -27473,6 +27487,50 @@ mod tests {
             Some("review_self_heal_plan")
         );
         assert_eq!(
+            summary
+                .get("next_actions_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            summary.get("next_actions_status").and_then(Value::as_str),
+            Some("offline_plan")
+        );
+        assert_eq!(
+            summary.get("self_heal_next_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            summary
+                .get("interaction_flow_next_status")
+                .and_then(Value::as_str),
+            Some("requires_instance_preflight")
+        );
+        assert_eq!(
+            summary
+                .get("trusted_channel_next_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            summary
+                .get("trusted_channel_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("pending_live_acceptance_item_count")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            summary
+                .get("must_not_mark_live_pass_from_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             summary.get("next_action_count").and_then(Value::as_u64),
             Some(5)
         );
@@ -27490,6 +27548,12 @@ mod tests {
         );
         assert_eq!(
             summary.get("does_not_start_tls").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -37319,6 +37383,144 @@ mod tests {
         assert_eq!(
             events[0]
                 .pointer("/data_summary/does_not_start_tls")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_events_filters_phase_c_plan_next_action_data_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        write_test_session_files(state_dir);
+        let config_path = state_dir.join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: None,
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        write_user_config(&config).unwrap();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let phase_c_plan_request = SessionCommandRequest {
+            request_id: "phase-c-plan-event".to_string(),
+            command: "phase_c_plan".to_string(),
+            global: global.clone(),
+            args: vec![
+                "--trigger".to_string(),
+                "capture_stale_suspected".to_string(),
+                "--endpoint".to_string(),
+                "https://127.0.0.1:9443".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 104,
+        };
+        let phase_c_plan_payload =
+            execute_session_command_request_inner(&phase_c_plan_request, state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+        let phase_c_plan_response = SessionCommandResponse {
+            request_id: phase_c_plan_request.request_id.clone(),
+            command: phase_c_plan_request.command.clone(),
+            ok: true,
+            data: Some(phase_c_plan_payload),
+            error: None,
+            started_at_unix_ms: 105,
+            completed_at_unix_ms: 106,
+        };
+        append_session_request_journal(state_dir, &phase_c_plan_request, &phase_c_plan_response)
+            .unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-phase-c-plan-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "phase_c_plan".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 107,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("phase-c-plan-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("phase_c_plan")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/next_actions_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_next_actions.v0.1")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/self_heal_next_status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/interaction_flow_next_status")
+                .and_then(Value::as_str),
+            Some("requires_instance_preflight")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/trusted_channel_next_status")
+                .and_then(Value::as_str),
+            Some("reserved")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/trusted_channel_requires_encryption")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/pending_live_acceptance_item_count")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/must_not_mark_live_pass_from_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_mark_live_validation_passed")
                 .and_then(Value::as_bool),
             Some(true)
         );

@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab Phase C plan event summary
+
+### Current status
+
+- Continued offline-only Session Layer work after submit-plan Phase C event summaries.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Extended `phase_c_plan` request data summaries with compact `next_actions` lane fields for self-heal, interaction flow, trusted channel, pending live acceptance, and no-live-pass guarantees.
+- `session events --data-summary-kind phase_c_plan` now has focused test coverage proving UI/scheduler event consumers can retrieve the aggregate Phase C roadmap from daemon request journals.
+- The event summary exposes next-action schema/status, first action, lane statuses, trusted-channel encryption/authentication requirements, pending live-acceptance item count, and `does_not_mark_live_validation_passed`.
+- Phase C boundaries remain unchanged: self-heal stays observe/plan-first, interaction flow stays lease-gated and instance-preflighted, and trusted remote control stays reserved until encryption/authentication/listener/token/TLS/audit work is explicitly implemented and live-validated.
+- This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `bbe915266bd89e62e06b3ac86aefa715cc70682d`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: aggregate plan event summaries expose the self-heal lane status and next action without executing recovery.
+- Interaction flow: aggregate plan event summaries expose instance-preflight and lease-gated interaction status without opening streams or relaying input.
+- Trusted channel: aggregate plan event summaries expose encryption/authentication requirements while preserving no listener/token/TLS startup.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; event summaries must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Inspected Session Layer request data-summary, Phase C plan payload, journal/events, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_phase_c_plan_request_returns_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_filters_phase_c_plan_next_action_data_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused phase-c-plan request summary test passed.
+- Focused phase-c-plan event-summary test passed.
+- Focused API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green, including 447 `actinglab` tests.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab submit-plan Phase C event summary
 
 ### Current status
