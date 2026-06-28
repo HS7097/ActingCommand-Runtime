@@ -179,6 +179,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab command-check throat gate summary: `session command-check` now includes a compact `throat_gate`, and `session submit-plan` mirrors its key fields into `preflight_summary` so UI/scheduler clients can see whether a command requires the Session Layer, daemon routing, or a LabLease before submitting.
 - ActingLab capture freshness policy surface: `session capture-policy` and `session request capture-policy` expose the fresh-frame/stale-capture policy from the AK stale screencap finding without touching devices or reading resources.
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
+- ActingLab command-check Phase C scope: `session command-check` now includes `phase_c_scope`, classifying self-heal, interaction-flow, trusted-channel, and live-validation relevance before clients submit or enqueue work.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
@@ -237,6 +238,18 @@ This increment makes the skipped live/device/operator work explicit enough for l
 - Interactive stream/input relay requires observed stream frames, lease-gate behavior, and journal/audit evidence before being marked accepted.
 - Trusted-channel security requires reviewed encrypted/authenticated transport plus request admission and audit logging before remote control can be considered accepted.
 - The validation-plan query remains offline: it does not enqueue, capture, touch devices, start MaaTouch, start apps, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
+
+## Current ActingLab Command-Check Phase C Scope
+
+This increment makes the Phase C lane decision visible from the earliest no-device command preflight.
+
+- `session command-check <command...>` now returns `phase_c_scope.schema_version=session.command_phase_c_scope.v0.1`.
+- `phase_c_scope` classifies the target command into self-heal, interaction-flow, trusted-channel, and live-validation lanes using the same lane vocabulary as `submit-plan` Phase C preflight.
+- Self-heal remains maintenance-only: it can plan observe/diagnose/recover work, but must not execute game-progress actions from this preflight surface.
+- Interaction flow remains lease-gated: input relay commands are visible as control work requiring a matching LabLease, and direct ADB/device access stays prohibited.
+- Trusted channel remains reserved and closed by default: encrypted/authenticated remote access is documented as required, while listeners, token issuance, and TLS startup remain unimplemented in this increment.
+- Live validation remains `deferred` with `deferred_code=requires-live-device`; `command-check` must not mark any live check accepted.
+- This is an offline contract/discovery increment only: it does not enqueue daemon work, capture frames, touch devices, start MaaTouch, start apps, start listeners, issue tokens, start TLS, read resource repositories, write SQLite, or run game logic.
 
 ## Current ActingLab Recording Command Preflight Classification
 

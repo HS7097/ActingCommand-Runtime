@@ -3285,6 +3285,8 @@ fn session_api_contract() -> Value {
                 "queue_gate_field": "queue_gate",
                 "instance_gate_field": "instance_gate",
                 "throat_gate_field": "throat_gate",
+                "phase_c_scope_field": "phase_c_scope",
+                "phase_c_scope_schema_version": "session.command_phase_c_scope.v0.1",
                 "routing_field": "routing",
                 "does_not_enqueue": true,
                 "does_not_touch_device": true
@@ -9213,6 +9215,16 @@ fn session_command_check_payload(
         &instance_gate,
     );
     let safe_to_submit = daemon_route_ok && lease_gate_ok && queue_gate_ok && instance_gate_ok;
+    let throat_gate = session_command_check_throat_gate(
+        classification,
+        daemon_route_ok,
+        daemon_alive,
+        explicit_daemon,
+        local_override,
+        strict_session_required,
+        would_route_via_daemon,
+    );
+    let phase_c_scope = session_command_check_phase_c_scope(&tokens, classification, &throat_gate);
     Ok(json!({
         "schema_version": "session.command_check.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -9230,15 +9242,8 @@ fn session_command_check_payload(
             "local_override": local_override,
             "strict_session_required": strict_session_required
         },
-        "throat_gate": session_command_check_throat_gate(
-            classification,
-            daemon_route_ok,
-            daemon_alive,
-            explicit_daemon,
-            local_override,
-            strict_session_required,
-            would_route_via_daemon,
-        ),
+        "throat_gate": throat_gate,
+        "phase_c_scope": phase_c_scope,
         "lease_gate": lease_gate,
         "queue_gate": queue_gate,
         "instance_gate": instance_gate,
@@ -9353,7 +9358,7 @@ fn session_submit_plan_phase_c_execution_preflight(
     queue: &Value,
     ready_to_submit: bool,
 ) -> Value {
-    let lanes = session_submit_plan_phase_c_lanes(tokens);
+    let lanes = session_phase_c_lanes_for_tokens(tokens);
     let relevant = !lanes.is_empty();
     json!({
         "schema_version": "session.submit_phase_c_execution_preflight.v0.1",
@@ -9416,7 +9421,73 @@ fn session_submit_plan_phase_c_execution_preflight(
     })
 }
 
-fn session_submit_plan_phase_c_lanes(tokens: &[String]) -> Vec<&'static str> {
+fn session_command_check_phase_c_scope(
+    tokens: &[String],
+    classification: SessionCommandCheckClass,
+    throat_gate: &Value,
+) -> Value {
+    let lanes = session_phase_c_lanes_for_tokens(tokens);
+    let relevant = !lanes.is_empty();
+    json!({
+        "schema_version": "session.command_phase_c_scope.v0.1",
+        "phase_c_relevant": relevant,
+        "relevant_lanes": lanes,
+        "normalized_command": tokens.join(" "),
+        "command_class": classification.command_class,
+        "device_affecting": classification.device_affecting,
+        "requires_lease": classification.requires_lease,
+        "session_layer_required": throat_gate
+            .get("session_layer_required")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "direct_adb_or_device_access_allowed": throat_gate
+            .get("direct_adb_or_device_access_allowed")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "clients_must_not_directly_touch_adb_or_devices": throat_gate
+            .get("clients_must_not_directly_touch_adb_or_devices")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "self_heal": {
+            "relevant": session_lane_present(&lanes, "self_heal"),
+            "preflight_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "maintenance_only": true,
+            "game_progress_actions_allowed": false
+        },
+        "interaction_flow": {
+            "relevant": session_lane_present(&lanes, "interaction_flow"),
+            "preflight_command": "session command-check stream --input-event <action,args>",
+            "input_relay_requires_matching_lease": true
+        },
+        "trusted_channel": {
+            "relevant": session_lane_present(&lanes, "trusted_channel"),
+            "preflight_command": "session transport plan [--endpoint <url>]",
+            "trusted_remote_status": "reserved_contract",
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "safe_to_accept_remote_clients": false
+        },
+        "live_validation": {
+            "relevant": session_lane_present(&lanes, "live_acceptance") || relevant,
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_command_check": true
+        },
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true,
+            "does_not_mark_live_validation_passed": true
+        }
+    })
+}
+
+fn session_phase_c_lanes_for_tokens(tokens: &[String]) -> Vec<&'static str> {
     let mut lanes = Vec::new();
     if session_tokens_contain(tokens, "phase-c-plan") {
         session_push_unique_lane(&mut lanes, "self_heal");
@@ -24662,6 +24733,55 @@ mod tests {
         assert_eq!(
             data.pointer("/lease_gate/code").and_then(Value::as_str),
             Some("lab_lease_required")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/schema_version")
+                .and_then(Value::as_str),
+            Some("session.command_phase_c_scope.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/phase_c_relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let phase_c_lanes = data
+            .pointer("/phase_c_scope/relevant_lanes")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            phase_c_lanes
+                .iter()
+                .any(|item| item.as_str() == Some("interaction_flow"))
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/interaction_flow/relevant")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/command_class")
+                .and_then(Value::as_str),
+            Some("control")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/requires_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/direct_adb_or_device_access_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/phase_c_scope/guarantees/does_not_enqueue")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/guarantees/does_not_touch_device")
@@ -43121,6 +43241,16 @@ mod tests {
             data.pointer("/envelopes/command_check_view/throat_gate_field")
                 .and_then(Value::as_str),
             Some("throat_gate")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/command_check_view/phase_c_scope_field")
+                .and_then(Value::as_str),
+            Some("phase_c_scope")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/command_check_view/phase_c_scope_schema_version")
+                .and_then(Value::as_str),
+            Some("session.command_phase_c_scope.v0.1")
         );
         let api_control_examples = data
             .pointer("/command_classes/control/examples")
