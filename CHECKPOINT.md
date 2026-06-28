@@ -15,6 +15,8 @@
   - trusted-channel security.
 - Every new live-only item remains `status=deferred` with `deferred_code=requires-live-device`.
 - No live validation was run, no live result was faked, and no unverified capability was marked accepted or passed-live.
+- Runtime baseline before this task: `f08f4d9596cefcf16dc9b1ac08ab5ab38aaa8756`.
+- Milestone source commit: `09bf6a4f336b1498342ca0fd07e73ac732a94d87`.
 
 ### 待真机验收
 
