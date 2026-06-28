@@ -155,6 +155,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab command-check surface: `session command-check <command...>` and `session request command-check <command...>` now classify a target command, report daemon-route readiness and lease-gate status, and return `safe_to_submit` without enqueueing, capturing, starting MaaTouch, or touching devices.
 - ActingLab control request admission gate: control-class `session request ... --no-wait` submissions are now lease-validated before queueing, so missing or mismatched LabLease metadata fails visibly and leaves no pending request file.
 - ActingLab request cancellation lease gate: `session request cancel <request-id>` preserves read-only request cleanup while requiring matching lease metadata before cancelling a lease-gated queued control request.
+- ActingLab blocked queue cancel recommendation: `session status --diagnostics` now distinguishes cancellable blocked queued requests from lease-gated blocked queued requests, marking cancel suggestions as non-device-touching scheduler decisions and exposing the request lease metadata.
 
 ## Current ActingLab Command-Check Surface
 

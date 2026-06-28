@@ -7537,7 +7537,7 @@ fn session_status_recommended_actions(
     actions.extend(session_queue_health_recommended_actions(
         state_dir,
         queue_health,
-    ));
+    )?);
     actions.extend(session_stale_lease_recommended_actions(state_dir)?);
     actions.extend(session_capture_health_recommended_actions(
         state_dir,
@@ -7554,7 +7554,10 @@ fn session_status_recommended_actions(
     Ok(actions)
 }
 
-fn session_queue_health_recommended_actions(state_dir: &Path, queue_health: &Value) -> Vec<Value> {
+fn session_queue_health_recommended_actions(
+    state_dir: &Path,
+    queue_health: &Value,
+) -> CliOutcome<Vec<Value>> {
     let state_dir_display = state_dir.display().to_string();
     let mut actions = Vec::new();
     if let Some(request_id) =
@@ -7581,6 +7584,13 @@ fn session_queue_health_recommended_actions(state_dir: &Path, queue_health: &Val
             .cloned()
             .unwrap_or(Value::Null);
         actions.push(action);
+        if let Some(action) = session_blocked_request_cancel_recommended_action(
+            state_dir,
+            request_id,
+            &state_dir_display,
+        )? {
+            actions.push(action);
+        }
     }
     if let Some(request_id) =
         queue_health_oldest_id(queue_health.pointer("/running_requests"), "blocked")
@@ -7633,7 +7643,7 @@ fn session_queue_health_recommended_actions(state_dir: &Path, queue_health: &Val
             .unwrap_or(Value::Null);
         actions.push(action);
     }
-    actions
+    Ok(actions)
 }
 
 fn queue_health_oldest_id<'a>(
@@ -7645,6 +7655,54 @@ fn queue_health_oldest_id<'a>(
         return None;
     }
     section.get("oldest_request_id").and_then(Value::as_str)
+}
+
+fn session_blocked_request_cancel_recommended_action(
+    state_dir: &Path,
+    request_id: &str,
+    state_dir_display: &str,
+) -> CliOutcome<Option<Value>> {
+    let request_path = session_requests_dir(state_dir).join(format!("{request_id}.json"));
+    let Some(request) = read_pending_session_request(&request_path)? else {
+        return Ok(None);
+    };
+    let requires_matching_lease = request
+        .lease
+        .as_ref()
+        .is_some_and(|lease| !lease.holder.is_empty());
+    let mut action = session_recommended_action_owned(
+        23,
+        if requires_matching_lease {
+            "blocked_request_cancel_requires_lease"
+        } else {
+            "blocked_request_cancel"
+        },
+        if requires_matching_lease {
+            "A blocked queued request may be cancelled only by the matching lease holder."
+        } else {
+            "A blocked queued request without lease metadata can be cancelled after inspection."
+        },
+        vec![
+            "session".to_string(),
+            "request".to_string(),
+            "cancel".to_string(),
+            request_id.to_string(),
+            "--reason".to_string(),
+            "blocked_queue_manual_cancel".to_string(),
+            "--state-dir".to_string(),
+            state_dir_display.to_string(),
+        ],
+    );
+    action["read_only"] = json!(false);
+    action["does_not_touch_device"] = json!(true);
+    action["requires_scheduler_decision"] = json!(true);
+    action["queue"] = json!("pending_requests");
+    action["request_id"] = json!(request_id);
+    action["request_command"] = json!(request.command);
+    action["cancel_requires_matching_lease"] = json!(requires_matching_lease);
+    action["request_lease"] = json!(request.lease);
+    action["request_path"] = json!(request_path.display().to_string());
+    Ok(Some(action))
 }
 
 fn session_capture_health_recommended_actions(
@@ -29875,6 +29933,59 @@ mod tests {
         );
         assert_eq!(
             pending_action.pointer("/args/3").and_then(Value::as_str),
+            Some("pending-1")
+        );
+        let cancel_action = actions
+            .iter()
+            .find(|action| {
+                action.get("action").and_then(Value::as_str)
+                    == Some("blocked_request_cancel_requires_lease")
+            })
+            .unwrap();
+        assert_eq!(
+            cancel_action.get("read_only").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            cancel_action
+                .get("does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_action
+                .get("requires_scheduler_decision")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_action
+                .get("cancel_requires_matching_lease")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cancel_action
+                .pointer("/request_lease/holder")
+                .and_then(Value::as_str),
+            Some("ui")
+        );
+        assert_eq!(
+            cancel_action
+                .pointer("/request_lease/lease_id")
+                .and_then(Value::as_str),
+            Some("lease-1")
+        );
+        assert_eq!(
+            cancel_action.pointer("/args/1").and_then(Value::as_str),
+            Some("request")
+        );
+        assert_eq!(
+            cancel_action.pointer("/args/2").and_then(Value::as_str),
+            Some("cancel")
+        );
+        assert_eq!(
+            cancel_action.pointer("/args/3").and_then(Value::as_str),
             Some("pending-1")
         );
         let running_action = actions
