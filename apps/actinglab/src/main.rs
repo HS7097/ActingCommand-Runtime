@@ -8088,11 +8088,12 @@ fn run_session_request_cancel(flags: &FlagArgs) -> CliOutcome<Value> {
     validate_session_request_id(request_id)?;
     let reason = parse_optional_string_value(flags, "--reason")?;
     let state_dir = session_state_dir_from_flags(flags)?;
-    session_request_cancel_payload(&state_dir, request_id, reason.as_deref())
+    session_request_cancel_payload(&state_dir, flags, request_id, reason.as_deref())
 }
 
 fn session_request_cancel_payload(
     state_dir: &Path,
+    flags: &FlagArgs,
     request_id: &str,
     reason: Option<&str>,
 ) -> CliOutcome<Value> {
@@ -8120,6 +8121,7 @@ fn session_request_cancel_payload(
             state_dir, request_id,
         )?);
     };
+    let lease_authorization = session_request_cancel_lease_authorization(&request, flags)?;
     fs::remove_file(&request_path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             CliError::new(
@@ -8160,11 +8162,74 @@ fn session_request_cancel_payload(
         "request_id": request_id,
         "command": request.command,
         "reason": reason,
+        "lease_authorization": lease_authorization,
         "cancelled_at_unix_ms": cancelled_at,
         "request_path": request_path.display().to_string(),
         "response_path": response_path.display().to_string(),
         "journal": session_request_journal_path(state_dir).display().to_string()
     }))
+}
+
+fn session_request_cancel_lease_authorization(
+    request: &SessionCommandRequest,
+    flags: &FlagArgs,
+) -> CliOutcome<Value> {
+    let Some(required) = request
+        .lease
+        .as_ref()
+        .filter(|lease| !lease.holder.is_empty())
+    else {
+        return Ok(json!({
+            "required": false,
+            "status": "not_required"
+        }));
+    };
+    let requested = session_command_lease_from_flags(flags);
+    let Some(requested) = requested.as_ref().filter(|lease| !lease.holder.is_empty()) else {
+        return Err(CliError::safety_blocked(
+            "lab_lease_required",
+            format!(
+                "cancelling lease-gated session request {} requires --lease-holder <id>",
+                request.request_id
+            ),
+            &["lab_lease", "request_queue"],
+        ));
+    };
+    validate_session_request_cancel_lease(required, requested)?;
+    Ok(json!({
+        "required": true,
+        "status": "ready",
+        "requested_lease": requested,
+        "request_lease": required
+    }))
+}
+
+fn validate_session_request_cancel_lease(
+    required: &SessionCommandLease,
+    requested: &SessionCommandLease,
+) -> CliOutcome<()> {
+    if required.holder != requested.holder {
+        return Err(CliError::safety_blocked(
+            "lease_holder_mismatch",
+            format!(
+                "queued request lease is held by {}, not {}",
+                required.holder, requested.holder
+            ),
+            &["lab_lease", "request_queue"],
+        ));
+    }
+    if let (Some(required_id), Some(requested_id)) = (
+        required.lease_id.as_ref().filter(|value| *value != "true"),
+        requested.lease_id.as_ref().filter(|value| *value != "true"),
+    ) && required_id != requested_id
+    {
+        return Err(CliError::safety_blocked(
+            "lease_id_mismatch",
+            format!("queued request lease has id {required_id}, not {requested_id}"),
+            &["lab_lease", "request_queue"],
+        ));
+    }
+    Ok(())
 }
 
 fn session_request_cancel_not_found_error(
@@ -27927,6 +27992,162 @@ mod tests {
                 .and_then(Value::as_str),
             Some("request_cancelled")
         );
+    }
+
+    #[test]
+    fn session_request_cancel_rejects_lease_gated_request_without_holder() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-control".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-control.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-control",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lab_lease_required"
+        );
+        assert!(request_path.exists());
+        assert!(!session_request_journal_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_request_cancel_rejects_lease_gated_request_wrong_holder() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-control".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-control.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-control",
+                "--lease-holder",
+                "lab",
+                "--lease-id",
+                "lease-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lease_holder_mismatch"
+        );
+        assert!(request_path.exists());
+        assert!(!session_request_journal_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn session_request_cancel_accepts_matching_lease_for_control_request() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-control".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-control.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-control",
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert!(!request_path.exists());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/lease_authorization/required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/lease_authorization/status")
+                .and_then(Value::as_str),
+            Some("ready")
+        );
+        let journal = read_session_request_journal(temp.path(), 10).unwrap();
+        assert_eq!(journal.len(), 1);
+        assert_eq!(journal[0].request_id, "cancel-control");
+        assert_eq!(journal[0].error.as_ref().unwrap().code, "request_cancelled");
     }
 
     #[test]

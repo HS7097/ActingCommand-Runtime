@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab request cancel lease gate
+
+### Current status
+
+- Added lease authorization to `session request cancel <request-id>` for queued requests that carry lease metadata.
+- Read-only or daemon-state queued requests without lease metadata can still be cancelled as before.
+- Lease-gated queued control requests now require `--lease-holder <id>` before cancellation.
+- Wrong holder or lease id fails visibly and leaves the pending request file untouched.
+- Matching lease metadata cancels the pending control request, records the existing `request_cancelled` journal failure, and includes `lease_authorization` in the response for auditability.
+- Already-completed response files, running requests, missing requests, unsafe request ids, device actions, capture, MaaTouch, resources, cooperation workspace sync, UI, SQLite, OCR/OpenCV, game logic, fallback, reconnect, and retry behavior were not changed.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `986141e87317ac36b7acd75926365cadb7d50368`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`.
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`.
+- Searched `C:\Users\Alice\.codex\memories\MEMORY.md` for ActingCommand workspace constraints.
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer request cancel, request queue, lease gate, monitor-policy, API, and diagnostic code in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Added-line precise prohibited-feature scan for ADB input fallback, `adb shell screencap`, SQLite, OCR/OpenCV, fallback, reconnect loop, retry loop, MaaTouch startup, and direct capture calls.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused request-cancel tests passed.
+- Full formatting check passed.
+- Git diff whitespace check passed.
+- Added-line precise prohibited-feature scan passed.
+- Full workspace clippy passed.
+- Full workspace tests passed.
+
+### Current blocker
+
+- No blocker for this implementation increment.
+- Full Session Layer remains incomplete: scheduler ownership, trusted remote transport, unbounded long-lived stream transport, trusted UI exposure, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this Runtime milestone with checkpoint tag `checkpoint/20260628-request-cancel-lease-gate`.
+2. Continue Session Layer follow-ups from scheduler/UI queue ownership, trusted remote transport, stream transport, or live prepared-emulator validation.
+
 ## 2026-06-28 ActingLab control request admission gate
 
 ### Current status
