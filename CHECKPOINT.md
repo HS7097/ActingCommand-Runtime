@@ -1,5 +1,103 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab record policy event summary
+
+### Current status
+
+- Continued offline-only Session Layer work after capture policy event summaries.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Extended `record_policy` request data summaries with active authorization, passive-full-recording prohibition, explicit promotion/repository requirements, safety fields, deferred-live status, and no-device/no-resource-write guarantees.
+- `session events --data-summary-kind record_policy` can now return compact recording authorization and safety data for UI/scheduler event consumers.
+- Phase D boundaries remain unchanged: recording stays active and operator-authorized, passive full recording is forbidden, navigation is not recorded by default, resource promotion remains explicit, and current-frame/live recording acceptance stays deferred.
+- This increment only exposes daemon journal/event diagnostics and does not create recording sessions, enqueue daemon work, capture frames, write drafts or resources, start listeners, issue tokens, start TLS, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `c607a030b7bea302926801c27e192098eeb64ae0`.
+- Milestone source commit: `c9700b13d28a33b0a5f87a1b0d6fe30c47ec34c1`.
+
+### Task-file subtask status
+
+1. Session Layer unique throat and daemon-first control path: partially complete; offline contracts, daemon request routing, lease gates, and event summaries are in place, but full live daemon/device acceptance remains deferred.
+2. Phase A instance lifecycle and CLI routing: partially complete; lifecycle/request surfaces exist, but live emulator/app validation remains `deferred: requires-live-device`.
+3. Phase A reliable capture and stale-frame policy: partially complete; capture backend primitives, diagnose surfaces, AK stale-frame classification, and capture-policy event summaries are implemented, but AK fresh-frame recovery live validation remains `deferred: requires-live-device`.
+4. Phase A complete input including key/text: partially complete; MaaTouch input and key/text surfaces exist, but live input validation remains `deferred: requires-live-device`.
+5. Phase B recognition/status and semantic actions: partially complete; recognize, detect-page, current-page, is-visible, locate, tap-target, and navigate surfaces exist, but broad resource/live verification remains deferred or resource-dependent.
+6. Phase C self-heal and recovery planning: partially complete; observe-first policy, self-heal plans, monitor policy, stale-capture recovery planning, and policy/event summaries exist, but automatic live recovery remains `deferred: requires-live-device`.
+7. LabLease arbitration interface: partially complete; acquire/release/preempt/status and lease-gated daemon requests exist, while scheduler ownership integration remains future work.
+8. Interaction flow and input relay: partially complete; bounded stream and input-relay preflight/contracts exist, but long-lived UI stream and relay live validation remain `deferred: requires-live-device`.
+9. Phase D active recording and resource generation: partially complete; recording context, step/amend/build/promote surfaces and record-policy/event summaries exist, but current-frame authoring and operator live acceptance remain `deferred: requires-live-device`.
+10. Multi-channel access and trusted remote: partially complete; local CLI/file-IPC contracts and transport plans exist, while encrypted/authenticated remote listener/token/TLS work remains reserved and future.
+11. AK stale-screencap finding response: partially complete; policy prevents false game-freeze classification from `adb_screencap` alone, but the lighter-backend recovery path needs future live validation.
+
+### Pending live validation
+
+- `prepared_emulator_session_layer_validation` deferred: `requires-live-device`.
+- `ak_stale_capture_fresh_frame_recovery_validation` deferred: `requires-live-device`.
+- `live_adb_device_control_and_screenshot_validation` deferred: `requires-live-device`.
+- `operator_acceptance_observation` deferred: `requires-live-device`.
+- `record_current_frame_authoring_live_validation` deferred: `requires-live-device`.
+- `interactive_stream_input_relay_live_validation` deferred: `requires-live-device`.
+- `trusted_channel_security_live_validation` deferred: `requires-live-device`.
+
+### Phase D plan alignment
+
+- Recording policy summaries expose active authorization before clients prompt an operator to record anchors, operations, color probes, or verification templates.
+- Passive full recording remains disallowed; navigation does not become a resource unless a record step explicitly authorizes it.
+- Resource promotion remains explicit and repository-scoped.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; event summaries must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Inspected Session Layer record policy payload, request data-summary, journal/events, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_record_policy_request_returns_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events_filters_record_policy_data_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_request_returns_api_contract -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json session record-policy --local`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused record policy request-summary test passed.
+- Focused record policy event-summary test passed.
+- Focused API contract test passed.
+- `session record-policy --local` JSON command completed successfully without device work.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green, including 454 `actinglab` tests.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, trusted encrypted remote channel implementation, and current-frame recording live acceptance remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-29 ActingLab capture policy event summary
 
 ### Current status
