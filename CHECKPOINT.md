@@ -11,6 +11,8 @@
 - `session contract`, `session api`, and Session Layer capability contracts now advertise the refined record classification.
 - This increment is offline-only and does not perform capture, input, device control, resource-repository reads/writes, UI work, listener startup, token issuance, TLS startup, or live validation.
 - Live validation remains `deferred: requires-live-device`.
+- Runtime baseline before this task: `bf6bff2e4f51e089b19cf1d020f47411841c5d93`.
+- Milestone source commit: `bea5096d6e8b8aeee393171fdc845b3bf22a2eff`.
 
 ### Phase C plan alignment
 
