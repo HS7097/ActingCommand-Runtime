@@ -12,7 +12,7 @@
 - Phase C boundaries remain unchanged: self-heal stays observe/plan-first, interaction flow stays lease-gated and preflighted, and trusted remote control stays reserved until encryption/authentication/listener/token/TLS/audit work is explicitly implemented and live-validated.
 - This increment only exposes daemon journal/event diagnostics and does not enqueue daemon work, execute recovery, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
 - Runtime baseline before this task: `3df1a3a8c5dd612e96b0652a9a67ae7d26ff35bf`.
-- Milestone source commit: pending.
+- Milestone source commit: `0829e653547408a1625e42c0af9d3d9b6706bbd9`.
 
 ### Pending live validation
 
