@@ -12,8 +12,8 @@
 - The surface is advertised by `session bootstrap`, `session api`, `session contract`, `session capabilities`, `session command-check`, request data summaries, and event data-summary filters.
 - The change is a pure no-device planning contract extension.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute app restart, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending.
-- Checkpoint tag: pending.
+- Milestone source commit: `196e835da52d903bd44a8351879a274a1ad6c488`.
+- Checkpoint tag: `checkpoint/20260628-phase-c-plan`.
 
 ### Resource mirrors used
 
@@ -83,9 +83,9 @@
 
 ### Next step
 
-1. Commit Runtime changes and record the milestone commit/tag.
-2. Push Runtime changes and checkpoint tag.
-3. Continue the next offline Session Layer increment before live validation.
+1. Continue the next offline Session Layer increment before live validation.
+2. Keep trusted-channel implementation work behind explicit listener/TLS/token tests.
+3. Keep live validation deferred until a real device or emulator run is intentionally requested.
 
 ## 2026-06-28 ActingLab pending-live validation diagnostics summary
 
