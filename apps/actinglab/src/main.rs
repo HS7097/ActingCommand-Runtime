@@ -1171,6 +1171,7 @@ fn session_layer_capability_contract() -> Value {
                 "status": "reserved",
                 "encryption_required": true,
                 "authentication_required": true,
+                "plan_command": "session transport plan [--endpoint <url>]",
                 "preflight_command": "session transport check --endpoint <url>",
                 "auth_env": {
                     "token": TRUSTED_REMOTE_TOKEN_ENV,
@@ -1184,7 +1185,7 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session self-heal-policy", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -1519,6 +1520,7 @@ fn session_access_contract() -> Value {
                 "authentication_required": true,
                 "minimum_transport": "TLS or mutually authenticated local IPC",
                 "token_or_certificate_required": true,
+                "plan_command": "session transport plan [--endpoint <url>]",
                 "auth_env": {
                     "token": TRUSTED_REMOTE_TOKEN_ENV,
                     "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
@@ -1535,6 +1537,7 @@ fn session_access_contract() -> Value {
             "contract": "session request contract",
             "api": "session request api",
             "transport": "session request transport",
+            "transport_plan": "session request transport plan [--endpoint <url>]",
             "transport_check": "session request transport check --endpoint <url>",
             "capabilities": "session request capabilities",
             "readiness": "session request readiness",
@@ -1575,6 +1578,7 @@ fn session_access_contract() -> Value {
                     "submit-plan",
                     "validation-plan",
                     "contract",
+                    "transport plan",
                     "transport check",
                     "capabilities",
                     "devices",
@@ -1679,6 +1683,7 @@ fn session_transport_contract() -> Value {
             "trusted_remote": {
                 "status": "reserved",
                 "network_listener_implemented": false,
+                "plan_command": "session transport plan [--endpoint <url>]",
                 "preflight_command": "session transport check --endpoint <url>",
                 "encryption_required": true,
                 "authentication_required": true,
@@ -1837,6 +1842,9 @@ fn session_api_contract() -> Value {
                 "query": "session transport",
                 "daemon_query": "session request transport",
                 "schema_version": "session.transport.v0.1",
+                "plan_query": "session transport plan [--endpoint <url>]",
+                "daemon_plan_query": "session request transport plan [--endpoint <url>]",
+                "plan_schema_version": "session.transport_plan.v0.1",
                 "check_query": "session transport check --endpoint <url>",
                 "daemon_check_query": "session request transport check --endpoint <url>",
                 "check_schema_version": "session.transport_check.v0.1"
@@ -2032,7 +2040,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "connect_plan", "stream_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "connect_plan", "stream_plan", "transport_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -7848,11 +7856,123 @@ fn run_session_transport(global: &GlobalOptions, args: &[String]) -> CliOutcome<
 fn session_transport_payload(flags: &FlagArgs) -> CliOutcome<Value> {
     match flags.positionals.first().map(String::as_str) {
         None => Ok(session_transport_contract()),
+        Some("plan") => session_transport_plan_payload(&flags.without_first_positional()),
         Some("check") => session_transport_check_payload(&flags.without_first_positional()),
         Some(other) => Err(CliError::usage(format!(
             "unknown session transport command: {other}"
         ))),
     }
+}
+
+fn session_transport_plan_payload(flags: &FlagArgs) -> CliOutcome<Value> {
+    flags.expect_positionals("session transport plan", 0)?;
+    let endpoint = parse_optional_string_value(flags, "--endpoint")?;
+    let endpoint_policy = session_transport_plan_endpoint_policy(endpoint.as_deref());
+    let endpoint_policy_safe = endpoint_policy
+        .get("safe_for_policy")
+        .and_then(Value::as_bool);
+    let has_endpoint_policy_blocker = endpoint_policy_safe == Some(false);
+    let blockers = session_transport_plan_blockers(&endpoint_policy);
+    Ok(json!({
+        "schema_version": "session.transport_plan.v0.1",
+        "status": if has_endpoint_policy_blocker { "blocked" } else { "reserved" },
+        "mode": "trusted_channel_startup_preflight",
+        "local_cli": {
+            "status": "available",
+            "command": "actinglab",
+            "encryption_required": false,
+            "authentication_required": false
+        },
+        "daemon_file_ipc": {
+            "status": "available",
+            "command": "session request <command>",
+            "serialized_by_daemon": true,
+            "control_requests_require_matching_lease": true
+        },
+        "trusted_remote": {
+            "status": "reserved",
+            "network_listener_implemented": false,
+            "safe_to_start_listener": false,
+            "ready_to_accept_remote_clients": false,
+            "requires_encryption": true,
+            "requires_authentication": true,
+            "token_configured": env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV),
+            "client_certificate_configured": env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV),
+            "token_env": TRUSTED_REMOTE_TOKEN_ENV,
+            "client_certificate_env": TRUSTED_REMOTE_CLIENT_CERT_ENV,
+            "endpoint_policy": endpoint_policy,
+            "required_before_enable": [
+                "reviewed network listener implementation",
+                "TLS or mutually authenticated local IPC",
+                "token or client certificate authentication",
+                "request serialization through the resident Session Layer",
+                "audit logging for accepted remote commands"
+            ]
+        },
+        "blockers": blockers,
+        "guarantees": {
+            "does_not_enqueue": true,
+            "does_not_touch_device": true,
+            "does_not_capture": true,
+            "does_not_start_maatouch": true,
+            "does_not_start_listener": true,
+            "does_not_probe_tcp": true,
+            "does_not_issue_tokens": true,
+            "does_not_start_tls": true,
+            "does_not_read_resource_repositories": true
+        }
+    }))
+}
+
+fn session_transport_plan_endpoint_policy(endpoint: Option<&str>) -> Value {
+    let Some(endpoint) = endpoint else {
+        return json!({
+            "checked": false,
+            "safe_for_policy": null,
+            "does_not_probe_tcp": true,
+            "message": "No endpoint was provided; run with --endpoint <url> to classify local versus trusted remote policy."
+        });
+    };
+    match runtime_endpoint_policy(endpoint) {
+        Ok(policy) => json!({
+            "checked": true,
+            "endpoint": endpoint,
+            "safe_for_policy": true,
+            "policy": runtime_endpoint_policy_json(&policy),
+            "does_not_probe_tcp": true
+        }),
+        Err(err) => json!({
+            "checked": true,
+            "endpoint": endpoint,
+            "safe_for_policy": false,
+            "error_code": err.code,
+            "error": err.message,
+            "blocked_by": err.blocked_by,
+            "does_not_probe_tcp": true
+        }),
+    }
+}
+
+fn session_transport_plan_blockers(endpoint_policy: &Value) -> Vec<Value> {
+    let mut blockers = vec![json!({
+        "kind": "trusted_remote_listener",
+        "code": "trusted_remote_listener_reserved",
+        "message": "Trusted remote listener is reserved and is not implemented in this offline milestone."
+    })];
+    if endpoint_policy
+        .get("safe_for_policy")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        blockers.push(json!({
+            "kind": "trusted_remote_endpoint_policy",
+            "code": endpoint_policy.get("error_code"),
+            "message": endpoint_policy.get("error"),
+            "blocked_by": endpoint_policy.get("blocked_by"),
+            "endpoint": endpoint_policy.get("endpoint")
+        }));
+    }
+    blockers
 }
 
 fn session_transport_check_payload(flags: &FlagArgs) -> CliOutcome<Value> {
@@ -11220,6 +11340,12 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         "stream" => Some(stream_request_data_summary(data)),
         "connect_plan" => Some(connect_plan_request_data_summary(data)),
         "stream_plan" => Some(stream_plan_request_data_summary(data)),
+        "transport"
+            if data.get("schema_version").and_then(Value::as_str)
+                == Some("session.transport_plan.v0.1") =>
+        {
+            Some(transport_plan_request_data_summary(data))
+        }
         "capture_diagnose" => Some(capture_diagnose_request_data_summary(data)),
         "recover" if data.get("mode").and_then(Value::as_str) == Some("stale_capture_recovery") => {
             Some(stale_capture_recovery_request_data_summary(data))
@@ -11275,6 +11401,20 @@ fn stream_plan_request_data_summary(data: &Value) -> Value {
         "input_relay_action_count": data.get("input_relay_action_count").cloned().unwrap_or(Value::Null),
         "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len),
         "trusted_remote_long_lived_stream_status": data.pointer("/stream_modes/trusted_remote_long_lived/status").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn transport_plan_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "transport_plan",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "trusted_remote_status": data.pointer("/trusted_remote/status").cloned().unwrap_or(Value::Null),
+        "network_listener_implemented": data.pointer("/trusted_remote/network_listener_implemented").cloned().unwrap_or(Value::Null),
+        "ready_to_accept_remote_clients": data.pointer("/trusted_remote/ready_to_accept_remote_clients").cloned().unwrap_or(Value::Null),
+        "endpoint_policy_checked": data.pointer("/trusted_remote/endpoint_policy/checked").cloned().unwrap_or(Value::Null),
+        "endpoint_policy_safe": data.pointer("/trusted_remote/endpoint_policy/safe_for_policy").cloned().unwrap_or(Value::Null),
+        "blocker_count": data.get("blockers").and_then(Value::as_array).map(Vec::len)
     })
 }
 
@@ -17205,6 +17345,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
+        command_cap("session transport plan", ["offline"], "available"),
         command_cap("session transport check", ["offline"], "available"),
         command_cap("session stream", ["offline"], "available"),
         command_cap("session stream check", ["offline"], "available"),
@@ -17309,6 +17450,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session request api", ["running_runtime"], "available"),
         command_cap(
             "session request transport",
+            ["running_runtime"],
+            "available",
+        ),
+        command_cap(
+            "session request transport plan",
             ["running_runtime"],
             "available",
         ),
@@ -17840,6 +17986,148 @@ mod tests {
         assert_eq!(
             data.get("does_not_start_listener").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn session_transport_plan_reports_reserved_trusted_channel_without_listener() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(["--json", "session", "transport", "plan"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.transport_plan.v0.1")
+        );
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("reserved"));
+        assert_eq!(
+            data.pointer("/trusted_remote/network_listener_implemented")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/ready_to_accept_remote_clients")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/token_configured")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/checked")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_probe_tcp")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_transport_plan_blocks_remote_http_without_tcp_probe() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "transport",
+                "plan",
+                "--endpoint",
+                "http://192.0.2.1:4317",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("blocked"));
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/safe_for_policy")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/error_code")
+                .and_then(Value::as_str),
+            Some("trusted_remote_transport_blocked")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/does_not_probe_tcp")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.get("blockers")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|blocker| blocker.get("kind").and_then(Value::as_str)
+                    == Some("trusted_remote_endpoint_policy"))
+        );
+    }
+
+    #[test]
+    fn session_transport_plan_accepts_remote_https_policy_but_keeps_listener_reserved() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "transport",
+                "plan",
+                "--endpoint",
+                "https://example.invalid:4317",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("reserved"));
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/safe_for_policy")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/policy/channel")
+                .and_then(Value::as_str),
+            Some("trusted_remote")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/endpoint_policy/policy/auth_material")
+                .and_then(Value::as_str),
+            Some("token")
+        );
+        assert_eq!(
+            data.pointer("/trusted_remote/ready_to_accept_remote_clients")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 
@@ -30619,6 +30907,7 @@ mod tests {
         for kind in [
             "connect_plan",
             "stream_plan",
+            "transport_plan",
             "capture_diagnose",
             "stale_capture_recovery",
         ] {
@@ -35810,6 +36099,16 @@ mod tests {
             Some("session transport check --endpoint <url>")
         );
         assert_eq!(
+            data.pointer("/envelopes/transport_view/plan_query")
+                .and_then(Value::as_str),
+            Some("session transport plan [--endpoint <url>]")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/transport_view/plan_schema_version")
+                .and_then(Value::as_str),
+            Some("session.transport_plan.v0.1")
+        );
+        assert_eq!(
             data.pointer("/envelopes/transport_view/check_schema_version")
                 .and_then(Value::as_str),
             Some("session.transport_check.v0.1")
@@ -36041,6 +36340,11 @@ mod tests {
             Some("session transport check --endpoint <url>")
         );
         assert_eq!(
+            data.pointer("/channels/trusted_remote/plan_command")
+                .and_then(Value::as_str),
+            Some("session transport plan [--endpoint <url>]")
+        );
+        assert_eq!(
             data.pointer("/safety/remote_transport_must_not_start_without_authentication")
                 .and_then(Value::as_bool),
             Some(true)
@@ -36084,6 +36388,66 @@ mod tests {
         assert_eq!(
             data.pointer("/check/error_code").and_then(Value::as_str),
             Some("trusted_remote_transport_blocked")
+        );
+    }
+
+    #[test]
+    fn session_transport_plan_request_returns_summary() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "transport-plan-query".to_string(),
+            command: "transport".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec![
+                "plan".to_string(),
+                "--endpoint".to_string(),
+                "http://192.0.2.1:4317".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+
+        let data = execute_session_command_request_inner(&request, temp.path()).unwrap();
+        let response = SessionCommandResponse {
+            request_id: request.request_id.clone(),
+            command: request.command.clone(),
+            ok: true,
+            data: Some(data.clone()),
+            error: None,
+            started_at_unix_ms: 2,
+            completed_at_unix_ms: 3,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
+
+        assert_eq!(
+            data.get("schema_version").and_then(Value::as_str),
+            Some("session.transport_plan.v0.1")
+        );
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("transport_plan")
+        );
+        assert_eq!(
+            summary.get("endpoint_policy_safe").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary
+                .get("ready_to_accept_remote_clients")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 

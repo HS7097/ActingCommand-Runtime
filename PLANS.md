@@ -177,6 +177,37 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
+- ActingLab trusted-channel transport plan: `session transport plan` now exposes a no-listener/no-TCP-probe plan for local CLI, daemon file-IPC, and reserved encrypted trusted remote access.
+
+## Current ActingLab Trusted-Channel Transport Plan
+
+This increment gives UI/API clients a stable no-device, no-listener plan for the future encrypted trusted channel before a real network transport is implemented.
+
+- `session transport plan` returns `session.transport_plan.v0.1`.
+- `session request transport plan` returns the same schema through the resident daemon request path.
+- The payload reports local CLI availability, daemon file-IPC availability, trusted remote reserved status, auth env configuration, optional endpoint policy, blockers, and no-side-effect guarantees.
+- Optional `--endpoint <url>` classifies local versus trusted remote policy without probing TCP reachability.
+- Remote `http://` endpoints remain blocked by `trusted_remote_transport_blocked`.
+- Remote `https://` endpoints with token or client certificate auth are policy-safe, but `ready_to_accept_remote_clients` remains false because the listener is still reserved.
+- Request journal summaries now support `data_summary.kind=transport_plan`.
+- `session api`, `session transport`, `session contract`, command capabilities, and access-channel contracts now advertise the transport-plan surface.
+
+No network listener, TLS implementation, token issuance, long-lived trusted remote stream, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, resource repository sync, or TCP reachability probe was added.
+
+## Planned ActingLab Phase C Self-Heal, Interaction, And Trusted Channel
+
+Phase C should stay split into three explicit surfaces so UI, scheduler, and trusted remote clients do not accidentally gain direct device ownership.
+
+- Self-heal flow: keep recovery as `observe -> diagnose -> plan -> execute`, with execution allowed only under a matching lease and only for maintenance-safe recovery. Repeated transient failures should escalate visibly instead of looping forever or silently falling back.
+- Interaction flow: UI and agent clients should consume compact session state, readiness, events, stream-plan, transport-plan, and command-check envelopes. User-approved commands should travel through explicit Session Layer requests rather than importing device, MaaTouch, or recognition internals.
+- Trusted encrypted channel: keep remote access reserved until a reviewed listener, TLS or mutually authenticated IPC, token or client-certificate authentication, request serialization, and audit logging exist. Preflight commands may classify endpoint policy, but must not start listeners, probe TCP, issue tokens, or claim remote readiness.
+
+Current offline implementation status:
+
+- `session self-heal-policy` describes the maintenance recovery boundary.
+- `session connect-plan` and `session stream-plan` describe client startup and interaction readiness.
+- `session transport plan` describes local CLI, daemon file-IPC, and reserved trusted remote transport policy.
+- Live validation and any real trusted-channel listener remain `deferred: requires-live-device` or `reserved` until a later reviewed implementation.
 
 ## Current ActingLab Interactive Stream-Plan Preflight
 

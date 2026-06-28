@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab trusted-channel transport plan
+
+### Current status
+
+- Added `session transport plan` as a no-listener trusted-channel startup plan.
+- Added daemon-routed `session request transport plan` support through the existing resident request handler.
+- The payload returns `schema_version=session.transport_plan.v0.1`.
+- The payload reports local CLI availability, daemon file-IPC availability, reserved trusted remote status, auth env configuration, optional endpoint policy, blockers, and no-side-effect guarantees.
+- Optional `--endpoint <url>` classifies endpoint policy with `runtime_endpoint_policy` and does not probe TCP reachability.
+- Remote `http://` endpoints remain blocked by `trusted_remote_transport_blocked`.
+- Remote `https://` endpoints with token or client certificate auth can be policy-safe, but `ready_to_accept_remote_clients` remains false because no listener is implemented.
+- Request journal summaries now support `data_summary.kind=transport_plan`.
+- `session api`, `session transport`, `session contract`, access-channel contracts, and command capabilities now advertise the transport-plan surface.
+- The change is a pure no-device/no-listener/no-TCP-probe preflight for UI/API, scheduler, and agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending until commit.
+- Checkpoint tag: pending until commit.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `0d54fdcdc1be98d184adb2f42ee8221edb9edf41`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and Runtime task documents.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected Session Layer transport, endpoint policy, access contract, API contract, request routing, request summaries, capabilities, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab transport_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_transport -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api -- --nocapture`
+- `cargo test -p actingcommand-actinglab capabilities_are_offline -- --nocapture`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json session transport plan`
+- `cargo run -q -p actingcommand-actinglab -- --json session transport plan --endpoint http://192.0.2.1:4317`
+- `$env:ACTINGLAB_TRUSTED_REMOTE_TOKEN='test-token'; try { cargo run -q -p actingcommand-actinglab -- --json session transport plan --endpoint https://example.invalid:4317 } finally { Remove-Item Env:\ACTINGLAB_TRUSTED_REMOTE_TOKEN -ErrorAction SilentlyContinue }`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines for listener startup, TCP reachability probes, TLS implementation/startup, token issuance, direct ADB input, shell screencap, SQLite, OCR/OpenCV, fallback calls, reconnect calls, capture calls, and MaaTouch startup.
+
+### Test results
+
+- Focused `transport_plan` tests passed.
+- Existing `session_transport` tests passed.
+- Existing Session API contract tests passed.
+- Existing capabilities test passed.
+- `cargo test --workspace` passed.
+- CLI smoke `session transport plan` passed and returned `schema_version=session.transport_plan.v0.1`, `status=reserved`, reserved trusted remote state, and a trusted remote listener blocker.
+- CLI smoke `session transport plan --endpoint http://192.0.2.1:4317` passed and returned `status=blocked` with `trusted_remote_transport_blocked` and `does_not_probe_tcp=true`.
+- CLI smoke `session transport plan --endpoint https://example.invalid:4317` with `ACTINGLAB_TRUSTED_REMOTE_TOKEN` set passed and classified the endpoint policy as safe while keeping trusted remote listener status reserved and `ready_to_accept_remote_clients=false`.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed; the only match was the allowed negative guarantee field `does_not_issue_tokens`.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- `deferred: requires-live-device` - live trusted-channel validation after a reviewed listener/TLS/auth implementation exists.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device and real trusted-channel validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit and push Runtime changes.
+2. Record final commit hash and checkpoint tag after commit.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab interactive stream-plan preflight
 
 ### Current status
