@@ -183,6 +183,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab command-check Phase C event summary: daemon request journals and `session events --data-summary-kind command_check` now expose compact command-check Phase C scope for UI/scheduler event consumers.
 - ActingLab submit-plan Phase C event summary: daemon request journals and `session events --data-summary-kind submit_plan` now expose compact submit-plan admission and Phase C execution-preflight summaries for UI/scheduler event consumers.
 - ActingLab Phase C plan event summary: daemon request journals and `session events --data-summary-kind phase_c_plan` now expose compact Phase C next-action lane summaries for UI/scheduler event consumers.
+- ActingLab readiness event summary: daemon request journals and `session events --data-summary-kind readiness` now expose compact startup readiness, queue, instance, diagnostics, Phase C, and live-deferred fields for UI/scheduler event consumers.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
 - ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
@@ -5788,6 +5789,36 @@ This is still a contract/discovery increment only:
 - `session status --diagnostics`, `session bootstrap`, and `session readiness` mirror compact Phase C acceptance-gate fields so normal health/readiness clients can see self-heal, interaction-flow, trusted-channel, and live-acceptance blockers without executing recovery, stream, listener, token, TLS, capture, MaaTouch, app, resource, SQLite, UI, or live-device work.
 - `session connect-plan` mirrors the same Phase C gate state into `phase_c_preflight`, so future UI/scheduler clients can make a single client-start decision while still seeing self-heal, interaction-flow, trusted-channel, and live-validation blockers.
 - `session submit-plan` now mirrors Phase C execution-readiness into `phase_c_execution_preflight`, so UI/scheduler clients can inspect self-heal, interaction-flow, trusted-channel, lease, queue, and live-deferred gates before submitting a command.
+
+## Current ActingLab readiness event summary
+
+This increment makes startup readiness discoverable from daemon request journals and event filters.
+
+`session request readiness` summaries now expose:
+
+- daemon liveness and request-acceptance state;
+- queue health and queue counts;
+- selected-instance readiness;
+- capture-staleness and AK stale-frame classification guard state;
+- Phase C self-heal, interaction-flow, trusted-channel, and pending-live validation fields;
+- no-device/no-capture/no-MaaTouch/no-listener/no-resource-read guarantees.
+
+`session events --data-summary-kind readiness` can now return this startup slice without forcing UI/scheduler clients to parse the full readiness payload.
+
+Phase C alignment:
+
+- Self-heal: readiness events show the first recovery-planning action and deferred live gate without executing recovery.
+- Interaction flow: readiness events expose bounded local CLI availability and matching-lease input-relay policy without starting streams or relaying input.
+- Trusted channel: readiness events expose encryption/authentication requirements and listener-not-implemented state without starting a listener, issuing tokens, or starting TLS.
+- Live validation: live-only gates remain `deferred` with `requires-live-device`; offline readiness summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no daemon work is enqueued;
+- no recovery is executed;
+- no stream is opened;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab Submit-Plan Phase C execution preflight
 
