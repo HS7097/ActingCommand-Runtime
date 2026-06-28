@@ -1,5 +1,92 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab interactive stream-plan preflight
+
+### Current status
+
+- Added `session stream-plan` as a no-device Phase C interactive stream startup preflight.
+- Added daemon-routed `session request stream-plan` support through the resident request handler.
+- The payload returns `schema_version=session.stream_plan.v0.1`.
+- The payload embeds the existing `session connect-plan` and `stream check` outputs so UI, scheduler, and agent clients can consume one startup envelope.
+- The payload reports `safe_to_open_stream`, `safe_to_start_client`, `safe_to_start_stream`, `safe_to_connect_transport`, `input_relay_requested`, `input_relay_action_count`, `stream_modes`, and `blockers`.
+- Bounded local CLI stream remains available, daemon-routed stream remains serialized by the resident Session Layer, and input relay remains lease-gated.
+- Trusted remote long-lived stream remains `reserved`; the payload reports encryption/authentication requirements and token/certificate configuration booleans without starting a listener.
+- Request journal summaries now support `data_summary.kind=stream_plan`.
+- `session api`, `session contract`, `session bootstrap`, `session command-check`, and command capabilities now advertise or classify the stream-plan surface.
+- The change is a pure no-device/no-listener preflight for UI, scheduler, and agent clients.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: pending until commit.
+- Checkpoint tag: pending until commit.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `3249f07a732277cd8bcccb9b727bd1b35f01a09a`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and Runtime task documents.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Inspected Session Layer readiness, connect-plan, stream preflight, API/access contracts, request routing, command-check classification, capabilities, request summaries, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_stream_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_command_check_stream_plan_is_read_only -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_connect_plan -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api -- --nocapture`
+- `cargo test -p actingcommand-actinglab stream_check -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session stream-plan --local --max-frames 2`
+- `cargo run -q -p actingcommand-actinglab -- --json --instance ak session stream-plan --local --input-event tap,10,20`
+- Initial source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines matched only the allowed negative guarantee field `does_not_start_listener`; refined execution-pattern scan passed.
+- Refined source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` diff lines for direct ADB input, shell screencap, SQLite, OCR/OpenCV, listener startup, TLS implementation, token issuance, fallback calls, and reconnect calls.
+
+### Test results
+
+- Focused `session_stream_plan` tests passed.
+- Focused command-check stream-plan classification test passed.
+- Existing `session_connect_plan` tests passed.
+- Existing Session API contract tests passed.
+- Existing `stream_check` tests passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- CLI smoke `session stream-plan --local --max-frames 2` passed and returned `schema_version=session.stream_plan.v0.1`, `status=blocked`, `safe_to_start_stream=true`, and visible daemon/instance blockers.
+- CLI smoke `session stream-plan --local --input-event tap,10,20` passed and returned `input_relay_requested=true`, `input_relay_action_count=1`, and `lab_lease_required` without touching devices.
+- Refined source-only prohibited-feature scan passed.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - trusted UI/API exposure and long-lived interactive stream validation.
+- `deferred: requires-live-device` - live stream-plan validation against a resident daemon and configured instances.
+- `deferred: requires-live-device` - scheduler-owned lease arbitration with real device/control consumers.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 task update and remains operator/live-environment work.
+
+### Next step
+
+1. Commit and push Runtime changes.
+2. Record final commit hash and checkpoint tag after commit.
+
 ## 2026-06-28 ActingLab client connect-plan preflight
 
 ### Current status

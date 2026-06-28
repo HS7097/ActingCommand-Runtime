@@ -176,6 +176,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C self-heal policy surface: `session self-heal-policy` and `session request self-heal-policy` expose the maintenance-only observe/diagnose/plan/execute recovery boundary without touching devices or reading resources.
 - ActingLab readiness client policy summary: `session readiness` now includes a compact no-device policy summary for UI, scheduler, and agent startup logic, covering Session throat, capture freshness, self-heal, stream, trusted transport, and deferred live validation.
 - ActingLab client connect-plan preflight: `session connect-plan` and `session request connect-plan` aggregate readiness, trusted transport checks, and stream preflight into one no-device startup plan for UI, scheduler, and agent clients.
+- ActingLab interactive stream-plan preflight: `session stream-plan` and `session request stream-plan` now expose a no-device Phase C stream startup plan that combines connect-plan, stream preflight, lease-gated input relay state, and reserved trusted-remote encrypted-channel status.
+
+## Current ActingLab Interactive Stream-Plan Preflight
+
+This increment gives UI, scheduler, and agent clients a stable no-device plan for entering the future interactive stream flow without opening a stream or touching devices.
+
+- `session stream-plan` returns `session.stream_plan.v0.1`.
+- `session request stream-plan` returns the same schema through the resident daemon request path.
+- The payload embeds `connect_plan` and `stream_preflight` so clients can consume one startup envelope.
+- The payload reports `safe_to_open_stream`, `safe_to_start_client`, `safe_to_start_stream`, `safe_to_connect_transport`, `input_relay_requested`, `input_relay_action_count`, `stream_modes`, and `blockers`.
+- Bounded local CLI stream remains available as a local, non-long-lived mode.
+- Daemon-routed stream remains serialized by the resident Session Layer and keeps input relay behind a matching lease.
+- Trusted remote long-lived stream remains `reserved`, requires encryption and authentication, and only reports token/certificate configuration status without starting a listener.
+- Request journal summaries now support `data_summary.kind=stream_plan`.
+- `session api`, `session contract`, `session bootstrap`, `session command-check`, and capabilities now advertise or classify the stream-plan surface.
+
+No network listener, TLS implementation, token issuance, long-lived trusted remote stream, UI, scheduler execution behavior, SQLite, OCR/OpenCV, game logic, resource repository access, new capture/input backend, direct ADB input fallback, reconnect loop, app restart, live device action, cooperation-workspace copy, or resource repository sync was added.
 
 ## Current ActingLab Client Connect-Plan Preflight
 
