@@ -5630,6 +5630,32 @@ This is still a contract/discovery increment only:
 - no capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
 - live validation remains `deferred: requires-live-device`.
 
+## Current ActingLab Capture Freeze Classification Gate
+
+This increment makes the AK stale-screencap finding harder for clients to misinterpret as a confirmed game freeze.
+
+`session capture-policy` now embeds `freeze_classification_gate` with:
+
+- `schema_version=session.capture_freeze_classification_gate.v0.1`;
+- `status=blocked_without_fresh_backend_evidence`;
+- `safe_to_classify_game_frozen=false`;
+- the explicit rule that `adb_screencap` evidence alone must not classify the game as frozen;
+- insufficient-evidence examples including same-md5 `adb_screencap`, reconnect-same-md5, input-ok-without-fresh-frame, high CPU without stronger evidence, and page detection from a stale frame;
+- required evidence before a live game-freeze label: fresh-frame diagnosis, backend/hash/timestamp evidence, frame comparison or stale proof, lighter non-ADB screenshot backend checks where available, and operator/live evidence;
+- live validation still marked `deferred: requires-live-device`.
+
+`session api` now advertises the freeze-classification gate field and schema version under `capture_policy_view`.
+
+Resident daemon request journals now summarize `capture_policy` results, including freeze-gate status, safe-to-classify state, required-evidence count, and live-validation deferral.
+
+This is still a contract/discovery increment only:
+
+- no capture is run;
+- no daemon request is enqueued by the policy command;
+- no recovery is executed;
+- no capture backend, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, listener, token, or TLS work is performed;
+- live validation remains `deferred: requires-live-device`.
+
 ## Repo-local planning policy
 
 Runtime planning and checkpoint records live in this repository.

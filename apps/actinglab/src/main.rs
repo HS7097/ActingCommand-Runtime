@@ -1351,6 +1351,39 @@ fn session_capture_policy_payload(
             "ak_known_stale_md5": "202752fa3e5cab706774819168639b6c",
             "finding": "FINDING-AK-game-freeze-2026-06-27"
         },
+        "freeze_classification_gate": {
+            "schema_version": "session.capture_freeze_classification_gate.v0.1",
+            "status": "blocked_without_fresh_backend_evidence",
+            "safe_to_classify_game_frozen": false,
+            "must_not_classify_as_game_freeze_from_adb_screencap_alone": true,
+            "finding": "FINDING-AK-game-freeze-2026-06-27",
+            "insufficient_evidence": [
+                "adb_screencap_same_md5_alone",
+                "adb_disconnect_reconnect_same_md5_alone",
+                "input_command_returned_ok_without_fresh_frame",
+                "high_cpu_without_anr_or_fresh_backend_evidence",
+                "page_detector_result_from_stale_frame"
+            ],
+            "required_before_game_freeze_label": [
+                "run capture diagnose --require-fresh",
+                "record backend name, frame hash, and timestamp or sequence evidence",
+                "compare at least two frames or prove stale status through capture diagnose",
+                "try a lighter non-adb_screencap backend when available",
+                "record operator/live evidence before accepting a live game-freeze conclusion"
+            ],
+            "recommended_order": [
+                "session capture-policy",
+                "capture diagnose --require-fresh",
+                "session recover --stale-capture",
+                "session self-heal-plan --trigger capture_stale_suspected",
+                "operator live validation"
+            ],
+            "live_validation": {
+                "status": "deferred",
+                "deferred_code": "requires-live-device",
+                "must_not_mark_live_pass_from_offline_checks": true
+            }
+        },
         "recovery_policy": {
             "read_only_plan": "session recover --stale-capture",
             "diagnosis_first": true,
@@ -3101,7 +3134,7 @@ fn session_api_contract() -> Value {
                 "command_filter_repeats": true,
                 "data_summary_field": "events[].data_summary",
                 "stream_data_summary_kind": "stream",
-                "data_summary_kinds": ["stream", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
+                "data_summary_kinds": ["stream", "capture_policy", "self_heal_plan", "phase_c_plan", "connect_plan", "stream_plan", "transport_plan", "validation_plan", "capture_diagnose", "stale_capture_recovery"],
                 "data_summary_kind_filter_repeats": true,
                 "status_filter_values": ["completed", "failed"],
                 "status_filter_repeats": true,
@@ -3421,6 +3454,8 @@ fn session_capture_policy_view_contract() -> Value {
         "fresh_frame_policy_field": "fresh_frame_policy",
         "backend_policy_field": "backend_policy",
         "stale_classification_field": "stale_classification",
+        "freeze_classification_gate_field": "freeze_classification_gate",
+        "freeze_classification_gate_schema_version": "session.capture_freeze_classification_gate.v0.1",
         "recovery_policy_field": "recovery_policy",
         "does_not_enqueue": true,
         "does_not_touch_device": true,
@@ -14167,6 +14202,7 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
     let data = response.data.as_ref()?;
     match response.command.as_str() {
         "stream" => Some(stream_request_data_summary(data)),
+        "capture_policy" => Some(capture_policy_request_data_summary(data)),
         "self_heal_plan" => Some(self_heal_plan_request_data_summary(data)),
         "phase_c_plan" => Some(phase_c_plan_request_data_summary(data)),
         "connect_plan" => Some(connect_plan_request_data_summary(data)),
@@ -14184,6 +14220,24 @@ fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Val
         }
         _ => None,
     }
+}
+
+fn capture_policy_request_data_summary(data: &Value) -> Value {
+    json!({
+        "schema_version": "session.request.data_summary.v0.1",
+        "kind": "capture_policy",
+        "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "preferred_backend_count": data.pointer("/backend_policy/preferred_order").and_then(Value::as_array).map(Vec::len),
+        "adb_screencap_is_last_resort": data.pointer("/backend_policy/adb_screencap_is_last_resort").cloned().unwrap_or(Value::Null),
+        "stale_capture_status": data.pointer("/stale_classification/stale_capture_status").cloned().unwrap_or(Value::Null),
+        "game_freeze_status": data.pointer("/stale_classification/game_freeze_status").cloned().unwrap_or(Value::Null),
+        "freeze_gate_schema_version": data.pointer("/freeze_classification_gate/schema_version").cloned().unwrap_or(Value::Null),
+        "freeze_gate_status": data.pointer("/freeze_classification_gate/status").cloned().unwrap_or(Value::Null),
+        "safe_to_classify_game_frozen": data.pointer("/freeze_classification_gate/safe_to_classify_game_frozen").cloned().unwrap_or(Value::Null),
+        "freeze_gate_required_evidence_count": data.pointer("/freeze_classification_gate/required_before_game_freeze_label").and_then(Value::as_array).map(Vec::len),
+        "live_validation_status": data.pointer("/freeze_classification_gate/live_validation/status").cloned().unwrap_or(Value::Null),
+        "deferred_code": data.pointer("/freeze_classification_gate/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
+    })
 }
 
 fn self_heal_plan_request_data_summary(data: &Value) -> Value {
@@ -24577,6 +24631,40 @@ mod tests {
             Some("FINDING-AK-game-freeze-2026-06-27")
         );
         assert_eq!(
+            data.pointer("/freeze_classification_gate/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_freeze_classification_gate.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/freeze_classification_gate/status")
+                .and_then(Value::as_str),
+            Some("blocked_without_fresh_backend_evidence")
+        );
+        assert_eq!(
+            data.pointer("/freeze_classification_gate/safe_to_classify_game_frozen")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.pointer("/freeze_classification_gate/insufficient_evidence")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("adb_screencap_same_md5_alone"))
+        );
+        assert!(
+            data.pointer("/freeze_classification_gate/required_before_game_freeze_label")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("run capture diagnose --require-fresh"))
+        );
+        assert_eq!(
+            data.pointer("/freeze_classification_gate/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
             data.pointer(
                 "/recovery_policy/try_lighter_capture_backend_recovery_before_app_restart"
             )
@@ -24615,6 +24703,16 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
+        let response = SessionCommandResponse {
+            request_id: query.request_id,
+            command: query.command,
+            ok: true,
+            data: Some(payload.clone()),
+            error: None,
+            started_at_unix_ms: 5,
+            completed_at_unix_ms: 6,
+        };
+        let summary = session_request_data_summary(&response).unwrap();
 
         assert_eq!(
             payload.get("schema_version").and_then(Value::as_str),
@@ -24635,6 +24733,26 @@ mod tests {
                 .pointer("/guarantees/does_not_read_resource_repositories")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            summary.get("kind").and_then(Value::as_str),
+            Some("capture_policy")
+        );
+        assert_eq!(
+            summary
+                .get("freeze_gate_schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_freeze_classification_gate.v0.1")
+        );
+        assert_eq!(
+            summary
+                .get("safe_to_classify_game_frozen")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            summary.get("deferred_code").and_then(Value::as_str),
+            Some("requires-live-device")
         );
     }
 
@@ -35835,6 +35953,7 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         for kind in [
+            "capture_policy",
             "connect_plan",
             "stream_plan",
             "transport_plan",
@@ -41633,6 +41752,18 @@ mod tests {
             data.pointer("/envelopes/capture_policy_view/stale_classification_field")
                 .and_then(Value::as_str),
             Some("stale_classification")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/capture_policy_view/freeze_classification_gate_field")
+                .and_then(Value::as_str),
+            Some("freeze_classification_gate")
+        );
+        assert_eq!(
+            data.pointer(
+                "/envelopes/capture_policy_view/freeze_classification_gate_schema_version"
+            )
+            .and_then(Value::as_str),
+            Some("session.capture_freeze_classification_gate.v0.1")
         );
         assert_eq!(
             data.pointer("/envelopes/self_heal_policy_view/schema_version")
