@@ -10752,6 +10752,7 @@ fn session_status_diagnostics(
         "instances": session_instance_registry_diagnostics(config),
         "leases": session_lease_diagnostics(state_dir)?,
         "monitor_policy": monitor_policy,
+        "capture_freshness": session_capture_freshness_diagnostics_summary()?,
         "phase_c": session_phase_c_diagnostics_summary()?,
         "validation": session_validation_diagnostics_summary(),
         "journal": {
@@ -10774,6 +10775,68 @@ fn session_status_diagnostics(
                 "bytes": file_size_if_exists(&session_request_journal_archive_path(state_dir))?
             }
         }
+    }))
+}
+
+fn session_capture_freshness_diagnostics_summary() -> CliOutcome<Value> {
+    let global = GlobalOptions::default();
+    let flags = FlagArgs::default();
+    let capture_policy = session_capture_policy_payload(&global, &flags, "session capture-policy")?;
+    Ok(json!({
+        "schema_version": "session.capture_freshness_diagnostics.v0.1",
+        "capture_policy_command": "session capture-policy",
+        "daemon_capture_policy_command": "session request capture-policy",
+        "diagnostic_command": capture_policy
+            .pointer("/fresh_frame_policy/diagnostic_command")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "session_diagnostic_command": capture_policy
+            .pointer("/fresh_frame_policy/session_diagnostic_command")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "preferred_backend_order": capture_policy
+            .pointer("/backend_policy/preferred_order")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "adb_screencap_is_last_resort": capture_policy
+            .pointer("/backend_policy/adb_screencap_is_last_resort")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "stale_classification": capture_policy
+            .get("stale_classification")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "recovery_policy": {
+            "read_only_plan": capture_policy
+                .pointer("/recovery_policy/read_only_plan")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "try_lighter_capture_backend_recovery_before_app_restart": capture_policy
+                .pointer("/recovery_policy/try_lighter_capture_backend_recovery_before_app_restart")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "app_restart_is_heavy_recovery": capture_policy
+                .pointer("/recovery_policy/app_restart_is_heavy_recovery")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "maintenance_recovery_requires_matching_lease_when_it_executes_control": capture_policy
+                .pointer("/recovery_policy/maintenance_recovery_requires_matching_lease_when_it_executes_control")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
+        "client_guidance": capture_policy
+            .get("client_guidance")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "live_validation": {
+            "status": "deferred",
+            "deferred_code": "requires-live-device",
+            "must_not_mark_live_pass_from_offline_checks": true
+        },
+        "guarantees": capture_policy
+            .get("guarantees")
+            .cloned()
+            .unwrap_or(Value::Null)
     }))
 }
 
@@ -38164,6 +38227,72 @@ mod tests {
                 .pointer("/phase_c/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/schema_version")
+                .and_then(Value::as_str),
+            Some("session.capture_freshness_diagnostics.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/capture_policy_command")
+                .and_then(Value::as_str),
+            Some("session capture-policy")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/diagnostic_command")
+                .and_then(Value::as_str),
+            Some("capture diagnose --require-fresh")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/preferred_backend_order/0")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/preferred_backend_order/2")
+                .and_then(Value::as_str),
+            Some("adb_screencap")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/adb_screencap_is_last_resort")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/stale_classification/stale_capture_status")
+                .and_then(Value::as_str),
+            Some("capture_stale_suspected")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/recovery_policy/try_lighter_capture_backend_recovery_before_app_restart")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/capture_freshness/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             diagnostics

@@ -203,6 +203,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab Phase C bootstrap diagnostics summary: `session bootstrap` now embeds the compact `status_diagnostics.phase_c` summary so UI/scheduler startup clients can read self-heal, interaction-flow, trusted-channel, and live-validation next actions from the first no-device startup envelope.
 - ActingLab Phase C bootstrap-view API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_phase_c_field="status_diagnostics.phase_c"`, so startup clients can discover the embedded Phase C diagnostics summary from the API contract.
 - ActingLab bootstrap validation diagnostics API contract alignment: `session api` now advertises `bootstrap_view.status_diagnostics_validation_field="status_diagnostics.validation"`, so startup clients can discover the embedded pending-live validation summary from the API contract.
+- ActingLab capture freshness status diagnostics summary: `session status --diagnostics` now embeds `diagnostics.capture_freshness`, exposing stale-frame policy, backend order, AK stale-screencap classification, and lighter recovery guidance without touching devices.
+
+## Current ActingLab Capture Freshness Status Diagnostics Summary
+
+This increment makes the AK stale screencap finding visible from the normal Session Layer status diagnostics surface.
+
+- `session status --diagnostics` now includes `diagnostics.capture_freshness`.
+- The summary points clients to `session capture-policy`, `capture diagnose --require-fresh`, and `session capture diagnose --require-fresh`.
+- The summary exposes the preferred capture backend order `nemu_ipc -> droidcast_raw -> adb_screencap`, with `adb_screencap` marked as the last resort.
+- The summary records that stale `adb_screencap` evidence alone must not be classified as game freeze.
+- The summary records that capture-backend recovery should be considered before heavy app restart.
+- The summary keeps live validation deferred as `requires-live-device` and guarantees that the diagnostics query does not enqueue requests, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
 
 ## Current ActingLab Bootstrap Validation Diagnostics API Contract Alignment
 
