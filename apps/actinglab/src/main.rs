@@ -15514,16 +15514,25 @@ fn capture_policy_request_data_summary(data: &Value) -> Value {
         "schema_version": "session.request.data_summary.v0.1",
         "kind": "capture_policy",
         "status": data.get("status").cloned().unwrap_or(Value::Null),
+        "require_fresh_flag": data.pointer("/fresh_frame_policy/require_fresh_flag").cloned().unwrap_or(Value::Null),
         "preferred_backend_count": data.pointer("/backend_policy/preferred_order").and_then(Value::as_array).map(Vec::len),
         "adb_screencap_is_last_resort": data.pointer("/backend_policy/adb_screencap_is_last_resort").cloned().unwrap_or(Value::Null),
+        "fallback_requires_full_logging": data.pointer("/backend_policy/fallback_requires_full_logging").cloned().unwrap_or(Value::Null),
         "stale_capture_status": data.pointer("/stale_classification/stale_capture_status").cloned().unwrap_or(Value::Null),
         "game_freeze_status": data.pointer("/stale_classification/game_freeze_status").cloned().unwrap_or(Value::Null),
+        "must_not_classify_game_freeze_from_adb_screencap_alone": data.pointer("/stale_classification/must_not_classify_as_game_freeze_from_adb_screencap_alone").cloned().unwrap_or(Value::Null),
+        "finding": data.pointer("/stale_classification/finding").cloned().unwrap_or(Value::Null),
         "freeze_gate_schema_version": data.pointer("/freeze_classification_gate/schema_version").cloned().unwrap_or(Value::Null),
         "freeze_gate_status": data.pointer("/freeze_classification_gate/status").cloned().unwrap_or(Value::Null),
         "safe_to_classify_game_frozen": data.pointer("/freeze_classification_gate/safe_to_classify_game_frozen").cloned().unwrap_or(Value::Null),
         "freeze_gate_required_evidence_count": data.pointer("/freeze_classification_gate/required_before_game_freeze_label").and_then(Value::as_array).map(Vec::len),
+        "try_lighter_capture_backend_recovery_before_app_restart": data.pointer("/recovery_policy/try_lighter_capture_backend_recovery_before_app_restart").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/freeze_classification_gate/live_validation/status").cloned().unwrap_or(Value::Null),
-        "deferred_code": data.pointer("/freeze_classification_gate/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
+        "deferred_code": data.pointer("/freeze_classification_gate/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_read_resource_repositories": data.pointer("/guarantees/does_not_read_resource_repositories").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -27055,6 +27064,122 @@ mod tests {
         assert_eq!(
             summary.get("deferred_code").and_then(Value::as_str),
             Some("requires-live-device")
+        );
+    }
+
+    #[test]
+    fn session_events_filters_capture_policy_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ak".to_string()),
+            game: Some("ark".to_string()),
+            server: Some("cn-bilibili".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let policy_request = SessionCommandRequest {
+            request_id: "capture-policy-event".to_string(),
+            command: "capture_policy".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let policy_payload =
+            execute_session_command_request_inner(&policy_request, state_dir).unwrap();
+        let policy_response = SessionCommandResponse {
+            request_id: policy_request.request_id.clone(),
+            command: policy_request.command.clone(),
+            ok: true,
+            data: Some(policy_payload),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &policy_request, &policy_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-capture-policy-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "capture_policy".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 13,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("capture-policy-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("capture_policy")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/require_fresh_flag")
+                .and_then(Value::as_str),
+            Some("--require-fresh")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/must_not_classify_game_freeze_from_adb_screencap_alone")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/finding")
+                .and_then(Value::as_str),
+            Some("FINDING-AK-game-freeze-2026-06-27")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/safe_to_classify_game_frozen")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/try_lighter_capture_backend_recovery_before_app_restart")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("capture_policy")
         );
     }
 

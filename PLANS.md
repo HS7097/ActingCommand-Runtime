@@ -228,6 +228,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab queue event summary: daemon request journals and `session events --data-summary-kind queue` now expose compact queue health, admission, request counts, recommended actions, and no-device/no-capture guarantees for UI/scheduler clients.
 - ActingLab self-heal policy event summary: daemon request journals and `session events --data-summary-kind self_heal_policy` now expose compact maintenance-only recovery policy, trigger guard, lease/scheduler boundary, and no-device/no-resource guarantees for UI/scheduler clients.
 - ActingLab throat policy event summary: daemon request journals and `session events --data-summary-kind throat_policy` now expose compact unique-control-throat, strict-session, route, lease, trusted-remote, and no-device/no-resource guarantees for UI/scheduler clients.
+- ActingLab capture policy event summary: daemon request journals and `session events --data-summary-kind capture_policy` now expose compact fresh-frame, stale-capture, AK false-freeze, lighter-recovery, deferred-live, and no-device/no-capture guarantees for UI/scheduler clients.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
@@ -5796,6 +5797,39 @@ This is still a contract/discovery increment only:
 - `session queue` and `session events --data-summary-kind queue` expose the queue/admission slice used by Phase C preflights, so UI/scheduler clients can see blocked work before they propose recovery, stream input, or future trusted remote control.
 - `session self-heal-policy` and `session events --data-summary-kind self_heal_policy` expose the maintenance-only self-heal policy slice used before any recovery plan or execution request is accepted.
 - `session throat-policy` and `session events --data-summary-kind throat_policy` expose the unique Session Layer throat slice that every self-heal, interaction-flow, and trusted-channel client must respect.
+- `session capture-policy` and `session events --data-summary-kind capture_policy` expose the fresh-frame and AK stale-screencap classification guard before clients interpret frozen-looking frames as game-freeze evidence.
+
+## Current ActingLab capture policy event summary
+
+This increment makes the fresh-frame and stale-capture policy discoverable from daemon request journals and event filters.
+
+`session request capture-policy` summaries now expose:
+
+- `--require-fresh` guidance for callers that need live frame evidence;
+- preferred backend count and the fact that `adb_screencap` is the last resort;
+- full fallback logging requirement for transient capture-backend failures;
+- stale-capture status and the AK stale-screencap finding reference;
+- the freeze-classification gate and `safe_to_classify_game_frozen=false` when only stale `adb_screencap` evidence exists;
+- lighter capture-backend recovery guidance before heavy app restart;
+- deferred live-validation code;
+- no-device/no-capture/no-MaaTouch/no-resource-read guarantees.
+
+`session events --data-summary-kind capture_policy` can now return this capture safety slice without forcing UI/scheduler clients to parse the full policy payload.
+
+Phase C alignment:
+
+- Self-heal: capture policy events keep stale-frame diagnosis ahead of recovery execution and app restart.
+- Interaction flow: capture policy events let stream/UI clients show degraded capture state before relaying input based on stale frames.
+- Trusted channel: future remote clients must see the same capture reliability blocker through Session Layer events.
+- Live validation: live-only capture recovery acceptance remains `deferred` with `requires-live-device`; offline summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no daemon work is enqueued;
+- no recovery is executed;
+- no stream is opened;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, resource repository, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab throat policy event summary
 
