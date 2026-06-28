@@ -1,5 +1,83 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab command-check instance gate
+
+### Current status
+
+- Extended `session command-check` and daemon-routed `session request command-check` with an `instance_gate` field.
+- Device-affecting commands with a selected `--instance <id>` now require that the selected instance exists in the user config and has required `serial`, `game`, and `server` fields before `safe_to_submit=true`.
+- Missing selected instances return `instance_gate.code=instance_not_found`; incomplete selected instances return `instance_gate.code=instance_configuration` with `missing_required`.
+- Non-device commands and commands without a selected instance remain non-blocking through `instance_gate.status=not_required` or `not_selected`.
+- `session submit-plan` now exposes a compact `preflight_summary` with readiness, command, queue, lease, and instance-gate status fields.
+- `session api` now advertises `command_check_view.instance_gate_field` and `submit_plan_view.preflight_summary_field`.
+- The change is a pure local/daemon preflight projection; it does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start a listener, read resources, or change actual daemon/device behavior.
+- Milestone source commit `02b0c366122bca69d39773e961f38359399e0cbb` was prepared with checkpoint tag `checkpoint/20260628-command-check-instance-gate`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `c479e0d3bcb3c450e164795d08ed8ec43c6d0609`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Re-read `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for task context only.
+- Read Runtime `AGENTS.md`, `NOTICE.md`, `PLANS.md`, and `CHECKPOINT.md`; `LICENSE_POLICY.md` is absent in this repository.
+- Read `ecc:rust-patterns` and `ecc:rust-testing` skill instructions.
+- Searched Codex memory for ActingCommand remote/source-of-truth and planning-file rules.
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Inspected Session Layer transport, readiness, queue, command-check, submit-plan, API contract, request handler, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_submit_plan -- --nocapture --test-threads=1`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over the changed `apps/actinglab/src/main.rs` diff.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git commit -m "Gate command checks on selected instance config"`
+- `git tag checkpoint/20260628-command-check-instance-gate 02b0c366122bca69d39773e961f38359399e0cbb`
+
+### Test results
+
+- Focused `session_command_check` tests passed, including the new incomplete selected-instance regression.
+- Focused `session_submit_plan` tests passed.
+- Focused Session API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Source-only prohibited-feature scan passed; no source path added actual fallback, reconnect loop, OCR/OpenCV, SQLite, shell screencap, direct ADB input, new capture/input backend, or MaaTouch startup behavior.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - any operator acceptance that requires live ADB, live screenshot, running games, or manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device validation is intentionally deferred by the 2026-06-28 11:44 task update and remains operator/live-environment work.
+- Full Session Layer remains incomplete: trusted remote UI/API transport, unbounded interactive stream transport, scheduler integration, and live prepared-emulator validation remain future work.
+
+### Next step
+
+1. Commit and push this checkpoint update.
+2. Continue Session Layer follow-ups that can be built and tested offline.
+3. Keep live/emulator validation deferred as `requires-live-device` until Alice provides a live validation window.
+
 ## 2026-06-28 ActingLab readiness selected-instance gate
 
 ### Current status
