@@ -15,8 +15,8 @@
 - `session api`, `session contract`, `session bootstrap`, `session command-check`, and command capabilities now advertise or classify the stream-plan surface.
 - The change is a pure no-device/no-listener preflight for UI, scheduler, and agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit: pending until commit.
-- Checkpoint tag: pending until commit.
+- Milestone source commit: `cff5d4a8799e2ffc5df8440ad01ff52a8692fc7b`.
+- Checkpoint tag: `checkpoint/20260628-session-stream-plan`.
 
 ### Resource mirrors used
 
@@ -84,8 +84,8 @@
 
 ### Next step
 
-1. Commit and push Runtime changes.
-2. Record final commit hash and checkpoint tag after commit.
+1. Push Runtime changes and checkpoint tag.
+2. Continue the next offline Session Layer increment before live validation.
 
 ## 2026-06-28 ActingLab client connect-plan preflight
 
