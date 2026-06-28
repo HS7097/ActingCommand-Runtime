@@ -229,6 +229,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab self-heal policy event summary: daemon request journals and `session events --data-summary-kind self_heal_policy` now expose compact maintenance-only recovery policy, trigger guard, lease/scheduler boundary, and no-device/no-resource guarantees for UI/scheduler clients.
 - ActingLab throat policy event summary: daemon request journals and `session events --data-summary-kind throat_policy` now expose compact unique-control-throat, strict-session, route, lease, trusted-remote, and no-device/no-resource guarantees for UI/scheduler clients.
 - ActingLab capture policy event summary: daemon request journals and `session events --data-summary-kind capture_policy` now expose compact fresh-frame, stale-capture, AK false-freeze, lighter-recovery, deferred-live, and no-device/no-capture guarantees for UI/scheduler clients.
+- ActingLab record policy event summary: daemon request journals and `session events --data-summary-kind record_policy` now expose compact active authorization, explicit step-kind selection, no passive full recording, explicit resource promotion, safety, deferred-live, and no-device/no-resource-write guarantees for UI/scheduler clients.
 
 ## Current ActingLab Live Acceptance Checklist Granularity
 
@@ -5798,6 +5799,40 @@ This is still a contract/discovery increment only:
 - `session self-heal-policy` and `session events --data-summary-kind self_heal_policy` expose the maintenance-only self-heal policy slice used before any recovery plan or execution request is accepted.
 - `session throat-policy` and `session events --data-summary-kind throat_policy` expose the unique Session Layer throat slice that every self-heal, interaction-flow, and trusted-channel client must respect.
 - `session capture-policy` and `session events --data-summary-kind capture_policy` expose the fresh-frame and AK stale-screencap classification guard before clients interpret frozen-looking frames as game-freeze evidence.
+- `session record-policy` and `session events --data-summary-kind record_policy` expose the active-recording authorization slice before UI/agents ask operators to authorize anchor, operation, color-probe, verify-template, build, or promote steps.
+
+## Current ActingLab record policy event summary
+
+This increment makes the active recording authorization policy discoverable from daemon request journals and event filters.
+
+`session request record-policy` summaries now expose:
+
+- active authorization requirement and passive full-recording prohibition;
+- allowed recording step kind count;
+- current-frame live-validation deferral;
+- explicit promotion command and explicit resource repository requirement;
+- policy command resource-write and promote guarantees;
+- destructive-operation, game-progress, and blind-confirmation safety fields;
+- live-validation deferred code;
+- no-enqueue/no-device/no-capture/no-MaaTouch/no-resource-read/no-resource-write/no-listener guarantees.
+
+`session events --data-summary-kind record_policy` can now return this recording safety slice without forcing UI/scheduler clients to parse the full policy payload.
+
+Phase D alignment:
+
+- Recording stays active and operator-authorized; passive full recording remains forbidden.
+- Navigation and normal operation do not become resources unless an explicit record step is submitted.
+- Resource promotion remains an explicit command with an explicit repository boundary.
+- Current-frame capture and live recording acceptance remain `deferred` with `requires-live-device`; offline summaries must not mark live validation accepted.
+
+This is still a contract/discovery increment only:
+
+- no recording session is created;
+- no daemon work is enqueued;
+- no frame is captured;
+- no draft or resource repository is written;
+- no listener, token, TLS, capture, MaaTouch, ADB, app lifecycle, SQLite, UI, OCR, or game logic work is performed;
+- live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab capture policy event summary
 

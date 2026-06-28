@@ -15547,9 +15547,20 @@ fn record_policy_request_data_summary(data: &Value) -> Value {
         "current_frame_deferred_code": data.pointer("/frame_source_policy/deferred_code").cloned().unwrap_or(Value::Null),
         "promote_command": data.pointer("/resource_write_policy/promote_requires_explicit_command").cloned().unwrap_or(Value::Null),
         "policy_command_writes_resources": data.pointer("/resource_write_policy/policy_command_writes_resources").cloned().unwrap_or(Value::Null),
+        "policy_command_promotes_resources": data.pointer("/resource_write_policy/policy_command_promotes_resources").cloned().unwrap_or(Value::Null),
+        "resource_repository_write_requires_explicit_repo": data.pointer("/resource_write_policy/resource_repository_write_requires_explicit_repo").cloned().unwrap_or(Value::Null),
         "destructive_operation_requires_explicit_flag": data.pointer("/safety_policy/destructive_operation_requires_explicit_flag").cloned().unwrap_or(Value::Null),
+        "game_progress_actions_allowed": data.pointer("/safety_policy/game_progress_actions_allowed").cloned().unwrap_or(Value::Null),
+        "blind_confirmation_allowed": data.pointer("/safety_policy/blind_confirmation_allowed").cloned().unwrap_or(Value::Null),
         "live_validation_status": data.pointer("/live_validation/status").cloned().unwrap_or(Value::Null),
-        "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null)
+        "deferred_code": data.pointer("/live_validation/deferred_code").cloned().unwrap_or(Value::Null),
+        "does_not_enqueue": data.pointer("/guarantees/does_not_enqueue").cloned().unwrap_or(Value::Null),
+        "does_not_touch_device": data.pointer("/guarantees/does_not_touch_device").cloned().unwrap_or(Value::Null),
+        "does_not_capture": data.pointer("/guarantees/does_not_capture").cloned().unwrap_or(Value::Null),
+        "does_not_start_maatouch": data.pointer("/guarantees/does_not_start_maatouch").cloned().unwrap_or(Value::Null),
+        "does_not_read_resource_repositories": data.pointer("/guarantees/does_not_read_resource_repositories").cloned().unwrap_or(Value::Null),
+        "does_not_write_resource_repositories": data.pointer("/guarantees/does_not_write_resource_repositories").cloned().unwrap_or(Value::Null),
+        "does_not_start_listener": data.pointer("/guarantees/does_not_start_listener").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -27338,6 +27349,134 @@ mod tests {
         assert_eq!(
             summary.get("deferred_code").and_then(Value::as_str),
             Some("requires-live-device")
+        );
+    }
+
+    #[test]
+    fn session_events_filters_record_policy_data_summary() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let global = SessionCommandGlobal {
+            instance: Some("ba-jp".to_string()),
+            game: Some("bluearchive".to_string()),
+            server: Some("jp".to_string()),
+            resource_root: None,
+            capture_backend: None,
+            dry_run: false,
+        };
+        let policy_request = SessionCommandRequest {
+            request_id: "record-policy-event".to_string(),
+            command: "record_policy".to_string(),
+            global: global.clone(),
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let policy_payload =
+            execute_session_command_request_inner(&policy_request, state_dir).unwrap();
+        let policy_response = SessionCommandResponse {
+            request_id: policy_request.request_id.clone(),
+            command: policy_request.command.clone(),
+            ok: true,
+            data: Some(policy_payload),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_journal(state_dir, &policy_request, &policy_response).unwrap();
+        let query = SessionCommandRequest {
+            request_id: "events-record-policy-filter-query".to_string(),
+            command: "events".to_string(),
+            global,
+            args: vec![
+                "--limit".to_string(),
+                "10".to_string(),
+                "--data-summary-kind".to_string(),
+                "record_policy".to_string(),
+            ],
+            lease: None,
+            created_at_unix_ms: 13,
+        };
+
+        let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        let events = payload.get("events").and_then(Value::as_array).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("request_id").and_then(Value::as_str),
+            Some("record-policy-event")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/kind")
+                .and_then(Value::as_str),
+            Some("record_policy")
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/active_authorization_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/passive_full_recording_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/allowed_step_kind_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/policy_command_writes_resources")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/resource_repository_write_requires_explicit_repo")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/game_progress_actions_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/blind_confirmation_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_write_resource_repositories")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            events[0]
+                .pointer("/data_summary/does_not_start_listener")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/data_summary_kind_filter/0")
+                .and_then(Value::as_str),
+            Some("record_policy")
         );
     }
 
