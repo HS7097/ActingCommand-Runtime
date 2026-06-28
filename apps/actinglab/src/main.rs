@@ -10774,6 +10774,16 @@ fn session_status_diagnostics(
 
 fn session_validation_diagnostics_summary() -> Value {
     let pending = session_validation_pending_live_acceptance();
+    let next_actions = session_validation_plan_next_actions(&pending);
+    let ordered = next_actions
+        .pointer("/ordered")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ordered_action_kinds: Vec<Value> = ordered
+        .iter()
+        .filter_map(|item| item.get("action").cloned())
+        .collect();
     json!({
         "schema_version": "session.validation_diagnostics.v0.1",
         "validation_plan_command": "session validation-plan",
@@ -10787,6 +10797,21 @@ fn session_validation_diagnostics_summary() -> Value {
                 .get("must_not_be_marked_passed_by_offline_checks")
                 .cloned()
                 .unwrap_or(Value::Null)
+        },
+        "next_actions": {
+            "schema_version": next_actions.get("schema_version").cloned().unwrap_or(Value::Null),
+            "status": next_actions.get("status").cloned().unwrap_or(Value::Null),
+            "deferred_code": next_actions.get("deferred_code").cloned().unwrap_or(Value::Null),
+            "action_count": ordered.len(),
+            "first_action": ordered
+                .first()
+                .and_then(|item| item.get("action"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "ordered_action_kinds": ordered_action_kinds,
+            "phase_c": next_actions.get("phase_c").cloned().unwrap_or(Value::Null),
+            "live_validation": next_actions.get("live_validation").cloned().unwrap_or(Value::Null),
+            "guarantees": next_actions.get("guarantees").cloned().unwrap_or(Value::Null)
         }
     })
 }
@@ -38068,6 +38093,50 @@ mod tests {
         assert_eq!(
             diagnostics
                 .pointer("/validation/pending_live_acceptance/must_not_be_marked_passed_by_offline_checks")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/next_actions/schema_version")
+                .and_then(Value::as_str),
+            Some("session.validation_next_actions.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/next_actions/first_action")
+                .and_then(Value::as_str),
+            Some("review_pending_live_acceptance")
+        );
+        assert!(
+            diagnostics
+                .pointer("/validation/next_actions/action_count")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 7)
+        );
+        assert!(
+            diagnostics
+                .pointer("/validation/next_actions/ordered_action_kinds")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some("review_trusted_channel_plan"))
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/next_actions/phase_c/self_heal")
+                .and_then(Value::as_str),
+            Some("observe_first_plan_review")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/next_actions/live_validation/deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/validation/next_actions/guarantees/does_not_mark_live_validation_passed")
                 .and_then(Value::as_bool),
             Some(true)
         );
