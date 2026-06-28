@@ -3256,6 +3256,9 @@ fn session_api_contract() -> Value {
                 "policy_summary_schema_version": "session.readiness_policy_summary.v0.1",
                 "diagnostics_summary_field": "diagnostics_summary",
                 "diagnostics_summary_schema_version": "session.readiness_diagnostics_summary.v0.1",
+                "phase_c_summary_field": "diagnostics_summary.phase_c",
+                "phase_c_acceptance_gates_schema_version_field": "diagnostics_summary.phase_c.acceptance_gates_schema_version",
+                "phase_c_acceptance_gate_lane_count_field": "diagnostics_summary.phase_c.acceptance_gate_lane_count",
                 "recommended_actions_field": "recommended_actions",
                 "blockers_field": "blockers"
             },
@@ -8580,6 +8583,32 @@ fn session_readiness_diagnostics_summary(status_view: &Value) -> Value {
                 .cloned()
                 .unwrap_or(Value::Null)
         },
+        "phase_c": {
+            "schema_version": status_view
+                .pointer("/diagnostics/phase_c/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "acceptance_gates_schema_version": status_view
+                .pointer("/diagnostics/phase_c/acceptance_gates/schema_version")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "acceptance_gate_lane_count": status_view
+                .pointer("/diagnostics/phase_c/acceptance_gates/lane_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "all_live_gates_deferred_code": status_view
+                .pointer("/diagnostics/phase_c/acceptance_gates/all_live_gates_deferred_code")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "first_next_action": status_view
+                .pointer("/diagnostics/phase_c/next_actions/first_action")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "first_live_gate_lane": status_view
+                .pointer("/diagnostics/phase_c/acceptance_gates/lanes/0/lane")
+                .cloned()
+                .unwrap_or(Value::Null)
+        },
         "validation": {
             "schema_version": status_view
                 .pointer("/diagnostics/validation/schema_version")
@@ -12132,6 +12161,48 @@ fn session_compact_next_actions(next_actions: &Value) -> Value {
     })
 }
 
+fn session_phase_c_acceptance_gates_compact_summary(gates: &Value) -> Value {
+    let lanes = gates
+        .get("lanes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let lane_summaries = lanes
+        .iter()
+        .map(|lane| {
+            json!({
+                "lane": lane.get("lane").cloned().unwrap_or(Value::Null),
+                "current_status": lane.get("current_status").cloned().unwrap_or(Value::Null),
+                "offline_gate_count": lane
+                    .get("offline_gates")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                "live_gate_count": lane
+                    .get("live_gates")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                "blocking_codes": lane.get("blocking_codes").cloned().unwrap_or(Value::Null),
+                "next_preflight_command": lane
+                    .get("next_preflight_command")
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "schema_version": gates.get("schema_version").cloned().unwrap_or(Value::Null),
+        "status": gates.get("status").cloned().unwrap_or(Value::Null),
+        "lane_count": lane_summaries.len(),
+        "all_live_gates_deferred_code": gates
+            .get("all_live_gates_deferred_code")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "lanes": lane_summaries,
+        "guarantees": gates.get("guarantees").cloned().unwrap_or(Value::Null)
+    })
+}
+
 fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
     let global = GlobalOptions::default();
     let flags = FlagArgs::default();
@@ -12153,6 +12224,9 @@ fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
     let transport_plan = session_transport_plan_payload(&flags)?;
     let validation_plan =
         session_validation_plan_payload(&global, &flags, "session validation-plan")?;
+    let acceptance_gates = session_phase_c_acceptance_gates_payload();
+    let acceptance_gates_summary =
+        session_phase_c_acceptance_gates_compact_summary(&acceptance_gates);
     let next_actions = session_phase_c_plan_next_actions(
         &self_heal_plan,
         &interaction_plan,
@@ -12172,6 +12246,7 @@ fn session_phase_c_diagnostics_summary() -> CliOutcome<Value> {
     Ok(json!({
         "schema_version": "session.phase_c_diagnostics.v0.1",
         "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+        "acceptance_gates": acceptance_gates_summary,
         "next_actions": {
             "schema_version": next_actions.get("schema_version").cloned().unwrap_or(Value::Null),
             "status": next_actions.get("status").cloned().unwrap_or(Value::Null),
@@ -23266,6 +23341,30 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/phase_c/acceptance_gates_schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/phase_c/acceptance_gate_lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/phase_c/all_live_gates_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            payload
+                .pointer("/diagnostics_summary/phase_c/first_live_gate_lane")
+                .and_then(Value::as_str),
+            Some("self_heal")
+        );
         assert_eq!(payload.get("ready").and_then(Value::as_bool), Some(false));
         assert_eq!(
             payload.pointer("/blockers/0/kind").and_then(Value::as_str),
@@ -25189,6 +25288,38 @@ mod tests {
             data.pointer("/status_diagnostics/phase_c/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_diagnostics.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/acceptance_gates/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/acceptance_gates/lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            data.pointer(
+                "/status_diagnostics/phase_c/acceptance_gates/all_live_gates_deferred_code"
+            )
+            .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/acceptance_gates/lanes/1/lane")
+                .and_then(Value::as_str),
+            Some("interaction_flow")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/acceptance_gates/lanes/2/lane")
+                .and_then(Value::as_str),
+            Some("trusted_channel")
+        );
+        assert_eq!(
+            data.pointer("/status_diagnostics/phase_c/acceptance_gates/guarantees/does_not_mark_live_validation_passed")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             data.pointer("/status_diagnostics/phase_c/next_actions/schema_version")
@@ -41082,6 +41213,48 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .pointer("/phase_c/acceptance_gates/schema_version")
+                .and_then(Value::as_str),
+            Some("session.phase_c_acceptance_gates.v0.1")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/lane_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/all_live_gates_deferred_code")
+                .and_then(Value::as_str),
+            Some("requires-live-device")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/lanes/0/lane")
+                .and_then(Value::as_str),
+            Some("self_heal")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/lanes/1/lane")
+                .and_then(Value::as_str),
+            Some("interaction_flow")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/lanes/2/current_status")
+                .and_then(Value::as_str),
+            Some("reserved_contract")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/phase_c/acceptance_gates/guarantees/does_not_touch_device")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics
                 .pointer("/phase_c/next_actions/schema_version")
                 .and_then(Value::as_str),
             Some("session.phase_c_next_actions.v0.1")
@@ -43037,6 +43210,21 @@ mod tests {
             data.pointer("/envelopes/readiness_view/diagnostics_summary_schema_version")
                 .and_then(Value::as_str),
             Some("session.readiness_diagnostics_summary.v0.1")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/phase_c_summary_field")
+                .and_then(Value::as_str),
+            Some("diagnostics_summary.phase_c")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/phase_c_acceptance_gates_schema_version_field")
+                .and_then(Value::as_str),
+            Some("diagnostics_summary.phase_c.acceptance_gates_schema_version")
+        );
+        assert_eq!(
+            data.pointer("/envelopes/readiness_view/phase_c_acceptance_gate_lane_count_field")
+                .and_then(Value::as_str),
+            Some("diagnostics_summary.phase_c.acceptance_gate_lane_count")
         );
         assert_eq!(
             data.pointer("/envelopes/connect_plan_view/schema_version")

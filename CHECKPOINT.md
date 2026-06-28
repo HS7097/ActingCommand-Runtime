@@ -1,5 +1,91 @@
 # CHECKPOINT.md
 
+## 2026-06-29 ActingLab Phase C acceptance diagnostics summary
+
+### Current status
+
+- Continued offline-only Session Layer Phase C work after the acceptance-gates contract.
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Added a compact `diagnostics.phase_c.acceptance_gates` summary under `session status --diagnostics`.
+- `session bootstrap` now embeds the same Phase C acceptance-gate summary through `status_diagnostics.phase_c`.
+- `session readiness` now mirrors the key Phase C acceptance-gate fields in `diagnostics_summary.phase_c`.
+- `session api` now advertises the readiness Phase C summary fields for UI/scheduler clients.
+- This increment only exposes contract/readiness diagnostics and does not execute recovery, enqueue daemon work, open streams, start listeners, issue tokens, start TLS, capture frames, start MaaTouch, touch emulators/devices, start apps, read resource repositories, write SQLite, or perform live validation.
+- Runtime baseline before this task: `7402d02be288a61b12bfed6204cb4934a595a186`.
+- Milestone source commit: pending.
+
+### 待真机验收
+
+- `prepared_emulator_session_layer_validation`
+- `ak_stale_capture_fresh_frame_recovery_validation`
+- `live_adb_device_control_and_screenshot_validation`
+- `operator_acceptance_observation`
+- `record_current_frame_authoring_live_validation`
+- `interactive_stream_input_relay_live_validation`
+- `trusted_channel_security_live_validation`
+
+### Phase C plan alignment
+
+- Self-heal: diagnostics expose acceptance blockers and preflight commands first; live recovery remains deferred until a prepared device/operator proves the route.
+- Interaction flow: diagnostics expose stream/input-relay acceptance gates; input relay remains lease-gated and live validation remains deferred.
+- Trusted channel: diagnostics expose encryption/authentication/listener/token/TLS blockers; no trusted remote listener, token issuer, or TLS layer is implemented in this increment.
+- Live validation: all live-only gates remain `deferred` with `requires-live-device`; offline tests must not mark them accepted.
+
+### Resource mirrors used
+
+- Runtime repository was fetched and confirmed aligned with `origin/main`.
+- Resource repositories were not used or modified by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- Inspected Session Layer Phase C plan, diagnostics, readiness, bootstrap, API contract, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_readiness_request_returns_readiness_payload -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_bootstrap_reports_client_contract_without_device_work -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_reports_queue_and_journal_summary -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, OCR/OpenCV, and false live-pass markers.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused readiness test passed.
+- Focused bootstrap contract test passed.
+- Focused status diagnostics test passed.
+- Focused API contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- All emulator/device/running-game/live-screenshot/operator-acceptance tasks remain deferred by current task policy: `requires-live-device`.
+- Full Phase C self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-28 ActingLab Phase C acceptance gates contract
 
 ### Current status
