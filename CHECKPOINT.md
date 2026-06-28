@@ -1,5 +1,86 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab validation-plan next-action summary
+
+### Current status
+
+- Added a machine-readable `next_actions` summary to `session validation-plan`.
+- `session request validation-plan` now returns the same next-action summary through the resident daemon request queue.
+- `next_actions` records ordered follow-up actions for pending live acceptance review, session readiness inspection, capture freshness policy review, Phase C self-heal review, interaction stream review, trusted-channel transport review, and status diagnostics review.
+- The pending-live summary keeps all live acceptance items marked `deferred: requires-live-device`.
+- The Phase C summary keeps self-heal, interaction flow, and trusted-channel lanes visible without executing any of them.
+- `validation_plan` daemon request summaries now retain pending live item count, next-action count, first next action, live-validation status, and Phase C lane summaries for journal/events consumers.
+- The Session API contract now advertises `next_actions_field=next_actions` under `validation_plan_view`.
+- The change is a pure no-device live-validation roadmap contract extension.
+- It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start daemon, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Milestone source commit: `e91307e476899de49ca1b5f027e68dda88115f9d`.
+- Checkpoint tag: `checkpoint/20260628-validation-plan-next-actions`.
+
+### Resource mirrors used
+
+- Runtime baseline before this task: `3c0ebb97611102ef5a83004be1330e8f55c33dfa`.
+- Runtime was confirmed clean and aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`; confirmed `LICENSE_POLICY.md` is not present in this Runtime repository.
+- Inspected existing validation-plan payload, pending-live acceptance helper, request data-summary, Session API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_validation_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --stat`
+- `git commit -m "Add validation plan next actions"`
+
+### Test results
+
+- Focused `session_validation_plan` tests passed and covered deferred live policy, pending-live acceptance, next-action ordering, Phase C lane summary, and request summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covered the new `validation_plan_view.next_actions_field` contract entry.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+
+### Pending live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live validation-plan next-action observation through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interactive stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update and tag the pushed checkpoint.
+2. Continue the next offline Session Layer increment before live validation.
+3. Keep Phase C self-heal execution behind observe-first, readiness, queue, and lease gates.
+4. Keep trusted-channel implementation behind explicit listener/TLS/token tests.
+5. Keep live validation deferred until a real device or emulator run is intentionally requested.
+
 ## 2026-06-28 ActingLab transport-plan next-action summary
 
 ### Current status
