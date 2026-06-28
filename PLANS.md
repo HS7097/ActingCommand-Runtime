@@ -213,6 +213,18 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab self-heal status diagnostics summary: `session status --diagnostics` and `session bootstrap` now expose compact `self_heal` summaries, and `session api` advertises their status/bootstrap field paths.
 - ActingLab readiness diagnostics summary: `session readiness` now exposes a compact `diagnostics_summary` for liveness, queue health, capture freshness, self-heal, interaction flow, trusted channel, and live-validation state without forcing clients to parse the full embedded status view.
 - ActingLab session recording authorization policy: `session record-policy` and `session request record-policy` expose the active recording authorization model, allowed step kinds, frame-source policy, resource-write policy, safety policy, and no-device/no-resource-write guarantees for UI/scheduler/agent clients.
+- ActingLab session recording command-check classification: `session command-check` now distinguishes current-frame recording from local-frame daemon-state work, so `session record step --capture` and `--current-frame` are device-affecting read-only while local `--frame` authoring remains daemon-state.
+
+## Current ActingLab Recording Command Preflight Classification
+
+This increment aligns Session Layer preflight classification with the active recording policy.
+
+- `session command-check session record step --capture` and `session command-check session record step --current-frame` now report `command_class=read_only`, `device_affecting=true`, and `requires_lease=false`.
+- `session command-check session record step --frame <png>` remains `command_class=daemon_state`, `device_affecting=false`, and `requires_lease=false`.
+- Unknown `session record <action>` values now fail loudly from command-check instead of being accepted as a broad daemon-state command.
+- `session contract`, `session api`, and Session Layer capability contracts now advertise current-frame recording as a device-affecting read-only example and local-frame recording as daemon-state work.
+- The command-check and submit-plan preflight queries remain offline and keep their guarantees: they do not enqueue, capture, touch devices, start MaaTouch, start apps, start listeners, issue tokens, start TLS, read resource repositories, or mark live validation passed.
+- Live validation remains `deferred: requires-live-device`.
 
 ## Current ActingLab Phase C Interaction Plan View
 

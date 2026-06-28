@@ -1,5 +1,79 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab recording command preflight classification
+
+### Current status
+
+- Implemented the next offline Session Layer safety increment after `session record-policy`.
+- `session command-check session record step --capture` and `--current-frame` now classify as device-affecting read-only work.
+- `session command-check session record step --frame <png>` remains daemon-state work.
+- Unsupported `session record <action>` values now fail loudly in command-check.
+- `session contract`, `session api`, and Session Layer capability contracts now advertise the refined record classification.
+- This increment is offline-only and does not perform capture, input, device control, resource-repository reads/writes, UI work, listener startup, token issuance, TLS startup, or live validation.
+- Live validation remains `deferred: requires-live-device`.
+
+### Phase C plan alignment
+
+- Self-heal: keep recovery observe-first and maintenance-only; live recovery validation remains deferred until a live device/operator confirms it.
+- Interaction flow: continue using `command-check` and `submit-plan` as the gate before UI/agent commands; current-frame recording is visible as device-affecting read-only before any capture occurs.
+- Trusted channel: keep UI/remote access behind the reserved encrypted/authenticated transport plan; no listener, token issuer, TLS layer, or long-lived remote stream is implemented in this increment.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read task files:
+  - `C:\合作工作区\ActingCommand\TASK-Lab-session-layer.md`
+  - `C:\合作工作区\ActingCommand\FINDING-AK-game-freeze-2026-06-27.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Inspected Session Layer Phase C, record-policy, command-check, access/API contracts, record command routing, and tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_command_check_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_contract_request_returns_access_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract -- --nocapture`
+- One malformed focused-test command was rejected by Cargo because multiple test filters were passed at once; it did not change files.
+- Early contract focused tests exposed stale duplicate/incorrect contract fields; they were fixed before final validation.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source-only prohibited-feature scan over added `apps/actinglab/src/main.rs` lines for listener startup, TCP bind/accept, token/TLS implementation, device/capture/MaaTouch entry points, direct ADB input, SQLite APIs, and OCR/OpenCV.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused command-check record tests passed.
+- Focused access-contract test passed.
+- Focused API-contract test passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Prohibited added-lines scan passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace --quiet` passed with workspace tests green.
+
+### Current blocker
+
+- Any live emulator/game/device validation remains deferred by current task policy: `requires-live-device`.
+- Phase C full self-heal execution, long-lived interactive stream validation, and trusted encrypted remote channel implementation remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes to GitHub with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue Phase C with the next offline Session Layer safety or discovery increment.
+
 ## 2026-06-28 ActingLab session record policy contract
 
 ### Current status

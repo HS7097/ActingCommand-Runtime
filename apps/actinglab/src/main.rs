@@ -1187,13 +1187,14 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session monitor-policy status"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
+                "device_affecting_examples": ["capture", "stream", "session instance health", "session record step --capture", "session record step --current-frame"]
             },
             "daemon_state": {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
                 "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear"]
+                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote"]
             },
             "control": {
                 "requires_lease": true,
@@ -2776,19 +2777,51 @@ fn session_access_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session recover --stale-capture",
+                    "session record step --capture",
+                    "session record step --current-frame",
                     "session monitor-policy status",
                     "session instance registry",
                     "session instance health",
                     "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
+                ],
+                "device_affecting_examples": [
+                    "capture",
+                    "capture-diagnose",
+                    "stream",
+                    "recognize",
+                    "detect-page",
+                    "current-page",
+                    "is-visible",
+                    "locate",
+                    "session record step --capture",
+                    "session record step --current-frame",
+                    "session instance health",
+                    "session instance health --capture-diagnose"
+                ]
+            },
+            "daemon_state": {
+                "requires_lease": false,
+                "recovery_policy_requires_matching_lease": true,
+                "recovery_policy_defers_without_matching_lease": true,
+                "examples": [
+                    "session record start",
+                    "session record status",
+                    "session record stop",
+                    "session record step --frame <png>",
+                    "session record candidates",
+                    "session record amend",
+                    "session record build-task",
+                    "session record promote",
+                    "session monitor-policy set",
+                    "session monitor-policy clear"
                 ]
             },
             "control": {
                 "requires_lease": true,
                 "examples": [
                     "lease",
-                    "record",
                     "session instance connect",
                     "session instance reconnect",
                     "session app launch",
@@ -2811,13 +2844,6 @@ fn session_access_contract() -> Value {
                     "navigate",
                     "recover except --stale-capture"
                 ]
-            }
-            ,
-            "daemon_state": {
-                "requires_lease": false,
-                "recovery_policy_requires_matching_lease": true,
-                "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear"]
             }
         },
         "safety": {
@@ -3357,19 +3383,34 @@ fn session_api_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session recover --stale-capture",
+                    "session record step --capture",
+                    "session record step --current-frame",
                     "session monitor-policy status",
                     "session instance registry",
                     "session instance health",
                     "session instance keep-alive",
                     "session instance health --capture-diagnose",
                     "monitor-once"
+                ],
+                "device_affecting_examples": [
+                    "capture",
+                    "capture-diagnose",
+                    "stream",
+                    "recognize",
+                    "detect-page",
+                    "current-page",
+                    "is-visible",
+                    "locate",
+                    "session record step --capture",
+                    "session record step --current-frame",
+                    "session instance health",
+                    "session instance health --capture-diagnose"
                 ]
             },
             "control": {
                 "requires_lease": true,
                 "examples": [
                     "lease",
-                    "record",
                     "session instance connect",
                     "session instance reconnect",
                     "session app launch",
@@ -3398,7 +3439,18 @@ fn session_api_contract() -> Value {
                 "requires_lease": false,
                 "recovery_policy_requires_matching_lease": true,
                 "recovery_policy_defers_without_matching_lease": true,
-                "examples": ["session monitor-policy set", "session monitor-policy clear"]
+                "examples": [
+                    "session record start",
+                    "session record status",
+                    "session record stop",
+                    "session record step --frame <png>",
+                    "session record candidates",
+                    "session record amend",
+                    "session record build-task",
+                    "session record promote",
+                    "session monitor-policy set",
+                    "session monitor-policy clear"
+                ]
             }
         },
         "failure_contract": {
@@ -9585,9 +9637,33 @@ fn classify_session_command_for_check(
         "package" if second == Some("run") => Ok(control),
         "operation" if matches!(second, Some("run" | "dry-run")) => Ok(control),
         "lease" => Ok(lease_arbitration),
-        "record" | "monitor-policy" => Ok(daemon_state),
+        "record" => {
+            classify_record_command_for_check(second, flags, daemon_state, device_read_only)
+        }
+        "monitor-policy" => Ok(daemon_state),
         other => Err(CliError::usage(format!(
             "unsupported session command-check command: {other}"
+        ))),
+    }
+}
+
+fn classify_record_command_for_check(
+    action: Option<&str>,
+    flags: &FlagArgs,
+    daemon_state: SessionCommandCheckClass,
+    device_read_only: SessionCommandCheckClass,
+) -> CliOutcome<SessionCommandCheckClass> {
+    match action {
+        Some("step") if flags.bool("--capture") || flags.bool("--current-frame") => {
+            Ok(device_read_only)
+        }
+        Some(
+            "start" | "status" | "stop" | "step" | "candidates" | "candidate-list" | "amend"
+            | "build-task" | "promote",
+        )
+        | None => Ok(daemon_state),
+        Some(other) => Err(CliError::usage(format!(
+            "unsupported session command-check record command: {other}"
         ))),
     }
 }
@@ -23590,6 +23666,138 @@ mod tests {
     }
 
     #[test]
+    fn session_command_check_record_step_current_frame_is_device_read_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "record",
+                "step",
+                "--kind",
+                "anchor",
+                "--current-frame",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("read_only")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/guarantees/does_not_capture")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_command_check_record_step_local_frame_is_daemon_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "record",
+                "step",
+                "--kind",
+                "anchor",
+                "--frame",
+                "sample.png",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("command_class").and_then(Value::as_str),
+            Some("daemon_state")
+        );
+        assert_eq!(
+            data.get("requires_lease").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.get("device_affecting").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/throat_gate/session_layer_required")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_command_check_record_unknown_action_fails_loudly() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, temp.path());
+            env::remove_var(CONFIG_ENV);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "command-check",
+                "session",
+                "record",
+                "delete",
+            ],
+            false,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+        }
+
+        assert_ne!(result.exit_code(), 0);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert!(
+            error
+                .message
+                .contains("unsupported session command-check record command: delete")
+        );
+    }
+
+    #[test]
     fn session_command_check_self_heal_policy_is_read_only() {
         let _guard = ENV_LOCK.lock().unwrap();
         let temp = TempDir::new().unwrap();
@@ -36159,6 +36367,29 @@ mod tests {
                 .iter()
                 .any(|item| item.as_str() == Some("session recover --stale-capture"))
         );
+        assert!(
+            readonly_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session record step --current-frame"))
+        );
+        let readonly_device_examples = payload
+            .pointer("/request_classes/read_only/device_affecting_examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            readonly_device_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session record step --capture"))
+        );
+        let daemon_examples = payload
+            .pointer("/request_classes/daemon_state/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            daemon_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session record step --frame <png>"))
+        );
         assert_eq!(
             payload
                 .pointer("/daemon_queries/api")
@@ -41812,6 +42043,24 @@ mod tests {
             data.pointer("/envelopes/command_check_view/throat_gate_field")
                 .and_then(Value::as_str),
             Some("throat_gate")
+        );
+        let api_readonly_device_examples = data
+            .pointer("/command_classes/read_only/device_affecting_examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            api_readonly_device_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session record step --current-frame"))
+        );
+        let api_daemon_examples = data
+            .pointer("/command_classes/daemon_state/examples")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(
+            api_daemon_examples
+                .iter()
+                .any(|item| item.as_str() == Some("session record step --frame <png>"))
         );
         assert_eq!(
             data.pointer("/envelopes/record_policy_view/schema_version")
