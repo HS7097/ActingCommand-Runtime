@@ -1,5 +1,87 @@
 # CHECKPOINT.md
 
+## 2026-06-28 ActingLab trusted remote transport gate
+
+### Current status
+
+- Added `trusted_remote_gate` to `session transport plan`.
+- The gate uses `schema_version=session.trusted_remote_gate.v0.1`.
+- The gate exposes endpoint-policy state, endpoint channel, trusted-remote requested state, token/client-certificate/auth-material readiness, listener/TLS/token-issuer implementation state, request serialization/audit requirements, blocked reasons, and `safe_to_accept_remote_clients=false`.
+- `session transport` contract now advertises `channels.trusted_remote.plan_gate_field=trusted_remote_gate`.
+- `session api` now advertises `transport_view.plan_trusted_remote_gate_field=trusted_remote_gate` and `plan_trusted_remote_gate_schema_version=session.trusted_remote_gate.v0.1`.
+- Request data summaries now include `trusted_remote_gate_status`, `trusted_remote_gate_auth_material_configured`, and `trusted_remote_gate_blocked_reason_count`.
+- This is an offline contract/discovery increment only.
+- It does not enqueue daemon requests, mutate queues, capture frames, start MaaTouch, touch devices, start apps, execute self-heal, start listeners, probe TCP, issue tokens, start TLS, read resources, modify cooperation-workspace files, or claim any live validation pass.
+- Runtime baseline before this task: `98aeda46758021a9643d52b6ed1e2f7169dd4406`.
+- Milestone source commit: `88ef39335daa834bdf4f61ad151f99b97bb4ae2c`.
+- Checkpoint tag: `checkpoint/20260628-trusted-remote-gate`.
+
+### Resource mirrors used
+
+- Runtime was confirmed aligned with `origin/main` before implementation.
+- Resource repositories were not modified or used by this implementation step.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read Rust skill guidance for Rust patterns and Rust testing.
+- Read relevant memory entries for Azur planning/checkpoint expectations and repository mirroring.
+- Scanned `TASK-Lab-session-layer.md` and `FINDING-AK-game-freeze-2026-06-27.md` from the cooperation workspace for Session Layer, Phase C, trusted-channel, and live-deferred constraints.
+- Inspected transport plan, transport check, trusted-channel diagnostics, request data-summary, API contract, and related tests in `apps/actinglab/src/main.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_transport_plan`
+- `cargo test -p actingcommand-actinglab session_api_is_offline_api_contract`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Refined source-only prohibited-feature scan excluding `does_not_*` guarantee fields and scanning added source lines for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, and touch execution.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --quiet`
+- `cargo test -p actingcommand-actinglab daemon_monitor_policy_recovery_defers_on_lease_holder_mismatch -- --nocapture`
+- `cargo test --workspace --quiet`
+
+### Test results
+
+- Focused `session_transport_plan` test group passed and covers no-endpoint reserved gate, remote HTTP endpoint blocker, remote HTTPS with token but listener reserved, and request-summary fields.
+- Focused `session_api_is_offline_api_contract` passed and covers the new `transport_view.plan_trusted_remote_gate_*` contract fields.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Refined source-only prohibited-feature scan passed with no matches for listener startup, TCP binding/accept, token/TLS implementation, direct ADB input, SQLite APIs, OCR/OpenCV, fallback calls, reconnect calls, capture execution, MaaTouch construction, or touch execution.
+- `cargo clippy --workspace -- -D warnings` passed.
+- The first `cargo test --workspace --quiet` run had one transient failure in `daemon_monitor_policy_recovery_defers_on_lease_holder_mismatch`.
+- The failing test passed when rerun directly with `cargo test -p actingcommand-actinglab daemon_monitor_policy_recovery_defers_on_lease_holder_mismatch -- --nocapture`.
+- The subsequent full `cargo test --workspace --quiet` rerun passed.
+
+### Live validation
+
+- `deferred: requires-live-device` - prepared-emulator Session Layer validation against a running game.
+- `deferred: requires-live-device` - live Phase C self-heal observation/execution through a resident daemon and real UI/scheduler/operator polling.
+- `deferred: requires-live-device` - AK stale-capture/fresh-frame recovery validation against a real or emulator instance.
+- `deferred: requires-live-device` - live interaction-flow stream consumption through UI/scheduler clients.
+- `deferred: requires-live-device` - live trusted-channel listener/TLS/token/client-certificate validation after a future implementation milestone.
+- `deferred: requires-live-device` - live ADB device control and live screenshot validation.
+- `deferred: requires-live-device` - operator acceptance requiring manual emulator observation.
+- No live result was faked, accepted, or marked passed in this checkpoint.
+
+### Current blocker
+
+- No blocker for this offline implementation increment.
+- Live-device, UI, and trusted-channel implementation validation are intentionally deferred and remain operator/live-environment work.
+
+### Next step
+
+1. Commit this checkpoint update.
+2. Tag and push the completed checkpoint.
+3. Continue the next offline Session Layer increment before live validation.
+
 ## 2026-06-28 ActingLab self-heal execution gate
 
 ### Current status
