@@ -2607,6 +2607,9 @@ fn session_api_contract() -> Value {
                 "phase_c_plan_actions": [
                     "phase_c_plan_review"
                 ],
+                "validation_plan_actions": [
+                    "validation_plan_review"
+                ],
                 "queue_health_actions": [
                     "blocked_request_inspect",
                     "blocked_request_cancel_dry_run",
@@ -34395,6 +34398,12 @@ mod tests {
                 .pointer("/envelopes/status_view/phase_c_plan_actions/0")
                 .and_then(Value::as_str),
             Some("phase_c_plan_review")
+        );
+        assert_eq!(
+            payload
+                .pointer("/envelopes/status_view/validation_plan_actions/0")
+                .and_then(Value::as_str),
+            Some("validation_plan_review")
         );
         assert_eq!(
             payload

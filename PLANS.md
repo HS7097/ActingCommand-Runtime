@@ -196,6 +196,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - ActingLab transport-plan next-action summary: `session transport plan` and `session request transport plan` now expose a machine-readable `next_actions` trusted-channel decision list for UI/API clients, covering endpoint classification, endpoint-policy blockers, token/certificate preparation, listener/TLS design review, request serialization/audit review, and deferred live-validation boundaries.
 - ActingLab validation-plan next-action summary: `session validation-plan` and `session request validation-plan` now expose a machine-readable `next_actions` live-acceptance decision list for UI/scheduler/operator clients, covering pending live acceptance review, readiness, capture freshness, Phase C self-heal, interaction stream, trusted-channel transport, and status diagnostics.
 - ActingLab validation-plan diagnostics routing: request-journal validation-plan summaries are now discoverable through event data-summary filters and can produce a read-only `validation_plan_review` status recommendation for UI/scheduler/operator clients.
+- ActingLab validation-plan status-view contract alignment: `session api` now advertises `status_view.validation_plan_actions=["validation_plan_review"]`, so UI/scheduler clients can discover the validation-plan diagnostics action without hard-coding it.
 
 ## Current ActingLab Phase C Aggregate Plan Surface
 
@@ -230,6 +231,7 @@ This increment connects the validation-plan summary to the existing Session Laye
 - `session status --diagnostics` can turn a recent validation-plan request summary into a read-only `validation_plan_review` recommended action.
 - The recommended action preserves pending live item count, next-action count, first next action, Phase C lane summaries, and the source request id.
 - The recommendation is explicitly operator/live-environment work: it requires live acceptance and must not mark live validation passed from offline checks.
+- `session api` now declares the status-view validation action kind through `status_view.validation_plan_actions`.
 - The change does not enqueue requests, mutate queues, capture frames, start MaaTouch, touch devices, start listeners, issue tokens, start TLS, read resource repositories, or perform live validation.
 
 ## Current ActingLab Phase C Aggregate Next-Action Summary
