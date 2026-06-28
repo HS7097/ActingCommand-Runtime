@@ -16,7 +16,8 @@
 - `session bootstrap`, `session api`, `session contract`, command-check classification, and command capabilities now advertise or recognize the self-heal-policy surface.
 - The change is a pure local/daemon policy projection for UI/scheduler/agent clients.
 - It does not enqueue daemon requests, capture frames, start MaaTouch, touch devices, start apps, start listeners, read resources, modify cooperation-workspace files, or claim any live validation pass.
-- Milestone source commit is pending until this checkpoint is committed and tagged.
+- Milestone source commit: `6ca0b03317160c796e310891ab32d49be893318b`.
+- Checkpoint tag: `checkpoint/20260628-session-self-heal-policy`.
 
 ### Resource mirrors used
 
@@ -84,9 +85,9 @@
 
 ### Next step
 
-1. Commit and push this Runtime increment.
-2. Create and push a checkpoint tag for this milestone.
-3. Record the source commit hash in this checkpoint.
+1. Commit this checkpoint hash backfill.
+2. Push Runtime `main` and `checkpoint/20260628-session-self-heal-policy`.
+3. Continue offline Session Layer planning for interaction streams and encrypted transport.
 
 ## 2026-06-28 ActingLab capture freshness policy surface
 
