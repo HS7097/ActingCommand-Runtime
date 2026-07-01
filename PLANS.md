@@ -12,6 +12,24 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current Session Layer D6 reliability close-out
+
+The 2026-07-02 D6 reliability close-out from baseline `fb00856` is implemented in the Rust `actinglab` code path.
+
+This close-out intentionally downgrades D6 from same-user anti-forgery authentication to local runtime reliability. The Session Layer now records that `state_dir` and loopback endpoint write access are part of the trusted same-user local environment. Same-user forged state or a fake endpoint that can echo the daemon id remains an accepted risk for the current phase; authentication, key material, memory protection, and remote-control security are deferred to the trusted-channel/scheduler/UI lane.
+
+Completed D6 reliability work:
+
+- Request routing now requires an early daemon acknowledgement before returning success. Acknowledgement is defined as either a `running/` request marker or a response file.
+- `--request-ack-timeout-ms` bounds the acknowledgement wait, and unacknowledged requests fail fast as `runtime_not_running` instead of hanging until the full response timeout.
+- Unacknowledged routed requests are removed from `requests/` to avoid leaving stale work for a future daemon.
+- Daemon liveness now records and verifies a process creation key when the platform supports it, closing the PID reuse gap.
+- Windows uses `GetProcessTimes` as a hard creation-time check. Linux uses `/proc/<pid>/stat` starttime. Unsupported platforms report an explicit degraded PID-reuse protection status instead of silently claiming full protection.
+- `session contract`, `session api`, and readiness policy output now document the local reliability threat model and the deferred trusted-channel security boundary.
+- Offline coverage includes stale/dead/mismatched liveness, PID creation-time mismatch, fake endpoint/no-request-processing fail-fast, real daemon no-wait acknowledgement, and updated route-preference tests.
+
+No secret challenge, HMAC, ed25519, memory encryption, UI, OCR, SQLite, game logic, resource repository reads, upstream source copying, ADB input fallback, reconnect loop, or live device work was added in this D6 close-out.
+
 ## Current Session Layer true-acceptance close-out
 
 The 2026-07-01 Session Layer acceptance close-out from baseline `0925c2a` is implemented in the Rust `actinglab` code path.
@@ -64,6 +82,7 @@ No resource repositories were used in this audit fix, and no UI, OCR, SQLite, ga
 
 ## Current completed milestones
 
+- ActingLab Session Layer D6 reliability close-out: request acknowledgement fail-fast, PID creation-time verification, explicit unsupported-platform PID-reuse degradation, and documented same-user forgery accepted risk for deferred trusted-channel work.
 - ActingLab Session Layer Round 2 close-out: daemon identity-bound liveness, canonical artifact containment, corrupt-journal skip diagnostics, orphan temp cleanup, request-processing failure-window regression coverage, and no-endpoint connect-plan regression coverage.
 - ActingLab Session Layer audit close-out: liveness/process readiness, lease preemption, local stream relay lease gating, durable request journaling, atomic JSON writes, artifact path containment, and safe transport defaults.
 - P1.6 MaaTouch input backend stability close-out.

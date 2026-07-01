@@ -55,6 +55,7 @@ const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
 const SESSION_LEASE_STALE_MS: u64 = 30_000;
 const SESSION_DAEMON_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const SESSION_DAEMON_REQUEST_ACK_TIMEOUT_MS: u64 = 1_000;
 const SESSION_DAEMON_LIVENESS_TIMEOUT_MS: u64 = 200;
 const SESSION_DAEMON_LIVENESS_PREFIX: &str = "actinglab-session-daemon ";
 const SESSION_ORPHAN_TMP_MIN_AGE_MS: u64 = 60_000;
@@ -73,6 +74,7 @@ const SESSION_MONITOR_POLICY_MIN_INTERVAL_MS: u64 = 500;
 const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--state-dir",
     "--request-timeout-ms",
+    "--request-ack-timeout-ms",
     "--lease-holder",
     "--holder",
     "--lease-id",
@@ -339,6 +341,7 @@ struct SessionInfo {
     pid: u32,
     daemon_id: Option<String>,
     daemon_liveness_endpoint: Option<String>,
+    process_creation_key: Option<String>,
     started_at_unix_ms: u64,
     state_dir: String,
     runtime_version: String,
@@ -349,6 +352,7 @@ struct SessionHeartbeat {
     pid: u32,
     daemon_id: Option<String>,
     daemon_liveness_endpoint: Option<String>,
+    process_creation_key: Option<String>,
     updated_at_unix_ms: u64,
     state: String,
 }
@@ -360,6 +364,8 @@ enum SessionLivenessStatus {
     PidMismatch,
     IdentityMismatch,
     LivenessProbeFailed,
+    PidCreationTimeMismatch,
+    PidCreationTimeUnavailable,
     Stale,
     Alive,
 }
@@ -372,6 +378,8 @@ impl SessionLivenessStatus {
             Self::PidMismatch => "pid_mismatch",
             Self::IdentityMismatch => "identity_mismatch",
             Self::LivenessProbeFailed => "liveness_probe_failed",
+            Self::PidCreationTimeMismatch => "pid_creation_time_mismatch",
+            Self::PidCreationTimeUnavailable => "pid_creation_time_unavailable",
             Self::Stale => "stale",
             Self::Alive => "alive",
         }
@@ -382,7 +390,7 @@ impl SessionLivenessStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SessionLivenessSnapshot {
     status: SessionLivenessStatus,
     heartbeat_age_ms: Option<u64>,
@@ -391,10 +399,26 @@ struct SessionLivenessSnapshot {
     identity_match: Option<bool>,
     liveness_probe_match: Option<bool>,
     process_alive: Option<bool>,
+    process_creation_key_match: Option<bool>,
+    process_creation_key_status: &'static str,
+    process_creation_key_supported: bool,
+    observed_process_creation_key: Option<String>,
 }
 
 trait ProcessLiveness {
     fn is_alive(&self, pid: u32) -> bool;
+
+    fn creation_key(&self, pid: u32) -> ProcessCreationKeyProbe {
+        let _ = pid;
+        ProcessCreationKeyProbe::Unsupported
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProcessCreationKeyProbe {
+    Known(String),
+    Unsupported,
+    Unavailable,
 }
 
 struct SystemProcessLiveness;
@@ -402,6 +426,10 @@ struct SystemProcessLiveness;
 impl ProcessLiveness for SystemProcessLiveness {
     fn is_alive(&self, pid: u32) -> bool {
         platform_process_is_alive(pid)
+    }
+
+    fn creation_key(&self, pid: u32) -> ProcessCreationKeyProbe {
+        platform_process_creation_key(pid)
     }
 }
 
@@ -433,6 +461,65 @@ fn platform_process_is_alive(pid: u32) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn platform_process_creation_key(pid: u32) -> ProcessCreationKeyProbe {
+    use std::ffi::c_void;
+
+    type WinHandle = *mut c_void;
+
+    #[repr(C)]
+    struct FileTime {
+        low_date_time: u32,
+        high_date_time: u32,
+    }
+
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> WinHandle;
+        fn GetProcessTimes(
+            handle: WinHandle,
+            creation_time: *mut FileTime,
+            exit_time: *mut FileTime,
+            kernel_time: *mut FileTime,
+            user_time: *mut FileTime,
+        ) -> i32;
+        fn CloseHandle(handle: WinHandle) -> i32;
+    }
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x0000_1000;
+
+    // SAFETY: The PID comes from local session state, the returned handle is checked,
+    // GetProcessTimes writes into initialized stack values, and the handle is closed.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return ProcessCreationKeyProbe::Unavailable;
+        }
+        let mut creation = FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        };
+        let mut exit = FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        };
+        let mut kernel = FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        };
+        let mut user = FileTime {
+            low_date_time: 0,
+            high_date_time: 0,
+        };
+        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
+        let _ = CloseHandle(handle);
+        if !ok {
+            return ProcessCreationKeyProbe::Unavailable;
+        }
+        let ticks = ((creation.high_date_time as u64) << 32) | creation.low_date_time as u64;
+        ProcessCreationKeyProbe::Known(format!("windows_filetime_100ns:{ticks}"))
+    }
+}
+
 #[cfg(unix)]
 fn platform_process_is_alive(pid: u32) -> bool {
     Command::new("kill")
@@ -442,9 +529,34 @@ fn platform_process_is_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
+fn platform_process_creation_key(pid: u32) -> ProcessCreationKeyProbe {
+    let path = PathBuf::from(format!("/proc/{pid}/stat"));
+    let Ok(text) = fs::read_to_string(path) else {
+        return ProcessCreationKeyProbe::Unsupported;
+    };
+    let Some((_comm, rest)) = text.rsplit_once(") ") else {
+        return ProcessCreationKeyProbe::Unsupported;
+    };
+    let Some(starttime) = rest.split_whitespace().nth(19) else {
+        return ProcessCreationKeyProbe::Unsupported;
+    };
+    ProcessCreationKeyProbe::Known(format!("linux_proc_starttime:{starttime}"))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn platform_process_creation_key(_pid: u32) -> ProcessCreationKeyProbe {
+    ProcessCreationKeyProbe::Unsupported
+}
+
 #[cfg(not(any(windows, unix)))]
 fn platform_process_is_alive(pid: u32) -> bool {
     pid == std::process::id()
+}
+
+#[cfg(not(any(windows, unix)))]
+fn platform_process_creation_key(_pid: u32) -> ProcessCreationKeyProbe {
+    ProcessCreationKeyProbe::Unsupported
 }
 
 fn new_session_daemon_id() -> String {
@@ -3165,10 +3277,23 @@ fn session_access_contract() -> Value {
             "severe_errors_fail_loud": true,
             "transient_recovery_path_must_be_logged": true
         },
+        "local_reliability_threat_model": {
+            "schema_version": "session.local_reliability_threat_model.v0.1",
+            "scope": "local automation reliability",
+            "state_dir_and_endpoint_writable_by_same_user_are_trusted_environment": true,
+            "same_user_forged_state_or_endpoint_is_accepted_risk": true,
+            "current_readiness_is_not_same_user_authentication": true,
+            "must_fail_fast_when_daemon_does_not_ack_request": true,
+            "authentication_key_material_and_memory_protection_deferred_to_trusted_channel_scheduler_ui": true,
+            "trusted_channel_phase": "P3/#10"
+        },
         "out_of_scope": [
             "network listener",
             "TLS implementation",
             "token issuance",
+            "same-user state_dir/endpoint forgery authentication",
+            "secret challenge proof",
+            "memory encryption",
             "UI transport",
             "scheduler runtime"
         ]
@@ -3328,6 +3453,8 @@ fn session_api_contract() -> Value {
                 },
                 "no_wait": {
                     "flag": "--no-wait",
+                    "waits_for_acknowledgement": true,
+                    "ack_timeout_flag": "--request-ack-timeout-ms",
                     "waits_for_response": false,
                     "response_query": "session response get <request-id>",
                     "consume_query": "session response get <request-id> --consume"
@@ -4476,7 +4603,13 @@ fn session_state_request_payload_args(args: &[String]) -> Vec<String> {
             index += 1;
             continue;
         }
-        if ["--state-dir", "--request-timeout-ms"].contains(&arg.as_str()) {
+        if [
+            "--state-dir",
+            "--request-timeout-ms",
+            "--request-ack-timeout-ms",
+        ]
+        .contains(&arg.as_str())
+        {
             index += if index + 1 < args.len() && !args[index + 1].starts_with("--") {
                 2
             } else {
@@ -8826,6 +8959,15 @@ fn session_readiness_policy_summary() -> Value {
             "trusted_remote_requires_encryption": true,
             "trusted_remote_requires_authentication": true
         },
+        "local_reliability_threat_model": {
+            "schema_version": "session.local_reliability_threat_model.v0.1",
+            "state_dir_and_endpoint_writable_by_same_user_are_trusted_environment": true,
+            "same_user_forged_state_or_endpoint_is_accepted_risk": true,
+            "readiness_is_reliability_check_not_same_user_authentication": true,
+            "request_ack_deadline_required_for_daemon_routing": true,
+            "pid_creation_time_check_degrades_explicitly_on_unsupported_platforms": true,
+            "authentication_deferred_to_trusted_channel_scheduler_ui": true
+        },
         "live_validation": {
             "status": "deferred",
             "deferred_code": "requires-live-device",
@@ -13014,6 +13156,8 @@ fn session_liveness_recommended_actions(
         | SessionLivenessStatus::PidMismatch
         | SessionLivenessStatus::IdentityMismatch
         | SessionLivenessStatus::LivenessProbeFailed
+        | SessionLivenessStatus::PidCreationTimeMismatch
+        | SessionLivenessStatus::PidCreationTimeUnavailable
         | SessionLivenessStatus::Stale => vec![
             session_recommended_action(
                 1,
@@ -14067,6 +14211,24 @@ fn session_liveness_diagnostics_with_process_liveness(
             .is_some(),
         "daemon_liveness_probe_match": snapshot.liveness_probe_match,
         "process_alive": snapshot.process_alive,
+        "process_creation_key_status": snapshot.process_creation_key_status,
+        "process_creation_key_supported": snapshot.process_creation_key_supported,
+        "process_creation_key_match": snapshot.process_creation_key_match,
+        "recorded_process_creation_key_present": info
+            .and_then(|value| value.process_creation_key.as_ref())
+            .is_some(),
+        "heartbeat_process_creation_key_present": heartbeat
+            .and_then(|value| value.process_creation_key.as_ref())
+            .is_some(),
+        "recorded_process_creation_key_matches_heartbeat": match (info, heartbeat) {
+            (Some(info), Some(heartbeat)) => Some(
+                info.process_creation_key.is_some()
+                    && heartbeat.process_creation_key.is_some()
+                    && info.process_creation_key == heartbeat.process_creation_key,
+            ),
+            _ => None,
+        },
+        "observed_process_creation_key": snapshot.observed_process_creation_key,
         "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
         "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
         "heartbeat_age_ms": snapshot.heartbeat_age_ms,
@@ -14084,6 +14246,11 @@ fn session_liveness_snapshot(
     session_liveness_snapshot_with_process_liveness(info, heartbeat, now_ms, &SystemProcessLiveness)
 }
 
+// D6 is a local runtime reliability gate, not same-user authentication. The
+// state directory and loopback liveness endpoint are treated as trusted local
+// environment; forged state by the same user is accepted risk until the later
+// trusted-channel/scheduler/UI phase. This gate must still reject stale/dead
+// daemons and fail fast when a routed request is not acknowledged.
 fn session_liveness_snapshot_with_process_liveness(
     info: Option<&SessionInfo>,
     heartbeat: Option<&SessionHeartbeat>,
@@ -14132,6 +14299,22 @@ fn session_liveness_snapshot_with_process_liveness(
         }
         _ => None,
     };
+    let process_creation_probe = match (info, process_alive) {
+        (Some(info), Some(true)) => Some(process_liveness.creation_key(info.pid)),
+        _ => None,
+    };
+    let process_creation_key_status =
+        process_creation_key_status(info, heartbeat, process_creation_probe.as_ref());
+    let process_creation_key_supported = matches!(
+        process_creation_probe,
+        Some(ProcessCreationKeyProbe::Known(_)) | Some(ProcessCreationKeyProbe::Unavailable)
+    );
+    let observed_process_creation_key = match &process_creation_probe {
+        Some(ProcessCreationKeyProbe::Known(value)) => Some(value.clone()),
+        _ => None,
+    };
+    let process_creation_key_match =
+        process_creation_key_match(info, heartbeat, process_creation_probe.as_ref());
     let status = match (info, heartbeat, pid_match, heartbeat_age_ms) {
         (None, _, _, _) => SessionLivenessStatus::Stopped,
         (Some(_), None, _, _) => SessionLivenessStatus::HeartbeatMissing,
@@ -14146,6 +14329,17 @@ fn session_liveness_snapshot_with_process_liveness(
             SessionLivenessStatus::Stale
         }
         (Some(_), Some(_), _, _) if process_alive == Some(false) => SessionLivenessStatus::Stale,
+        (Some(_), Some(_), _, _)
+            if matches!(
+                process_creation_probe,
+                Some(ProcessCreationKeyProbe::Unavailable)
+            ) =>
+        {
+            SessionLivenessStatus::PidCreationTimeUnavailable
+        }
+        (Some(_), Some(_), _, _) if process_creation_key_match == Some(false) => {
+            SessionLivenessStatus::PidCreationTimeMismatch
+        }
         (Some(_), Some(_), _, _) => SessionLivenessStatus::Alive,
     };
     SessionLivenessSnapshot {
@@ -14156,7 +14350,47 @@ fn session_liveness_snapshot_with_process_liveness(
         identity_match,
         liveness_probe_match,
         process_alive,
+        process_creation_key_match,
+        process_creation_key_status,
+        process_creation_key_supported,
+        observed_process_creation_key,
     }
+}
+
+fn process_creation_key_status(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    probe: Option<&ProcessCreationKeyProbe>,
+) -> &'static str {
+    match probe {
+        None => "not_checked",
+        Some(ProcessCreationKeyProbe::Unsupported) => "unsupported_platform_degraded",
+        Some(ProcessCreationKeyProbe::Unavailable) => "unavailable",
+        Some(ProcessCreationKeyProbe::Known(_)) => {
+            process_creation_key_match(info, heartbeat, probe)
+                .map(|matched| if matched { "verified" } else { "mismatch" })
+                .unwrap_or("missing_recorded_key")
+        }
+    }
+}
+
+fn process_creation_key_match(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    probe: Option<&ProcessCreationKeyProbe>,
+) -> Option<bool> {
+    let (Some(info), Some(heartbeat), Some(ProcessCreationKeyProbe::Known(observed))) =
+        (info, heartbeat, probe)
+    else {
+        return None;
+    };
+    let Some(info_key) = info.process_creation_key.as_deref() else {
+        return Some(false);
+    };
+    let Some(heartbeat_key) = heartbeat.process_creation_key.as_deref() else {
+        return Some(false);
+    };
+    Some(info_key == heartbeat_key && info_key == observed)
 }
 
 fn session_lease_diagnostics(state_dir: &Path) -> CliOutcome<Value> {
@@ -14591,6 +14825,18 @@ fn submit_session_command_request_with_lease_admission(
     let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
     let response_path = session_responses_dir(&state_dir).join(format!("{request_id}.json"));
     write_json_file_atomic(&request_path, &request)?;
+    let ack_timeout = parse_optional_duration_ms(
+        flags,
+        "--request-ack-timeout-ms",
+        SESSION_DAEMON_REQUEST_ACK_TIMEOUT_MS,
+    )?;
+    let ack = wait_for_session_request_ack(
+        &state_dir,
+        &request_id,
+        &request_path,
+        &response_path,
+        ack_timeout,
+    )?;
     if flags.bool("--no-wait") {
         return Ok(json!({
             "status": "queued",
@@ -14603,7 +14849,8 @@ fn submit_session_command_request_with_lease_admission(
             "response_path": response_path.display().to_string(),
             "response_query": format!("session response get {request_id}"),
             "consume_query": format!("session response get {request_id} --consume"),
-            "waited_for_response": false
+            "waited_for_response": false,
+            "acknowledgement": ack
         }));
     }
     let timeout = parse_optional_duration_ms(
@@ -14637,6 +14884,54 @@ fn submit_session_command_request_with_lease_admission(
         "session daemon request {request_id} timed out after {} ms",
         timeout.as_millis()
     )))
+}
+
+fn wait_for_session_request_ack(
+    state_dir: &Path,
+    request_id: &str,
+    request_path: &Path,
+    response_path: &Path,
+    timeout: Duration,
+) -> CliOutcome<Value> {
+    if timeout.is_zero() || timeout > Duration::from_millis(5_000) {
+        return Err(CliError::usage(
+            "--request-ack-timeout-ms must be between 1 and 5000",
+        ));
+    }
+    let running_path = session_running_request_path(state_dir, request_id);
+    let started = Instant::now();
+    loop {
+        if response_path.exists() {
+            return Ok(json!({
+                "status": "response_available",
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64
+            }));
+        }
+        if running_path.exists() {
+            return Ok(json!({
+                "status": "running",
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64
+            }));
+        }
+        if started.elapsed() >= timeout {
+            if request_path.exists() {
+                fs::remove_file(request_path).map_err(|err| {
+                    CliError::runtime_not_running(format!(
+                        "session daemon request {request_id} was not acknowledged within {} ms and failed to remove unacked request {}: {err}",
+                        timeout.as_millis(),
+                        request_path.display()
+                    ))
+                })?;
+            }
+            return Err(CliError::runtime_not_running(format!(
+                "session daemon request {request_id} was not acknowledged within {} ms; daemon may be stale, blocked, or not processing the request queue",
+                timeout.as_millis()
+            )));
+        }
+        thread::sleep(Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())));
+    }
 }
 
 fn validate_session_request_queue_admission(state_dir: &Path) -> CliOutcome<()> {
@@ -16621,11 +16916,21 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
     })?;
     cleanup_stale_json_tmp_files_in_tree(&state_dir, SESSION_ORPHAN_TMP_MIN_AGE_MS)?;
     let daemon_id = new_session_daemon_id();
+    let process_creation_key = match platform_process_creation_key(std::process::id()) {
+        ProcessCreationKeyProbe::Known(value) => Some(value),
+        ProcessCreationKeyProbe::Unsupported => None,
+        ProcessCreationKeyProbe::Unavailable => {
+            return Err(CliError::runtime_not_running(
+                "session daemon could not read its process creation time; refusing to publish ready state",
+            ));
+        }
+    };
     let liveness_server = start_session_liveness_server(&daemon_id)?;
     let info = SessionInfo {
         pid: std::process::id(),
         daemon_id: Some(daemon_id),
         daemon_liveness_endpoint: Some(liveness_server.endpoint().to_string()),
+        process_creation_key: process_creation_key.clone(),
         started_at_unix_ms: current_unix_ms(),
         state_dir: state_dir.display().to_string(),
         runtime_version: RUNTIME_VERSION.to_string(),
@@ -16644,6 +16949,7 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
             pid: std::process::id(),
             daemon_id: info.daemon_id.clone(),
             daemon_liveness_endpoint: info.daemon_liveness_endpoint.clone(),
+            process_creation_key: process_creation_key.clone(),
             updated_at_unix_ms: current_unix_ms(),
             state: if processed > 0 {
                 "processed_request".to_string()
@@ -17196,6 +17502,10 @@ fn run_session_lease_run(
         request_args.push("--request-timeout-ms".to_string());
         request_args.push(timeout);
     }
+    if let Some(timeout) = flags.optional("--request-ack-timeout-ms") {
+        request_args.push("--request-ack-timeout-ms".to_string());
+        request_args.push(timeout);
+    }
     request_args.push("--lease-holder".to_string());
     request_args.push(lease.holder.clone());
     request_args.push("--lease-id".to_string());
@@ -17246,6 +17556,7 @@ fn validate_lease_run_flags(flags: &FlagArgs) -> CliOutcome<()> {
     let allowed = [
         "--state-dir",
         "--request-timeout-ms",
+        "--request-ack-timeout-ms",
         "--holder",
         "--lease-holder",
         "--lease-id",
@@ -23109,6 +23420,16 @@ mod tests {
         endpoint
     }
 
+    fn test_process_creation_key_for_pid(pid: u32) -> Option<String> {
+        if pid != std::process::id() {
+            return None;
+        }
+        match platform_process_creation_key(pid) {
+            ProcessCreationKeyProbe::Known(value) => Some(value),
+            ProcessCreationKeyProbe::Unsupported | ProcessCreationKeyProbe::Unavailable => None,
+        }
+    }
+
     fn user_config_with_test_adb() -> (TempDir, UserConfig) {
         let temp = tempfile::tempdir().unwrap();
         let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
@@ -23164,6 +23485,21 @@ mod tests {
     impl ProcessLiveness for FixedProcessLiveness {
         fn is_alive(&self, _pid: u32) -> bool {
             self.0
+        }
+    }
+
+    struct FixedProcessLivenessWithCreation {
+        alive: bool,
+        creation_key: ProcessCreationKeyProbe,
+    }
+
+    impl ProcessLiveness for FixedProcessLivenessWithCreation {
+        fn is_alive(&self, _pid: u32) -> bool {
+            self.alive
+        }
+
+        fn creation_key(&self, _pid: u32) -> ProcessCreationKeyProbe {
+            self.creation_key.clone()
         }
     }
 
@@ -24252,6 +24588,7 @@ mod tests {
             pid,
             daemon_id: Some(daemon_id.clone()),
             daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: test_process_creation_key_for_pid(pid),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -24260,6 +24597,7 @@ mod tests {
             pid,
             daemon_id: Some(daemon_id),
             daemon_liveness_endpoint: Some(endpoint),
+            process_creation_key: test_process_creation_key_for_pid(pid),
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -24273,6 +24611,7 @@ mod tests {
             pid: std::process::id(),
             daemon_id: Some(daemon_id.clone()),
             daemon_liveness_endpoint: Some(test_session_liveness_endpoint(&daemon_id)),
+            process_creation_key: test_process_creation_key_for_pid(std::process::id()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -24293,6 +24632,7 @@ mod tests {
             pid,
             daemon_id: Some(daemon_id),
             daemon_liveness_endpoint: Some(endpoint),
+            process_creation_key: test_process_creation_key_for_pid(pid),
             updated_at_unix_ms,
             state: "idle".to_string(),
         };
@@ -24337,8 +24677,13 @@ mod tests {
         append_session_request_journal(state_dir, &request, &response).unwrap();
     }
 
-    fn assert_daemon_request_timeout(result: CliResult) {
-        assert_eq!(result.exit_code(), 5);
+    fn assert_daemon_request_ack_timeout(result: CliResult) {
+        assert_eq!(
+            result.exit_code(),
+            5,
+            "unexpected daemon request result: {:?}",
+            result.envelope.error
+        );
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
             "runtime_not_running"
@@ -24350,7 +24695,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .message
-                .contains("timed out")
+                .contains("not acknowledged")
         );
     }
 
@@ -30178,6 +30523,7 @@ mod tests {
             pid: 321,
             daemon_id: Some("daemon-a".to_string()),
             daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: None,
             started_at_unix_ms: 10,
             state_dir: "state".to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -30186,6 +30532,7 @@ mod tests {
             pid: 321,
             daemon_id: Some("daemon-a".to_string()),
             daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: None,
             updated_at_unix_ms: 1_000,
             state: "idle".to_string(),
         };
@@ -30197,6 +30544,12 @@ mod tests {
             &FixedProcessLiveness(true),
         );
         assert_eq!(alive.get("status").and_then(Value::as_str), Some("alive"));
+        assert_eq!(
+            alive
+                .get("process_creation_key_status")
+                .and_then(Value::as_str),
+            Some("unsupported_platform_degraded")
+        );
         assert_eq!(
             alive.get("heartbeat_age_ms").and_then(Value::as_u64),
             Some(1_000)
@@ -30233,6 +30586,7 @@ mod tests {
             pid: 999,
             daemon_id: Some("daemon-a".to_string()),
             daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: None,
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
@@ -30266,6 +30620,7 @@ mod tests {
             pid: 321,
             daemon_id: Some("other-daemon".to_string()),
             daemon_liveness_endpoint: Some(endpoint),
+            process_creation_key: None,
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
@@ -30281,6 +30636,55 @@ mod tests {
         );
         assert_eq!(
             identity_mismatch
+                .get("can_accept_requests")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn session_liveness_rejects_pid_creation_key_mismatch() {
+        let endpoint = test_session_liveness_endpoint("daemon-a");
+        let info = SessionInfo {
+            pid: 321,
+            daemon_id: Some("daemon-a".to_string()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: Some("process-created-a".to_string()),
+            started_at_unix_ms: 10,
+            state_dir: "state".to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: 321,
+            daemon_id: Some("daemon-a".to_string()),
+            daemon_liveness_endpoint: Some(endpoint),
+            process_creation_key: Some("process-created-a".to_string()),
+            updated_at_unix_ms: 1_000,
+            state: "idle".to_string(),
+        };
+
+        let diagnostics = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&heartbeat),
+            2_000,
+            &FixedProcessLivenessWithCreation {
+                alive: true,
+                creation_key: ProcessCreationKeyProbe::Known("process-created-b".to_string()),
+            },
+        );
+
+        assert_eq!(
+            diagnostics.get("status").and_then(Value::as_str),
+            Some("pid_creation_time_mismatch")
+        );
+        assert_eq!(
+            diagnostics
+                .get("process_creation_key_match")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            diagnostics
                 .get("can_accept_requests")
                 .and_then(Value::as_bool),
             Some(false)
@@ -30393,6 +30797,7 @@ mod tests {
             pid: std::process::id(),
             daemon_id: Some("recorded-daemon".to_string()),
             daemon_liveness_endpoint: None,
+            process_creation_key: test_process_creation_key_for_pid(std::process::id()),
             started_at_unix_ms: 10,
             state_dir: temp.path().display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -30401,6 +30806,7 @@ mod tests {
             pid: std::process::id(),
             daemon_id: Some("foreign-daemon".to_string()),
             daemon_liveness_endpoint: None,
+            process_creation_key: test_process_creation_key_for_pid(std::process::id()),
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -30446,6 +30852,7 @@ mod tests {
             pid: std::process::id(),
             daemon_id: Some(daemon_id.clone()),
             daemon_liveness_endpoint: None,
+            process_creation_key: test_process_creation_key_for_pid(std::process::id()),
             started_at_unix_ms: 10,
             state_dir: temp.path().display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -30454,6 +30861,7 @@ mod tests {
             pid: std::process::id(),
             daemon_id: Some(daemon_id),
             daemon_liveness_endpoint: None,
+            process_creation_key: test_process_creation_key_for_pid(std::process::id()),
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -30551,6 +30959,8 @@ mod tests {
                 temp.path().to_str().unwrap(),
                 "--request-timeout-ms",
                 "1",
+                "--request-ack-timeout-ms",
+                "100",
             ],
             true,
         );
@@ -30928,6 +31338,8 @@ mod tests {
                 temp.path().to_str().unwrap(),
                 "--request-timeout-ms",
                 "1",
+                "--request-ack-timeout-ms",
+                "100",
             ],
             true,
         );
@@ -30944,7 +31356,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .message
-                .contains("timed out")
+                .contains("not acknowledged")
         );
     }
 
@@ -30976,7 +31388,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .message
-                .contains("timed out")
+                .contains("not acknowledged")
         );
     }
 
@@ -31000,6 +31412,8 @@ mod tests {
                 temp.path().to_str().unwrap(),
                 "--request-timeout-ms",
                 "1",
+                "--request-ack-timeout-ms",
+                "100",
                 "--lease-holder",
                 "scheduler",
                 "--lease-id",
@@ -31022,7 +31436,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .message
-                .contains("timed out")
+                .contains("not acknowledged")
         );
     }
 
@@ -31195,8 +31609,31 @@ mod tests {
             ],
         ];
 
-        for args in cases {
-            assert_daemon_request_timeout(run_cli(args, true));
+        for mut args in cases {
+            write_test_session_files(temp.path());
+            args.extend(["--request-ack-timeout-ms", "100"]);
+            let result = run_cli(args.clone(), true);
+            assert_eq!(
+                result.exit_code(),
+                5,
+                "args={args:?}, error={:?}",
+                result.envelope.error
+            );
+            assert_eq!(
+                result.envelope.error.as_ref().unwrap().code,
+                "runtime_not_running"
+            );
+            assert!(
+                result
+                    .envelope
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .message
+                    .contains("not acknowledged"),
+                "args={args:?}, error={:?}",
+                result.envelope.error
+            );
         }
     }
 
@@ -32224,7 +32661,7 @@ mod tests {
     }
 
     #[test]
-    fn session_lease_run_submits_with_generated_lease_and_releases_on_timeout() {
+    fn session_lease_run_releases_lease_on_daemon_ack_timeout() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -32240,6 +32677,8 @@ mod tests {
                 temp.path().to_str().unwrap(),
                 "--request-timeout-ms",
                 "1",
+                "--request-ack-timeout-ms",
+                "100",
                 "--holder",
                 "manual",
                 "--",
@@ -32250,26 +32689,11 @@ mod tests {
             true,
         );
 
-        assert_daemon_request_timeout(result);
+        assert_daemon_request_ack_timeout(result);
         assert!(!session_lease_path(temp.path(), "ak").exists());
-
-        let request_paths = fs::read_dir(session_requests_dir(temp.path()))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect::<Vec<_>>();
-        assert_eq!(request_paths.len(), 1);
-        let request = read_json_file::<SessionCommandRequest>(&request_paths[0])
-            .unwrap()
-            .unwrap();
-        assert_eq!(request.command, "tap");
-        assert_eq!(request.args, vec!["100".to_string(), "200".to_string()]);
-        let lease = request.lease.unwrap();
-        assert_eq!(lease.holder, "manual");
-        assert!(
-            lease
-                .lease_id
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
         );
     }
 
@@ -37456,6 +37880,7 @@ mod tests {
             pid: 123,
             daemon_id: Some(daemon_id.clone()),
             daemon_liveness_endpoint: Some(endpoint.clone()),
+            process_creation_key: None,
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -37464,6 +37889,7 @@ mod tests {
             pid: 123,
             daemon_id: Some(daemon_id),
             daemon_liveness_endpoint: Some(endpoint),
+            process_creation_key: None,
             updated_at_unix_ms: 20,
             state: "idle".to_string(),
         };
@@ -42776,6 +43202,8 @@ mod tests {
             "target/session".to_string(),
             "--request-timeout-ms".to_string(),
             "15000".to_string(),
+            "--request-ack-timeout-ms".to_string(),
+            "250".to_string(),
             "--lease-holder".to_string(),
             "scheduler".to_string(),
             "--lease-id".to_string(),
@@ -42794,9 +43222,10 @@ mod tests {
     }
 
     #[test]
-    fn session_request_no_wait_queues_request_without_waiting() {
+    fn session_request_no_wait_requires_daemon_acknowledgement() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
+        let started = Instant::now();
 
         let result = run_cli(
             [
@@ -42807,37 +43236,33 @@ mod tests {
                 "--no-wait",
                 "--request-timeout-ms",
                 "1",
+                "--request-ack-timeout-ms",
+                "100",
                 "--state-dir",
                 temp.path().to_str().unwrap(),
             ],
             true,
         );
 
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+        assert_eq!(result.exit_code(), 5);
+        assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(
-            data.get("waited_for_response").and_then(Value::as_bool),
-            Some(false)
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
         );
-        let request_id = data
-            .get("request_id")
-            .and_then(Value::as_str)
-            .expect("queued request id");
-        let expected_response_query = format!("session response get {request_id}");
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("not acknowledged")
+        );
         assert_eq!(
-            data.get("response_query").and_then(Value::as_str),
-            Some(expected_response_query.as_str())
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
         );
-        let request_path = session_requests_dir(temp.path()).join(format!("{request_id}.json"));
-        let response_path = session_responses_dir(temp.path()).join(format!("{request_id}.json"));
-        let request = read_json_file::<SessionCommandRequest>(&request_path)
-            .unwrap()
-            .expect("queued request file");
-
-        assert_eq!(request.command, "status");
-        assert!(request.args.is_empty());
-        assert!(!response_path.exists());
     }
 
     #[test]
@@ -42946,6 +43371,8 @@ mod tests {
                 "100",
                 "200",
                 "--no-wait",
+                "--request-ack-timeout-ms",
+                "100",
                 "--lease-holder",
                 "lab",
                 "--lease-id",
@@ -42968,7 +43395,7 @@ mod tests {
     }
 
     #[test]
-    fn session_control_request_matching_lease_queues_request() {
+    fn session_control_request_matching_lease_requires_daemon_acknowledgement() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let lease = new_session_lease(
@@ -43001,18 +43428,22 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 0);
-        let request_paths =
-            file_paths_with_extension(&session_requests_dir(temp.path()), "json").unwrap();
-        assert_eq!(request_paths.len(), 1);
-        let request = read_json_file::<SessionCommandRequest>(&request_paths[0])
-            .unwrap()
-            .expect("queued control request");
-        assert_eq!(request.command, "tap");
-        assert_eq!(request.args, vec!["100".to_string(), "200".to_string()]);
         assert_eq!(
-            request.lease.as_ref().map(|lease| lease.holder.as_str()),
-            Some("lab")
+            result.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("not acknowledged")
+        );
+        assert_eq!(
+            count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
+            0
         );
     }
 
@@ -46801,6 +47232,16 @@ mod tests {
             data.pointer("/daemon_request_queue/submit_modes/no_wait/flag")
                 .and_then(Value::as_str),
             Some("--no-wait")
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/submit_modes/no_wait/waits_for_acknowledgement")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/daemon_request_queue/submit_modes/no_wait/ack_timeout_flag")
+                .and_then(Value::as_str),
+            Some("--request-ack-timeout-ms")
         );
         assert_eq!(
             data.pointer("/daemon_request_queue/cancel_query")

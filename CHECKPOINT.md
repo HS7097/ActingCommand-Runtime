@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-02 Session Layer D6 reliability close-out from `fb00856`
+
+### Current status
+
+- Implemented the D6 reliability close-out plan from `C:\合作工作区\ActingCommand\TASK-SessionLayer-D6-reliability.md`.
+- Runtime baseline before this task: `fb00856`.
+- Commit hash, remote CI run, and checkpoint tag will be recorded after push verification.
+- Scope is limited to Runtime `actinglab` Session Layer reliability code, tests, and planning/checkpoint records.
+- Threat model downgrade recorded in code comments and contracts: this phase is local runtime reliability, not same-user authentication. Same-user forged `state_dir` or fake endpoint that can echo the daemon id is accepted risk until trusted-channel/scheduler/UI work.
+- Request routing now requires a bounded acknowledgement before success. Ack means the daemon writes `running/<request-id>.json` or a response file.
+- `--request-ack-timeout-ms` now bounds the ack wait; old, fake, blocked, or no-response endpoints fail fast with `runtime_not_running` and `not acknowledged` instead of waiting for the full response timeout.
+- Unacknowledged request files are removed from `requests/` so future daemons do not inherit stale work.
+- PID reuse coverage added with a recorded process creation key. Windows uses `GetProcessTimes`; Linux uses `/proc/<pid>/stat` starttime; unsupported platforms report explicit degraded PID-reuse protection.
+- No secret challenge, HMAC, ed25519, memory encryption, UI, OCR, SQLite, game logic, resource repository reads, upstream source copying, ADB input fallback, reconnect loop, or live device work was added.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/session_closeout.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\Users\Alice\.codex\AGENTS.md`
+- `Get-Content C:\合作工作区\ActingCommand\TASK-SessionLayer-D6-reliability.md`
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab session_liveness_rejects_pid_creation_key_mismatch`
+- `cargo test -p actingcommand-actinglab session_liveness_diagnostics_classifies_heartbeat_state`
+- `cargo test -p actingcommand-actinglab session_request_no_wait_requires_daemon_acknowledgement`
+- `cargo test -p actingcommand-actinglab session_daemon_no_wait_request_returns_after_ack`
+- `cargo test -p actingcommand-actinglab session_control_request_matching_lease_requires_daemon_acknowledgement`
+- `cargo test -p actingcommand-actinglab session_lease_run_releases_lease_on_daemon_ack_timeout`
+- `cargo test -p actingcommand-actinglab device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab`: passed.
+- Focused D6 tests passed:
+  - `session_liveness_rejects_pid_creation_key_mismatch`
+  - `session_liveness_diagnostics_classifies_heartbeat_state`
+  - `session_request_no_wait_requires_daemon_acknowledgement`
+  - `session_daemon_no_wait_request_returns_after_ack`
+  - `session_control_request_matching_lease_requires_daemon_acknowledgement`
+  - `session_lease_run_releases_lease_on_daemon_ack_timeout`
+  - `device_lifecycle_and_run_entrypoints_prefer_daemon_when_session_info_exists`
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for the local D6 reliability close-out.
+- Remote GitHub CI and checkpoint tagging are pending until this change is committed and pushed.
+- Same-user state/endpoint forgery authentication remains intentionally deferred to trusted-channel/scheduler/UI work.
+
+### Next step
+
+1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Watch remote CI for the pushed commit.
+3. Tag the pushed commit as a stable D6 reliability checkpoint if CI passes.
+4. Continue later with trusted-channel/scheduler/UI security work as a separate scoped task.
+
 ## 2026-07-01 Session Layer true-acceptance close-out from `0925c2a`
 
 ### Current status

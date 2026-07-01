@@ -225,3 +225,67 @@ fn session_daemon_non_graceful_death_makes_readiness_not_ready() {
         "readiness must reject residual daemon state after non-graceful death"
     );
 }
+
+#[test]
+fn session_daemon_no_wait_request_returns_after_ack() {
+    let temp = TempDir::new().unwrap();
+    let state_dir = temp.path();
+    let state_dir_text = state_dir.to_str().unwrap();
+    let mut child = spawn_daemon(state_dir, None);
+
+    let ready = wait_for(Duration::from_secs(5), || {
+        let response = run_json(&[
+            "--json",
+            "session",
+            "readiness",
+            "--state-dir",
+            state_dir_text,
+        ]);
+        readiness_data(&response)
+            .get("ready")
+            .and_then(Value::as_bool)
+            == Some(true)
+    });
+    if !ready {
+        stop_child(&mut child);
+    }
+    assert!(ready, "session daemon should become ready before request");
+
+    let response = run_json(&[
+        "--json",
+        "session",
+        "request",
+        "status",
+        "--no-wait",
+        "--request-ack-timeout-ms",
+        "2000",
+        "--state-dir",
+        state_dir_text,
+    ]);
+    let data = response.get("data").expect("request data");
+    assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+    assert_eq!(
+        data.get("waited_for_response").and_then(Value::as_bool),
+        Some(false)
+    );
+    let ack_status = data
+        .pointer("/acknowledgement/status")
+        .and_then(Value::as_str)
+        .expect("ack status");
+    assert!(
+        ack_status == "running" || ack_status == "response_available",
+        "unexpected ack status {ack_status}"
+    );
+    let request_id = data
+        .get("request_id")
+        .and_then(Value::as_str)
+        .expect("request id");
+    let completed = wait_for(Duration::from_secs(5), || {
+        !request_path(state_dir, request_id).exists()
+            && !running_path(state_dir, request_id).exists()
+            && response_path(state_dir, request_id).exists()
+    });
+    stop_child(&mut child);
+
+    assert!(completed, "daemon should finish acked no-wait request");
+}
