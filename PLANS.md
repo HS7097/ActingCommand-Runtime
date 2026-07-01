@@ -25,7 +25,7 @@ Completed close-out work:
 - P1.4: `CONFIG_ENV` mutation in tests is sealed behind fixture helpers; the no-config path points to a missing temp config instead of removing the env var, and a source guard prevents direct `remove_var` or new bare `set_var(CONFIG_ENV)` usage.
 - P1.5: GitHub Actions CI has been added for `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
 - P2/D4: daemon startup cleans stale JSON temp files only when the file name matches the tmp pattern, the owner PID is not alive, and the temp file is older than the configured threshold.
-- P2/D5/D7: record artifact directory creation performs a canonical containment recheck after `create_dir_all`.
+- P2/D5/D7: record artifact directory creation performs a canonical containment recheck after `create_dir_all`, with Windows 8.3 short-path components expanded before safety prefix comparison.
 - P2/D9: corrupt journal lines are counted and surfaced in status diagnostics and recommended actions instead of being silently treated as healthy.
 
 No UI, OCR, SQLite, game logic, resource repository reads, live device work, upstream source copying, ADB input fallback, reconnect loop, or broad runtime redesign was added in this close-out.

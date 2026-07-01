@@ -14,7 +14,7 @@
 - P1.4 complete: `CONFIG_ENV` test mutation is sealed behind helper functions, no-config tests use a missing temp config path, and a source guard rejects direct `remove_var(CONFIG_ENV)` or additional bare `set_var(CONFIG_ENV)` usage.
 - P1.5 prepared: GitHub Actions workflow now runs format, clippy, and workspace tests on Windows for `main` pushes and pull requests.
 - P2/D4 complete: daemon startup cleans stale JSON tmp files only when the name matches the tmp pattern, the mtime is older than the configured threshold, and the owner PID is not alive.
-- P2/D5/D7 complete for record artifact directories: containment is rechecked after directory creation.
+- P2/D5/D7 complete for record artifact directories: containment is rechecked after directory creation, and Windows 8.3 short-path components are expanded before canonical safety prefix comparison.
 - P2/D9 complete: corrupt journal lines are counted and surfaced in diagnostics and `corrupt_journal_inspect` recommended actions.
 - No resource repositories were read or modified.
 - No UI, OCR, SQLite, game logic, upstream source copying, live device validation, ADB input fallback, reconnect loop, or broad runtime redesign was added.
@@ -44,6 +44,8 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
 - `git diff --check`
+- `gh run watch 28527001410 --repo HS7097/ActingCommand-Runtime --exit-status`
+- `gh run view 28527001410 --repo HS7097/ActingCommand-Runtime --log-failed`
 - Source scans for:
   - direct `env::set_var(CONFIG_ENV)` and `env::remove_var(CONFIG_ENV)`;
   - liveness endpoint/probe fields;
@@ -61,15 +63,16 @@
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
 - Source guard scan: no direct `env::remove_var(CONFIG_ENV)` and only the two allowed fixture-helper `env::set_var(CONFIG_ENV)` calls remain.
+- First remote CI run for `b5b46a8ccb9eeb914cd0069d5fd27f0420db4b84` failed in the Test step because the Windows runner represented temp paths with an 8.3 short component such as `RUNNER~1`, while canonicalized record artifact paths used the long `runneradmin` form. The fix expands Windows long path names before the post-create containment recheck.
 
 ### Current blocker
 
-- Remote GitHub Actions CI cannot be observed until this commit is pushed.
+- Remote GitHub Actions CI must be re-run after the Windows short-path fix is pushed.
 - Live emulator/device validation is still outside this Session Layer close-out.
 
 ### Next step
 
-1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+1. Commit and push the Windows short-path canonicalization fix plus updated `PLANS.md` and `CHECKPOINT.md`.
 2. Confirm the GitHub Actions workflow result for the pushed commit.
 3. If the remote CI is green, tag the pushed commit as a stable Session Layer acceptance checkpoint.
 4. Keep Phase C self-heal loop, long-lived interaction stream, trusted encrypted remote channel, scheduler/UI integration, and live device validation for later scoped tasks.

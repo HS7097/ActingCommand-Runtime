@@ -20581,7 +20581,7 @@ fn canonicalize_required_base(
     reason: &str,
     blocked_by: &[&'static str],
 ) -> CliOutcome<PathBuf> {
-    base.canonicalize().map_err(|err| {
+    base.canonicalize().map(windows_long_path).map_err(|err| {
         CliError::safety_blocked(
             "path_escape",
             format!(
@@ -20623,20 +20623,62 @@ fn canonicalize_with_existing_parent(
             ));
         }
     }
-    let mut resolved = existing.canonicalize().map_err(|err| {
-        CliError::safety_blocked(
-            "path_escape",
-            format!(
-                "{reason}: existing parent {} cannot be canonicalized: {err}",
-                existing.display()
-            ),
-            blocked_by,
-        )
-    })?;
+    let mut resolved = existing
+        .canonicalize()
+        .map(windows_long_path)
+        .map_err(|err| {
+            CliError::safety_blocked(
+                "path_escape",
+                format!(
+                    "{reason}: existing parent {} cannot be canonicalized: {err}",
+                    existing.display()
+                ),
+                blocked_by,
+            )
+        })?;
     for component in missing.iter().rev() {
         resolved.push(component);
     }
     Ok(normalize_path_lexically(&resolved))
+}
+
+#[cfg(windows)]
+fn windows_long_path(path: PathBuf) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLongPathNameW(
+            lpszShortPath: *const u16,
+            lpszLongPath: *mut u16,
+            cchBuffer: u32,
+        ) -> u32;
+    }
+
+    let input = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // Windows CI can expose temp paths with 8.3 short components; expand them
+    // before safety prefix checks so canonicalization does not create a false escape.
+    // SAFETY: `input` is null-terminated and the first call only queries the required buffer size.
+    let required = unsafe { GetLongPathNameW(input.as_ptr(), std::ptr::null_mut(), 0) };
+    if required == 0 {
+        return path;
+    }
+    let mut buffer = vec![0u16; required as usize];
+    // SAFETY: `buffer` has the size reported by Windows and remains valid for the call.
+    let written = unsafe { GetLongPathNameW(input.as_ptr(), buffer.as_mut_ptr(), required) };
+    if written == 0 || written >= required {
+        return path;
+    }
+    OsString::from_wide(&buffer[..written as usize]).into()
+}
+
+#[cfg(not(windows))]
+fn windows_long_path(path: PathBuf) -> PathBuf {
+    path
 }
 
 fn ensure_path_within(
