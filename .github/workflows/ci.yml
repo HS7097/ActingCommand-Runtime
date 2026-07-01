@@ -9,9 +9,6 @@ on:
 jobs:
   rust:
     runs-on: windows-latest
-    env:
-      TEMP: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -20,4 +17,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
       - name: Test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: cargo test --workspace

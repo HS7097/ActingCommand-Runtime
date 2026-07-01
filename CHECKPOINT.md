@@ -65,6 +65,7 @@
 - Source guard scan: no direct `env::remove_var(CONFIG_ENV)` and only the two allowed fixture-helper `env::set_var(CONFIG_ENV)` calls remain.
 - First remote CI run for `b5b46a8ccb9eeb914cd0069d5fd27f0420db4b84` failed in the Test step because the Windows runner represented temp paths with an 8.3 short component such as `RUNNER~1`, while canonicalized record artifact paths used the long `runneradmin` form. The fix expands Windows long path names before the post-create containment recheck.
 - Second remote CI run for `b60ba0b893f806601ed0a1b164cb530b8780955e` failed in the same Windows Test step because the short/long temp path alias could still survive parent-based canonicalization. The follow-up fix resolves existing paths through `GetFinalPathNameByHandleW` before falling back to `GetLongPathNameW`, and the Windows CI job now pins `TEMP`/`TMP` to `${{ runner.temp }}`.
+- Third remote CI run for `026ec08b065ddf6bbde18b821d0887fc7b4870b7` failed before starting jobs because `${{ runner.temp }}` is not available in job-level `env`. The workflow fix moves `TEMP`/`TMP` to the Test step env where the runner context is available.
 
 ### Current blocker
 
