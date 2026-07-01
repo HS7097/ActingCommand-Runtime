@@ -12,8 +12,26 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current Session Layer audit close-out
+
+The 2026-07-01 Session Layer audit fix from baseline `cf9095a01606654c42e6202e281260b5d5d21de9` is implemented in the Rust `actinglab` code path.
+
+Completed fixes:
+
+- B1: test environment lock poisoning now recovers instead of cascading one panic into many false failures.
+- B0/D6: session liveness checks now require a fresh heartbeat and a live process before readiness or daemon-preferred routing can be accepted.
+- D2: preempted leases no longer authorize control requests; release identity checks remain separate so cleanup can still proceed.
+- D8: local `stream` input relay now requires a matching lease unless the command is already executing inside the resident daemon request handler.
+- D4/D9: session JSON files and JSONL journal lines are written through complete in-memory JSON payloads, unique temporary file names, flush, and sync.
+- D3: daemon request journal entries are made durable before request files are removed.
+- D5/D7: record artifact directories and build/promote artifact source paths must stay inside the Session Layer state/record boundary.
+- D1: checked transport records missing `safe_to_connect` are treated as unsafe; only explicitly unchecked local/no-endpoint transport remains allowed.
+
+No resource repositories were used in this audit fix, and no UI, OCR, SQLite, game logic, upstream source copying, or device live validation was added.
+
 ## Current completed milestones
 
+- ActingLab Session Layer audit close-out: liveness/process readiness, lease preemption, local stream relay lease gating, durable request journaling, atomic JSON writes, artifact path containment, and safe transport defaults.
 - P1.6 MaaTouch input backend stability close-out.
 - P2 ADB `exec-out screencap -p` capture backend.
 - P2.1 capture artifact store.

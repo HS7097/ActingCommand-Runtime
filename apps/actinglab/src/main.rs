@@ -20,6 +20,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::write::FileOptions;
@@ -76,6 +77,7 @@ const DANGEROUS_EXTENSIONS: &[&str] = &[
 ];
 const MAX_PACKAGE_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PACKAGE_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+static JSON_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn main() -> ExitCode {
     let json_default = !io::stdout().is_terminal();
@@ -372,6 +374,61 @@ struct SessionLivenessSnapshot {
     heartbeat_age_ms: Option<u64>,
     heartbeat_clock_skew_ms: u64,
     pid_match: Option<bool>,
+    process_alive: Option<bool>,
+}
+
+trait ProcessLiveness {
+    fn is_alive(&self, pid: u32) -> bool;
+}
+
+struct SystemProcessLiveness;
+
+impl ProcessLiveness for SystemProcessLiveness {
+    fn is_alive(&self, pid: u32) -> bool {
+        platform_process_is_alive(pid)
+    }
+}
+
+#[cfg(windows)]
+fn platform_process_is_alive(pid: u32) -> bool {
+    use std::ffi::c_void;
+
+    type WinHandle = *mut c_void;
+
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> WinHandle;
+        fn WaitForSingleObject(handle: WinHandle, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: WinHandle) -> i32;
+    }
+
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+
+    // SAFETY: OpenProcess is called with a PID from trusted local session metadata; the
+    // returned handle is checked for null and closed before returning.
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let wait_result = WaitForSingleObject(handle, 0);
+        let _ = CloseHandle(handle);
+        wait_result == WAIT_TIMEOUT
+    }
+}
+
+#[cfg(unix)]
+fn platform_process_is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn platform_process_is_alive(pid: u32) -> bool {
+    pid == std::process::id()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6779,6 +6836,37 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     if max_frames == 0 || max_frames > 60 {
         return Err(CliError::usage("--max-frames must be between 1 and 60"));
     }
+    if !relay_actions.is_empty() && !global.inside_session_daemon {
+        let lease_gate = stream_check_lease_gate(&flags, &instance_id, true)?;
+        if !lease_gate
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let code = match lease_gate
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("lab_lease_required")
+            {
+                "lab_lease_required" => "lab_lease_required",
+                "lab_lease_missing" => "lab_lease_missing",
+                "lease_holder_mismatch" => "lease_holder_mismatch",
+                "lease_id_mismatch" => "lease_id_mismatch",
+                "lease_preempted" => "lease_preempted",
+                _ => "stream_input_relay_lease_blocked",
+            };
+            let message = lease_gate
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("stream input relay requires a matching active lease")
+                .to_string();
+            return Err(CliError::safety_blocked(
+                code,
+                message,
+                &["lab_lease", "stream_input_relay"],
+            ));
+        }
+    }
     let interval = parse_optional_duration_ms(&flags, "--interval-ms", 250)?;
     let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -7912,8 +8000,12 @@ fn session_readiness_payload(
     let transport = endpoint.as_deref().map(session_readiness_transport_check);
     let transport_safe = transport
         .as_ref()
-        .and_then(|value| value.get("safe_to_connect"))
-        .and_then(Value::as_bool)
+        .map(|value| {
+            value
+                .get("safe_to_connect")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .unwrap_or(true);
     let recommended_actions = status_view
         .pointer("/diagnostics/recommended_actions")
@@ -8003,10 +8095,7 @@ fn session_connect_plan_payload(
         .get("safe_to_start")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let transport_safe = readiness
-        .pointer("/transport/safe_to_connect")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let transport_safe = session_readiness_transport_safe(&readiness);
     let blockers = session_connect_plan_blockers(&readiness, &stream_preflight);
     let safe_to_start_client = readiness_ready && stream_safe && transport_safe;
     let phase_c_preflight = session_connect_phase_c_preflight(
@@ -8070,6 +8159,16 @@ fn session_connect_plan_payload(
             "does_not_read_resource_repositories": true
         }
     }))
+}
+
+fn session_readiness_transport_safe(readiness: &Value) -> bool {
+    let Some(transport) = readiness.get("transport") else {
+        return false;
+    };
+    if let Some(safe) = transport.get("safe_to_connect").and_then(Value::as_bool) {
+        return safe;
+    }
+    transport.get("checked").and_then(Value::as_bool) == Some(false)
 }
 
 fn session_connect_phase_c_preflight(
@@ -13766,7 +13865,22 @@ fn session_liveness_diagnostics(
     heartbeat: Option<&SessionHeartbeat>,
     now_ms: u64,
 ) -> Value {
-    let snapshot = session_liveness_snapshot(info, heartbeat, now_ms);
+    session_liveness_diagnostics_with_process_liveness(
+        info,
+        heartbeat,
+        now_ms,
+        &SystemProcessLiveness,
+    )
+}
+
+fn session_liveness_diagnostics_with_process_liveness(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    now_ms: u64,
+    process_liveness: &dyn ProcessLiveness,
+) -> Value {
+    let snapshot =
+        session_liveness_snapshot_with_process_liveness(info, heartbeat, now_ms, process_liveness);
     json!({
         "status": snapshot.status.as_str(),
         "info_present": info.is_some(),
@@ -13774,6 +13888,7 @@ fn session_liveness_diagnostics(
         "daemon_pid": info.map(|value| value.pid),
         "heartbeat_pid": heartbeat.map(|value| value.pid),
         "pid_match": snapshot.pid_match,
+        "process_alive": snapshot.process_alive,
         "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
         "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
         "heartbeat_age_ms": snapshot.heartbeat_age_ms,
@@ -13788,12 +13903,27 @@ fn session_liveness_snapshot(
     heartbeat: Option<&SessionHeartbeat>,
     now_ms: u64,
 ) -> SessionLivenessSnapshot {
+    session_liveness_snapshot_with_process_liveness(info, heartbeat, now_ms, &SystemProcessLiveness)
+}
+
+fn session_liveness_snapshot_with_process_liveness(
+    info: Option<&SessionInfo>,
+    heartbeat: Option<&SessionHeartbeat>,
+    now_ms: u64,
+    process_liveness: &dyn ProcessLiveness,
+) -> SessionLivenessSnapshot {
     let heartbeat_age_ms = heartbeat.map(|value| now_ms.saturating_sub(value.updated_at_unix_ms));
     let heartbeat_clock_skew_ms = heartbeat
         .and_then(|value| value.updated_at_unix_ms.checked_sub(now_ms))
         .unwrap_or(0);
     let pid_match = match (info, heartbeat) {
         (Some(info), Some(heartbeat)) => Some(info.pid == heartbeat.pid),
+        _ => None,
+    };
+    let process_alive = match (info, heartbeat, pid_match, heartbeat_age_ms) {
+        (Some(info), Some(_), Some(true), Some(age)) if age <= SESSION_HEARTBEAT_STALE_MS => {
+            Some(process_liveness.is_alive(info.pid))
+        }
         _ => None,
     };
     let status = match (info, heartbeat, pid_match, heartbeat_age_ms) {
@@ -13803,6 +13933,7 @@ fn session_liveness_snapshot(
         (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => {
             SessionLivenessStatus::Stale
         }
+        (Some(_), Some(_), _, _) if process_alive == Some(false) => SessionLivenessStatus::Stale,
         (Some(_), Some(_), _, _) => SessionLivenessStatus::Alive,
     };
     SessionLivenessSnapshot {
@@ -13810,6 +13941,7 @@ fn session_liveness_snapshot(
         heartbeat_age_ms,
         heartbeat_clock_skew_ms,
         pid_match,
+        process_alive,
     }
 }
 
@@ -13953,21 +14085,6 @@ fn session_request_cancel_payload(
             "journal": session_request_journal_path(state_dir).display().to_string()
         }));
     }
-    fs::remove_file(&request_path).map_err(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            CliError::new(
-                ErrorKind::RuntimeNotRunning,
-                "request_not_cancellable",
-                format!("session request {request_id} disappeared before cancellation"),
-                &["request_queue"],
-            )
-        } else {
-            CliError::runtime_not_running(format!(
-                "failed to remove pending session request {}: {err}",
-                request_path.display()
-            ))
-        }
-    })?;
     let cancelled_at = current_unix_ms();
     let message = reason
         .map(|value| format!("session request {request_id} cancelled: {value}"))
@@ -13986,6 +14103,21 @@ fn session_request_cancel_payload(
         completed_at_unix_ms: cancelled_at,
     };
     append_session_request_journal(state_dir, &request, &response)?;
+    fs::remove_file(&request_path).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            CliError::new(
+                ErrorKind::RuntimeNotRunning,
+                "request_not_cancellable",
+                format!("session request {request_id} disappeared before cancellation"),
+                &["request_queue"],
+            )
+        } else {
+            CliError::runtime_not_running(format!(
+                "failed to remove pending session request {}: {err}",
+                request_path.display()
+            ))
+        }
+    })?;
     Ok(json!({
         "schema_version": "session.request_cancel.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -14779,13 +14911,13 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
         let response_path =
             session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
         write_json_file_atomic(&response_path, &response)?;
+        append_session_request_journal(state_dir, &request, &response)?;
         fs::remove_file(&path).map_err(|err| {
             CliError::runtime_not_running(format!(
                 "failed to remove processed request {}: {err}",
                 path.display()
             ))
         })?;
-        append_session_request_journal(state_dir, &request, &response)?;
         remove_session_running_request(state_dir, &request.request_id)?;
         processed += 1;
     }
@@ -14971,7 +15103,10 @@ fn session_monitor_policy_lease_deferral(
 }
 
 fn session_monitor_policy_lease_can_defer(code: &str) -> bool {
-    matches!(code, "lease_holder_mismatch" | "lease_id_mismatch")
+    matches!(
+        code,
+        "lease_holder_mismatch" | "lease_id_mismatch" | "lease_preempted"
+    )
 }
 
 fn envelope_error_from_cli_error(err: CliError) -> EnvelopeError {
@@ -16971,7 +17106,7 @@ fn validate_lease_release(
     if force {
         return Ok(());
     }
-    validate_lease_request(
+    validate_lease_identity(
         lease,
         &SessionCommandLease {
             holder: holder.to_string(),
@@ -16981,6 +17116,23 @@ fn validate_lease_release(
 }
 
 fn validate_lease_request(lease: &SessionLease, requested: &SessionCommandLease) -> CliOutcome<()> {
+    if lease.preempted {
+        return Err(CliError::safety_blocked(
+            "lease_preempted",
+            format!(
+                "lease for {} was preempted; re-acquire before use",
+                lease.instance
+            ),
+            &["lab_lease", "lease_preempted"],
+        ));
+    }
+    validate_lease_identity(lease, requested)
+}
+
+fn validate_lease_identity(
+    lease: &SessionLease,
+    requested: &SessionCommandLease,
+) -> CliOutcome<()> {
     if lease.holder != requested.holder {
         return Err(CliError::safety_blocked(
             "lease_holder_mismatch",
@@ -17241,7 +17393,8 @@ fn build_session_record_task(
     let out = flags.required_path("--out")?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
     let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
-    let draft = session_record_build_draft(&record, flags, &out, &game, &server)?;
+    let state_dir = record_path.parent().unwrap_or_else(|| Path::new("."));
+    let draft = session_record_build_draft(&record, flags, &out, &game, &server, state_dir)?;
     if !dry_run {
         write_session_record_build_draft(&draft)?;
     }
@@ -17310,7 +17463,15 @@ fn promote_session_record_task(
     let dry_run = global.dry_run || flags.bool("--dry-run");
     let force = flags.bool("--force");
     let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
-    let draft = session_record_build_draft(&record, flags, &resource_root.root, &game, &server)?;
+    let state_dir = record_path.parent().unwrap_or_else(|| Path::new("."));
+    let draft = session_record_build_draft(
+        &record,
+        flags,
+        &resource_root.root,
+        &game,
+        &server,
+        state_dir,
+    )?;
     validate_session_record_promote_target(&draft, force)?;
     let resources_action = if dry_run {
         if draft.resources_path.exists() {
@@ -17359,6 +17520,7 @@ fn session_record_build_draft(
     out: &Path,
     game: &str,
     server: &str,
+    state_dir: &Path,
 ) -> CliOutcome<SessionRecordBuildDraft> {
     let task_dir_name = safe_task_dir_name(&record.task_id)?;
     let task_dir = out.join("operations").join(task_dir_name);
@@ -17398,7 +17560,12 @@ fn session_record_build_draft(
             {
                 resolution = Some((provenance.width, provenance.height));
             }
-            let source = PathBuf::from(&artifact.path);
+            let source = ensure_path_within(
+                state_dir,
+                Path::new(&artifact.path),
+                "record build-task artifact source",
+                &["record", "artifact_path"],
+            )?;
             if !source.is_file() {
                 return Err(CliError::usage(format!(
                     "record build-task anchor '{}' artifact is missing: {}",
@@ -17513,7 +17680,12 @@ fn session_record_build_draft(
             {
                 resolution = Some((provenance.width, provenance.height));
             }
-            let source = PathBuf::from(&artifact.path);
+            let source = ensure_path_within(
+                state_dir,
+                Path::new(&artifact.path),
+                "record build-task artifact source",
+                &["record", "artifact_path"],
+            )?;
             if !source.is_file() {
                 return Err(CliError::usage(format!(
                     "record build-task verify-template '{}' artifact is missing: {}",
@@ -18152,12 +18324,11 @@ fn materialize_anchor_artifact(
     if local_frame_path.is_none() && !capture_current_frame {
         return Ok(None);
     }
-    let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
-        context
-            .state_dir
-            .join("record-artifacts")
-            .join(safe_file_stem(&context.record.record_id))
-    });
+    let artifact_dir = session_record_artifact_dir(
+        context.state_dir,
+        &context.record.record_id,
+        flags.optional_path("--artifact-dir").as_deref(),
+    )?;
     let source_frame = if capture_current_frame {
         capture_session_record_source_frame(
             context.global,
@@ -18211,12 +18382,11 @@ fn materialize_color_probe(
     if local_frame_path.is_none() && !capture_current_frame {
         return Ok(None);
     }
-    let artifact_dir = flags.optional_path("--artifact-dir").unwrap_or_else(|| {
-        context
-            .state_dir
-            .join("record-artifacts")
-            .join(safe_file_stem(&context.record.record_id))
-    });
+    let artifact_dir = session_record_artifact_dir(
+        context.state_dir,
+        &context.record.record_id,
+        flags.optional_path("--artifact-dir").as_deref(),
+    )?;
     let source_frame = if capture_current_frame {
         capture_session_record_source_frame(
             context.global,
@@ -18267,6 +18437,27 @@ fn read_session_record_source_frame(frame_path: &Path) -> CliOutcome<SessionReco
         freshness: None,
         capture_attempts: Vec::new(),
     })
+}
+
+fn session_record_artifact_root(state_dir: &Path, record_id: &str) -> PathBuf {
+    state_dir
+        .join("record-artifacts")
+        .join(safe_file_stem(record_id))
+}
+
+fn session_record_artifact_dir(
+    state_dir: &Path,
+    record_id: &str,
+    requested: Option<&Path>,
+) -> CliOutcome<PathBuf> {
+    let default_dir = session_record_artifact_root(state_dir, record_id);
+    let candidate = requested.unwrap_or(default_dir.as_path());
+    ensure_path_within(
+        state_dir,
+        candidate,
+        "record artifact directory",
+        &["record", "artifact_dir"],
+    )
 }
 
 fn capture_session_record_source_frame(
@@ -19249,7 +19440,7 @@ fn refresh_amended_anchor_artifact(
             flags,
         )?
     };
-    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
+    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref())?;
     let materialized = materialize_anchor_artifact_from_source(
         source_frame,
         resolution,
@@ -19345,7 +19536,7 @@ fn refresh_amended_verify_template(
             flags,
         )?
     };
-    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref());
+    let artifact_dir = amended_anchor_artifact_dir(context, target.artifact.as_deref())?;
     let materialized = materialize_anchor_artifact_from_source(
         source_frame,
         resolution,
@@ -19398,15 +19589,17 @@ fn read_session_record_source_frame_from_provenance(
 fn amended_anchor_artifact_dir(
     context: &SessionRecordAmendContext,
     artifact: Option<&SessionRecordAnchorArtifact>,
-) -> PathBuf {
-    artifact
+) -> CliOutcome<PathBuf> {
+    let default_dir = session_record_artifact_root(&context.state_dir, &context.record_id);
+    let candidate = artifact
         .and_then(|artifact| Path::new(&artifact.path).parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| {
-            context
-                .state_dir
-                .join("record-artifacts")
-                .join(safe_file_stem(&context.record_id))
-        })
+        .unwrap_or(default_dir);
+    ensure_path_within(
+        &context.state_dir,
+        &candidate,
+        "record amend artifact directory",
+        &["record", "artifact_dir"],
+    )
 }
 
 fn amend_operation_record_step(
@@ -20062,6 +20255,98 @@ fn config_path() -> CliOutcome<PathBuf> {
     Ok(app_state_root()?.join("config.json"))
 }
 
+fn absolute_lexical_path(path: &Path) -> CliOutcome<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|err| CliError::usage(format!("failed to resolve current dir: {err}")))?
+            .join(path)
+    };
+    Ok(normalize_path_lexically(&absolute))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+fn path_has_root_or_prefix(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+}
+
+fn path_starts_with_case_aware(path: &Path, base: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let path_components = path
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let base_components = base
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        path_components.len() >= base_components.len()
+            && path_components
+                .iter()
+                .zip(base_components.iter())
+                .all(|(left, right)| left == right)
+    }
+    #[cfg(not(windows))]
+    {
+        path.starts_with(base)
+    }
+}
+
+fn ensure_path_within(
+    base: &Path,
+    candidate: &Path,
+    reason: &str,
+    blocked_by: &[&'static str],
+) -> CliOutcome<PathBuf> {
+    if !candidate.is_absolute() && path_has_root_or_prefix(candidate) {
+        return Err(CliError::safety_blocked(
+            "path_escape",
+            format!(
+                "{reason}: path {} uses a root or drive prefix outside the allowed base",
+                candidate.display()
+            ),
+            blocked_by,
+        ));
+    }
+    let base = absolute_lexical_path(base)?;
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        base.join(candidate)
+    };
+    let resolved = normalize_path_lexically(&joined);
+    if !path_starts_with_case_aware(&resolved, &base) {
+        return Err(CliError::safety_blocked(
+            "path_escape",
+            format!(
+                "{reason}: path {} escapes allowed base {}",
+                resolved.display(),
+                base.display()
+            ),
+            blocked_by,
+        ));
+    }
+    Ok(resolved)
+}
+
 fn write_json_line<T>(path: &Path, value: &T) -> CliOutcome<()>
 where
     T: Serialize,
@@ -20084,13 +20369,14 @@ where
                 path.display()
             ))
         })?;
-    serde_json::to_writer(&mut file, value)
+    let mut line = serde_json::to_vec(value)
         .map_err(|err| CliError::runtime_not_running(format!("failed to encode journal: {err}")))?;
-    file.write_all(b"\n").map_err(|err| {
+    line.push(b'\n');
+    file.write_all(&line).map_err(|err| {
         CliError::runtime_not_running(format!("failed to write journal {}: {err}", path.display()))
     })?;
-    file.flush().map_err(|err| {
-        CliError::runtime_not_running(format!("failed to flush journal {}: {err}", path.display()))
+    file.sync_all().map_err(|err| {
+        CliError::runtime_not_running(format!("failed to sync journal {}: {err}", path.display()))
     })
 }
 
@@ -20711,9 +20997,15 @@ where
     }
     let text = serde_json::to_string_pretty(value)
         .map_err(|err| CliError::usage(format!("failed to serialize JSON: {err}")))?;
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    fs::write(&tmp, text)
+    let seq = JSON_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp-{}-{seq}", std::process::id()));
+    let mut file = File::create(&tmp)
+        .map_err(|err| CliError::usage(format!("failed to create {}: {err}", tmp.display())))?;
+    file.write_all(text.as_bytes())
         .map_err(|err| CliError::usage(format!("failed to write {}: {err}", tmp.display())))?;
+    file.sync_all()
+        .map_err(|err| CliError::usage(format!("failed to sync {}: {err}", tmp.display())))?;
+    drop(file);
     fs::rename(&tmp, path).map_err(|err| {
         CliError::usage(format!(
             "failed to publish {} from {}: {err}",
@@ -22212,6 +22504,20 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct FixedProcessLiveness(bool);
+
+    impl ProcessLiveness for FixedProcessLiveness {
+        fn is_alive(&self, _pid: u32) -> bool {
+            self.0
+        }
+    }
+
     fn test_record_frame_png(width: u32, height: u32) -> Vec<u8> {
         let mut pixels = Vec::new();
         for y in 0..height {
@@ -22296,7 +22602,7 @@ mod tests {
 
     #[test]
     fn status_without_runtime_is_exit_five() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, temp.path().join("config.json"));
@@ -22314,7 +22620,7 @@ mod tests {
 
     #[test]
     fn runtime_endpoint_policy_allows_loopback_without_auth() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22329,7 +22635,7 @@ mod tests {
 
     #[test]
     fn runtime_endpoint_policy_blocks_remote_http() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22341,7 +22647,7 @@ mod tests {
 
     #[test]
     fn runtime_endpoint_policy_blocks_remote_https_without_auth() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22353,7 +22659,7 @@ mod tests {
 
     #[test]
     fn runtime_endpoint_policy_accepts_remote_https_with_token() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22405,7 +22711,7 @@ mod tests {
 
     #[test]
     fn session_transport_plan_reports_reserved_trusted_channel_without_listener() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22498,7 +22804,7 @@ mod tests {
 
     #[test]
     fn session_transport_plan_blocks_remote_http_without_tcp_probe() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22574,7 +22880,7 @@ mod tests {
 
     #[test]
     fn session_transport_plan_accepts_remote_https_policy_but_keeps_listener_reserved() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22660,7 +22966,7 @@ mod tests {
 
     #[test]
     fn session_transport_check_blocks_remote_http() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -22695,7 +23001,7 @@ mod tests {
 
     #[test]
     fn status_blocks_untrusted_remote_runtime_endpoint() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(CONFIG_ENV);
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
@@ -22719,7 +23025,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_remote_endpoint_policy_without_blocking() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(CONFIG_ENV);
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
@@ -22793,7 +23099,7 @@ mod tests {
 
     #[test]
     fn lab_lease_and_release_alias_session_lease_files() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -22863,7 +23169,7 @@ mod tests {
 
     #[test]
     fn lab_lease_status_alias_reads_session_lease_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -22918,7 +23224,7 @@ mod tests {
 
     #[test]
     fn lab_lease_touch_alias_updates_session_lease_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -22984,7 +23290,7 @@ mod tests {
 
     #[test]
     fn lab_lease_list_alias_reads_all_session_lease_files() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path().join("session");
         let ak_lease = new_session_lease(
@@ -23027,7 +23333,7 @@ mod tests {
 
     #[test]
     fn lab_lease_wait_alias_reads_session_lease_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -23083,7 +23389,7 @@ mod tests {
 
     #[test]
     fn lab_preempt_alias_records_previous_session_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -23150,7 +23456,7 @@ mod tests {
 
     #[test]
     fn config_set_and_get_round_trip() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23185,7 +23491,7 @@ mod tests {
 
     #[test]
     fn config_set_and_get_instance_package() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23220,7 +23526,7 @@ mod tests {
 
     #[test]
     fn config_set_and_get_instance_adb_and_capture_backend() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23281,7 +23587,7 @@ mod tests {
 
     #[test]
     fn config_set_rejects_invalid_instance_capture_backend() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23309,14 +23615,23 @@ mod tests {
     }
 
     fn write_test_session_files(state_dir: &Path) {
+        write_test_session_files_with_pid(state_dir, std::process::id());
+    }
+
+    fn write_test_dead_session_files(state_dir: &Path) {
+        let pid = std::process::id().saturating_add(1_000_000);
+        write_test_session_files_with_pid(state_dir, pid);
+    }
+
+    fn write_test_session_files_with_pid(state_dir: &Path, pid: u32) {
         let info = SessionInfo {
-            pid: 321,
+            pid,
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
         };
         let heartbeat = SessionHeartbeat {
-            pid: 321,
+            pid,
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -23326,7 +23641,7 @@ mod tests {
 
     fn write_test_session_info_only(state_dir: &Path) {
         let info = SessionInfo {
-            pid: 321,
+            pid: std::process::id(),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -23396,7 +23711,7 @@ mod tests {
 
     #[test]
     fn session_status_without_daemon_is_offline_ok() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -23420,7 +23735,7 @@ mod tests {
 
     #[test]
     fn session_readiness_without_daemon_reports_not_ready() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23533,7 +23848,7 @@ mod tests {
 
     #[test]
     fn session_connect_plan_reports_client_preflight_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23674,7 +23989,7 @@ mod tests {
 
     #[test]
     fn session_connect_plan_blocks_untrusted_remote_transport() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -23736,8 +24051,33 @@ mod tests {
     }
 
     #[test]
+    fn session_transport_missing_safe_field_blocks_checked_transport() {
+        let local_unchecked = json!({
+            "transport": {
+                "checked": false,
+                "safe_to_connect": null
+            }
+        });
+        let checked_missing_safe = json!({
+            "transport": {
+                "checked": true
+            }
+        });
+        let checked_safe = json!({
+            "transport": {
+                "checked": true,
+                "safe_to_connect": true
+            }
+        });
+
+        assert!(session_readiness_transport_safe(&local_unchecked));
+        assert!(!session_readiness_transport_safe(&checked_missing_safe));
+        assert!(session_readiness_transport_safe(&checked_safe));
+    }
+
+    #[test]
     fn session_readiness_reports_alive_daemon_and_endpoint_policy() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         unsafe {
@@ -23784,8 +24124,68 @@ mod tests {
     }
 
     #[test]
+    fn session_readiness_rejects_dead_daemon_even_with_instance_config() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        let config_path = temp.path().join("config.json");
+        fs::create_dir_all(&state_dir).unwrap();
+        write_test_dead_session_files(&state_dir);
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                adb_path: None,
+                capture_backend: None,
+            },
+        );
+        unsafe {
+            env::set_var(SESSION_STATE_ENV, &state_dir);
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        write_user_config(&config).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "readiness",
+                "--local",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.get("status").and_then(Value::as_str),
+            Some("not_ready")
+        );
+        assert_eq!(
+            data.pointer("/daemon/status").and_then(Value::as_str),
+            Some("stale")
+        );
+        assert_eq!(
+            data.pointer("/status_view/diagnostics/liveness/process_alive")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn session_readiness_reports_instance_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let config_path = temp.path().join("config.json");
@@ -23892,7 +24292,7 @@ mod tests {
 
     #[test]
     fn session_readiness_blocks_unknown_selected_instance() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let config_path = temp.path().join("config.json");
@@ -23954,7 +24354,7 @@ mod tests {
 
     #[test]
     fn session_readiness_reports_queue_health_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let pending = SessionCommandRequest {
@@ -24327,7 +24727,7 @@ mod tests {
 
     #[test]
     fn session_readiness_request_returns_readiness_payload() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::remove_var(CONFIG_ENV);
@@ -24479,7 +24879,7 @@ mod tests {
 
     #[test]
     fn session_stream_plan_reports_interactive_preflight_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -24614,7 +25014,7 @@ mod tests {
 
     #[test]
     fn session_stream_plan_blocks_input_relay_without_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -24683,7 +25083,7 @@ mod tests {
 
     #[test]
     fn session_connect_plan_request_returns_payload_and_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -24796,7 +25196,7 @@ mod tests {
 
     #[test]
     fn session_stream_plan_request_returns_payload_and_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -24885,7 +25285,7 @@ mod tests {
 
     #[test]
     fn session_command_check_readonly_local_is_safe_without_daemon() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -24945,7 +25345,7 @@ mod tests {
 
     #[test]
     fn session_command_check_throat_policy_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -24986,7 +25386,7 @@ mod tests {
 
     #[test]
     fn session_command_check_capture_policy_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25028,7 +25428,7 @@ mod tests {
 
     #[test]
     fn session_command_check_record_policy_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25070,7 +25470,7 @@ mod tests {
 
     #[test]
     fn session_command_check_record_step_current_frame_is_device_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25122,7 +25522,7 @@ mod tests {
 
     #[test]
     fn session_command_check_record_step_local_frame_is_daemon_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25170,7 +25570,7 @@ mod tests {
 
     #[test]
     fn session_command_check_record_unknown_action_fails_loudly() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25202,7 +25602,7 @@ mod tests {
 
     #[test]
     fn session_command_check_self_heal_policy_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25244,7 +25644,7 @@ mod tests {
 
     #[test]
     fn session_command_check_self_heal_plan_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25281,7 +25681,7 @@ mod tests {
 
     #[test]
     fn session_command_check_phase_c_plan_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25315,7 +25715,7 @@ mod tests {
 
     #[test]
     fn session_command_check_connect_plan_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25349,7 +25749,7 @@ mod tests {
 
     #[test]
     fn session_command_check_stream_plan_is_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25383,7 +25783,7 @@ mod tests {
 
     #[test]
     fn session_command_check_plain_stream_is_device_read_only() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25425,7 +25825,7 @@ mod tests {
 
     #[test]
     fn session_command_check_stream_input_event_requires_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25530,7 +25930,7 @@ mod tests {
 
     #[test]
     fn session_command_check_stream_relay_event_requires_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25583,7 +25983,7 @@ mod tests {
 
     #[test]
     fn session_command_check_stream_check_input_event_stays_preflight() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25641,7 +26041,7 @@ mod tests {
 
     #[test]
     fn session_command_check_explicit_daemon_requires_alive_daemon() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
@@ -25697,7 +26097,7 @@ mod tests {
 
     #[test]
     fn session_command_check_control_requires_matching_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         unsafe {
@@ -25853,7 +26253,7 @@ mod tests {
 
     #[test]
     fn session_command_check_blocks_selected_instance_missing_required_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let config_path = temp.path().join("config.json");
@@ -25919,7 +26319,7 @@ mod tests {
 
     #[test]
     fn session_command_check_blocks_daemon_submission_when_queue_needs_attention() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let pending = SessionCommandRequest {
@@ -26047,7 +26447,7 @@ mod tests {
 
     #[test]
     fn session_submit_plan_reports_ready_when_daemon_queue_and_command_are_ready() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         unsafe {
@@ -26118,7 +26518,7 @@ mod tests {
 
     #[test]
     fn session_submit_plan_blocks_when_queue_needs_attention_without_enqueueing() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let pending = SessionCommandRequest {
@@ -26177,7 +26577,7 @@ mod tests {
 
     #[test]
     fn session_submit_plan_control_command_requires_lease_without_enqueueing() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         unsafe {
@@ -26237,7 +26637,7 @@ mod tests {
 
     #[test]
     fn session_submit_plan_stream_input_reports_phase_c_execution_preflight() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         unsafe {
@@ -26313,7 +26713,7 @@ mod tests {
 
     #[test]
     fn session_submit_plan_request_returns_submit_plan_payload() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let config_path = temp.path().join("config.json");
@@ -26402,7 +26802,7 @@ mod tests {
 
     #[test]
     fn session_bootstrap_reports_client_contract_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         unsafe {
@@ -26734,7 +27134,7 @@ mod tests {
 
     #[test]
     fn session_bootstrap_request_returns_payload() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let query = SessionCommandRequest {
@@ -26907,7 +27307,7 @@ mod tests {
 
     #[test]
     fn session_capture_policy_reports_stale_policy_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -27196,7 +27596,7 @@ mod tests {
 
     #[test]
     fn session_record_policy_reports_active_authorization_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -27482,7 +27882,7 @@ mod tests {
 
     #[test]
     fn session_self_heal_policy_reports_phase_c_boundaries_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -27740,7 +28140,7 @@ mod tests {
 
     #[test]
     fn session_self_heal_plan_reports_observe_first_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -27830,7 +28230,7 @@ mod tests {
 
     #[test]
     fn session_self_heal_plan_stale_capture_trigger_does_not_require_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -27931,7 +28331,7 @@ mod tests {
 
     #[test]
     fn session_self_heal_plan_control_trigger_requires_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -28204,7 +28604,7 @@ mod tests {
     #[test]
     fn session_phase_c_plan_reports_self_heal_interaction_and_trusted_channel_without_device_work()
     {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -28641,7 +29041,7 @@ mod tests {
 
     #[test]
     fn session_throat_policy_reports_unique_throat_without_device_work() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -29141,7 +29541,12 @@ mod tests {
             state: "idle".to_string(),
         };
 
-        let alive = session_liveness_diagnostics(Some(&info), Some(&heartbeat), 2_000);
+        let alive = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&heartbeat),
+            2_000,
+            &FixedProcessLiveness(true),
+        );
         assert_eq!(alive.get("status").and_then(Value::as_str), Some("alive"));
         assert_eq!(
             alive.get("heartbeat_age_ms").and_then(Value::as_u64),
@@ -29152,14 +29557,24 @@ mod tests {
             Some(true)
         );
 
-        let stale = session_liveness_diagnostics(Some(&info), Some(&heartbeat), 4_001);
+        let stale = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&heartbeat),
+            4_001,
+            &FixedProcessLiveness(true),
+        );
         assert_eq!(stale.get("status").and_then(Value::as_str), Some("stale"));
         assert_eq!(
             stale.get("can_accept_requests").and_then(Value::as_bool),
             Some(false)
         );
 
-        let missing_heartbeat = session_liveness_diagnostics(Some(&info), None, 2_000);
+        let missing_heartbeat = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            None,
+            2_000,
+            &FixedProcessLiveness(true),
+        );
         assert_eq!(
             missing_heartbeat.get("status").and_then(Value::as_str),
             Some("heartbeat_missing")
@@ -29170,11 +29585,74 @@ mod tests {
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
-        let pid_mismatch = session_liveness_diagnostics(Some(&info), Some(&mismatched), 2_000);
+        let pid_mismatch = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&mismatched),
+            2_000,
+            &FixedProcessLiveness(true),
+        );
         assert_eq!(
             pid_mismatch.get("status").and_then(Value::as_str),
             Some("pid_mismatch")
         );
+
+        let dead_process = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&heartbeat),
+            2_000,
+            &FixedProcessLiveness(false),
+        );
+        assert_eq!(
+            dead_process.get("status").and_then(Value::as_str),
+            Some("stale")
+        );
+        assert_eq!(
+            dead_process.get("process_alive").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn write_json_file_atomic_uses_unique_tmp_and_publishes_complete_json() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("state.json");
+
+        for value in [
+            json!({"value": 1}),
+            json!({"value": 2}),
+            json!({"value": 3}),
+        ] {
+            write_json_file_atomic(&path, &value).unwrap();
+        }
+
+        let stored = fs::read_to_string(&path).unwrap();
+        let parsed: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed.get("value").and_then(Value::as_u64), Some(3));
+        let leftovers = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains("tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn write_json_line_writes_complete_jsonl_line() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("journal.jsonl");
+
+        write_json_line(&path, &json!({"event": "completed", "value": 1})).unwrap();
+
+        let stored = fs::read_to_string(&path).unwrap();
+        assert!(stored.ends_with('\n'));
+        let lines = stored.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        let parsed: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(
+            parsed.get("event").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(parsed.get("value").and_then(Value::as_u64), Some(1));
     }
 
     #[test]
@@ -29193,7 +29671,7 @@ mod tests {
 
         write_test_session_heartbeat(
             temp.path(),
-            321,
+            std::process::id(),
             current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
         );
         assert!(!session_daemon_info_exists(&flags).unwrap());
@@ -29201,7 +29679,7 @@ mod tests {
         write_test_session_heartbeat(temp.path(), 999, current_unix_ms());
         assert!(!session_daemon_info_exists(&flags).unwrap());
 
-        write_test_session_heartbeat(temp.path(), 321, current_unix_ms());
+        write_test_session_heartbeat(temp.path(), std::process::id(), current_unix_ms());
         assert!(session_daemon_info_exists(&flags).unwrap());
     }
 
@@ -29332,7 +29810,7 @@ mod tests {
         write_test_session_info_only(temp.path());
         write_test_session_heartbeat(
             temp.path(),
-            321,
+            std::process::id(),
             current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
         );
 
@@ -29415,7 +29893,7 @@ mod tests {
         write_test_session_info_only(temp.path());
         write_test_session_heartbeat(
             temp.path(),
-            321,
+            std::process::id(),
             current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
         );
 
@@ -29467,7 +29945,7 @@ mod tests {
         write_test_session_info_only(temp.path());
         write_test_session_heartbeat(
             temp.path(),
-            321,
+            std::process::id(),
             current_unix_ms().saturating_sub(SESSION_HEARTBEAT_STALE_MS + 1),
         );
 
@@ -29943,7 +30421,10 @@ mod tests {
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(data.get("running").and_then(Value::as_bool), Some(true));
-        assert_eq!(data.pointer("/info/pid").and_then(Value::as_u64), Some(321));
+        assert_eq!(
+            data.pointer("/info/pid").and_then(Value::as_u64),
+            Some(u64::from(std::process::id()))
+        );
     }
 
     #[test]
@@ -29995,7 +30476,7 @@ mod tests {
 
     #[test]
     fn session_lease_enforces_holder_and_lease_id_on_release() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let acquire = run_cli(
             [
@@ -30123,7 +30604,7 @@ mod tests {
 
     #[test]
     fn session_lease_touch_updates_matching_lease_timestamp() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let mut lease = new_session_lease(
             "ak".to_string(),
@@ -30187,7 +30668,7 @@ mod tests {
 
     #[test]
     fn session_lease_touch_rejects_wrong_holder_without_mutating() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let mut lease = new_session_lease(
             "ak".to_string(),
@@ -30231,7 +30712,7 @@ mod tests {
 
     #[test]
     fn session_lease_touch_missing_lease_fails_visibly() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -30258,7 +30739,7 @@ mod tests {
 
     #[test]
     fn session_lease_status_reports_freshness_metadata() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let mut lease = new_session_lease(
             "ak".to_string(),
@@ -30306,7 +30787,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_returns_immediately_when_free() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -30346,7 +30827,7 @@ mod tests {
 
     #[test]
     fn session_lease_list_reports_all_active_leases_without_instance_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let ak_lease = new_session_lease(
             "ak".to_string(),
@@ -30406,7 +30887,7 @@ mod tests {
 
     #[test]
     fn session_lease_list_filters_holder_and_lease_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let ak_lease = new_session_lease(
             "ak".to_string(),
@@ -30460,7 +30941,7 @@ mod tests {
 
     #[test]
     fn session_lease_list_reports_freshness_metadata() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let fresh = new_session_lease(
             "ak".to_string(),
@@ -30518,7 +30999,7 @@ mod tests {
 
     #[test]
     fn session_lease_list_rejects_positionals() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -30541,7 +31022,7 @@ mod tests {
 
     #[test]
     fn session_lease_list_request_reads_daemon_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         let lease = new_session_lease(
@@ -30587,7 +31068,7 @@ mod tests {
 
     #[test]
     fn session_lease_touch_request_updates_daemon_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         let mut lease = new_session_lease(
@@ -30642,7 +31123,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_accepts_matching_holder_and_lease_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let lease = new_session_lease(
             "ak".to_string(),
@@ -30692,7 +31173,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_timeout_returns_current_held_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let lease = new_session_lease(
             "ak".to_string(),
@@ -30742,7 +31223,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_rejects_zero_poll_ms() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -30770,7 +31251,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_rejects_unknown_status() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let result = run_cli(
             [
@@ -30800,7 +31281,7 @@ mod tests {
 
     #[test]
     fn session_lease_wait_request_reads_daemon_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         let lease = new_session_lease(
@@ -30855,7 +31336,7 @@ mod tests {
 
     #[test]
     fn session_lease_preempt_records_previous_holder() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let _ = run_cli(
             [
@@ -30946,7 +31427,7 @@ mod tests {
 
     #[test]
     fn session_lease_run_submits_with_generated_lease_and_releases_on_timeout() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let result = run_cli(
@@ -30996,7 +31477,7 @@ mod tests {
 
     #[test]
     fn session_record_start_status_and_stop_write_context() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31117,7 +31598,7 @@ mod tests {
 
     #[test]
     fn top_level_record_alias_uses_session_record_context() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31204,7 +31685,7 @@ mod tests {
 
     #[test]
     fn top_level_record_build_task_routes_to_session_record() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31238,7 +31719,7 @@ mod tests {
 
     #[test]
     fn stream_command_reports_bounded_dry_run_contract() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -31360,9 +31841,18 @@ mod tests {
 
     #[test]
     fn stream_input_relay_dry_run_reports_planned_action() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
         }
@@ -31375,6 +31865,12 @@ mod tests {
                 "--dry-run",
                 "--max-frames",
                 "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
                 "--input-relay",
                 "tap",
                 "10",
@@ -31439,7 +31935,7 @@ mod tests {
 
     #[test]
     fn stream_check_reports_read_only_preflight() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -31496,7 +31992,7 @@ mod tests {
 
     #[test]
     fn stream_check_reports_input_relay_missing_lease() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -31543,9 +32039,18 @@ mod tests {
 
     #[test]
     fn stream_input_relay_dry_run_reports_multiple_events() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let lease = new_session_lease(
+            "ak".to_string(),
+            "scheduler".to_string(),
+            Some("lease-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
         }
@@ -31558,6 +32063,12 @@ mod tests {
                 "--dry-run",
                 "--max-frames",
                 "1",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--lease-holder",
+                "scheduler",
+                "--lease-id",
+                "lease-1",
                 "--input-event",
                 "tap,10,20",
                 "--input-event",
@@ -31595,7 +32106,7 @@ mod tests {
 
     #[test]
     fn session_record_active_start_requires_force() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31670,7 +32181,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_records_region_schema() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31776,7 +32287,7 @@ mod tests {
 
     #[test]
     fn session_record_step_color_probe_records_deferred_schema() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31853,7 +32364,7 @@ mod tests {
 
     #[test]
     fn session_record_step_color_probe_samples_frame() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -31947,7 +32458,7 @@ mod tests {
 
     #[test]
     fn session_record_step_verify_template_records_deferred_schema() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32030,7 +32541,7 @@ mod tests {
 
     #[test]
     fn session_record_step_verify_template_materializes_frame_crop() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32122,7 +32633,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_recomputes_frame_backed_color_probe() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32236,7 +32747,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_deferred_color_probe_does_not_fake_expected_color() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32322,7 +32833,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_rebacktests_frame_backed_verify_template() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32447,12 +32958,12 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_materializes_frame_crop() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
-        let artifact_dir = temp.path().join("artifacts");
+        let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
@@ -32592,6 +33103,159 @@ mod tests {
     }
 
     #[test]
+    fn session_record_step_rejects_artifact_dir_outside_state_dir() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let escaped_artifact_dir = temp.path().join("outside-artifacts");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        unsafe {
+            env::set_var(CONFIG_ENV, &config);
+        }
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let step = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+                "--artifact-dir",
+                escaped_artifact_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(step.exit_code(), 3);
+        assert_eq!(step.envelope.error.as_ref().unwrap().code, "path_escape");
+        assert!(!escaped_artifact_dir.exists());
+    }
+
+    #[test]
+    fn session_record_build_rejects_artifact_source_outside_state_dir() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        fs::create_dir_all(&state_dir).unwrap();
+        let escaped_artifact = temp.path().join("outside.png");
+        fs::write(&escaped_artifact, test_record_frame_png(4, 5)).unwrap();
+        let rect = SessionRecordRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 5,
+        };
+        let record = SessionRecordContext {
+            schema_version: "session-record-context-v0".to_string(),
+            record_id: "record-1".to_string(),
+            task_id: "daily-check".to_string(),
+            instance: "ak".to_string(),
+            status: "stopped".to_string(),
+            holder: None,
+            lease_id: None,
+            started_at_unix_ms: 1,
+            updated_at_unix_ms: 2,
+            steps: vec![SessionRecordStep {
+                schema_version: "session-record-step-v0".to_string(),
+                step_id: "home-anchor".to_string(),
+                created_at_unix_ms: 1,
+                updated_at_unix_ms: 2,
+                data: SessionRecordStepData::Anchor {
+                    id: "page/home".to_string(),
+                    region: SessionRecordRegion::Rect { rect: rect.clone() },
+                    color_check: false,
+                    threshold: Some(0.95),
+                    frame_provenance: Some(Box::new(SessionRecordFrameProvenance {
+                        source: "local_png".to_string(),
+                        path: escaped_artifact.display().to_string(),
+                        sha256: "sha256".to_string(),
+                        width: 12,
+                        height: 10,
+                        recorded_at_unix_ms: 1,
+                        capture_backend: None,
+                        freshness: None,
+                        capture_attempts: Vec::new(),
+                    })),
+                    artifact: Some(Box::new(SessionRecordAnchorArtifact {
+                        kind: "template_crop".to_string(),
+                        path: escaped_artifact.display().to_string(),
+                        sha256: "sha256".to_string(),
+                        width: 4,
+                        height: 5,
+                        region: rect.clone(),
+                    })),
+                    evaluation: Box::new(SessionRecordStepEvaluation {
+                        status: "passed".to_string(),
+                        reason: "test".to_string(),
+                        auto_region: None,
+                        backtest: Some(SessionRecordAnchorBacktest {
+                            source: "local_png_self_test".to_string(),
+                            metric: "ccorr_normed".to_string(),
+                            region: rect,
+                            x: 0,
+                            y: 0,
+                            raw_score: 1.0,
+                            score: 1.0,
+                            threshold: 0.95,
+                            passed: true,
+                        }),
+                        contrast_backtest: None,
+                    }),
+                },
+            }],
+        };
+        let flags = FlagArgs::parse(&Vec::<String>::new()).unwrap();
+
+        let result = session_record_build_draft(
+            &record,
+            &flags,
+            &temp.path().join("out"),
+            "arknights",
+            "cn",
+            &state_dir,
+        );
+        let err = match result {
+            Ok(_) => panic!("expected path_escape error"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.code, "path_escape");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
     fn session_record_anchor_materializes_current_capture_source_frame_metadata() {
         let temp = TempDir::new().unwrap();
         let png = test_record_frame_png(12, 10);
@@ -32665,7 +33329,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_rejects_frame_and_capture_together() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32733,7 +33397,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_contrast_frame_passes_when_distinct() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32827,7 +33491,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_contrast_frame_fails_when_matching() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -32912,12 +33576,12 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_auto_region_materializes_frame_crop() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
-        let artifact_dir = temp.path().join("artifacts");
+        let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
@@ -33000,7 +33664,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_auto_region_prefers_contrast_rejected_candidate() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33121,7 +33785,7 @@ mod tests {
 
     #[test]
     fn session_record_candidates_lists_auto_region_report() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33237,7 +33901,7 @@ mod tests {
 
     #[test]
     fn session_record_candidates_lists_color_probe_auto_region_report() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33336,7 +34000,7 @@ mod tests {
 
     #[test]
     fn session_record_candidates_requires_auto_region_report() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33421,7 +34085,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_auto_without_frame_stays_deferred() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33488,7 +34152,7 @@ mod tests {
 
     #[test]
     fn session_record_step_anchor_rejects_out_of_bounds_frame_crop() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33555,7 +34219,7 @@ mod tests {
 
     #[test]
     fn session_record_step_operation_records_coord_click() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -33634,7 +34298,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_writes_draft_bundle() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34007,7 +34671,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_rejects_deferred_color_probe() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34161,7 +34825,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_rejects_deferred_verify_template() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34315,7 +34979,7 @@ mod tests {
 
     #[test]
     fn session_record_promote_writes_repo_ours_and_guards_overwrite() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34570,7 +35234,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_rejects_unresolved_target_click() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34661,7 +35325,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_rejects_missing_page_anchor() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34776,7 +35440,7 @@ mod tests {
 
     #[test]
     fn session_record_build_task_rejects_out_of_bounds_click() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34893,7 +35557,7 @@ mod tests {
 
     #[test]
     fn session_record_step_requires_active_record() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -34932,7 +35596,7 @@ mod tests {
 
     #[test]
     fn session_record_step_rejects_duplicate_step_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35013,7 +35677,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_updates_anchor_metadata() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35107,12 +35771,12 @@ mod tests {
 
     #[test]
     fn session_record_amend_rebacktests_frame_backed_anchor() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
-        let artifact_dir = temp.path().join("artifacts");
+        let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         unsafe {
             env::set_var(CONFIG_ENV, &config);
@@ -35237,7 +35901,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_selects_auto_region_candidate_and_rebacktests() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35384,7 +36048,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_candidate_index_requires_auto_region_report() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35471,7 +36135,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_updates_operation_metadata() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35562,7 +36226,7 @@ mod tests {
 
     #[test]
     fn session_record_amend_requires_supported_field() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35636,7 +36300,7 @@ mod tests {
 
     #[test]
     fn session_record_start_requires_task_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -35689,6 +36353,80 @@ mod tests {
         let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
         assert_eq!(err.code, "lab_lease_required");
         assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn preempted_session_lease_cannot_authorize_control_request() {
+        let temp = TempDir::new().unwrap();
+        let lease = SessionLease {
+            instance: "ak".to_string(),
+            holder: "scheduler".to_string(),
+            lease_id: "lease-1".to_string(),
+            acquired_at_unix_ms: 1,
+            updated_at_unix_ms: 2,
+            preempted: true,
+            previous: None,
+        };
+        write_json_file_atomic(&session_lease_path(temp.path(), "ak"), &lease).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "request-1".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: vec!["100".to_string(), "200".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 1,
+        };
+
+        let err = execute_session_command_request_inner(&request, temp.path()).unwrap_err();
+        assert_eq!(err.code, "lease_preempted");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn stream_input_relay_local_path_requires_lease() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join("session");
+        let config_path = temp.path().join("config.json");
+        unsafe {
+            env::set_var(CONFIG_ENV, &config_path);
+        }
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "stream",
+                "--local",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--dry-run",
+                "--input-relay",
+                "tap",
+                "100",
+                "200",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lab_lease_required"
+        );
     }
 
     #[test]
@@ -36021,7 +36759,7 @@ mod tests {
 
     #[test]
     fn session_status_request_returns_daemon_diagnostics() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         unsafe {
@@ -38496,7 +39234,7 @@ mod tests {
 
     #[test]
     fn session_events_filters_submit_plan_phase_c_data_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         write_test_session_files(state_dir);
@@ -38639,7 +39377,7 @@ mod tests {
 
     #[test]
     fn session_events_filters_phase_c_plan_next_action_data_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         write_test_session_files(state_dir);
@@ -38777,7 +39515,7 @@ mod tests {
 
     #[test]
     fn session_events_filters_readiness_startup_data_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         unsafe {
@@ -38888,12 +39626,12 @@ mod tests {
 
     #[test]
     fn session_events_filters_bootstrap_startup_data_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
-        write_test_session_files(state_dir);
+        write_test_dead_session_files(state_dir);
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            env::set_var(CONFIG_ENV, temp.path().join("config.json"));
         }
         let global = SessionCommandGlobal {
             instance: Some("ak".to_string()),
@@ -38938,6 +39676,9 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
+        unsafe {
+            env::remove_var(CONFIG_ENV);
+        }
         let events = payload.get("events").and_then(Value::as_array).unwrap();
 
         assert_eq!(events.len(), 1);
@@ -39341,7 +40082,7 @@ mod tests {
 
     #[test]
     fn session_capabilities_request_returns_daemon_contract() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -39435,7 +40176,7 @@ mod tests {
 
     #[test]
     fn session_instance_registry_request_returns_contract() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         unsafe {
@@ -40312,7 +41053,7 @@ mod tests {
 
     #[test]
     fn session_lease_request_acquires_and_releases_in_daemon_state_dir() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("daemon-state");
@@ -40382,7 +41123,7 @@ mod tests {
 
     #[test]
     fn session_record_request_starts_statuses_and_stops_in_daemon_state_dir() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("daemon-state");
@@ -43136,7 +43877,7 @@ mod tests {
 
     #[test]
     fn session_request_journal_records_success_and_error() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -43499,7 +44240,7 @@ mod tests {
 
     #[test]
     fn session_status_diagnostics_reports_queue_and_journal_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -44494,7 +45235,7 @@ mod tests {
 
     #[test]
     fn session_status_cli_diagnostics_reports_configured_instances() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
@@ -44802,7 +45543,7 @@ mod tests {
 
     #[test]
     fn session_instance_list_reads_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         unsafe {
@@ -44873,7 +45614,7 @@ mod tests {
 
     #[test]
     fn session_instance_registry_reports_contract() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         unsafe {
@@ -44960,7 +45701,7 @@ mod tests {
 
     #[test]
     fn session_instance_registry_rejects_invalid_configured_backend() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         unsafe {
@@ -45157,7 +45898,7 @@ mod tests {
 
     #[test]
     fn session_contract_is_offline_access_contract() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
         }
@@ -46015,7 +46756,7 @@ mod tests {
 
     #[test]
     fn session_transport_check_request_returns_transport_check() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -46055,7 +46796,7 @@ mod tests {
 
     #[test]
     fn session_transport_plan_request_returns_summary() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
@@ -46875,7 +47616,7 @@ mod tests {
 
     #[test]
     fn detect_page_returns_standby_when_no_page_matches() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let pack = temp.path().join("pack.json");
         let pages = temp.path().join("pages.json");
@@ -46925,7 +47666,7 @@ mod tests {
 
     #[test]
     fn detect_page_resolves_pack_from_resource_root_and_game_alias() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let recognition = temp.path().join("recognition");
         fs::create_dir(&recognition).unwrap();
@@ -46975,7 +47716,7 @@ mod tests {
 
     #[test]
     fn detect_page_accepts_reorganized_repo_root_resource_root() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
         let ours = repo.join("ours");
@@ -47150,7 +47891,7 @@ mod tests {
 
     #[test]
     fn current_page_resolves_semantic_page() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(CONFIG_ENV);
             env::remove_var(SESSION_STATE_ENV);
@@ -47188,7 +47929,7 @@ mod tests {
 
     #[test]
     fn tap_target_dry_run_requires_visible_target_and_returns_point() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             env::remove_var(CONFIG_ENV);
             env::remove_var(SESSION_STATE_ENV);

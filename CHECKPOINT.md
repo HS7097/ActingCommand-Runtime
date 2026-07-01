@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-07-01 Session Layer audit close-out from `cf9095a`
+
+### Current status
+
+- Implemented the Session Layer audit fix guide from `C:\合作工作区\ActingCommand\FIX-SessionLayer-audit-cf9095a.md`.
+- Runtime baseline before this task: `cf9095a01606654c42e6202e281260b5d5d21de9`.
+- The fix is limited to Runtime `actinglab` Session Layer code and tests.
+- B1 complete: `ENV_LOCK` test locking now recovers from poisoning so one panic does not cascade into unrelated test failures.
+- B0/D6 complete: session liveness/readiness now combines heartbeat freshness, pid match, and process liveness; stale, missing-heartbeat, pid-mismatched, and dead-process daemon state fails visibly before daemon-preferred routing or readiness success.
+- D2 complete: preempted leases are rejected for control authorization while release identity checks remain available for cleanup.
+- D8 complete: local/no-daemon `stream --input-relay` and repeated `--input-event` now require a matching active lease; daemon-internal execution remains allowed after the outer resident daemon request has already validated the lease.
+- D4/D9 complete: JSON file and JSONL journal writes now serialize complete payloads first, use unique temp file names where applicable, flush, and sync.
+- D3 complete: daemon request journal entries are appended before request files are removed from the queue.
+- D5/D7 complete: record artifact directories and build/promote artifact sources are lexically contained within the Session Layer state/record boundary.
+- D1 complete: checked transport records missing `safe_to_connect` are unsafe by default; only explicitly unchecked local/no-endpoint transport remains allowed.
+- No resource repositories were used or modified.
+- No UI, OCR, SQLite, game logic, upstream source copying, or live device validation was added.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\Users\Alice\.codex\AGENTS.md`
+- `Get-Content C:\合作工作区\ActingCommand\FIX-SessionLayer-audit-cf9095a.md`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `cargo fmt --all`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Source scans for old unsafe Session Layer patterns:
+  - poisoned `ENV_LOCK.lock().unwrap()`
+  - direct `serde_json::to_writer(&mut file...)` journal writes
+  - pid-only JSON temp file names
+  - unchecked `PathBuf::from(&artifact.path)`
+  - test artifact dirs outside `state_dir`
+- Source scan for input fallback/reconnect/ADB shell patterns; matches were existing documented policy/contract strings and command names, not new fallback paths.
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab`: passed.
+- `cargo test -p actingcommand-actinglab`: passed, 462 tests.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- Unsafe-pattern scans for this audit scope: passed, no old target patterns remained.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+
+### Current blocker
+
+- None for this Session Layer audit close-out.
+- Live emulator/device validation was not part of this audit fix and remains separate.
+
+### Next step
+
+1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Tag the pushed commit as a stable checkpoint for Session Layer audit rollback/provenance.
+3. Wait for the next scoped Runtime/UI task before expanding Session Layer behavior further.
+
 ## 2026-06-29 ActingLab record policy event summary
 
 ### Current status
