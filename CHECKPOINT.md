@@ -73,18 +73,17 @@
   - `cargo fmt --all -- --check`
   - `cargo clippy --workspace -- -D warnings`
   - `cargo test --workspace`
+- Final remote CI run for `60bec28cb2e15ca928d3619eb80437a26b1ec1a4` passed Format, Clippy, and Test on GitHub Actions run `28528460371`.
 
 ### Current blocker
 
-- Remote GitHub Actions CI must be re-run after the device-config test fixture fix is pushed.
+- None for the Session Layer true-acceptance close-out.
 - Live emulator/device validation is still outside this Session Layer close-out.
 
 ### Next step
 
-1. Commit and push the Windows short-path canonicalization fix plus updated `PLANS.md` and `CHECKPOINT.md`.
-2. Confirm the GitHub Actions workflow result for the pushed commit.
-3. If the remote CI is green, tag the pushed commit as a stable Session Layer acceptance checkpoint.
-4. Keep Phase C self-heal loop, long-lived interaction stream, trusted encrypted remote channel, scheduler/UI integration, and live device validation for later scoped tasks.
+1. Tag the pushed commit as a stable Session Layer acceptance checkpoint.
+2. Keep Phase C self-heal loop, long-lived interaction stream, trusted encrypted remote channel, scheduler/UI integration, and live device validation for later scoped tasks.
 
 ## 2026-07-01 Session Layer Round 2 close-out from `6151553`
 
