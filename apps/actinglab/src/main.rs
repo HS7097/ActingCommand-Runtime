@@ -23109,6 +23109,20 @@ mod tests {
         endpoint
     }
 
+    fn user_config_with_test_adb() -> (TempDir, UserConfig) {
+        let temp = tempfile::tempdir().unwrap();
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb_path = temp.path().join(adb_name);
+        fs::write(&adb_path, b"test adb placeholder").unwrap();
+        (
+            temp,
+            UserConfig {
+                adb_path: Some(adb_path.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        )
+    }
+
     #[test]
     fn tests_mutate_config_env_only_through_fixture_helpers() {
         let source = include_str!("main.rs");
@@ -48598,7 +48612,7 @@ mod tests {
             instance: Some("127.0.0.1:16416".to_string()),
             ..Default::default()
         };
-        let config = UserConfig::default();
+        let (_adb_dir, config) = user_config_with_test_adb();
         let resolved = device_config(&global, &config).expect("device config");
         assert_eq!(resolved.target.serial.as_deref(), Some("127.0.0.1:16416"));
     }
@@ -48609,7 +48623,7 @@ mod tests {
             instance: Some("ak-b".to_string()),
             ..Default::default()
         };
-        let mut config = UserConfig::default();
+        let (_adb_dir, mut config) = user_config_with_test_adb();
         config.instances.insert(
             "ak-b".to_string(),
             InstanceConfig {
@@ -48632,7 +48646,7 @@ mod tests {
             capture_backend: Some(CaptureBackendChoice::Adb),
             ..Default::default()
         };
-        let mut config = UserConfig::default();
+        let (_adb_dir, mut config) = user_config_with_test_adb();
         config.instances.insert(
             "ak-b".to_string(),
             InstanceConfig {
