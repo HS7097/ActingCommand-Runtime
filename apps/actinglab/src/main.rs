@@ -59,6 +59,7 @@ const SESSION_DAEMON_REQUEST_ACK_TIMEOUT_MS: u64 = 1_000;
 const SESSION_DAEMON_LIVENESS_TIMEOUT_MS: u64 = 200;
 const SESSION_DAEMON_LIVENESS_PREFIX: &str = "actinglab-session-daemon ";
 const SESSION_ORPHAN_TMP_MIN_AGE_MS: u64 = 60_000;
+#[cfg(debug_assertions)]
 const SESSION_CRASH_INJECTION_ENV: &str = "ACTINGLAB_TEST_SESSION_CRASH_POINT";
 const SESSION_REQUEST_STATE_WAIT_DEFAULT_STATUSES: &[&str] =
     &["response_available", "completed", "failed"];

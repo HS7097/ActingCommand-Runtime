@@ -1,5 +1,53 @@
 # CHECKPOINT.md
 
+## 2026-07-02 full validation rerun and release-clippy cleanup
+
+### Current status
+
+- Re-ran full local Runtime validation after the old B0/B1 109-failure concern.
+- Local `main` matched `origin/main` at `0d6f4abd8ef62c8d3ecc22a18739f7fbec4abe23` before this cleanup.
+- Latest remote CI run checked before cleanup, `28533744122`, passed on GitHub Actions.
+- The historical 109 red was the documented B0/B1 cascade, not a current Runtime failure.
+- During stricter release validation, `cargo clippy --workspace --release -- -D warnings` caught release-only dead code for `SESSION_CRASH_INJECTION_ENV`.
+- Fixed by compiling the crash-injection environment constant only under `#[cfg(debug_assertions)]`; release behavior is unchanged.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git rev-parse HEAD`
+- `git ls-remote origin refs/heads/main`
+- `gh run list --repo HS7097/ActingCommand-Runtime --branch main --limit 5`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --no-fail-fast`
+- `cargo test -p actingcommand-actinglab session_events_filters_bootstrap_startup_data_summary -- --nocapture`
+- `cargo build --release --workspace`
+- `cargo clippy --workspace --release -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace --no-fail-fast`: passed, 690 tests passed and 0 failed.
+- `session_events_filters_bootstrap_startup_data_summary`: passed.
+- `cargo build --release --workspace`: passed.
+- `cargo clippy --workspace --release -- -D warnings`: failed before cleanup on the debug-only crash-injection constant, then passed after cleanup.
+- `git diff --check`: passed.
+- Remote GitHub Actions CI run `28533744122`: passed Format, Clippy, and Test for the pre-cleanup remote state.
+
+### Current blocker
+
+- None for offline/full local validation.
+- Live device smoke remains a separate device-gated validation step.
+
 ## 2026-07-02 Session Layer D6 reliability close-out from `fb00856`
 
 ### Current status

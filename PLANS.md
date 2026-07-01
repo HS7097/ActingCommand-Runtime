@@ -12,6 +12,14 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current full-validation rerun
+
+The 2026-07-02 full Runtime validation rerun rechecked the old B0/B1 "one failure amplified into 109 failures" concern against the current `main` code path.
+
+The rerun confirmed that local `main` matched `origin/main` at `0d6f4ab` before the cleanup, GitHub CI run `28533744122` was green for that remote state, and the workspace passes format, dev clippy, release clippy, release build, the targeted B0-adjacent session-events test, and full `cargo test --workspace --no-fail-fast` locally.
+
+The old 109-failure event was the documented B0/B1 cascade from ambient local config plus poisoned `ENV_LOCK`, not a current Runtime failure. During stricter release validation, `cargo clippy --workspace --release -- -D warnings` found a release-only dead-code warning on the debug crash-injection environment constant. The fix gates that constant behind `#[cfg(debug_assertions)]`, preserving the debug-only crash-injection behavior while keeping release validation warning-clean.
+
 ## Current Session Layer D6 reliability close-out
 
 The 2026-07-02 D6 reliability close-out from baseline `fb00856` is implemented in the Rust `actinglab` code path.
