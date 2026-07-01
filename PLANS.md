@@ -12,6 +12,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current Session Layer Round 2 close-out
+
+The 2026-07-01 Session Layer Round 2 fix from baseline `6151553` is implemented in the Rust `actinglab` code path.
+
+Completed Round 2 fixes:
+
+- D6: resident daemon liveness now requires daemon identity binding, not only a live PID. `SessionInfo` and `SessionHeartbeat` carry a shared daemon id, diagnostics expose identity presence/match state, and readiness/session-info routing rejects a live non-daemon PID with mismatched or missing identity.
+- D5/D7: artifact directories and artifact source paths now pass canonical containment checks that resolve symlink/junction/alias escapes while still rejecting absolute/outside inputs before artifact use.
+- D9: request-journal reads skip corrupt or truncated JSONL lines, count skipped lines, and expose the count in journal/status diagnostics while journal writes still fail loudly.
+- D4: atomic JSON writes clean only current-process orphan temp files before publish and remove the current temp file on publish failure.
+- D3/D9: request processing preserves the queued request when response/journal/remove ordering fails before safe cleanup.
+- D1: no-endpoint local connect-plan behavior is covered by regression tests and remains safe because unchecked local/no-endpoint transport does not block client preflight.
+
+No resource repositories were used in this Round 2 fix, and no UI, OCR, SQLite, game logic, upstream source copying, live device validation, fallback path, reconnect path, or transport listener was added.
+
 ## Current Session Layer audit close-out
 
 The 2026-07-01 Session Layer audit fix from baseline `cf9095a01606654c42e6202e281260b5d5d21de9` is implemented in the Rust `actinglab` code path.
@@ -31,6 +46,7 @@ No resource repositories were used in this audit fix, and no UI, OCR, SQLite, ga
 
 ## Current completed milestones
 
+- ActingLab Session Layer Round 2 close-out: daemon identity-bound liveness, canonical artifact containment, corrupt-journal skip diagnostics, orphan temp cleanup, request-processing failure-window regression coverage, and no-endpoint connect-plan regression coverage.
 - ActingLab Session Layer audit close-out: liveness/process readiness, lease preemption, local stream relay lease gating, durable request journaling, atomic JSON writes, artifact path containment, and safe transport defaults.
 - P1.6 MaaTouch input backend stability close-out.
 - P2 ADB `exec-out screencap -p` capture backend.

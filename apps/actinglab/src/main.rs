@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -331,6 +332,7 @@ struct InstanceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionInfo {
     pid: u32,
+    daemon_id: Option<String>,
     started_at_unix_ms: u64,
     state_dir: String,
     runtime_version: String,
@@ -339,6 +341,7 @@ struct SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionHeartbeat {
     pid: u32,
+    daemon_id: Option<String>,
     updated_at_unix_ms: u64,
     state: String,
 }
@@ -348,6 +351,7 @@ enum SessionLivenessStatus {
     Stopped,
     HeartbeatMissing,
     PidMismatch,
+    IdentityMismatch,
     Stale,
     Alive,
 }
@@ -358,6 +362,7 @@ impl SessionLivenessStatus {
             Self::Stopped => "stopped",
             Self::HeartbeatMissing => "heartbeat_missing",
             Self::PidMismatch => "pid_mismatch",
+            Self::IdentityMismatch => "identity_mismatch",
             Self::Stale => "stale",
             Self::Alive => "alive",
         }
@@ -374,6 +379,7 @@ struct SessionLivenessSnapshot {
     heartbeat_age_ms: Option<u64>,
     heartbeat_clock_skew_ms: u64,
     pid_match: Option<bool>,
+    identity_match: Option<bool>,
     process_alive: Option<bool>,
 }
 
@@ -429,6 +435,11 @@ fn platform_process_is_alive(pid: u32) -> bool {
 #[cfg(not(any(windows, unix)))]
 fn platform_process_is_alive(pid: u32) -> bool {
     pid == std::process::id()
+}
+
+fn new_session_daemon_id() -> String {
+    let seq = JSON_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{:x}-{seq:x}", std::process::id(), current_unix_ms())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -522,6 +533,12 @@ struct SessionRequestJournalEntry {
     created_at_unix_ms: u64,
     started_at_unix_ms: u64,
     completed_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct SessionRequestJournalRead {
+    entries: Vec<SessionRequestJournalEntry>,
+    skipped_corrupt_lines: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11914,7 +11931,10 @@ fn session_journal_payload(
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let mut entries = read_session_request_journal(state_dir, filters.read_limit(limit))?
+    let read_result =
+        read_session_request_journal_with_diagnostics(state_dir, filters.read_limit(limit))?;
+    let mut entries = read_result
+        .entries
         .into_iter()
         .filter(|entry| filters.matches(entry))
         .collect::<Vec<_>>();
@@ -11942,6 +11962,7 @@ fn session_journal_payload(
             json!(&filters.statuses)
         },
         "target_filter": filters.target.to_json(),
+        "skipped_corrupt_lines": read_result.skipped_corrupt_lines,
         "entries": entries
     }))
 }
@@ -12268,6 +12289,7 @@ fn session_status_diagnostics(
             "path": session_request_journal_path(state_dir).display().to_string(),
             "bytes": file_size_if_exists(&session_request_journal_path(state_dir))?,
             "total_entries": count_session_request_journal_entries(state_dir)?,
+            "skipped_corrupt_lines": count_session_request_journal_skipped_corrupt_lines(state_dir)?,
             "recent_limit": 5,
             "recent_count": recent_entries.len(),
             "last_entry": last_entry,
@@ -12871,6 +12893,7 @@ fn session_liveness_recommended_actions(
         )],
         SessionLivenessStatus::HeartbeatMissing
         | SessionLivenessStatus::PidMismatch
+        | SessionLivenessStatus::IdentityMismatch
         | SessionLivenessStatus::Stale => vec![
             session_recommended_action(
                 1,
@@ -13888,6 +13911,9 @@ fn session_liveness_diagnostics_with_process_liveness(
         "daemon_pid": info.map(|value| value.pid),
         "heartbeat_pid": heartbeat.map(|value| value.pid),
         "pid_match": snapshot.pid_match,
+        "daemon_identity_match": snapshot.identity_match,
+        "info_daemon_id_present": info.and_then(|value| value.daemon_id.as_ref()).is_some(),
+        "heartbeat_daemon_id_present": heartbeat.and_then(|value| value.daemon_id.as_ref()).is_some(),
         "process_alive": snapshot.process_alive,
         "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
         "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
@@ -13920,8 +13946,18 @@ fn session_liveness_snapshot_with_process_liveness(
         (Some(info), Some(heartbeat)) => Some(info.pid == heartbeat.pid),
         _ => None,
     };
+    let identity_match = match (info, heartbeat) {
+        (Some(info), Some(heartbeat)) => Some(
+            info.daemon_id.is_some()
+                && heartbeat.daemon_id.is_some()
+                && info.daemon_id == heartbeat.daemon_id,
+        ),
+        _ => None,
+    };
     let process_alive = match (info, heartbeat, pid_match, heartbeat_age_ms) {
-        (Some(info), Some(_), Some(true), Some(age)) if age <= SESSION_HEARTBEAT_STALE_MS => {
+        (Some(info), Some(_), Some(true), Some(age))
+            if identity_match == Some(true) && age <= SESSION_HEARTBEAT_STALE_MS =>
+        {
             Some(process_liveness.is_alive(info.pid))
         }
         _ => None,
@@ -13930,6 +13966,9 @@ fn session_liveness_snapshot_with_process_liveness(
         (None, _, _, _) => SessionLivenessStatus::Stopped,
         (Some(_), None, _, _) => SessionLivenessStatus::HeartbeatMissing,
         (Some(_), Some(_), Some(false), _) => SessionLivenessStatus::PidMismatch,
+        (Some(_), Some(_), Some(true), _) if identity_match != Some(true) => {
+            SessionLivenessStatus::IdentityMismatch
+        }
         (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => {
             SessionLivenessStatus::Stale
         }
@@ -13941,6 +13980,7 @@ fn session_liveness_snapshot_with_process_liveness(
         heartbeat_age_ms,
         heartbeat_clock_skew_ms,
         pid_match,
+        identity_match,
         process_alive,
     }
 }
@@ -16389,6 +16429,7 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
     })?;
     let info = SessionInfo {
         pid: std::process::id(),
+        daemon_id: Some(new_session_daemon_id()),
         started_at_unix_ms: current_unix_ms(),
         state_dir: state_dir.display().to_string(),
         runtime_version: RUNTIME_VERSION.to_string(),
@@ -16400,6 +16441,7 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
         let monitor_ran = run_due_session_monitor_policy(&state_dir)?;
         let heartbeat = SessionHeartbeat {
             pid: std::process::id(),
+            daemon_id: info.daemon_id.clone(),
             updated_at_unix_ms: current_unix_ms(),
             state: if processed > 0 {
                 "processed_request".to_string()
@@ -20290,14 +20332,8 @@ fn path_has_root_or_prefix(path: &Path) -> bool {
 fn path_starts_with_case_aware(path: &Path, base: &Path) -> bool {
     #[cfg(windows)]
     {
-        let path_components = path
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        let base_components = base
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-            .collect::<Vec<_>>();
+        let path_components = windows_normalized_path_components(path);
+        let base_components = windows_normalized_path_components(base);
         path_components.len() >= base_components.len()
             && path_components
                 .iter()
@@ -20308,6 +20344,85 @@ fn path_starts_with_case_aware(path: &Path, base: &Path) -> bool {
     {
         path.starts_with(base)
     }
+}
+
+#[cfg(windows)]
+fn windows_normalized_path_components(path: &Path) -> Vec<String> {
+    let raw = path.to_string_lossy();
+    let normalized = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw.to_string()
+    };
+    Path::new(&normalized)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect()
+}
+
+fn canonicalize_required_base(
+    base: &Path,
+    reason: &str,
+    blocked_by: &[&'static str],
+) -> CliOutcome<PathBuf> {
+    base.canonicalize().map_err(|err| {
+        CliError::safety_blocked(
+            "path_escape",
+            format!(
+                "{reason}: allowed base {} cannot be canonicalized: {err}",
+                base.display()
+            ),
+            blocked_by,
+        )
+    })
+}
+
+fn canonicalize_with_existing_parent(
+    path: &Path,
+    reason: &str,
+    blocked_by: &[&'static str],
+) -> CliOutcome<PathBuf> {
+    let mut existing = path.to_path_buf();
+    let mut missing = Vec::<OsString>::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name().map(OsString::from) else {
+            return Err(CliError::safety_blocked(
+                "path_escape",
+                format!(
+                    "{reason}: path {} has no existing parent inside the allowed base",
+                    path.display()
+                ),
+                blocked_by,
+            ));
+        };
+        missing.push(name);
+        if !existing.pop() {
+            return Err(CliError::safety_blocked(
+                "path_escape",
+                format!(
+                    "{reason}: path {} has no existing parent inside the allowed base",
+                    path.display()
+                ),
+                blocked_by,
+            ));
+        }
+    }
+    let mut resolved = existing.canonicalize().map_err(|err| {
+        CliError::safety_blocked(
+            "path_escape",
+            format!(
+                "{reason}: existing parent {} cannot be canonicalized: {err}",
+                existing.display()
+            ),
+            blocked_by,
+        )
+    })?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(normalize_path_lexically(&resolved))
 }
 
 fn ensure_path_within(
@@ -20326,20 +20441,33 @@ fn ensure_path_within(
             blocked_by,
         ));
     }
-    let base = absolute_lexical_path(base)?;
+    let lexical_base = absolute_lexical_path(base)?;
     let joined = if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
-        base.join(candidate)
+        lexical_base.join(candidate)
     };
-    let resolved = normalize_path_lexically(&joined);
-    if !path_starts_with_case_aware(&resolved, &base) {
+    let lexical_resolved = normalize_path_lexically(&joined);
+    if !path_starts_with_case_aware(&lexical_resolved, &lexical_base) {
         return Err(CliError::safety_blocked(
             "path_escape",
             format!(
                 "{reason}: path {} escapes allowed base {}",
+                lexical_resolved.display(),
+                lexical_base.display()
+            ),
+            blocked_by,
+        ));
+    }
+    let canonical_base = canonicalize_required_base(&lexical_base, reason, blocked_by)?;
+    let resolved = canonicalize_with_existing_parent(&lexical_resolved, reason, blocked_by)?;
+    if !path_starts_with_case_aware(&resolved, &canonical_base) {
+        return Err(CliError::safety_blocked(
+            "path_escape",
+            format!(
+                "{reason}: path {} escapes allowed base {} after canonicalization",
                 resolved.display(),
-                base.display()
+                canonical_base.display()
             ),
             blocked_by,
         ));
@@ -20410,57 +20538,48 @@ fn read_session_request_journal(
     state_dir: &Path,
     limit: usize,
 ) -> CliOutcome<Vec<SessionRequestJournalEntry>> {
+    Ok(read_session_request_journal_with_diagnostics(state_dir, limit)?.entries)
+}
+
+fn read_session_request_journal_with_diagnostics(
+    state_dir: &Path,
+    limit: usize,
+) -> CliOutcome<SessionRequestJournalRead> {
     let path = session_request_journal_path(state_dir);
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(SessionRequestJournalRead {
+            entries: Vec::new(),
+            skipped_corrupt_lines: 0,
+        });
     }
     let text = fs::read_to_string(&path).map_err(|err| {
         CliError::runtime_not_running(format!("failed to read journal {}: {err}", path.display()))
     })?;
-    let lines = text
-        .lines()
-        .enumerate()
-        .filter(|(_line_no, line)| !line.trim().is_empty())
-        .collect::<Vec<_>>();
-    let skip = lines.len().saturating_sub(limit);
-    lines
-        .into_iter()
-        .skip(skip)
-        .map(|(line_no, line)| {
-            serde_json::from_str::<SessionRequestJournalEntry>(line).map_err(|err| {
-                CliError::runtime_not_running(format!(
-                    "failed to parse journal {} line {}: {err}",
-                    path.display(),
-                    line_no + 1
-                ))
-            })
-        })
-        .collect()
+    let mut entries = Vec::new();
+    let mut skipped_corrupt_lines = 0usize;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str::<SessionRequestJournalEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => skipped_corrupt_lines += 1,
+        }
+    }
+    let skip = entries.len().saturating_sub(limit);
+    Ok(SessionRequestJournalRead {
+        entries: entries.into_iter().skip(skip).collect(),
+        skipped_corrupt_lines,
+    })
 }
 
 fn count_session_request_journal_entries(state_dir: &Path) -> CliOutcome<usize> {
-    let path = session_request_journal_path(state_dir);
-    if !path.exists() {
-        return Ok(0);
-    }
-    let text = fs::read_to_string(&path).map_err(|err| {
-        CliError::runtime_not_running(format!("failed to read journal {}: {err}", path.display()))
-    })?;
-    let mut count = 0usize;
-    for (line_no, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        serde_json::from_str::<SessionRequestJournalEntry>(line).map_err(|err| {
-            CliError::runtime_not_running(format!(
-                "failed to parse journal {} line {}: {err}",
-                path.display(),
-                line_no + 1
-            ))
-        })?;
-        count += 1;
-    }
-    Ok(count)
+    Ok(
+        read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?
+            .entries
+            .len(),
+    )
+}
+
+fn count_session_request_journal_skipped_corrupt_lines(state_dir: &Path) -> CliOutcome<usize> {
+    Ok(read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?.skipped_corrupt_lines)
 }
 
 fn file_size_if_exists(path: &Path) -> CliOutcome<u64> {
@@ -20997,6 +21116,7 @@ where
     }
     let text = serde_json::to_string_pretty(value)
         .map_err(|err| CliError::usage(format!("failed to serialize JSON: {err}")))?;
+    cleanup_current_process_json_tmp_files(path)?;
     let seq = JSON_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("tmp-{}-{seq}", std::process::id()));
     let mut file = File::create(&tmp)
@@ -21007,12 +21127,44 @@ where
         .map_err(|err| CliError::usage(format!("failed to sync {}: {err}", tmp.display())))?;
     drop(file);
     fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
         CliError::usage(format!(
             "failed to publish {} from {}: {err}",
             path.display(),
             tmp.display()
         ))
     })
+}
+
+fn cleanup_current_process_json_tmp_files(path: &Path) -> CliOutcome<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if !parent.exists() {
+        return Ok(());
+    }
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return Ok(());
+    };
+    let prefix = format!("{stem}.tmp-{}-", std::process::id());
+    let entries = fs::read_dir(parent)
+        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", parent.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            CliError::usage(format!("failed to inspect {}: {err}", parent.display()))
+        })?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name.starts_with(&prefix) {
+            fs::remove_file(entry.path()).map_err(|err| {
+                CliError::usage(format!(
+                    "failed to remove stale temp file {}: {err}",
+                    entry.path().display()
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn safe_file_stem(value: &str) -> String {
@@ -22510,6 +22662,30 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn create_test_dir_alias(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = (link, target);
+            false
+        }
+    }
+
     struct FixedProcessLiveness(bool);
 
     impl ProcessLiveness for FixedProcessLiveness {
@@ -23624,14 +23800,17 @@ mod tests {
     }
 
     fn write_test_session_files_with_pid(state_dir: &Path, pid: u32) {
+        let daemon_id = test_session_daemon_id();
         let info = SessionInfo {
             pid,
+            daemon_id: Some(daemon_id.clone()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
         };
         let heartbeat = SessionHeartbeat {
             pid,
+            daemon_id: Some(daemon_id),
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -23642,6 +23821,7 @@ mod tests {
     fn write_test_session_info_only(state_dir: &Path) {
         let info = SessionInfo {
             pid: std::process::id(),
+            daemon_id: Some(test_session_daemon_id()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -23650,12 +23830,21 @@ mod tests {
     }
 
     fn write_test_session_heartbeat(state_dir: &Path, pid: u32, updated_at_unix_ms: u64) {
+        let daemon_id = read_json_file::<SessionInfo>(&session_info_path(state_dir))
+            .unwrap()
+            .and_then(|info| info.daemon_id)
+            .unwrap_or_else(test_session_daemon_id);
         let heartbeat = SessionHeartbeat {
             pid,
+            daemon_id: Some(daemon_id),
             updated_at_unix_ms,
             state: "idle".to_string(),
         };
         write_json_file_atomic(&session_heartbeat_path(state_dir), &heartbeat).unwrap();
+    }
+
+    fn test_session_daemon_id() -> String {
+        "test-session-daemon".to_string()
     }
 
     fn append_test_session_journal_response(
@@ -23886,6 +24075,15 @@ mod tests {
         assert_eq!(
             data.get("safe_to_start_stream").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            data.get("safe_to_connect_transport")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.pointer("/transport/checked").and_then(Value::as_bool),
+            Some(false)
         );
         assert_eq!(
             data.pointer("/readiness/schema_version")
@@ -29531,12 +29729,14 @@ mod tests {
     fn session_liveness_diagnostics_classifies_heartbeat_state() {
         let info = SessionInfo {
             pid: 321,
+            daemon_id: Some("daemon-a".to_string()),
             started_at_unix_ms: 10,
             state_dir: "state".to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
         };
         let heartbeat = SessionHeartbeat {
             pid: 321,
+            daemon_id: Some("daemon-a".to_string()),
             updated_at_unix_ms: 1_000,
             state: "idle".to_string(),
         };
@@ -29582,6 +29782,7 @@ mod tests {
 
         let mismatched = SessionHeartbeat {
             pid: 999,
+            daemon_id: Some("daemon-a".to_string()),
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
@@ -29610,12 +29811,37 @@ mod tests {
             dead_process.get("process_alive").and_then(Value::as_bool),
             Some(false)
         );
+
+        let wrong_identity = SessionHeartbeat {
+            pid: 321,
+            daemon_id: Some("other-daemon".to_string()),
+            updated_at_unix_ms: 1_900,
+            state: "idle".to_string(),
+        };
+        let identity_mismatch = session_liveness_diagnostics_with_process_liveness(
+            Some(&info),
+            Some(&wrong_identity),
+            2_000,
+            &FixedProcessLiveness(true),
+        );
+        assert_eq!(
+            identity_mismatch.get("status").and_then(Value::as_str),
+            Some("identity_mismatch")
+        );
+        assert_eq!(
+            identity_mismatch
+                .get("can_accept_requests")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[test]
     fn write_json_file_atomic_uses_unique_tmp_and_publishes_complete_json() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("state.json");
+        let stale_tmp = path.with_extension(format!("tmp-{}-stale", std::process::id()));
+        fs::write(&stale_tmp, "stale").unwrap();
 
         for value in [
             json!({"value": 1}),
@@ -29628,6 +29854,7 @@ mod tests {
         let stored = fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&stored).unwrap();
         assert_eq!(parsed.get("value").and_then(Value::as_u64), Some(3));
+        assert!(!stale_tmp.exists());
         let leftovers = fs::read_dir(temp.path())
             .unwrap()
             .filter_map(|entry| entry.ok())
@@ -29681,6 +29908,56 @@ mod tests {
 
         write_test_session_heartbeat(temp.path(), std::process::id(), current_unix_ms());
         assert!(session_daemon_info_exists(&flags).unwrap());
+    }
+
+    #[test]
+    fn session_daemon_info_rejects_live_non_daemon_pid_without_identity_match() {
+        let temp = TempDir::new().unwrap();
+        let flags = FlagArgs::parse(&[
+            "--state-dir".to_string(),
+            temp.path().to_str().unwrap().to_string(),
+        ])
+        .unwrap();
+        let info = SessionInfo {
+            pid: std::process::id(),
+            daemon_id: Some("recorded-daemon".to_string()),
+            started_at_unix_ms: 10,
+            state_dir: temp.path().display().to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: std::process::id(),
+            daemon_id: Some("foreign-daemon".to_string()),
+            updated_at_unix_ms: current_unix_ms(),
+            state: "idle".to_string(),
+        };
+        write_json_file_atomic(&session_info_path(temp.path()), &info).unwrap();
+        write_json_file_atomic(&session_heartbeat_path(temp.path()), &heartbeat).unwrap();
+
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+        let status = run_cli(
+            [
+                "--json",
+                "session",
+                "status",
+                "--local",
+                "--diagnostics",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(status.exit_code(), 0);
+        assert_eq!(
+            status
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/diagnostics/liveness/status")
+                .and_then(Value::as_str),
+            Some("identity_mismatch")
+        );
     }
 
     #[test]
@@ -33162,6 +33439,33 @@ mod tests {
         assert_eq!(step.exit_code(), 3);
         assert_eq!(step.envelope.error.as_ref().unwrap().code, "path_escape");
         assert!(!escaped_artifact_dir.exists());
+    }
+
+    #[test]
+    fn ensure_path_within_rejects_directory_alias_escape() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("state");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let absolute_escape =
+            ensure_path_within(&base, &outside.join("artifact.png"), "test", &["record"])
+                .unwrap_err();
+        assert_eq!(absolute_escape.code, "path_escape");
+
+        let link = base.join("linked-outside");
+        if create_test_dir_alias(&link, &outside) {
+            let linked_escape = ensure_path_within(
+                &base,
+                Path::new("linked-outside/artifact.png"),
+                "test",
+                &["record"],
+            )
+            .unwrap_err();
+            assert_eq!(linked_escape.code, "path_escape");
+            let _ = fs::remove_dir(&link);
+        }
     }
 
     #[test]
@@ -36767,14 +37071,17 @@ mod tests {
         }
         let state_dir = temp.path();
         write_user_config(&UserConfig::default()).unwrap();
+        let daemon_id = test_session_daemon_id();
         let info = SessionInfo {
             pid: 123,
+            daemon_id: Some(daemon_id.clone()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
         };
         let heartbeat = SessionHeartbeat {
             pid: 123,
+            daemon_id: Some(daemon_id),
             updated_at_unix_ms: 20,
             state: "idle".to_string(),
         };
@@ -43876,6 +44183,41 @@ mod tests {
     }
 
     #[test]
+    fn process_session_requests_keeps_request_when_journal_append_fails() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        fs::create_dir_all(session_requests_dir(state_dir)).unwrap();
+        fs::create_dir_all(session_request_journal_path(state_dir)).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "journal-fails".to_string(),
+            command: "queue".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        let request_path = session_requests_dir(state_dir).join("journal-fails.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+
+        let err = process_session_requests(state_dir).unwrap_err();
+
+        assert_eq!(err.code, "runtime_not_running");
+        assert!(request_path.exists());
+        assert!(
+            session_responses_dir(state_dir)
+                .join("journal-fails.json")
+                .exists()
+        );
+    }
+
+    #[test]
     fn session_request_journal_records_success_and_error() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -45413,9 +45755,16 @@ mod tests {
     }
 
     #[test]
-    fn session_journal_corrupt_line_is_runtime_error() {
+    fn session_journal_skips_corrupt_line_and_reports_count() {
         let temp = TempDir::new().unwrap();
         fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
+        append_test_session_journal_response(
+            temp.path(),
+            "valid-journal",
+            "status",
+            Some("ak"),
+            json!({"schema_version": "test"}),
+        );
         let result = run_cli(
             [
                 "--json",
@@ -45427,17 +45776,30 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 5);
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "runtime_not_running"
+            data.get("skipped_corrupt_lines").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/entries/0/request_id")
+                .and_then(Value::as_str),
+            Some("valid-journal")
         );
     }
 
     #[test]
-    fn session_status_diagnostics_corrupt_journal_is_runtime_error() {
+    fn session_status_diagnostics_counts_corrupt_journal_lines() {
         let temp = TempDir::new().unwrap();
         fs::write(session_request_journal_path(temp.path()), "not-json\n").unwrap();
+        append_test_session_journal_response(
+            temp.path(),
+            "valid-journal",
+            "status",
+            Some("ak"),
+            json!({"schema_version": "test"}),
+        );
         let result = run_cli(
             [
                 "--json",
@@ -45450,10 +45812,25 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 5);
+        assert_eq!(result.exit_code(), 0);
+        let diagnostics = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("diagnostics")
+            .unwrap();
         assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "runtime_not_running"
+            diagnostics
+                .pointer("/journal/skipped_corrupt_lines")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/journal/total_entries")
+                .and_then(Value::as_u64),
+            Some(1)
         );
     }
 

@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-07-01 Session Layer Round 2 close-out from `6151553`
+
+### Current status
+
+- Implemented the Round 2 fix guide from `C:\合作工作区\ActingCommand\FIX-SessionLayer-round2-6151553.md`.
+- Runtime baseline before this task: `6151553`.
+- The fix is limited to Runtime `actinglab` Session Layer code and tests.
+- D6 complete: daemon readiness now requires identity binding in addition to heartbeat freshness and process liveness. `SessionInfo` and `SessionHeartbeat` carry a shared daemon id, diagnostics report identity presence/match state, and a live non-daemon PID with mismatched identity is rejected as not ready.
+- D5/D7 complete: artifact directory and artifact source containment now uses canonical path checks that resolve symlink/junction/alias escapes while preserving the existing outside-path rejection.
+- D9 complete: request-journal readers skip corrupt or truncated JSONL lines, count skipped lines, and expose the count in `session journal` and `session status --diagnostics`; journal writes still fail loudly.
+- D4 complete: atomic JSON publish cleans current-process orphan temp files and removes the current temp file after a publish failure.
+- D3/D9 complete: request processing now has failure-window regression coverage that preserves the queued request when journal append fails after response creation.
+- D1 complete: local/no-endpoint connect-plan behavior has explicit regression coverage and remains a safe unchecked client preflight.
+- No resource repositories were used or modified.
+- No UI, OCR, SQLite, game logic, upstream source copying, live device validation, fallback path, reconnect path, or transport listener was added.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\Users\Alice\.codex\AGENTS.md`
+- `Get-Content C:\合作工作区\ActingCommand\FIX-SessionLayer-round2-6151553.md`
+- `git status --short --branch`
+- `git diff --stat`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source scans for old unsafe Session Layer patterns:
+  - poisoned `ENV_LOCK.lock().unwrap()`
+  - direct `serde_json::to_writer(&mut file...)` journal writes
+  - pid-only JSON temp file names
+  - unchecked `PathBuf::from(&artifact.path)`
+  - test artifact dirs outside `state_dir`
+- Source scan for old direct request-journal parse failure text.
+- Checked for `.github/workflows`; no workflow directory exists in this repository, so no remote GitHub Actions CI run is available for this close-out.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab`: passed, 465 tests.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+- Unsafe-pattern scan for this Round 2 scope: passed, no old target patterns remained.
+- `.github/workflows`: absent; remote CI could not be triggered from this repository.
+
+### Current blocker
+
+- None for this Round 2 close-out.
+- Remote CI remains unavailable until a GitHub Actions workflow is added.
+- Live emulator/device validation was not part of this fix and remains separate.
+
+### Next step
+
+1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Tag the pushed commit as a stable checkpoint for Session Layer Round 2 rollback/provenance.
+3. Wait for the next scoped Runtime/UI task before expanding Session Layer behavior further.
+
 ## 2026-07-01 Session Layer audit close-out from `cf9095a`
 
 ### Current status
