@@ -20646,8 +20646,26 @@ fn canonicalize_with_existing_parent(
 fn windows_long_path(path: PathBuf) -> PathBuf {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
+    type Handle = *mut std::ffi::c_void;
+
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        fn CloseHandle(hObject: Handle) -> i32;
+        fn CreateFileW(
+            lpFileName: *const u16,
+            dwDesiredAccess: u32,
+            dwShareMode: u32,
+            lpSecurityAttributes: *mut std::ffi::c_void,
+            dwCreationDisposition: u32,
+            dwFlagsAndAttributes: u32,
+            hTemplateFile: Handle,
+        ) -> Handle;
+        fn GetFinalPathNameByHandleW(
+            hFile: Handle,
+            lpszFilePath: *mut u16,
+            cchFilePath: u32,
+            dwFlags: u32,
+        ) -> u32;
         fn GetLongPathNameW(
             lpszShortPath: *const u16,
             lpszLongPath: *mut u16,
@@ -20660,6 +20678,39 @@ fn windows_long_path(path: PathBuf) -> PathBuf {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_SHARE_READ: u32 = 0x01;
+    const FILE_SHARE_WRITE: u32 = 0x02;
+    const FILE_SHARE_DELETE: u32 = 0x04;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const INVALID_HANDLE_VALUE: Handle = !0usize as Handle;
+
+    // SAFETY: `input` is null-terminated; the handle is closed before this function returns.
+    let handle = unsafe {
+        CreateFileW(
+            input.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle != INVALID_HANDLE_VALUE {
+        let mut final_path = vec![0u16; 32_768];
+        // SAFETY: `final_path` is a valid writable buffer and `handle` is a live file handle.
+        let written = unsafe {
+            GetFinalPathNameByHandleW(handle, final_path.as_mut_ptr(), final_path.len() as u32, 0)
+        };
+        // SAFETY: `handle` was returned by `CreateFileW` above.
+        let _ = unsafe { CloseHandle(handle) };
+        if written > 0 && (written as usize) < final_path.len() {
+            return OsString::from_wide(&final_path[..written as usize]).into();
+        }
+    }
+
     // Windows CI can expose temp paths with 8.3 short components; expand them
     // before safety prefix checks so canonicalization does not create a false escape.
     // SAFETY: `input` is null-terminated and the first call only queries the required buffer size.

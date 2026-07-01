@@ -14,7 +14,7 @@
 - P1.4 complete: `CONFIG_ENV` test mutation is sealed behind helper functions, no-config tests use a missing temp config path, and a source guard rejects direct `remove_var(CONFIG_ENV)` or additional bare `set_var(CONFIG_ENV)` usage.
 - P1.5 prepared: GitHub Actions workflow now runs format, clippy, and workspace tests on Windows for `main` pushes and pull requests.
 - P2/D4 complete: daemon startup cleans stale JSON tmp files only when the name matches the tmp pattern, the mtime is older than the configured threshold, and the owner PID is not alive.
-- P2/D5/D7 complete for record artifact directories: containment is rechecked after directory creation, and Windows 8.3 short-path components are expanded before canonical safety prefix comparison.
+- P2/D5/D7 complete for record artifact directories: containment is rechecked after directory creation, and Windows final-path normalization covers 8.3 short-path components before canonical safety prefix comparison.
 - P2/D9 complete: corrupt journal lines are counted and surfaced in diagnostics and `corrupt_journal_inspect` recommended actions.
 - No resource repositories were read or modified.
 - No UI, OCR, SQLite, game logic, upstream source copying, live device validation, ADB input fallback, reconnect loop, or broad runtime redesign was added.
@@ -64,10 +64,11 @@
 - `git diff --check`: passed.
 - Source guard scan: no direct `env::remove_var(CONFIG_ENV)` and only the two allowed fixture-helper `env::set_var(CONFIG_ENV)` calls remain.
 - First remote CI run for `b5b46a8ccb9eeb914cd0069d5fd27f0420db4b84` failed in the Test step because the Windows runner represented temp paths with an 8.3 short component such as `RUNNER~1`, while canonicalized record artifact paths used the long `runneradmin` form. The fix expands Windows long path names before the post-create containment recheck.
+- Second remote CI run for `b60ba0b893f806601ed0a1b164cb530b8780955e` failed in the same Windows Test step because the short/long temp path alias could still survive parent-based canonicalization. The follow-up fix resolves existing paths through `GetFinalPathNameByHandleW` before falling back to `GetLongPathNameW`, and the Windows CI job now pins `TEMP`/`TMP` to `${{ runner.temp }}`.
 
 ### Current blocker
 
-- Remote GitHub Actions CI must be re-run after the Windows short-path fix is pushed.
+- Remote GitHub Actions CI must be re-run after the Windows final-path normalization fix is pushed.
 - Live emulator/device validation is still outside this Session Layer close-out.
 
 ### Next step
