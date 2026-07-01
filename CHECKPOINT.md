@@ -1,5 +1,79 @@
 # CHECKPOINT.md
 
+## 2026-07-01 Session Layer true-acceptance close-out from `0925c2a`
+
+### Current status
+
+- Implemented the Session Layer acceptance close-out plan from `C:\合作工作区\ActingCommand\TASK-SessionLayer-closeout.md`.
+- Runtime baseline before this task: `0925c2a`.
+- The fix is limited to Runtime `actinglab` Session Layer code, tests, CI workflow, and planning/checkpoint records.
+- P0/D6 complete: readiness now requires daemon-owned local liveness proof. `SessionInfo` and `SessionHeartbeat` carry `daemon_liveness_endpoint`, diagnostics expose liveness-probe state, and forged same-id state with a live non-daemon PID is rejected as `liveness_probe_failed`.
+- P1.1 complete: `apps/actinglab/tests/session_closeout.rs` starts a real daemon, waits for readiness, kills it non-gracefully, and verifies readiness becomes not-ready.
+- P1.2/D3 complete: debug-build child-process crash injection covers response write, journal append, and request removal windows. Restart recovery preserves the response, leaves exactly one journal entry, removes pending request/running marker state, and does not re-execute the request.
+- P1.3 covered by focused regression tests: forged state, directory alias/path escape, outside artifact source, wrong/preempted lease control attempts, and untrusted transport remain rejected.
+- P1.4 complete: `CONFIG_ENV` test mutation is sealed behind helper functions, no-config tests use a missing temp config path, and a source guard rejects direct `remove_var(CONFIG_ENV)` or additional bare `set_var(CONFIG_ENV)` usage.
+- P1.5 prepared: GitHub Actions workflow now runs format, clippy, and workspace tests on Windows for `main` pushes and pull requests.
+- P2/D4 complete: daemon startup cleans stale JSON tmp files only when the name matches the tmp pattern, the mtime is older than the configured threshold, and the owner PID is not alive.
+- P2/D5/D7 complete for record artifact directories: containment is rechecked after directory creation.
+- P2/D9 complete: corrupt journal lines are counted and surfaced in diagnostics and `corrupt_journal_inspect` recommended actions.
+- No resource repositories were read or modified.
+- No UI, OCR, SQLite, game logic, upstream source copying, live device validation, ADB input fallback, reconnect loop, or broad runtime redesign was added.
+
+### Files changed
+
+- `.github/workflows/ci.yml`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/session_closeout.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\Users\Alice\.codex\AGENTS.md`
+- `Get-Content C:\合作工作区\ActingCommand\TASK-SessionLayer-closeout.md`
+- `Get-Content PLANS.md`
+- `Get-Content CHECKPOINT.md`
+- `Get-Content AGENTS.md`
+- `git status --short --branch`
+- `git diff --stat`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab session_daemon_non_graceful_death_makes_readiness_not_ready --test session_closeout -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_daemon_crash_points_recover_without_duplicate_execution --test session_closeout -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- Source scans for:
+  - direct `env::set_var(CONFIG_ENV)` and `env::remove_var(CONFIG_ENV)`;
+  - liveness endpoint/probe fields;
+  - crash injection points;
+  - corrupt journal recommended action;
+  - stale temp cleanup and response replay helpers.
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab`: passed, 469 tests.
+- `session_daemon_non_graceful_death_makes_readiness_not_ready`: passed.
+- `session_daemon_crash_points_recover_without_duplicate_execution`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+- Source guard scan: no direct `env::remove_var(CONFIG_ENV)` and only the two allowed fixture-helper `env::set_var(CONFIG_ENV)` calls remain.
+
+### Current blocker
+
+- Remote GitHub Actions CI cannot be observed until this commit is pushed.
+- Live emulator/device validation is still outside this Session Layer close-out.
+
+### Next step
+
+1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Confirm the GitHub Actions workflow result for the pushed commit.
+3. If the remote CI is green, tag the pushed commit as a stable Session Layer acceptance checkpoint.
+4. Keep Phase C self-heal loop, long-lived interaction stream, trusted encrypted remote channel, scheduler/UI integration, and live device validation for later scoped tasks.
+
 ## 2026-07-01 Session Layer Round 2 close-out from `6151553`
 
 ### Current status

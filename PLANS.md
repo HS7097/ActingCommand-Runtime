@@ -12,6 +12,24 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current Session Layer true-acceptance close-out
+
+The 2026-07-01 Session Layer acceptance close-out from baseline `0925c2a` is implemented in the Rust `actinglab` code path.
+
+Completed close-out work:
+
+- P0/D6: resident daemon readiness now requires a live daemon-owned local liveness endpoint in addition to pid, heartbeat, and daemon-id state. Two forged JSON state files plus a live non-daemon PID can no longer produce `ready=true`.
+- P1.1: a real child-process daemon lifecycle test starts the daemon, observes readiness, kills it non-gracefully, and verifies readiness falls back to not-ready.
+- P1.2/D3: child-process crash injection covers response-written, journal-appended, and request-removed windows, then restarts the daemon and verifies no duplicate execution, no pending request, no stale running marker, one journal entry, and a preserved response.
+- P1.3: adversarial coverage includes forged state identity, path traversal and directory-alias artifact escapes, outside artifact sources, wrong/preempted lease control attempts, and untrusted transport checks.
+- P1.4: `CONFIG_ENV` mutation in tests is sealed behind fixture helpers; the no-config path points to a missing temp config instead of removing the env var, and a source guard prevents direct `remove_var` or new bare `set_var(CONFIG_ENV)` usage.
+- P1.5: GitHub Actions CI has been added for `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
+- P2/D4: daemon startup cleans stale JSON temp files only when the file name matches the tmp pattern, the owner PID is not alive, and the temp file is older than the configured threshold.
+- P2/D5/D7: record artifact directory creation performs a canonical containment recheck after `create_dir_all`.
+- P2/D9: corrupt journal lines are counted and surfaced in status diagnostics and recommended actions instead of being silently treated as healthy.
+
+No UI, OCR, SQLite, game logic, resource repository reads, live device work, upstream source copying, ADB input fallback, reconnect loop, or broad runtime redesign was added in this close-out.
+
 ## Current Session Layer Round 2 close-out
 
 The 2026-07-01 Session Layer Round 2 fix from baseline `6151553` is implemented in the Rust `actinglab` code path.

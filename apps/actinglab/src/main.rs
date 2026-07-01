@@ -18,10 +18,11 @@ use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::write::FileOptions;
@@ -54,6 +55,10 @@ const SESSION_PENDING_REQUEST_PREVIEW_LIMIT: usize = 10;
 const SESSION_HEARTBEAT_STALE_MS: u64 = 2_000;
 const SESSION_LEASE_STALE_MS: u64 = 30_000;
 const SESSION_DAEMON_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const SESSION_DAEMON_LIVENESS_TIMEOUT_MS: u64 = 200;
+const SESSION_DAEMON_LIVENESS_PREFIX: &str = "actinglab-session-daemon ";
+const SESSION_ORPHAN_TMP_MIN_AGE_MS: u64 = 60_000;
+const SESSION_CRASH_INJECTION_ENV: &str = "ACTINGLAB_TEST_SESSION_CRASH_POINT";
 const SESSION_REQUEST_STATE_WAIT_DEFAULT_STATUSES: &[&str] =
     &["response_available", "completed", "failed"];
 const SESSION_REQUEST_STATE_WAIT_ALLOWED_STATUSES: &[&str] = &[
@@ -333,6 +338,7 @@ struct InstanceConfig {
 struct SessionInfo {
     pid: u32,
     daemon_id: Option<String>,
+    daemon_liveness_endpoint: Option<String>,
     started_at_unix_ms: u64,
     state_dir: String,
     runtime_version: String,
@@ -342,6 +348,7 @@ struct SessionInfo {
 struct SessionHeartbeat {
     pid: u32,
     daemon_id: Option<String>,
+    daemon_liveness_endpoint: Option<String>,
     updated_at_unix_ms: u64,
     state: String,
 }
@@ -352,6 +359,7 @@ enum SessionLivenessStatus {
     HeartbeatMissing,
     PidMismatch,
     IdentityMismatch,
+    LivenessProbeFailed,
     Stale,
     Alive,
 }
@@ -363,6 +371,7 @@ impl SessionLivenessStatus {
             Self::HeartbeatMissing => "heartbeat_missing",
             Self::PidMismatch => "pid_mismatch",
             Self::IdentityMismatch => "identity_mismatch",
+            Self::LivenessProbeFailed => "liveness_probe_failed",
             Self::Stale => "stale",
             Self::Alive => "alive",
         }
@@ -380,6 +389,7 @@ struct SessionLivenessSnapshot {
     heartbeat_clock_skew_ms: u64,
     pid_match: Option<bool>,
     identity_match: Option<bool>,
+    liveness_probe_match: Option<bool>,
     process_alive: Option<bool>,
 }
 
@@ -440,6 +450,112 @@ fn platform_process_is_alive(pid: u32) -> bool {
 fn new_session_daemon_id() -> String {
     let seq = JSON_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{:x}-{:x}-{seq:x}", std::process::id(), current_unix_ms())
+}
+
+struct SessionDaemonLivenessServer {
+    endpoint: String,
+    stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SessionDaemonLivenessServer {
+    fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for SessionDaemonLivenessServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(&self.endpoint);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start_session_liveness_server(daemon_id: &str) -> CliOutcome<SessionDaemonLivenessServer> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to bind local session daemon liveness probe: {err}"
+        ))
+    })?;
+    listener.set_nonblocking(true).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to configure local session daemon liveness probe: {err}"
+        ))
+    })?;
+    let endpoint = listener
+        .local_addr()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "failed to read local session daemon liveness endpoint: {err}"
+            ))
+        })?
+        .to_string();
+    let stop = Arc::new(AtomicBool::new(false));
+    let failed = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let thread_failed = Arc::clone(&failed);
+    let response = format!("{SESSION_DAEMON_LIVENESS_PREFIX}{daemon_id}\n");
+    let handle = thread::spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_write_timeout(Some(Duration::from_millis(
+                        SESSION_DAEMON_LIVENESS_TIMEOUT_MS,
+                    )));
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => {
+                    thread_failed.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+    });
+    Ok(SessionDaemonLivenessServer {
+        endpoint,
+        stop,
+        failed,
+        handle: Some(handle),
+    })
+}
+
+fn session_liveness_probe_matches(endpoint: Option<&str>, daemon_id: Option<&str>) -> bool {
+    let (Some(endpoint), Some(daemon_id)) = (endpoint, daemon_id) else {
+        return false;
+    };
+    let timeout = Duration::from_millis(SESSION_DAEMON_LIVENESS_TIMEOUT_MS);
+    let Some(address) = endpoint
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+    else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let mut buffer = [0u8; 256];
+    let Ok(read) = stream.read(&mut buffer) else {
+        return false;
+    };
+    if read == 0 {
+        return false;
+    }
+    let expected = format!("{SESSION_DAEMON_LIVENESS_PREFIX}{daemon_id}");
+    String::from_utf8_lossy(&buffer[..read]).trim_end() == expected
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12233,7 +12349,9 @@ fn session_status_diagnostics(
     now_ms: u64,
     config: Option<&UserConfig>,
 ) -> CliOutcome<Value> {
-    let recent_entries = read_session_request_journal(state_dir, 5)?;
+    let journal_read = read_session_request_journal_with_diagnostics(state_dir, 5)?;
+    let skipped_corrupt_lines = journal_read.skipped_corrupt_lines;
+    let recent_entries = journal_read.entries;
     let last_entry = recent_entries.last();
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
     let liveness = session_liveness_snapshot(info, heartbeat, now_ms);
@@ -12245,6 +12363,7 @@ fn session_status_diagnostics(
         &monitor_policy,
         &queue_health,
         &recent_entries,
+        skipped_corrupt_lines,
     )?;
     Ok(json!({
         "liveness": session_liveness_diagnostics(info, heartbeat, now_ms),
@@ -12289,7 +12408,7 @@ fn session_status_diagnostics(
             "path": session_request_journal_path(state_dir).display().to_string(),
             "bytes": file_size_if_exists(&session_request_journal_path(state_dir))?,
             "total_entries": count_session_request_journal_entries(state_dir)?,
-            "skipped_corrupt_lines": count_session_request_journal_skipped_corrupt_lines(state_dir)?,
+            "skipped_corrupt_lines": skipped_corrupt_lines,
             "recent_limit": 5,
             "recent_count": recent_entries.len(),
             "last_entry": last_entry,
@@ -12894,6 +13013,7 @@ fn session_liveness_recommended_actions(
         SessionLivenessStatus::HeartbeatMissing
         | SessionLivenessStatus::PidMismatch
         | SessionLivenessStatus::IdentityMismatch
+        | SessionLivenessStatus::LivenessProbeFailed
         | SessionLivenessStatus::Stale => vec![
             session_recommended_action(
                 1,
@@ -12930,8 +13050,13 @@ fn session_status_recommended_actions(
     monitor_policy: &Value,
     queue_health: &Value,
     recent_entries: &[SessionRequestJournalEntry],
+    skipped_corrupt_lines: usize,
 ) -> CliOutcome<Vec<Value>> {
     let mut actions = session_liveness_recommended_actions(state_dir, liveness_status);
+    actions.extend(session_corrupt_journal_recommended_actions(
+        state_dir,
+        skipped_corrupt_lines,
+    ));
     actions.extend(session_queue_health_recommended_actions(
         state_dir,
         queue_health,
@@ -12966,6 +13091,29 @@ fn session_status_recommended_actions(
         monitor_policy,
     ));
     Ok(actions)
+}
+
+fn session_corrupt_journal_recommended_actions(
+    state_dir: &Path,
+    skipped_corrupt_lines: usize,
+) -> Vec<Value> {
+    if skipped_corrupt_lines == 0 {
+        return Vec::new();
+    }
+    let mut action = session_recommended_action_owned(
+        15,
+        "corrupt_journal_inspect",
+        "Inspect request journal corruption before treating daemon history as healthy.",
+        vec![
+            "session".to_string(),
+            "journal".to_string(),
+            "--state-dir".to_string(),
+            state_dir.display().to_string(),
+        ],
+    );
+    action["skipped_corrupt_lines"] = json!(skipped_corrupt_lines);
+    action["requires_operator_review"] = json!(true);
+    vec![action]
 }
 
 fn session_queue_health_recommended_actions(
@@ -13914,6 +14062,10 @@ fn session_liveness_diagnostics_with_process_liveness(
         "daemon_identity_match": snapshot.identity_match,
         "info_daemon_id_present": info.and_then(|value| value.daemon_id.as_ref()).is_some(),
         "heartbeat_daemon_id_present": heartbeat.and_then(|value| value.daemon_id.as_ref()).is_some(),
+        "daemon_liveness_endpoint_present": info
+            .and_then(|value| value.daemon_liveness_endpoint.as_ref())
+            .is_some(),
+        "daemon_liveness_probe_match": snapshot.liveness_probe_match,
         "process_alive": snapshot.process_alive,
         "heartbeat_state": heartbeat.map(|value| value.state.as_str()),
         "heartbeat_updated_at_unix_ms": heartbeat.map(|value| value.updated_at_unix_ms),
@@ -13954,9 +14106,27 @@ fn session_liveness_snapshot_with_process_liveness(
         ),
         _ => None,
     };
+    let liveness_probe_match = match (info, heartbeat, identity_match) {
+        (Some(info), Some(heartbeat), Some(true)) => {
+            let endpoint_match = info.daemon_liveness_endpoint.is_some()
+                && heartbeat.daemon_liveness_endpoint.is_some()
+                && info.daemon_liveness_endpoint == heartbeat.daemon_liveness_endpoint;
+            Some(
+                endpoint_match
+                    && session_liveness_probe_matches(
+                        info.daemon_liveness_endpoint.as_deref(),
+                        info.daemon_id.as_deref(),
+                    ),
+            )
+        }
+        (Some(_), Some(_), _) => Some(false),
+        _ => None,
+    };
     let process_alive = match (info, heartbeat, pid_match, heartbeat_age_ms) {
         (Some(info), Some(_), Some(true), Some(age))
-            if identity_match == Some(true) && age <= SESSION_HEARTBEAT_STALE_MS =>
+            if identity_match == Some(true)
+                && liveness_probe_match == Some(true)
+                && age <= SESSION_HEARTBEAT_STALE_MS =>
         {
             Some(process_liveness.is_alive(info.pid))
         }
@@ -13968,6 +14138,9 @@ fn session_liveness_snapshot_with_process_liveness(
         (Some(_), Some(_), Some(false), _) => SessionLivenessStatus::PidMismatch,
         (Some(_), Some(_), Some(true), _) if identity_match != Some(true) => {
             SessionLivenessStatus::IdentityMismatch
+        }
+        (Some(_), Some(_), Some(true), _) if liveness_probe_match != Some(true) => {
+            SessionLivenessStatus::LivenessProbeFailed
         }
         (Some(_), Some(_), _, Some(age)) if age > SESSION_HEARTBEAT_STALE_MS => {
             SessionLivenessStatus::Stale
@@ -13981,6 +14154,7 @@ fn session_liveness_snapshot_with_process_liveness(
         heartbeat_clock_skew_ms,
         pid_match,
         identity_match,
+        liveness_probe_match,
         process_alive,
     }
 }
@@ -14923,6 +15097,7 @@ fn session_stale_cleanup_candidates(state_dir: &Path) -> CliOutcome<Vec<PathBuf>
 }
 
 fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
+    cleanup_completed_session_running_requests(state_dir)?;
     let requests_dir = session_requests_dir(state_dir);
     if !requests_dir.exists() {
         return Ok(0);
@@ -14946,18 +15121,35 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
                 path.display()
             ))
         })?;
+        let response_path =
+            session_responses_dir(state_dir).join(format!("{}.json", request.request_id));
+        if let Some(response) = read_pending_session_response(&response_path)? {
+            if !session_request_journal_contains(state_dir, &request.request_id)? {
+                append_session_request_journal(state_dir, &request, &response)?;
+            }
+            fs::remove_file(&path).map_err(|err| {
+                CliError::runtime_not_running(format!(
+                    "failed to remove already-responded request {}: {err}",
+                    path.display()
+                ))
+            })?;
+            remove_session_running_request_if_exists(state_dir, &request.request_id)?;
+            processed += 1;
+            continue;
+        }
         write_session_running_request(state_dir, &request, current_unix_ms())?;
         let response = execute_session_command_request(request.clone(), state_dir);
-        let response_path =
-            session_responses_dir(state_dir).join(format!("{}.json", response.request_id));
         write_json_file_atomic(&response_path, &response)?;
+        maybe_exit_for_session_crash_test("after_response_write");
         append_session_request_journal(state_dir, &request, &response)?;
+        maybe_exit_for_session_crash_test("after_journal_append");
         fs::remove_file(&path).map_err(|err| {
             CliError::runtime_not_running(format!(
                 "failed to remove processed request {}: {err}",
                 path.display()
             ))
         })?;
+        maybe_exit_for_session_crash_test("after_request_remove");
         remove_session_running_request(state_dir, &request.request_id)?;
         processed += 1;
     }
@@ -16427,9 +16619,13 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
             state_dir.display()
         ))
     })?;
+    cleanup_stale_json_tmp_files_in_tree(&state_dir, SESSION_ORPHAN_TMP_MIN_AGE_MS)?;
+    let daemon_id = new_session_daemon_id();
+    let liveness_server = start_session_liveness_server(&daemon_id)?;
     let info = SessionInfo {
         pid: std::process::id(),
-        daemon_id: Some(new_session_daemon_id()),
+        daemon_id: Some(daemon_id),
+        daemon_liveness_endpoint: Some(liveness_server.endpoint().to_string()),
         started_at_unix_ms: current_unix_ms(),
         state_dir: state_dir.display().to_string(),
         runtime_version: RUNTIME_VERSION.to_string(),
@@ -16437,11 +16633,17 @@ fn run_session_daemon(args: &[String]) -> CliOutcome<Value> {
     write_json_file(&session_info_path(&state_dir), &info)?;
     let stop_path = session_stop_path(&state_dir);
     while !stop_path.exists() {
+        if liveness_server.failed() {
+            return Err(CliError::runtime_not_running(
+                "session daemon liveness probe stopped unexpectedly",
+            ));
+        }
         let processed = process_session_requests(&state_dir)?;
         let monitor_ran = run_due_session_monitor_policy(&state_dir)?;
         let heartbeat = SessionHeartbeat {
             pid: std::process::id(),
             daemon_id: info.daemon_id.clone(),
+            daemon_liveness_endpoint: info.daemon_liveness_endpoint.clone(),
             updated_at_unix_ms: current_unix_ms(),
             state: if processed > 0 {
                 "processed_request".to_string()
@@ -18494,9 +18696,21 @@ fn session_record_artifact_dir(
 ) -> CliOutcome<PathBuf> {
     let default_dir = session_record_artifact_root(state_dir, record_id);
     let candidate = requested.unwrap_or(default_dir.as_path());
-    ensure_path_within(
+    let resolved = ensure_path_within(
         state_dir,
         candidate,
+        "record artifact directory",
+        &["record", "artifact_dir"],
+    )?;
+    fs::create_dir_all(&resolved).map_err(|err| {
+        CliError::usage(format!(
+            "failed to create record artifact dir {}: {err}",
+            resolved.display()
+        ))
+    })?;
+    ensure_path_within(
+        state_dir,
+        &resolved,
         "record artifact directory",
         &["record", "artifact_dir"],
     )
@@ -20578,8 +20792,13 @@ fn count_session_request_journal_entries(state_dir: &Path) -> CliOutcome<usize> 
     )
 }
 
-fn count_session_request_journal_skipped_corrupt_lines(state_dir: &Path) -> CliOutcome<usize> {
-    Ok(read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?.skipped_corrupt_lines)
+fn session_request_journal_contains(state_dir: &Path, request_id: &str) -> CliOutcome<bool> {
+    Ok(
+        read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?
+            .entries
+            .iter()
+            .any(|entry| entry.request_id == request_id),
+    )
 }
 
 fn file_size_if_exists(path: &Path) -> CliOutcome<u64> {
@@ -20771,6 +20990,53 @@ fn remove_session_running_request(state_dir: &Path, request_id: &str) -> CliOutc
             path.display()
         ))
     })
+}
+
+fn remove_session_running_request_if_exists(state_dir: &Path, request_id: &str) -> CliOutcome<()> {
+    let path = session_running_request_path(state_dir, request_id);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(CliError::runtime_not_running(format!(
+            "failed to remove running session request {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+fn cleanup_completed_session_running_requests(state_dir: &Path) -> CliOutcome<usize> {
+    let running_dir = session_running_dir(state_dir);
+    if !running_dir.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0usize;
+    for path in sorted_json_paths(&running_dir)? {
+        let Some(running) = read_running_session_request(&path)? else {
+            continue;
+        };
+        let request_path =
+            session_requests_dir(state_dir).join(format!("{}.json", running.request_id));
+        let response_path =
+            session_responses_dir(state_dir).join(format!("{}.json", running.request_id));
+        if !request_path.exists() && response_path.exists() {
+            remove_session_running_request(state_dir, &running.request_id)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+fn maybe_exit_for_session_crash_test(point: &str) {
+    #[cfg(debug_assertions)]
+    {
+        if env::var(SESSION_CRASH_INJECTION_ENV).as_deref() == Ok(point) {
+            std::process::exit(101);
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = point;
+    }
 }
 
 fn session_pending_response_preview(state_dir: &Path, limit: usize) -> CliOutcome<Value> {
@@ -21165,6 +21431,65 @@ fn cleanup_current_process_json_tmp_files(path: &Path) -> CliOutcome<()> {
         }
     }
     Ok(())
+}
+
+fn cleanup_stale_json_tmp_files_in_tree(root: &Path, min_age_ms: u64) -> CliOutcome<usize> {
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0usize;
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir)
+            .map_err(|err| CliError::usage(format!("failed to read {}: {err}", dir.display())))?
+        {
+            let entry = entry.map_err(|err| {
+                CliError::usage(format!("failed to inspect {}: {err}", dir.display()))
+            })?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|err| {
+                CliError::usage(format!("failed to inspect {}: {err}", path.display()))
+            })?;
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(owner_pid) = parse_json_tmp_owner_pid(&entry.file_name().to_string_lossy())
+            else {
+                continue;
+            };
+            if platform_process_is_alive(owner_pid) {
+                continue;
+            }
+            let age_ms = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                .map(|age| age.as_millis() as u64)
+                .unwrap_or(u64::MAX);
+            if age_ms < min_age_ms {
+                continue;
+            }
+            fs::remove_file(&path).map_err(|err| {
+                CliError::usage(format!(
+                    "failed to remove stale temp file {}: {err}",
+                    path.display()
+                ))
+            })?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+fn parse_json_tmp_owner_pid(file_name: &str) -> Option<u32> {
+    let (_, rest) = file_name.split_once(".tmp-")?;
+    let (pid, _) = rest.split_once('-')?;
+    pid.parse().ok()
 }
 
 fn safe_file_stem(value: &str) -> String {
@@ -22655,11 +22980,52 @@ mod tests {
     use tempfile::TempDir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static TEST_SESSION_LIVENESS_SERVERS: Mutex<Vec<SessionDaemonLivenessServer>> =
+        Mutex::new(Vec::new());
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_config_env(path: impl AsRef<Path>) {
+        unsafe {
+            env::set_var(CONFIG_ENV, path.as_ref());
+        }
+    }
+
+    fn set_missing_config_env() {
+        let path = env::temp_dir().join(format!(
+            "actinglab-missing-config-{}-{}.json",
+            std::process::id(),
+            JSON_TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        unsafe {
+            env::set_var(CONFIG_ENV, path);
+        }
+    }
+
+    fn test_session_liveness_endpoint(daemon_id: &str) -> String {
+        let server = start_session_liveness_server(daemon_id).unwrap();
+        let endpoint = server.endpoint().to_string();
+        TEST_SESSION_LIVENESS_SERVERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(server);
+        endpoint
+    }
+
+    #[test]
+    fn tests_mutate_config_env_only_through_fixture_helpers() {
+        let source = include_str!("main.rs");
+        assert_eq!(
+            source
+                .matches(concat!("env::set", "_var(CONFIG_ENV"))
+                .count(),
+            2
+        );
+        assert!(!source.contains(concat!("env::remove", "_var(CONFIG_ENV")));
     }
 
     fn create_test_dir_alias(link: &Path, target: &Path) -> bool {
@@ -22780,13 +23146,11 @@ mod tests {
     fn status_without_runtime_is_exit_five() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, temp.path().join("config.json"));
-        }
+        set_config_env(temp.path().join("config.json"));
+
         let result = run_cli(["--json", "status"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         assert_eq!(result.exit_code(), 5);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
@@ -23179,7 +23543,7 @@ mod tests {
     fn status_blocks_untrusted_remote_runtime_endpoint() {
         let _guard = env_lock();
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
         }
@@ -23203,7 +23567,7 @@ mod tests {
     fn doctor_reports_remote_endpoint_policy_without_blocking() {
         let _guard = env_lock();
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
         }
@@ -23279,9 +23643,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let leased = run_cli(
             [
                 "--json",
@@ -23314,9 +23677,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(leased.exit_code(), 0);
         assert_eq!(
@@ -23349,9 +23710,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let leased = run_cli(
             [
                 "--json",
@@ -23381,9 +23741,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(leased.exit_code(), 0);
         assert_eq!(status.exit_code(), 0);
@@ -23404,9 +23762,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let leased = run_cli(
             [
                 "--json",
@@ -23444,9 +23801,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(leased.exit_code(), 0);
         assert_eq!(touched.exit_code(), 0);
@@ -23521,9 +23876,8 @@ mod tests {
             None,
         );
         write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let wait = run_cli(
             [
                 "--json",
@@ -23547,9 +23901,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(wait.exit_code(), 0);
         let data = wait.envelope.data.as_ref().unwrap();
@@ -23569,9 +23921,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let scheduler_lease = run_cli(
             [
                 "--json",
@@ -23604,9 +23955,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(scheduler_lease.exit_code(), 0);
         assert_eq!(lab_preempt.exit_code(), 0);
@@ -23635,9 +23984,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let set = run_cli(
             [
                 "--json",
@@ -23650,9 +23998,8 @@ mod tests {
         );
         assert_eq!(set.exit_code(), 0);
         let get = run_cli(["--json", "config", "get", "instance.ba.serial"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         assert_eq!(get.exit_code(), 0);
         assert_eq!(
             get.envelope
@@ -23670,9 +24017,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let set = run_cli(
             [
                 "--json",
@@ -23685,9 +24031,8 @@ mod tests {
         );
         assert_eq!(set.exit_code(), 0);
         let get = run_cli(["--json", "config", "get", "instance.ak.package"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         assert_eq!(get.exit_code(), 0);
         assert_eq!(
             get.envelope
@@ -23705,9 +24050,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let adb = run_cli(
             [
                 "--json",
@@ -23733,9 +24077,7 @@ mod tests {
             ["--json", "config", "get", "instance.ak-b.capture_backend"],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(adb.exit_code(), 0);
         assert_eq!(backend.exit_code(), 0);
@@ -23766,9 +24108,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let result = run_cli(
             [
                 "--json",
@@ -23779,9 +24120,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 2);
         assert_eq!(
@@ -23801,9 +24140,11 @@ mod tests {
 
     fn write_test_session_files_with_pid(state_dir: &Path, pid: u32) {
         let daemon_id = test_session_daemon_id();
+        let endpoint = test_session_liveness_endpoint(&daemon_id);
         let info = SessionInfo {
             pid,
             daemon_id: Some(daemon_id.clone()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -23811,6 +24152,7 @@ mod tests {
         let heartbeat = SessionHeartbeat {
             pid,
             daemon_id: Some(daemon_id),
+            daemon_liveness_endpoint: Some(endpoint),
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -23819,9 +24161,11 @@ mod tests {
     }
 
     fn write_test_session_info_only(state_dir: &Path) {
+        let daemon_id = test_session_daemon_id();
         let info = SessionInfo {
             pid: std::process::id(),
-            daemon_id: Some(test_session_daemon_id()),
+            daemon_id: Some(daemon_id.clone()),
+            daemon_liveness_endpoint: Some(test_session_liveness_endpoint(&daemon_id)),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -23834,9 +24178,14 @@ mod tests {
             .unwrap()
             .and_then(|info| info.daemon_id)
             .unwrap_or_else(test_session_daemon_id);
+        let endpoint = read_json_file::<SessionInfo>(&session_info_path(state_dir))
+            .unwrap()
+            .and_then(|info| info.daemon_liveness_endpoint)
+            .unwrap_or_else(|| test_session_liveness_endpoint(&daemon_id));
         let heartbeat = SessionHeartbeat {
             pid,
             daemon_id: Some(daemon_id),
+            daemon_liveness_endpoint: Some(endpoint),
             updated_at_unix_ms,
             state: "idle".to_string(),
         };
@@ -23929,12 +24278,12 @@ mod tests {
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config);
+            set_config_env(&config);
         }
         let result = run_cli(["--json", "session", "readiness"], true);
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24042,7 +24391,7 @@ mod tests {
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config);
+            set_config_env(&config);
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
         }
@@ -24059,7 +24408,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24192,7 +24541,7 @@ mod tests {
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config);
+            set_config_env(&config);
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
         }
@@ -24211,7 +24560,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24280,7 +24629,7 @@ mod tests {
         write_test_session_files(temp.path());
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "readiness", "--local"], true);
         unsafe {
@@ -24343,7 +24692,7 @@ mod tests {
         );
         unsafe {
             env::set_var(SESSION_STATE_ENV, &state_dir);
-            env::set_var(CONFIG_ENV, &config_path);
+            set_config_env(&config_path);
         }
         write_user_config(&config).unwrap();
 
@@ -24360,7 +24709,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24389,7 +24738,7 @@ mod tests {
         let config_path = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config_path);
+            set_config_env(&config_path);
         }
         let mut config = UserConfig::default();
         config.instances.insert(
@@ -24428,7 +24777,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24496,7 +24845,7 @@ mod tests {
         let config_path = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config_path);
+            set_config_env(&config_path);
         }
         let mut config = UserConfig::default();
         config.instances.insert(
@@ -24524,7 +24873,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -24577,7 +24926,7 @@ mod tests {
         .unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "readiness", "--local"], true);
         unsafe {
@@ -24927,9 +25276,8 @@ mod tests {
     fn session_readiness_request_returns_readiness_payload() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let query = SessionCommandRequest {
             request_id: "readiness-query".to_string(),
             command: "readiness".to_string(),
@@ -25082,7 +25430,7 @@ mod tests {
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config);
+            set_config_env(&config);
             env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
             env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
         }
@@ -25101,7 +25449,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -25217,7 +25565,7 @@ mod tests {
         let config = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config);
+            set_config_env(&config);
         }
         let result = run_cli(
             [
@@ -25234,7 +25582,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -25284,9 +25632,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let query = SessionCommandRequest {
             request_id: "connect-plan-query".to_string(),
             command: "connect_plan".to_string(),
@@ -25304,9 +25651,8 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let response = SessionCommandResponse {
             request_id: query.request_id.clone(),
             command: query.command.clone(),
@@ -25397,9 +25743,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let query = SessionCommandRequest {
             request_id: "stream-plan-query".to_string(),
             command: "stream_plan".to_string(),
@@ -25417,9 +25762,8 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let response = SessionCommandResponse {
             request_id: query.request_id.clone(),
             command: query.command.clone(),
@@ -25672,7 +26016,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             [
@@ -25724,7 +26068,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             [
@@ -25772,7 +26116,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             [
@@ -25846,7 +26190,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             ["--json", "session", "command-check", "self-heal-plan"],
@@ -25883,7 +26227,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "command-check", "phase-c-plan"], true);
         unsafe {
@@ -25917,7 +26261,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "command-check", "connect-plan"], true);
         unsafe {
@@ -25951,7 +26295,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "command-check", "stream-plan"], true);
         unsafe {
@@ -26300,7 +26644,7 @@ mod tests {
         let config_path = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config_path);
+            set_config_env(&config_path);
         }
         let mut config = UserConfig::default();
         config.instances.insert(
@@ -26370,7 +26714,7 @@ mod tests {
         );
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(missing.exit_code(), 0);
@@ -26457,7 +26801,7 @@ mod tests {
         let config_path = temp.path().join("config.json");
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::set_var(CONFIG_ENV, &config_path);
+            set_config_env(&config_path);
         }
         let mut config = UserConfig::default();
         config.instances.insert(
@@ -26487,7 +26831,7 @@ mod tests {
 
         unsafe {
             env::remove_var(SESSION_STATE_ENV);
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         assert_eq!(result.exit_code(), 0);
@@ -26542,7 +26886,7 @@ mod tests {
         .unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "command-check", "status"], true);
         unsafe {
@@ -26650,7 +26994,7 @@ mod tests {
         write_test_session_files(temp.path());
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "submit-plan", "status"], true);
         unsafe {
@@ -26741,7 +27085,7 @@ mod tests {
         .unwrap();
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(["--json", "session", "submit-plan", "status"], true);
         unsafe {
@@ -26780,7 +27124,7 @@ mod tests {
         write_test_session_files(temp.path());
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             [
@@ -26840,7 +27184,7 @@ mod tests {
         write_test_session_files(temp.path());
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
         let result = run_cli(
             [
@@ -26915,9 +27259,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak".to_string(),
@@ -26948,9 +27291,7 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(
             payload.get("schema_version").and_then(Value::as_str),
@@ -27005,7 +27346,7 @@ mod tests {
         write_test_session_files(temp.path());
         unsafe {
             env::set_var(SESSION_STATE_ENV, temp.path());
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
         }
 
         let result = run_cli(["--json", "session", "bootstrap", "--local"], true);
@@ -27350,9 +27691,7 @@ mod tests {
             lease: None,
             created_at_unix_ms: 4,
         };
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
 
@@ -29727,9 +30066,11 @@ mod tests {
 
     #[test]
     fn session_liveness_diagnostics_classifies_heartbeat_state() {
+        let endpoint = test_session_liveness_endpoint("daemon-a");
         let info = SessionInfo {
             pid: 321,
             daemon_id: Some("daemon-a".to_string()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
             started_at_unix_ms: 10,
             state_dir: "state".to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -29737,6 +30078,7 @@ mod tests {
         let heartbeat = SessionHeartbeat {
             pid: 321,
             daemon_id: Some("daemon-a".to_string()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
             updated_at_unix_ms: 1_000,
             state: "idle".to_string(),
         };
@@ -29783,6 +30125,7 @@ mod tests {
         let mismatched = SessionHeartbeat {
             pid: 999,
             daemon_id: Some("daemon-a".to_string()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
@@ -29815,6 +30158,7 @@ mod tests {
         let wrong_identity = SessionHeartbeat {
             pid: 321,
             daemon_id: Some("other-daemon".to_string()),
+            daemon_liveness_endpoint: Some(endpoint),
             updated_at_unix_ms: 1_900,
             state: "idle".to_string(),
         };
@@ -29861,6 +30205,26 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains("tmp-"))
             .count();
         assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn startup_tmp_cleanup_removes_only_dead_owner_tmp_files() {
+        let temp = TempDir::new().unwrap();
+        let stale = temp.path().join("state.tmp-99999999-stale");
+        let active = temp
+            .path()
+            .join(format!("state.tmp-{}-active", std::process::id()));
+        let unrelated = temp.path().join("state.tmp-not-a-pid");
+        fs::write(&stale, "stale").unwrap();
+        fs::write(&active, "active").unwrap();
+        fs::write(&unrelated, "unrelated").unwrap();
+
+        let removed = cleanup_stale_json_tmp_files_in_tree(temp.path(), 0).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!stale.exists());
+        assert!(active.exists());
+        assert!(unrelated.exists());
     }
 
     #[test]
@@ -29921,6 +30285,7 @@ mod tests {
         let info = SessionInfo {
             pid: std::process::id(),
             daemon_id: Some("recorded-daemon".to_string()),
+            daemon_liveness_endpoint: None,
             started_at_unix_ms: 10,
             state_dir: temp.path().display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -29928,6 +30293,7 @@ mod tests {
         let heartbeat = SessionHeartbeat {
             pid: std::process::id(),
             daemon_id: Some("foreign-daemon".to_string()),
+            daemon_liveness_endpoint: None,
             updated_at_unix_ms: current_unix_ms(),
             state: "idle".to_string(),
         };
@@ -29957,6 +30323,54 @@ mod tests {
                 .pointer("/diagnostics/liveness/status")
                 .and_then(Value::as_str),
             Some("identity_mismatch")
+        );
+    }
+
+    #[test]
+    fn session_daemon_info_rejects_live_non_daemon_pid_with_forged_matching_identity() {
+        let temp = TempDir::new().unwrap();
+        let flags = FlagArgs::parse(&[
+            "--state-dir".to_string(),
+            temp.path().to_str().unwrap().to_string(),
+        ])
+        .unwrap();
+        let daemon_id = "forged-daemon".to_string();
+        let info = SessionInfo {
+            pid: std::process::id(),
+            daemon_id: Some(daemon_id.clone()),
+            daemon_liveness_endpoint: None,
+            started_at_unix_ms: 10,
+            state_dir: temp.path().display().to_string(),
+            runtime_version: RUNTIME_VERSION.to_string(),
+        };
+        let heartbeat = SessionHeartbeat {
+            pid: std::process::id(),
+            daemon_id: Some(daemon_id),
+            daemon_liveness_endpoint: None,
+            updated_at_unix_ms: current_unix_ms(),
+            state: "idle".to_string(),
+        };
+        write_json_file_atomic(&session_info_path(temp.path()), &info).unwrap();
+        write_json_file_atomic(&session_heartbeat_path(temp.path()), &heartbeat).unwrap();
+
+        assert!(!session_daemon_info_exists(&flags).unwrap());
+        let readiness = run_cli(
+            [
+                "--json",
+                "session",
+                "readiness",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(readiness.exit_code(), 0);
+        let data = readiness.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("ready").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.pointer("/daemon/status").and_then(Value::as_str),
+            Some("liveness_probe_failed")
         );
     }
 
@@ -31758,9 +32172,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -31806,9 +32219,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         let start_data = start.envelope.data.as_ref().unwrap();
@@ -31879,9 +32290,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -31921,9 +32331,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(
@@ -31966,9 +32374,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let build = run_cli(
             [
                 "--json",
@@ -31983,9 +32390,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(build.exit_code(), 3);
         assert_eq!(
@@ -31999,9 +32404,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let stream = run_cli(
             [
                 "--json",
@@ -32014,9 +32418,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(stream.exit_code(), 0);
         let data = stream.envelope.data.as_ref().unwrap();
@@ -32130,9 +32532,8 @@ mod tests {
             None,
         );
         write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let stream = run_cli(
             [
                 "--json",
@@ -32155,9 +32556,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(stream.exit_code(), 0);
         let data = stream.envelope.data.as_ref().unwrap();
@@ -32215,9 +32614,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let check = run_cli(
             [
                 "--json",
@@ -32231,9 +32629,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(check.exit_code(), 0);
         let data = check.envelope.data.as_ref().unwrap();
@@ -32272,9 +32668,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let check = run_cli(
             [
                 "--json",
@@ -32288,9 +32683,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(check.exit_code(), 0);
         let data = check.envelope.data.as_ref().unwrap();
@@ -32328,9 +32721,8 @@ mod tests {
             None,
         );
         write_json_file_atomic(&session_lease_path(&state_dir, "ak"), &lease).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let stream = run_cli(
             [
                 "--json",
@@ -32353,9 +32745,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(stream.exit_code(), 0);
         let data = stream.envelope.data.as_ref().unwrap();
@@ -32387,9 +32777,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let first = run_cli(
             [
                 "--json",
@@ -32420,9 +32809,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(first.exit_code(), 0);
         assert_eq!(conflict.exit_code(), 3);
@@ -32462,9 +32849,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32504,9 +32890,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -32568,9 +32952,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32607,9 +32990,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -32647,9 +33028,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32688,9 +33068,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(
@@ -32739,9 +33117,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32780,9 +33157,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -32824,9 +33199,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32865,9 +33239,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(
@@ -32916,9 +33288,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -32973,9 +33344,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33028,9 +33397,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33083,9 +33451,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33116,9 +33482,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33175,9 +33540,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33242,9 +33605,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33285,9 +33647,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33388,9 +33748,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let escaped_artifact_dir = temp.path().join("outside-artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33431,9 +33790,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 3);
@@ -33639,9 +33996,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33679,9 +34035,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 2);
@@ -33709,9 +34063,8 @@ mod tests {
         let contrast_path = temp.path().join("contrast.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
         fs::write(&contrast_path, test_contrast_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33754,9 +34107,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(
@@ -33801,9 +34152,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33844,9 +34194,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33887,9 +34235,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -33928,9 +34275,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -33984,9 +34329,8 @@ mod tests {
             test_auto_region_discrimination_frame_png(true),
         )
         .unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34025,9 +34369,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34105,9 +34447,8 @@ mod tests {
             test_auto_region_discrimination_frame_png(true),
         )
         .unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34162,9 +34503,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34215,9 +34554,8 @@ mod tests {
             test_auto_region_discrimination_frame_png(false),
         )
         .unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34270,9 +34608,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34310,9 +34646,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34365,9 +34700,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34393,9 +34726,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34430,9 +34762,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34462,9 +34792,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34501,9 +34830,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 2);
@@ -34527,9 +34854,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34567,9 +34893,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -34609,9 +34933,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let out = temp.path().join("draft");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -34762,9 +35085,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(anchor.exit_code(), 0);
@@ -34982,9 +35303,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let out = temp.path().join("draft");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35109,9 +35429,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(home_anchor.exit_code(), 0);
@@ -35136,9 +35454,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let out = temp.path().join("draft");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35263,9 +35580,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(home_anchor.exit_code(), 0);
@@ -35299,9 +35614,8 @@ mod tests {
         )
         .unwrap();
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35464,9 +35778,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(home_anchor.exit_code(), 0);
@@ -35543,9 +35855,8 @@ mod tests {
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let out = temp.path().join("draft");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35605,9 +35916,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(operation.exit_code(), 0);
@@ -35636,9 +35945,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let out = temp.path().join("draft");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35719,9 +36027,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(anchor.exit_code(), 0);
@@ -35751,9 +36057,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let out = temp.path().join("draft");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35834,9 +36139,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(anchor.exit_code(), 0);
@@ -35865,9 +36168,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let result = run_cli(
             [
                 "--json",
@@ -35887,9 +36189,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 3);
         assert_eq!(
@@ -35904,9 +36204,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -35966,9 +36265,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(first.exit_code(), 0);
@@ -35985,9 +36282,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36045,9 +36341,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36082,9 +36376,8 @@ mod tests {
         let frame_path = temp.path().join("source.png");
         let artifact_dir = state_dir.join("artifacts");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36143,9 +36436,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36221,9 +36512,8 @@ mod tests {
             test_auto_region_discrimination_frame_png(true),
         )
         .unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36282,9 +36572,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36358,9 +36646,8 @@ mod tests {
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
         fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36415,9 +36702,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36443,9 +36728,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36505,9 +36789,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36534,9 +36816,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let start = run_cli(
             [
                 "--json",
@@ -36589,9 +36870,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(start.exit_code(), 0);
         assert_eq!(step.exit_code(), 0);
@@ -36608,9 +36887,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let result = run_cli(
             [
                 "--json",
@@ -36624,9 +36902,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 2);
         assert_eq!(
@@ -36702,9 +36978,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path().join("session");
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let result = run_cli(
             [
                 "--json",
@@ -36722,9 +36997,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 3);
         assert_eq!(
@@ -37066,15 +37339,16 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let state_dir = temp.path();
         write_user_config(&UserConfig::default()).unwrap();
         let daemon_id = test_session_daemon_id();
+        let endpoint = test_session_liveness_endpoint(&daemon_id);
         let info = SessionInfo {
             pid: 123,
             daemon_id: Some(daemon_id.clone()),
+            daemon_liveness_endpoint: Some(endpoint.clone()),
             started_at_unix_ms: 10,
             state_dir: state_dir.display().to_string(),
             runtime_version: RUNTIME_VERSION.to_string(),
@@ -37082,6 +37356,7 @@ mod tests {
         let heartbeat = SessionHeartbeat {
             pid: 123,
             daemon_id: Some(daemon_id),
+            daemon_liveness_endpoint: Some(endpoint),
             updated_at_unix_ms: 20,
             state: "idle".to_string(),
         };
@@ -37104,9 +37379,7 @@ mod tests {
         };
 
         let status = execute_session_command_request_inner(&request, state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(status.get("running").and_then(Value::as_bool), Some(true));
         assert_eq!(
@@ -39546,9 +39819,8 @@ mod tests {
         let state_dir = temp.path();
         write_test_session_files(state_dir);
         let config_path = state_dir.join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak".to_string(),
@@ -39584,9 +39856,8 @@ mod tests {
         };
         let submit_plan_payload =
             execute_session_command_request_inner(&submit_plan_request, state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let submit_plan_response = SessionCommandResponse {
             request_id: submit_plan_request.request_id.clone(),
             command: submit_plan_request.command.clone(),
@@ -39689,9 +39960,8 @@ mod tests {
         let state_dir = temp.path();
         write_test_session_files(state_dir);
         let config_path = state_dir.join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak".to_string(),
@@ -39728,9 +39998,8 @@ mod tests {
         };
         let phase_c_plan_payload =
             execute_session_command_request_inner(&phase_c_plan_request, state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let phase_c_plan_response = SessionCommandResponse {
             request_id: phase_c_plan_request.request_id.clone(),
             command: phase_c_plan_request.command.clone(),
@@ -39825,9 +40094,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let global = SessionCommandGlobal {
             instance: Some("ak".to_string()),
             game: Some("ark".to_string()),
@@ -39937,9 +40205,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         write_test_dead_session_files(state_dir);
-        unsafe {
-            env::set_var(CONFIG_ENV, temp.path().join("config.json"));
-        }
+        set_config_env(temp.path().join("config.json"));
+
         let global = SessionCommandGlobal {
             instance: Some("ak".to_string()),
             game: Some("ark".to_string()),
@@ -39983,9 +40250,8 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         let events = payload.get("events").and_then(Value::as_array).unwrap();
 
         assert_eq!(events.len(), 1);
@@ -40392,9 +40658,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let query = SessionCommandRequest {
             request_id: "capabilities-query".to_string(),
             command: "capabilities".to_string(),
@@ -40412,9 +40677,7 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(
             payload
@@ -40486,9 +40749,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak-b".to_string(),
@@ -40519,9 +40781,7 @@ mod tests {
         };
 
         let payload = execute_session_command_request_inner(&query, temp.path()).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(
             payload.get("schema_version").and_then(Value::as_str),
@@ -41364,9 +41624,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("daemon-state");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let global = SessionCommandGlobal {
             instance: Some("ak".to_string()),
             game: None,
@@ -41417,9 +41676,7 @@ mod tests {
             created_at_unix_ms: 2,
         };
         let released = execute_session_command_request_inner(&release, &state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(
             released.get("status").and_then(Value::as_str),
@@ -41434,9 +41691,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("daemon-state");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let global = SessionCommandGlobal {
             instance: Some("ak".to_string()),
             game: None,
@@ -41500,9 +41756,7 @@ mod tests {
             created_at_unix_ms: 3,
         };
         let stopped = execute_session_command_request_inner(&stop, &state_dir).unwrap();
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(
             stopped.get("status").and_then(Value::as_str),
@@ -44218,14 +44472,56 @@ mod tests {
     }
 
     #[test]
+    fn process_session_requests_reuses_existing_response_without_reexecuting() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        fs::create_dir_all(session_requests_dir(state_dir)).unwrap();
+        let request = SessionCommandRequest {
+            request_id: "already-responded".to_string(),
+            command: "unknown-command-that-must-not-run".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 1,
+        };
+        let response = SessionCommandResponse {
+            request_id: request.request_id.clone(),
+            command: request.command.clone(),
+            ok: true,
+            data: Some(json!({"reused": true})),
+            error: None,
+            started_at_unix_ms: 1,
+            completed_at_unix_ms: 2,
+        };
+        let request_path = session_requests_dir(state_dir).join("already-responded.json");
+        let response_path = session_responses_dir(state_dir).join("already-responded.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+        write_json_file_atomic(&response_path, &response).unwrap();
+
+        assert_eq!(process_session_requests(state_dir).unwrap(), 1);
+
+        assert!(!request_path.exists());
+        assert!(response_path.exists());
+        let journal = read_session_request_journal(state_dir, 10).unwrap();
+        assert_eq!(journal.len(), 1);
+        assert!(journal[0].ok);
+    }
+
+    #[test]
     fn session_request_journal_records_success_and_error() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let success = SessionCommandRequest {
             request_id: "request-1".to_string(),
             command: "stream".to_string(),
@@ -44329,9 +44625,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(recent.exit_code(), 0);
         let entries = recent
@@ -44586,9 +44880,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let completed = SessionCommandRequest {
             request_id: "completed-1".to_string(),
             command: "stream".to_string(),
@@ -44682,9 +44975,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(status.exit_code(), 0);
         let diagnostics = status
@@ -45581,9 +45872,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak-b".to_string(),
@@ -45609,9 +45899,7 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(status.exit_code(), 0);
         let diagnostics = status
@@ -45832,6 +46120,14 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
+        let actions = diagnostics
+            .get("recommended_actions")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(actions.iter().any(|action| {
+            action.get("action").and_then(Value::as_str) == Some("corrupt_journal_inspect")
+                && action.get("skipped_corrupt_lines").and_then(Value::as_u64) == Some(1)
+        }));
     }
 
     #[test]
@@ -45923,9 +46219,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config);
-        }
+        set_config_env(&config);
+
         let _ = run_cli(
             [
                 "--json",
@@ -45965,9 +46260,8 @@ mod tests {
             true,
         );
         let result = run_cli(["--json", "session", "instance", "list"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
+
         assert_eq!(result.exit_code(), 0);
         let instances = result
             .envelope
@@ -45994,9 +46288,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak-b".to_string(),
@@ -46023,9 +46316,7 @@ mod tests {
         write_user_config(&config).unwrap();
 
         let result = run_cli(["--json", "session", "instance", "registry"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
@@ -46081,9 +46372,8 @@ mod tests {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join("config.json");
-        unsafe {
-            env::set_var(CONFIG_ENV, &config_path);
-        }
+        set_config_env(&config_path);
+
         let mut config = UserConfig::default();
         config.instances.insert(
             "ak-b".to_string(),
@@ -46099,9 +46389,7 @@ mod tests {
         write_user_config(&config).unwrap();
 
         let result = run_cli(["--json", "session", "instance", "registry"], true);
-        unsafe {
-            env::remove_var(CONFIG_ENV);
-        }
+        set_missing_config_env();
 
         assert_eq!(result.exit_code(), 2);
         assert_eq!(
@@ -48270,7 +48558,7 @@ mod tests {
     fn current_page_resolves_semantic_page() {
         let _guard = env_lock();
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
         }
         let temp = semantic_resource_root(false);
@@ -48308,7 +48596,7 @@ mod tests {
     fn tap_target_dry_run_requires_visible_target_and_returns_point() {
         let _guard = env_lock();
         unsafe {
-            env::remove_var(CONFIG_ENV);
+            set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
         }
         let temp = semantic_resource_root(false);
