@@ -6,7 +6,9 @@
 
 - Implemented the D6 reliability close-out plan from `C:\合作工作区\ActingCommand\TASK-SessionLayer-D6-reliability.md`.
 - Runtime baseline before this task: `fb00856`.
-- Commit hash, remote CI run, and checkpoint tag will be recorded after push verification.
+- Implementation commit pushed for remote CI: `4b94817`.
+- Remote CI run `28533479051` passed Format, Clippy, and Test on GitHub Actions.
+- Checkpoint tag target after metadata close-out: `checkpoint/20260702-session-layer-d6-reliability`.
 - Scope is limited to Runtime `actinglab` Session Layer reliability code, tests, and planning/checkpoint records.
 - Threat model downgrade recorded in code comments and contracts: this phase is local runtime reliability, not same-user authentication. Same-user forged `state_dir` or fake endpoint that can echo the daemon id is accepted risk until trusted-channel/scheduler/UI work.
 - Request routing now requires a bounded acknowledgement before success. Ack means the daemon writes `running/<request-id>.json` or a response file.
@@ -59,19 +61,18 @@
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
+- Remote GitHub Actions CI run `28533479051`: passed Format, Clippy, and Test.
 
 ### Current blocker
 
-- None for the local D6 reliability close-out.
-- Remote GitHub CI and checkpoint tagging are pending until this change is committed and pushed.
+- None for the D6 reliability close-out.
 - Same-user state/endpoint forgery authentication remains intentionally deferred to trusted-channel/scheduler/UI work.
 
 ### Next step
 
-1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
-2. Watch remote CI for the pushed commit.
-3. Tag the pushed commit as a stable D6 reliability checkpoint if CI passes.
-4. Continue later with trusted-channel/scheduler/UI security work as a separate scoped task.
+1. Push this checkpoint metadata update.
+2. Tag the verified Runtime state as `checkpoint/20260702-session-layer-d6-reliability`.
+3. Continue later with trusted-channel/scheduler/UI security work as a separate scoped task.
 
 ## 2026-07-01 Session Layer true-acceptance close-out from `0925c2a`
 
