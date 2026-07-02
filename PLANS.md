@@ -48,17 +48,20 @@ Scope:
 - The provider requires `runtime_library_path` during real invocation, validates reviewed artifact paths, loads the ONNX model, converts RGB/RGBA/gray frames to f32 NHWC or NCHW tensors only when the model input shape is compatible, and fails loudly for missing runtime libraries, unsupported model input shapes, non-f32 outputs, output/label count mismatches, or non-finite scores.
 - `providers/ppocr-onnx-json` is the first Runtime-owned PPOCR OCR JSON-ABI provider crate. It builds a cdylib exporting `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
 - The PPOCR provider uses dynamic CPU ONNXRuntime loading and reviewed PPOCR recognizer artifacts behind the existing `FastDeployPpocrArtifacts` contract.
-- The PPOCR provider currently runs recognizer-only ROI OCR. It does not silently claim detector/full-frame OCR support; OCR results include an explicit warning that detector/full-frame text box detection is not enabled in this increment.
+- The PPOCR provider now runs detector-plus-recognizer full-frame OCR when the OCR request region is the full frame.
+- Sub-frame OCR requests still use recognizer-only ROI OCR and return an explicit warning for that path.
 - A local-only real R3 NN smoke passed with reviewed local paths for ONNXRuntime `v1.24.4` CPU x64, the Runtime-built ONNXRuntime JSON provider DLL, and an ONNX Models SqueezeNet `Opset16` model. The smoke used `apps/vision-provider-check --nn-frame`, returned `ok: true`, frame `224x224 rgb8`, top label `class_623`, and top score `6.899109363555908`.
-- A local-only real R1 OCR smoke passed with reviewed local paths for the Runtime-built PPOCR ONNX JSON provider DLL, ONNXRuntime CPU x64, MAA release `PaddleCharOCR` recognizer ONNX model, and dictionary. The smoke used `apps/vision-provider-check --ocr-frame`, returned `ok: true`, frame `320x80 rgb8`, text `ABC123`, and confidence `0.9997550845146179`.
+- A local-only real R1 ROI OCR smoke passed with reviewed local paths for the Runtime-built PPOCR ONNX JSON provider DLL, ONNXRuntime CPU x64, MAA release `PaddleCharOCR` recognizer ONNX model, and dictionary. The smoke used `apps/vision-provider-check --ocr-frame --ocr-region`, returned `ok: true`, frame `320x80 rgb8`, text `ABC123`, and confidence `0.9997550845146179`.
+- A local-only real R1 full-frame OCR smoke passed with reviewed local paths for the Runtime-built PPOCR ONNX JSON provider DLL, ONNXRuntime CPU x64, MAA release `PaddleCharOCR` detector and recognizer ONNX models, and dictionary. The smoke used `apps/vision-provider-check --ocr-frame` without `--ocr-region`, returned `ok: true`, frame `320x80 rgb8`, one detected text block, text `ABC123`, and confidence `0.9998682141304016`.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 - `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md` records the local-only MAA `v6.13.0` OCR artifact audit, including `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, PaddleOCR/PaddleCharOCR ONNX model files, dictionaries, sizes, hashes, and the release-packaging boundary.
 - `benchmarks/reports/2026-07-02-r1-maa-provider-export-audit.md` records that `fastdeploy_ppocr_maa.dll` exposes MSVC C++ FastDeploy/PPOCR symbols and `MaaCore.dll` exposes MAA task-level C APIs; neither exports the ActingCommand OCR provider ABI.
 - `benchmarks/reports/2026-07-02-r1-ppocr-onnx-roi-smoke.md` records the local-only real PPOCR ROI recognizer smoke, artifact sizes, commands, result, limitation, and release-packaging boundary.
+- `benchmarks/reports/2026-07-02-r1-ppocr-onnx-full-frame-smoke.md` records the local-only real PPOCR detector-plus-recognizer full-frame smoke, artifact sizes, commands, result, and release-packaging boundary.
 - `benchmarks/reports/2026-07-02-r3-onnxruntime-real-smoke.md` records the local-only real ONNXRuntime smoke, artifact sizes, commands, and release-packaging boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 
-This increment does not bundle FastDeploy, PPOCR, ONNXRuntime runtime binaries, MAA release binaries, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or release-ready provider binaries. The ONNXRuntime and PPOCR provider crates are source-only; the real NN smoke, real OCR smoke, and MAA OCR artifact/export audits used ignored local artifacts and do not grant redistribution rights. R1 now has real OCR output through the ActingCommand provider ABI, but detector/full-frame OCR is still open unless ROI recognizer-only OCR is explicitly accepted as the current gate scope.
+This increment does not bundle FastDeploy, PPOCR, ONNXRuntime runtime binaries, MAA release binaries, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or release-ready provider binaries. The ONNXRuntime and PPOCR provider crates are source-only; the real NN smoke, real OCR smokes, and MAA OCR artifact/export audits used ignored local artifacts and do not grant redistribution rights. R1 now has real detector-plus-recognizer full-frame OCR output through the ActingCommand provider ABI. Release packaging remains blocked until exact ONNXRuntime/PPOCR model/dictionary license texts, third-party notices, binary provenance, and redistribution obligations are recorded for any bundled artifacts.
 
 ## Current P6.5-A MaaFramework fusion chain E
 
@@ -188,7 +191,7 @@ Scope:
 P0, A2, A1.1, A3, the first B recovery executor slice, E FeatureMatch gate, O1 ProjectInterface, and A4 replay are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
 - Live recovery wiring beyond the pure executor.
-- R-class FFI decision and OCR/NN gates before Lab-2 CLI.
+- Release packaging review for any future bundled OCR/NN binaries, models, dictionaries, or labels.
 
 ## Current P6.5-A1 device input fallback
 

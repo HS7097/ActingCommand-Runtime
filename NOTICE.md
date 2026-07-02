@@ -35,7 +35,7 @@ No upstream automation source code has been copied into this repository as part 
 
 ### FastDeploy / PPOCR
 
-- Intended role: future R1 OCR backend behind `crates/vision-ffi`.
+- Intended role: R1 OCR backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
 - Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library. `FastDeployPpocrArtifacts` records the reviewed provider library, optional OCR runtime dependency libraries, PPOCR detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout before artifact-backed invocation.
 - Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include FastDeploy, PPOCR, OCR models, dictionaries, or upstream source.
@@ -44,7 +44,8 @@ No upstream automation source code has been copied into this repository as part 
 - License check: FastDeploy repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0. PaddleOCR repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0.
 - MAA release audit: `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md` records a local-only inspection of `MaaAssistantArknights/MaaAssistantArknights` release `v6.13.0` asset `MAA-v6.13.0-win-x64.zip`. The inspected artifact set includes `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, PaddleOCR/PaddleCharOCR ONNX model files, and dictionaries. These files remain ignored under `target/` and are not bundled here.
 - Provider export audit: `benchmarks/reports/2026-07-02-r1-maa-provider-export-audit.md` records that the audited `fastdeploy_ppocr_maa.dll` does not export the ActingCommand OCR provider ABI and that `MaaCore.dll` exposes MAA assistant/task-level APIs instead of direct frame-to-OCR provider symbols. These findings do not add redistribution rights or copy any DLL into this repository.
-- PPOCR ONNX provider smoke: `benchmarks/reports/2026-07-02-r1-ppocr-onnx-roi-smoke.md` records a local-only real OCR smoke using the Runtime-owned source-only `providers/ppocr-onnx-json` provider, ignored ONNXRuntime runtime DLL, and ignored MAA release PaddleCharOCR ONNX/dictionary artifacts. The provider source is committed, but the provider DLL, runtime DLL, OCR models, and dictionary are not bundled here.
+- PPOCR ONNX ROI provider smoke: `benchmarks/reports/2026-07-02-r1-ppocr-onnx-roi-smoke.md` records a local-only real ROI OCR smoke using the Runtime-owned source-only `providers/ppocr-onnx-json` provider, ignored ONNXRuntime runtime DLL, and ignored MAA release PaddleCharOCR ONNX/dictionary artifacts.
+- PPOCR ONNX full-frame provider smoke: `benchmarks/reports/2026-07-02-r1-ppocr-onnx-full-frame-smoke.md` records a local-only real full-frame OCR smoke using the Runtime-owned source-only `providers/ppocr-onnx-json` provider, ignored ONNXRuntime runtime DLL, ignored MAA release PaddleCharOCR detector/recognizer ONNX models, and ignored dictionary. The provider source is committed, but the provider DLL, runtime DLL, OCR models, and dictionary are not bundled here.
 - Artifact contract status: the contract exists, but no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
 - Release boundary: before any release bundles these artifacts, update this NOTICE with the exact upstream project URLs, license texts, model/data terms, dictionary terms, copied artifact paths, third-party notices, binary provenance, and redistribution obligations.
 

@@ -24,7 +24,7 @@ source_path = ""
 local_hint = "external-tools/vision/fastdeploy"
 included_in_repository = false
 license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: Apache-2.0, https://github.com/PaddlePaddle/FastDeploy/blob/develop/LICENSE. Release binaries, third-party notices, binary provenance, and redistribution terms still require review before bundling provider artifacts."
-notes = "Planned R1 OCR provider dependency behind crates/vision-ffi. Do not commit binaries or upstream source without an updated NOTICE entry."
+notes = "R1 OCR provider dependency behind crates/vision-ffi. Local-only full-frame smoke uses the Runtime-owned PPOCR ONNX JSON provider with ignored artifacts. Do not commit binaries or upstream source without an updated NOTICE entry."
 
 [[tools]]
 id = "paddleocr-ppocr"
@@ -35,7 +35,7 @@ source_path = ""
 local_hint = "external-tools/vision/ppocr"
 included_in_repository = false
 license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: Apache-2.0, https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE. Model/data terms, dictionaries, notices, and redistribution terms still require review before bundling OCR artifacts."
-notes = "Planned R1 OCR model/data dependency behind crates/vision-ffi. Do not commit models, dictionaries, or OCR data without an updated NOTICE entry."
+notes = "R1 OCR model/data dependency behind crates/vision-ffi. Local-only full-frame smoke uses ignored PaddleCharOCR detector/recognizer ONNX models and dictionary. Do not commit models, dictionaries, or OCR data without an updated NOTICE entry."
 
 [[tools]]
 id = "maa-v6-13-0-win-x64-ocr-audit"

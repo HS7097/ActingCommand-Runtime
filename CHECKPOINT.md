@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1 PPOCR ONNX full-frame provider smoke
+
+### Current status
+
+- Continued the P6.5-A R1 OCR gate after commit `c78abd9`.
+- Added detector-plus-recognizer full-frame OCR to the source-only `providers/ppocr-onnx-json` provider.
+- Full-frame OCR requests now load the reviewed detector ONNX model, run detector inference, convert the detector probability map into bounded text regions, merge nearby text boxes, and run recognizer inference on detected regions.
+- Sub-frame OCR requests still use recognizer-only ROI OCR and return an explicit warning for that path.
+- Added pure provider unit coverage for detector output parsing, probability conversion, component detection/merge behavior, and full-frame region classification.
+- Recorded the local-only full-frame OCR smoke in `benchmarks/reports/2026-07-02-r1-ppocr-onnx-full-frame-smoke.md`.
+- Updated `PLANS.md`, `NOTICE.md`, and `resources/upstream-manifest.toml`.
+- No MAA release binary, ONNXRuntime DLL, OCR model, dictionary, OCR data, upstream source, UI, SQLite, scheduler behavior, device access, or game logic was committed.
+
+### Files changed
+
+- `providers/ppocr-onnx-json/src/lib.rs`
+- `benchmarks/reports/2026-07-02-r1-ppocr-onnx-full-frame-smoke.md`
+- `PLANS.md`
+- `NOTICE.md`
+- `resources/upstream-manifest.toml`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, `resources/upstream-manifest.toml`, provider code, and provider-check code.
+- `cargo fmt --all -- --check`
+- `cargo test -p actingcommand-ppocr-onnx-json-provider`
+- `cargo build -p actingcommand-ppocr-onnx-json-provider --release`
+- Copied the built provider DLL to ignored `external-tools\vision\fastdeploy\ac_fastdeploy_ppocr.dll` for local smoke validation.
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --require-existing`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --abi-check`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --ocr-frame target\ppocr-smoke\ocr_ascii.png`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --artifact-lock --lock-out target\ppocr-smoke\ppocr-char-full-frame-lock.json`
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- Repository sync check: `main...origin/main` before edits.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -p actingcommand-ppocr-onnx-json-provider`: passed with 9 tests.
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`: passed with 27 provider-check tests and 24 vision-ffi tests.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+- Local provider manifest check: passed.
+- Local provider ABI check: passed for `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
+- Local real full-frame OCR smoke: passed with text `ABC123`, confidence `0.9998682141304016`, frame `320x80 rgb8`, block rect `(15,14,190,48)`, and no warnings.
+- Local artifact lock: passed with total size `26136034` bytes. Provider DLL size `534016` bytes, SHA-256 `d45b0967f4fc1589afc614c39b5835f48fa2f2e20eea140dfc5c62b21025f225`.
+
+### Current blocker
+
+- No blocker for this full-frame PPOCR ONNX provider increment.
+- Release packaging remains blocked until exact ONNXRuntime/PPOCR model/dictionary license texts, third-party notices, binary provenance, and redistribution obligations are recorded for any bundled artifacts.
+
+### Next step
+
+1. Commit and push this increment with updated planning/checkpoint files.
+2. Watch GitHub Actions for the pushed Runtime commit.
+
 ## 2026-07-02 P6.5-A R1 PPOCR ONNX ROI provider smoke
 
 ### Current status
