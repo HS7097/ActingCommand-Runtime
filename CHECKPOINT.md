@@ -5,6 +5,9 @@
 ### Current status
 
 - Continued the P6.5-A R1 OCR gate after commit `7b7d3cb`.
+- Implementation commit: `08083fb` (`runtime: audit maa ocr artifacts`).
+- Checkpoint tag: `checkpoint/20260702-r1-maa-ocr-artifact-audit`.
+- GitHub Actions CI run `28583497470` passed after push.
 - Synced `main` from `origin/main`; the repository was already up to date before changes.
 - Inspected `MaaAssistantArknights/MaaAssistantArknights` release `v6.13.0` asset `MAA-v6.13.0-win-x64.zip` under ignored `target/maa-r1-ocr-audit`.
 - Recorded a local-only OCR artifact audit in `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md`.
@@ -47,6 +50,11 @@
 - `cargo build --release`
 - `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json`
 - `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --backend fastdeploy_ppocr --require-existing`
+- `git commit -m "runtime: audit maa ocr artifacts"`
+- `git push origin main`
+- `git tag checkpoint/20260702-r1-maa-ocr-artifact-audit 08083fb`
+- `git push origin checkpoint/20260702-r1-maa-ocr-artifact-audit`
+- `gh run watch 28583497470 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -69,9 +77,8 @@
 
 ### Next step
 
-1. Commit and push this R1 OCR artifact audit and runtime-library contract increment.
-2. Continue R1 by adding or linking a reviewed OCR provider path that can produce real OCR output through the existing FFI boundary.
-3. Keep R1 fail-loud: no fake OCR success and no silent fallback while artifacts are absent.
+1. Continue R1 by adding or linking a reviewed OCR provider path that can produce real OCR output through the existing FFI boundary.
+2. Keep R1 fail-loud: no fake OCR success and no silent fallback while artifacts are absent.
 
 ## 2026-07-02 P6.5-A R3 ONNXRuntime real smoke
 
