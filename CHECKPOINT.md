@@ -5,6 +5,9 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `80fadfa`.
+- Documentation/provenance commit: `bdee4f4` (`docs: record onnxruntime real smoke`).
+- Checkpoint tag: `checkpoint/20260702-r3-onnxruntime-real-smoke`.
+- GitHub Actions CI run `28582322736` passed after push.
 - Completed a local-only real R3 NN smoke using the Runtime-owned ONNXRuntime JSON provider and reviewed local artifact paths.
 - Downloaded ONNXRuntime `v1.24.4` CPU x64 release asset `onnxruntime-win-x64-1.24.4.zip` into `target\onnxruntime-smoke-artifacts` and copied only `onnxruntime.dll` into ignored `external-tools\vision\onnxruntime` for local validation.
 - Built `providers/onnxruntime-json` and copied the local provider DLL into ignored `external-tools\vision\onnxruntime\ac_onnxruntime.dll` for local validation.
