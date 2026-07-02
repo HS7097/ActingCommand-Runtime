@@ -243,10 +243,16 @@ fn print_touch_diagnostics(diagnostics: &TouchBackendDiagnostics) {
     );
     for attempt in &diagnostics.attempts {
         println!(
-            "touch_attempt backend={} ok={} elapsed_ms={} selected={} error_reason={}",
+            "touch_attempt attempt_id={} backend={} ok={} elapsed_ms={} action={} fallback_backend={} selected={} error_reason={}",
+            attempt.attempt_id,
             attempt.backend.as_str(),
             attempt.ok,
             attempt.elapsed_ms,
+            attempt.action.as_deref().unwrap_or("none"),
+            attempt
+                .fallback_backend
+                .map(TouchBackendName::as_str)
+                .unwrap_or("none"),
             attempt.selected,
             attempt.error_reason.as_deref().unwrap_or("")
         );

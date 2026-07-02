@@ -12,6 +12,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain P0
+
+The 2026-07-02 P6.5-A MaaFramework fusion chain is being implemented as clean-room Rust behavior and protocol work.
+
+P0 refines the existing A1 touch fallback milestone instead of expanding to Minitouch, capture autotune, recovery, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, or game logic.
+
+Scope:
+
+- Device errors now distinguish `Transient` from `Fatal`.
+- Runtime touch fallback is allowed only for transient backend/transport failures.
+- Fatal validation or configuration errors do not fall back and stay fail-loud.
+- MaaTouch transport-class failures such as device availability, install/chmod, app_process start, handshake, process exit, command write, and flush are classified as transient where they are eligible for fallback.
+- MaaTouch input validation failures remain fatal.
+- Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
+- Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
+
+P0 is the first completed unit in the larger P6.5-A chain. Later chain work remains separate:
+
+- A2 capture autotune and freshness.
+- A1.1 Minitouch backend after binary/source/license decision.
+- A3 device discovery.
+- Phase 2 recovery/recognition work.
+- Phase 3 OCR/NN, replay, and ProjectInterface gates before Lab-2 CLI.
+
 ## Current P6.5-A1 device input fallback
 
 The 2026-07-02 P6.5-A1 device input fallback from baseline `04ca117` is implemented as a clean-room Rust device-control milestone.
@@ -28,7 +52,8 @@ Completed A1 work:
 
 - `crates/device` now exposes `TouchBackendChoice`, `TouchBackendConfig`, `SelectedTouchBackend`, `AdbShellInputBackend`, structured `TouchBackendDiagnostics`, and `touch_probe_report`.
 - Default touch selection uses fixed priority `MaaTouch -> adb shell input`; `auto-fastest` is available as an explicit manual choice.
-- Single-backend failures are recorded in structured attempts/warnings and then fall back to the next backend.
+- Single-backend transient failures are recorded in structured attempts/warnings and then fall back to the next backend.
+- Fatal touch validation/configuration errors do not fall back.
 - Full-chain touch failure returns a fatal error containing backend attempts and warnings.
 - `apps/actinglab` direct touch, stream input relay, semantic tap/navigation, and Lab run device input now use the shared selector instead of constructing `MaaTouchBackend` directly.
 - ActingLab Session Layer routed requests preserve the global touch backend choice so daemon-routed control commands use the same selector request as local commands.
@@ -6159,7 +6184,7 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 
 - Touch input fallback is limited to the P6.5-A1 chain: `MaaTouch -> adb shell input`.
 - `adb shell input` is available only for `tap`, `long_tap`, and `swipe`; `key`, `text`, Minitouch, reconnect, retry loops, and arbitrary fallback remain out of scope.
-- MaaTouch failure is recorded as structured diagnostics and may fall back to `adb shell input`; full-chain input failure is fatal.
+- MaaTouch transient transport failure is recorded as structured diagnostics and may fall back to `adb shell input`; MaaTouch fatal validation/configuration failure does not fall back; full-chain input failure is fatal.
 - Capture failure is fatal.
 - Recognition primitive errors are fatal.
 - Recognition pack validation and evaluation errors are fatal.

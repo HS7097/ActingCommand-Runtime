@@ -7,6 +7,7 @@ pub type DeviceResult<T> = Result<T, DeviceError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceErrorSeverity {
+    Transient,
     Fatal,
 }
 
@@ -17,11 +18,29 @@ pub struct DeviceError {
 }
 
 impl DeviceError {
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self {
+            severity: DeviceErrorSeverity::Transient,
+            message: message.into(),
+        }
+    }
+
     pub fn fatal(message: impl Into<String>) -> Self {
         Self {
             severity: DeviceErrorSeverity::Fatal,
             message: message.into(),
         }
+    }
+
+    pub fn with_severity(severity: DeviceErrorSeverity, message: impl Into<String>) -> Self {
+        Self {
+            severity,
+            message: message.into(),
+        }
+    }
+
+    pub fn is_fallback_eligible(&self) -> bool {
+        matches!(self.severity, DeviceErrorSeverity::Transient)
     }
 
     pub fn severity(&self) -> DeviceErrorSeverity {

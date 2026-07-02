@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A MaaFramework fusion chain P0 transient touch fallback
+
+### Current status
+
+- Implemented the first P0 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `294a9cf81e31f38a6862542c18071c2a50537256`.
+- Scope stayed limited to touch error classification, fallback gating, diagnostics, shared coordinate validation, and planning/checkpoint updates.
+- `DeviceError` now distinguishes transient backend/transport failures from fatal validation/configuration failures.
+- Touch fallback now runs only for `DeviceError::transient`; fatal errors return immediately and do not fall back to `adb shell input`.
+- MaaTouch transport-class failures are fallback-eligible transient errors. MaaTouch input validation remains fatal.
+- Shared pre-dispatch coordinate validation blocks out-of-bounds touch points before either MaaTouch or adb input receives the action.
+- Touch diagnostics now include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
+- No Minitouch, capture autotune, recovery loop, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new external binary was added.
+
+### Files changed
+
+- `crates/device/src/error.rs`
+- `crates/device/src/touch.rs`
+- `crates/device/src/maatouch.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `cargo test -p actingcommand-device touch -- --nocapture`
+- `cargo test -p actingcommand-device touch`
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo fmt --all`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Focused `actingcommand-device` touch fallback tests passed.
+- Focused `actingcommand-device`, `actingcommand-device-test`, and `actingcommand-actinglab` tests passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for P0 offline implementation.
+- The live over-screen coordinate repro was not executed in this P0 checkpoint.
+
+### Next step
+
+1. Commit and push this P0 unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with A2 capture autotune/freshness, A1.1 Minitouch, and A3 device discovery as separate units.
+
 ## 2026-07-02 P6.5-A1 device input fallback from `04ca117`
 
 ### Current status

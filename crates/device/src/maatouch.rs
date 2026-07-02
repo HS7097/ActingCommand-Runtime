@@ -250,10 +250,16 @@ impl MaaTouchBackend {
                 .local_path
                 .to_string_lossy()
                 .to_string();
-            adb.push(&self.serial, &local, &self.maatouch_config.remote_path)?;
+            adb.push(&self.serial, &local, &self.maatouch_config.remote_path)
+                .map_err(|err| {
+                    DeviceError::transient(format!("failed to push MaaTouch binary: {err}"))
+                })?;
         }
 
-        adb.chmod(&self.serial, &self.maatouch_config.remote_path, "755")?;
+        adb.chmod(&self.serial, &self.maatouch_config.remote_path, "755")
+            .map_err(|err| {
+                DeviceError::transient(format!("failed to chmod MaaTouch binary: {err}"))
+            })?;
         Ok(())
     }
 
@@ -277,21 +283,21 @@ impl MaaTouchBackend {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                DeviceError::fatal(format!("failed to start MaaTouch app_process: {err}"))
+                DeviceError::transient(format!("failed to start MaaTouch app_process: {err}"))
             })?;
 
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdout"))?;
+            .ok_or_else(|| DeviceError::transient("failed to open MaaTouch stdout"))?;
         let stderr = child
             .stderr
             .take()
-            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stderr"))?;
+            .ok_or_else(|| DeviceError::transient("failed to open MaaTouch stderr"))?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| DeviceError::fatal("failed to open MaaTouch stdin"))?;
+            .ok_or_else(|| DeviceError::transient("failed to open MaaTouch stdin"))?;
 
         self.stderr_text = Arc::new(Mutex::new(String::new()));
         self.stderr_thread = Some(spawn_stderr_reader(stderr, Arc::clone(&self.stderr_text)));
@@ -337,14 +343,14 @@ impl MaaTouchBackend {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(DeviceError::fatal(format!(
+                Err(self.with_stderr(DeviceError::transient(format!(
                     "timed out after {:?} waiting for MaaTouch handshake",
                     self.maatouch_config.handshake_timeout
                 ))))
             }
             Err(err) => {
                 stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(DeviceError::fatal(format!(
+                Err(self.with_stderr(DeviceError::transient(format!(
                     "failed to receive MaaTouch handshake: {err}"
                 ))))
             }
@@ -359,11 +365,11 @@ impl MaaTouchBackend {
         let child = self
             .child
             .as_mut()
-            .ok_or_else(|| DeviceError::fatal("MaaTouch child process is missing"))?;
+            .ok_or_else(|| DeviceError::transient("MaaTouch child process is missing"))?;
         if let Some(status) = child.try_wait().map_err(|err| {
-            DeviceError::fatal(format!("failed to poll MaaTouch process status: {err}"))
+            DeviceError::transient(format!("failed to poll MaaTouch process status: {err}"))
         })? {
-            return Err(self.with_stderr(DeviceError::fatal(format!(
+            return Err(self.with_stderr(DeviceError::transient(format!(
                 "MaaTouch process exited unexpectedly with {status}"
             ))));
         }
@@ -413,12 +419,12 @@ impl MaaTouchBackend {
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or_else(|| DeviceError::fatal("MaaTouch stdin is missing"))?;
+            .ok_or_else(|| DeviceError::transient("MaaTouch stdin is missing"))?;
         stdin.write_all(commands.as_bytes()).map_err(|err| {
-            DeviceError::fatal(format!("failed to write MaaTouch command: {err}"))
+            DeviceError::transient(format!("failed to write MaaTouch command: {err}"))
         })?;
         stdin.flush().map_err(|err| {
-            DeviceError::fatal(format!("failed to flush MaaTouch command: {err}"))
+            DeviceError::transient(format!("failed to flush MaaTouch command: {err}"))
         })?;
         Ok(())
     }
@@ -432,7 +438,10 @@ impl MaaTouchBackend {
         if stderr.is_empty() {
             err
         } else {
-            DeviceError::fatal(format!("{err}\nMaaTouch stderr:\n{stderr}"))
+            DeviceError::with_severity(
+                err.severity(),
+                format!("{}\nMaaTouch stderr:\n{stderr}", err.message()),
+            )
         }
     }
 
@@ -651,17 +660,19 @@ fn verify_device(adb: &Adb, serial: &str, connect_allowed: bool) -> DeviceResult
             .run(&["devices", "-l"])
             .map(|out| out.stdout)
             .unwrap_or_else(|list_err| format!("adb devices -l also failed: {list_err}"));
-        DeviceError::fatal(format!(
+        DeviceError::transient(format!(
             "target device {serial} is not available: {err}\nadb devices -l:\n{devices}"
         ))
     })?;
     if state != "device" {
-        return Err(DeviceError::fatal(format!(
+        return Err(DeviceError::transient(format!(
             "target device {serial} is not in device state: {state:?}"
         )));
     }
 
-    let screen_size = adb.screen_size(serial)?;
+    let screen_size = adb.screen_size(serial).map_err(|err| {
+        DeviceError::transient(format!("failed to query target device screen size: {err}"))
+    })?;
     Ok(DeviceInfo {
         serial: serial.to_string(),
         state,
@@ -692,7 +703,7 @@ fn parse_handshake<R: Read>(reader: &mut BufReader<R>) -> DeviceResult<Handshake
     loop {
         let mut line = String::new();
         let read = reader.read_line(&mut line).map_err(|err| {
-            DeviceError::fatal(format!("failed to read MaaTouch handshake: {err}"))
+            DeviceError::transient(format!("failed to read MaaTouch handshake: {err}"))
         })?;
         if read == 0 {
             break;
@@ -702,7 +713,7 @@ fn parse_handshake<R: Read>(reader: &mut BufReader<R>) -> DeviceResult<Handshake
             continue;
         }
         if line == "Aborted" {
-            return Err(DeviceError::fatal(
+            return Err(DeviceError::transient(
                 "MaaTouch reported Aborted during startup",
             ));
         }
@@ -710,7 +721,7 @@ fn parse_handshake<R: Read>(reader: &mut BufReader<R>) -> DeviceResult<Handshake
             return parse_version_and_pid(rest, reader);
         }
     }
-    Err(DeviceError::fatal(
+    Err(DeviceError::transient(
         "MaaTouch stdout ended before handshake was received",
     ))
 }
@@ -723,23 +734,25 @@ fn parse_version_and_pid<R: Read>(
         .split_whitespace()
         .map(str::parse::<i32>)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| DeviceError::fatal(format!("invalid MaaTouch version value: {err}")))?;
+        .map_err(|err| DeviceError::transient(format!("invalid MaaTouch version value: {err}")))?;
     if values.len() != 4 {
-        return Err(DeviceError::fatal(format!(
+        return Err(DeviceError::transient(format!(
             "invalid MaaTouch version line: ^ {version}"
         )));
     }
 
     let mut pid_line = String::new();
     reader.read_line(&mut pid_line).map_err(|err| {
-        DeviceError::fatal(format!(
+        DeviceError::transient(format!(
             "failed to read MaaTouch pid line after version: {err}"
         ))
     })?;
     let pid_line = pid_line.trim();
     let pid = pid_line
         .strip_prefix("$ ")
-        .ok_or_else(|| DeviceError::fatal(format!("unexpected MaaTouch pid line: {pid_line:?}")))?
+        .ok_or_else(|| {
+            DeviceError::transient(format!("unexpected MaaTouch pid line: {pid_line:?}"))
+        })?
         .trim()
         .to_string();
 

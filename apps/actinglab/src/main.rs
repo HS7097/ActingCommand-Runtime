@@ -5173,9 +5173,12 @@ fn touch_attempts_json(diagnostics: &TouchBackendDiagnostics) -> Value {
             .attempts
             .iter()
             .map(|attempt| json!({
+                "attempt_id": attempt.attempt_id,
                 "backend": attempt.backend.as_str(),
                 "ok": attempt.ok,
                 "elapsed_ms": attempt.elapsed_ms,
+                "action": attempt.action.as_deref(),
+                "fallback_backend": attempt.fallback_backend.map(actingcommand_device::TouchBackendName::as_str),
                 "error_reason": attempt.error_reason.as_deref(),
                 "selected": attempt.selected
             }))

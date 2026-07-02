@@ -87,10 +87,13 @@ impl TouchBackendConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TouchBackendAttempt {
+    pub attempt_id: u64,
     pub backend: TouchBackendName,
     pub ok: bool,
     pub elapsed_ms: u128,
     pub error_reason: Option<String>,
+    pub action: Option<String>,
+    pub fallback_backend: Option<TouchBackendName>,
     pub selected: bool,
 }
 
@@ -110,6 +113,50 @@ impl TouchBackendDiagnostics {
             attempts: Vec::new(),
             warnings: Vec::new(),
         }
+    }
+
+    fn push_attempt(&mut self, mut attempt: TouchBackendAttempt) {
+        attempt.attempt_id = self.attempts.len() as u64 + 1;
+        self.attempts.push(attempt);
+    }
+
+    fn push_success(
+        &mut self,
+        backend: TouchBackendName,
+        elapsed_ms: u128,
+        action: &str,
+        selected: bool,
+    ) {
+        self.push_attempt(TouchBackendAttempt {
+            attempt_id: self.attempts.len() as u64 + 1,
+            backend,
+            ok: true,
+            elapsed_ms,
+            error_reason: None,
+            action: Some(action.to_string()),
+            fallback_backend: None,
+            selected,
+        });
+    }
+
+    fn push_failure(
+        &mut self,
+        backend: TouchBackendName,
+        elapsed_ms: u128,
+        error_reason: String,
+        action: &str,
+        fallback_backend: Option<TouchBackendName>,
+    ) {
+        self.push_attempt(TouchBackendAttempt {
+            attempt_id: self.attempts.len() as u64 + 1,
+            backend,
+            ok: false,
+            elapsed_ms,
+            error_reason: Some(error_reason),
+            action: Some(action.to_string()),
+            fallback_backend,
+            selected: false,
+        });
     }
 }
 
@@ -162,32 +209,46 @@ impl SelectedTouchBackend {
     fn run_touch_action(
         &mut self,
         action: &'static str,
+        points: &[(i32, i32)],
         mut run: impl FnMut(&mut dyn InputBackend) -> DeviceResult<()>,
     ) -> DeviceResult<()> {
+        self.validate_action_points(action, points)?;
+
+        let active_started = Instant::now();
         match run(self.active.backend.as_mut()) {
             Ok(()) => return Ok(()),
             Err(err) => {
-                self.record_runtime_failure(action, self.active.name, &err);
+                let elapsed_ms = active_started.elapsed().as_millis();
+                let fallback_backend = err
+                    .is_fallback_eligible()
+                    .then(|| self.next_fallback_backend())
+                    .flatten();
+                self.record_runtime_failure(
+                    action,
+                    self.active.name,
+                    &err,
+                    elapsed_ms,
+                    fallback_backend,
+                );
+                if !err.is_fallback_eligible() {
+                    return Err(err);
+                }
             }
         }
 
         while !self.remaining.is_empty() {
             let factory = self.remaining.remove(0);
+            let backend_name = factory.name();
             let started = Instant::now();
             match factory.connect() {
                 Ok(mut connected) => match run(connected.backend.as_mut()) {
                     Ok(()) => {
                         let elapsed_ms = started.elapsed().as_millis();
-                        self.diagnostics.attempts.push(TouchBackendAttempt {
-                            backend: connected.name,
-                            ok: true,
-                            elapsed_ms,
-                            error_reason: None,
-                            selected: true,
-                        });
+                        self.diagnostics
+                            .push_success(connected.name, elapsed_ms, action, true);
                         if let Err(err) = self.active.backend.close() {
                             self.diagnostics.warnings.push(format!(
-                                "failed to close previous touch backend {} after fallback: {}",
+                                "WARNING failed to close previous touch backend {} after fallback: {}",
                                 self.active.name.as_str(),
                                 err
                             ));
@@ -199,49 +260,62 @@ impl SelectedTouchBackend {
                     Err(err) => {
                         let elapsed_ms = started.elapsed().as_millis();
                         let reason = err.to_string();
-                        self.diagnostics.attempts.push(TouchBackendAttempt {
-                            backend: connected.name,
-                            ok: false,
+                        let fallback_backend = self.next_fallback_backend();
+                        self.diagnostics.push_failure(
+                            connected.name,
                             elapsed_ms,
-                            error_reason: Some(reason.clone()),
-                            selected: false,
-                        });
+                            reason.clone(),
+                            action,
+                            fallback_backend,
+                        );
                         self.diagnostics.warnings.push(format!(
-                            "touch backend {} failed during {action}: {reason}",
-                            connected.name.as_str()
+                            "WARNING touch backend {} failed during {action}; fallback_backend={}; reason={reason}",
+                            connected.name.as_str(),
+                            fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                         ));
                         if let Err(close_err) = connected.backend.close() {
                             self.diagnostics.warnings.push(format!(
-                                "failed to close failed touch backend {}: {}",
+                                "WARNING failed to close failed touch backend {}: {}",
                                 connected.name.as_str(),
                                 close_err
                             ));
+                        }
+                        if !err.is_fallback_eligible() {
+                            return Err(self.chain_failed_error(action));
                         }
                     }
                 },
                 Err(err) => {
                     let elapsed_ms = started.elapsed().as_millis();
-                    let backend = factory.name();
                     let reason = err.to_string();
-                    self.diagnostics.attempts.push(TouchBackendAttempt {
-                        backend,
-                        ok: false,
+                    let fallback_backend = self.next_fallback_backend();
+                    self.diagnostics.push_failure(
+                        backend_name,
                         elapsed_ms,
-                        error_reason: Some(reason.clone()),
-                        selected: false,
-                    });
+                        reason.clone(),
+                        action,
+                        fallback_backend,
+                    );
                     self.diagnostics.warnings.push(format!(
-                        "touch backend {} could not be selected for {action}: {reason}",
-                        backend.as_str()
+                        "WARNING touch backend {} could not be selected for {action}; fallback_backend={}; reason={reason}",
+                        backend_name.as_str(),
+                        fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                     ));
+                    if !err.is_fallback_eligible() {
+                        return Err(self.chain_failed_error(action));
+                    }
                 }
             }
         }
 
-        Err(DeviceError::fatal(format!(
+        Err(self.chain_failed_error(action))
+    }
+
+    fn chain_failed_error(&self, action: &str) -> DeviceError {
+        DeviceError::fatal(format!(
             "touch backend chain failed during {action}; diagnostics: {}",
             format_touch_diagnostics(&self.diagnostics)
-        )))
+        ))
     }
 
     fn record_runtime_failure(
@@ -249,33 +323,53 @@ impl SelectedTouchBackend {
         action: &str,
         backend: TouchBackendName,
         err: &DeviceError,
+        elapsed_ms: u128,
+        fallback_backend: Option<TouchBackendName>,
     ) {
         let reason = err.to_string();
-        self.diagnostics.attempts.push(TouchBackendAttempt {
+        self.diagnostics.push_failure(
             backend,
-            ok: false,
-            elapsed_ms: 0,
-            error_reason: Some(reason.clone()),
-            selected: false,
-        });
+            elapsed_ms,
+            reason.clone(),
+            action,
+            fallback_backend,
+        );
         self.diagnostics.warnings.push(format!(
-            "touch backend {} failed during {action}: {reason}",
-            backend.as_str()
+            "WARNING touch backend {} failed during {action}; fallback_backend={}; reason={reason}",
+            backend.as_str(),
+            fallback_backend
+                .map(TouchBackendName::as_str)
+                .unwrap_or("none")
         ));
+    }
+
+    fn next_fallback_backend(&self) -> Option<TouchBackendName> {
+        self.remaining.first().map(|factory| factory.name())
+    }
+
+    fn validate_action_points(&self, action: &str, points: &[(i32, i32)]) -> DeviceResult<()> {
+        let bounds = touch_bounds_from_device(self.active.handshake.as_ref(), &self.active.device)?;
+        for (index, (x, y)) in points.iter().enumerate() {
+            validate_touch_coordinate(&format!("{action} point {index} x"), *x, bounds.max_x)?;
+            validate_touch_coordinate(&format!("{action} point {index} y"), *y, bounds.max_y)?;
+        }
+        Ok(())
     }
 }
 
 impl InputBackend for SelectedTouchBackend {
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.run_touch_action("tap", |backend| backend.tap(x, y))
+        self.run_touch_action("tap", &[(x, y)], |backend| backend.tap(x, y))
     }
 
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.run_touch_action("long_tap", |backend| backend.long_tap(x, y, duration_ms))
+        self.run_touch_action("long_tap", &[(x, y)], |backend| {
+            backend.long_tap(x, y, duration_ms)
+        })
     }
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.run_touch_action("swipe", |backend| {
+        self.run_touch_action("swipe", &[(x1, y1), (x2, y2)], |backend| {
             backend.swipe(x1, y1, x2, y2, duration_ms)
         })
     }
@@ -346,22 +440,16 @@ fn touch_probe_report_with_factories(
                         err
                     ));
                 }
-                diagnostics.attempts.push(TouchBackendAttempt {
-                    backend: name,
-                    ok: true,
-                    elapsed_ms,
-                    error_reason: None,
-                    selected: false,
-                });
+                diagnostics.push_success(name, elapsed_ms, "probe", false);
                 successful.push((name, elapsed_ms));
             }
-            Err(err) => diagnostics.attempts.push(TouchBackendAttempt {
-                backend: factory.name(),
-                ok: false,
-                elapsed_ms: started.elapsed().as_millis(),
-                error_reason: Some(err.to_string()),
-                selected: false,
-            }),
+            Err(err) => diagnostics.push_failure(
+                factory.name(),
+                started.elapsed().as_millis(),
+                err.to_string(),
+                "probe",
+                None,
+            ),
         }
     }
 
@@ -407,13 +495,12 @@ fn select_fixed_priority(
         let started = Instant::now();
         match factory.connect() {
             Ok(active) => {
-                diagnostics.attempts.push(TouchBackendAttempt {
-                    backend: active.name,
-                    ok: true,
-                    elapsed_ms: started.elapsed().as_millis(),
-                    error_reason: None,
-                    selected: true,
-                });
+                diagnostics.push_success(
+                    active.name,
+                    started.elapsed().as_millis(),
+                    "select",
+                    true,
+                );
                 diagnostics.selected = Some(active.name);
                 return Ok(SelectedTouchBackend {
                     active,
@@ -424,17 +511,25 @@ fn select_fixed_priority(
             Err(err) => {
                 let backend = factory.name();
                 let reason = err.to_string();
-                diagnostics.attempts.push(TouchBackendAttempt {
+                let fallback_backend = factories.first().map(|factory| factory.name());
+                diagnostics.push_failure(
                     backend,
-                    ok: false,
-                    elapsed_ms: started.elapsed().as_millis(),
-                    error_reason: Some(reason.clone()),
-                    selected: false,
-                });
+                    started.elapsed().as_millis(),
+                    reason.clone(),
+                    "select",
+                    fallback_backend,
+                );
                 diagnostics.warnings.push(format!(
-                    "touch backend {} unavailable during selection: {reason}",
-                    backend.as_str()
+                    "WARNING touch backend {} unavailable during selection; fallback_backend={}; reason={reason}",
+                    backend.as_str(),
+                    fallback_backend.map(TouchBackendName::as_str).unwrap_or("none")
                 ));
+                if !err.is_fallback_eligible() {
+                    return Err(DeviceError::fatal(format!(
+                        "touch backend selection stopped on non-fallback error; diagnostics: {}",
+                        format_touch_diagnostics(&diagnostics)
+                    )));
+                }
             }
         }
     }
@@ -456,29 +551,29 @@ fn select_fastest(
         match factory.connect() {
             Ok(backend) => {
                 let elapsed_ms = started.elapsed().as_millis();
-                diagnostics.attempts.push(TouchBackendAttempt {
-                    backend: backend.name,
-                    ok: true,
-                    elapsed_ms,
-                    error_reason: None,
-                    selected: false,
-                });
+                diagnostics.push_success(backend.name, elapsed_ms, "select", false);
                 connected.push((index, elapsed_ms, backend));
             }
             Err(err) => {
                 let backend = factory.name();
                 let reason = err.to_string();
-                diagnostics.attempts.push(TouchBackendAttempt {
+                diagnostics.push_failure(
                     backend,
-                    ok: false,
-                    elapsed_ms: started.elapsed().as_millis(),
-                    error_reason: Some(reason.clone()),
-                    selected: false,
-                });
+                    started.elapsed().as_millis(),
+                    reason.clone(),
+                    "select",
+                    None,
+                );
                 diagnostics.warnings.push(format!(
-                    "touch backend {} unavailable during fastest selection: {reason}",
+                    "WARNING touch backend {} unavailable during fastest selection: {reason}",
                     backend.as_str()
                 ));
+                if !err.is_fallback_eligible() {
+                    return Err(DeviceError::fatal(format!(
+                        "touch backend fastest selection stopped on non-fallback error; diagnostics: {}",
+                        format_touch_diagnostics(&diagnostics)
+                    )));
+                }
             }
         }
     }
@@ -544,10 +639,16 @@ fn format_touch_diagnostics(diagnostics: &TouchBackendDiagnostics) -> String {
         .iter()
         .map(|attempt| {
             format!(
-                "{{backend:{}, ok:{}, elapsed_ms:{}, selected:{}, error_reason:{}}}",
+                "{{attempt_id:{}, backend:{}, ok:{}, elapsed_ms:{}, action:{}, fallback_backend:{}, selected:{}, error_reason:{}}}",
+                attempt.attempt_id,
                 attempt.backend.as_str(),
                 attempt.ok,
                 attempt.elapsed_ms,
+                attempt.action.as_deref().unwrap_or("none"),
+                attempt
+                    .fallback_backend
+                    .map(TouchBackendName::as_str)
+                    .unwrap_or("none"),
                 attempt.selected,
                 attempt.error_reason.as_deref().unwrap_or("")
             )
@@ -622,6 +723,7 @@ pub struct AdbShellInputBackend {
     adb_config: AdbConfig,
     target: DeviceTarget,
     serial: String,
+    bounds: Option<TouchBounds>,
     connected: bool,
 }
 
@@ -632,6 +734,7 @@ impl AdbShellInputBackend {
             adb_config,
             target,
             serial,
+            bounds: None,
             connected: false,
         }
     }
@@ -640,6 +743,7 @@ impl AdbShellInputBackend {
         let adb = Adb::new(self.adb_config.clone());
         let state = adb.ensure_device(&self.serial, self.target.connect)?;
         let screen_size = adb.screen_size(&self.serial)?;
+        self.bounds = Some(touch_bounds_from_screen_size(&screen_size)?);
         self.connected = true;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
@@ -664,12 +768,18 @@ impl AdbShellInputBackend {
         }
         Adb::new(config)
     }
+
+    fn bounds(&self) -> DeviceResult<TouchBounds> {
+        self.bounds
+            .ok_or_else(|| DeviceError::fatal("AdbShellInputBackend screen bounds are unavailable"))
+    }
 }
 
 impl InputBackend for AdbShellInputBackend {
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        validate_adb_input_coordinate("tap x", x)?;
-        validate_adb_input_coordinate("tap y", y)?;
+        let bounds = self.bounds()?;
+        validate_touch_coordinate("tap x", x, bounds.max_x)?;
+        validate_touch_coordinate("tap y", y, bounds.max_y)?;
         self.ensure_connected()?;
         let adb = Adb::new(self.adb_config.clone());
         adb.shell_input_tap(&self.serial, x, y)?;
@@ -681,10 +791,11 @@ impl InputBackend for AdbShellInputBackend {
     }
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
-        validate_adb_input_coordinate("swipe x1", x1)?;
-        validate_adb_input_coordinate("swipe y1", y1)?;
-        validate_adb_input_coordinate("swipe x2", x2)?;
-        validate_adb_input_coordinate("swipe y2", y2)?;
+        let bounds = self.bounds()?;
+        validate_touch_coordinate("swipe x1", x1, bounds.max_x)?;
+        validate_touch_coordinate("swipe y1", y1, bounds.max_y)?;
+        validate_touch_coordinate("swipe x2", x2, bounds.max_x)?;
+        validate_touch_coordinate("swipe y2", y2, bounds.max_y)?;
         self.ensure_connected()?;
         let duration_ms = duration_ms.clamp(1, MAX_ADB_INPUT_GESTURE_MS);
         let adb = self.adb_for_duration(duration_ms);
@@ -714,10 +825,59 @@ impl InputBackend for AdbShellInputBackend {
     }
 }
 
-fn validate_adb_input_coordinate(label: &str, value: i32) -> DeviceResult<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TouchBounds {
+    max_x: i32,
+    max_y: i32,
+}
+
+fn touch_bounds_from_device(
+    handshake: Option<&HandshakeInfo>,
+    device: &DeviceInfo,
+) -> DeviceResult<TouchBounds> {
+    if let Some(handshake) = handshake {
+        return Ok(TouchBounds {
+            max_x: handshake.max_x,
+            max_y: handshake.max_y,
+        });
+    }
+    touch_bounds_from_screen_size(&device.screen_size)
+}
+
+fn touch_bounds_from_screen_size(screen_size: &str) -> DeviceResult<TouchBounds> {
+    let (_, dimensions) = screen_size.rsplit_once(':').unwrap_or(("", screen_size));
+    let (width, height) = dimensions.trim().split_once('x').ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "failed to parse touch screen bounds from adb wm size output: {screen_size}"
+        ))
+    })?;
+    let max_x = width.trim().parse::<i32>().map_err(|err| {
+        DeviceError::fatal(format!(
+            "invalid touch screen width '{width}' in adb wm size output: {err}"
+        ))
+    })?;
+    let max_y = height.trim().parse::<i32>().map_err(|err| {
+        DeviceError::fatal(format!(
+            "invalid touch screen height '{height}' in adb wm size output: {err}"
+        ))
+    })?;
+    if max_x <= 0 || max_y <= 0 {
+        return Err(DeviceError::fatal(format!(
+            "touch screen bounds must be positive, got {max_x}x{max_y}"
+        )));
+    }
+    Ok(TouchBounds { max_x, max_y })
+}
+
+fn validate_touch_coordinate(label: &str, value: i32, max: i32) -> DeviceResult<()> {
     if value < 0 {
         return Err(DeviceError::fatal(format!(
-            "{label} must be non-negative for adb shell input, got {value}"
+            "{label} must be non-negative for touch input, got {value}"
+        )));
+    }
+    if value > max {
+        return Err(DeviceError::fatal(format!(
+            "{label} {value} exceeds touch screen max {max}"
         )));
     }
     Ok(())
@@ -823,7 +983,7 @@ mod tests {
                 fake_factory(
                     TouchBackendName::MaaTouch,
                     Ok(()),
-                    Err(DeviceError::fatal("maatouch write failed")),
+                    Err(DeviceError::transient("maatouch write failed")),
                 ),
                 fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
             ],
@@ -833,20 +993,16 @@ mod tests {
         selected.tap(10, 20).expect("fallback tap");
 
         assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
-        assert!(
-            selected
-                .diagnostics()
-                .warnings
-                .iter()
-                .any(|warning| { warning.contains("maatouch") && warning.contains("tap") })
-        );
-        assert!(
-            selected
-                .diagnostics()
-                .attempts
-                .iter()
-                .any(|attempt| attempt.backend == TouchBackendName::MaaTouch && !attempt.ok)
-        );
+        assert!(selected.diagnostics().warnings.iter().any(|warning| {
+            warning.contains("WARNING") && warning.contains("maatouch") && warning.contains("tap")
+        }));
+        assert!(selected.diagnostics().attempts.iter().any(|attempt| {
+            attempt.backend == TouchBackendName::MaaTouch
+                && !attempt.ok
+                && attempt.action.as_deref() == Some("tap")
+                && attempt.fallback_backend == Some(TouchBackendName::AdbShellInput)
+                && attempt.attempt_id > 0
+        }));
         assert!(
             selected
                 .diagnostics()
@@ -866,12 +1022,12 @@ mod tests {
                 fake_factory(
                     TouchBackendName::MaaTouch,
                     Ok(()),
-                    Err(DeviceError::fatal("maatouch write failed")),
+                    Err(DeviceError::transient("maatouch write failed")),
                 ),
                 fake_factory(
                     TouchBackendName::AdbShellInput,
                     Ok(()),
-                    Err(DeviceError::fatal("adb input failed")),
+                    Err(DeviceError::transient("adb input failed")),
                 ),
             ],
         )
@@ -883,13 +1039,121 @@ mod tests {
     }
 
     #[test]
+    fn fallback_skipped_on_serious_input_error() {
+        let mut selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(
+                    TouchBackendName::MaaTouch,
+                    Ok(()),
+                    Err(DeviceError::fatal("serious input error")),
+                ),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        let err = selected.tap(10, 20).expect_err("fatal input error");
+
+        assert_eq!(err.message(), "serious input error");
+        assert_eq!(selected.backend_name(), TouchBackendName::MaaTouch);
+        assert!(
+            !selected
+                .diagnostics()
+                .attempts
+                .iter()
+                .any(|attempt| attempt.backend == TouchBackendName::AdbShellInput && attempt.ok)
+        );
+    }
+
+    #[test]
+    fn fallback_on_transient_backend_failure() {
+        let mut selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(
+                    TouchBackendName::MaaTouch,
+                    Ok(()),
+                    Err(DeviceError::transient("temporary write failed")),
+                ),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        selected.long_tap(10, 20, 100).expect("transient fallback");
+
+        assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
+    }
+
+    #[test]
+    fn fallback_records_full_context() {
+        let mut selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(
+                    TouchBackendName::MaaTouch,
+                    Ok(()),
+                    Err(DeviceError::transient("socket write failed")),
+                ),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        selected.swipe(10, 20, 30, 40, 100).expect("fallback swipe");
+
+        let attempt = selected
+            .diagnostics()
+            .attempts
+            .iter()
+            .find(|attempt| attempt.backend == TouchBackendName::MaaTouch && !attempt.ok)
+            .expect("maatouch failure attempt");
+        assert_eq!(attempt.action.as_deref(), Some("swipe"));
+        assert_eq!(
+            attempt.fallback_backend,
+            Some(TouchBackendName::AdbShellInput)
+        );
+        assert!(attempt.error_reason.as_deref().is_some_and(|reason| {
+            reason.contains("Transient") && reason.contains("socket write failed")
+        }));
+        assert!(attempt.attempt_id > 0);
+        assert!(
+            selected
+                .diagnostics()
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("WARNING")
+                    && warning.contains("fallback_backend=adb_shell_input"))
+        );
+    }
+
+    #[test]
+    fn shared_input_validation_blocks_fallback_on_out_of_bounds() {
+        let mut selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(TouchBackendName::MaaTouch, Ok(()), Ok(())),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        let err = selected.tap(1281, 20).expect_err("out of bounds");
+
+        assert!(err.message().contains("exceeds touch screen max"));
+        assert_eq!(selected.backend_name(), TouchBackendName::MaaTouch);
+        assert_eq!(selected.diagnostics().attempts.len(), 1);
+    }
+
+    #[test]
     fn touch_probe_report_uses_fake_backends_without_touch_actions() {
         let report = touch_probe_report_with_factories(
             TouchBackendChoice::Auto,
             vec![
                 fake_factory(
                     TouchBackendName::MaaTouch,
-                    Err(DeviceError::fatal("maatouch unavailable")),
+                    Err(DeviceError::transient("maatouch unavailable")),
                     Ok(()),
                 ),
                 fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
