@@ -12,6 +12,7 @@ members = [
     "crates/recognition-pack",
     "crates/runtime-core",
     "crates/task-loop",
+    "crates/vision-ffi",
 ]
 resolver = "3"
 
@@ -28,5 +29,6 @@ actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }
 actingcommand-task-loop = { path = "crates/task-loop" }
+actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 FFI boundary skeleton
+
+### Current status
+
+- Started the R1/R3 OCR/NN gate from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `275770f`.
+- Alice approved the recommended route: first add the FFI boundary skeleton, then attach FastDeploy/PPOCR and ONNXRuntime behind it.
+- Added `crates/vision-ffi` as a safe Rust boundary crate for future OCR and NN backends.
+- Recorded route decision metadata: OCR goes to FastDeploy/PPOCR, NN goes to ONNXRuntime, GPU and DirectML are disabled.
+- Added fail-loud unavailable OCR/NN backends so missing production engines cannot be silently treated as success.
+- Added the required acceptance-named tests `ocr_reads_text_from_frame` and `nn_classifies_frame` using explicit test doubles.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN hot path was added in this boundary skeleton.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/vision-ffi/Cargo.toml`
+- `crates/vision-ffi/src/lib.rs`
+- `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and root `Cargo.toml`; `LICENSE_POLICY.md` is not present in this split Runtime repository.
+- Inspected existing crate layout, `actingcommand-recognition`, `crates/device/src/error.rs`, and `crates/device/src/lib.rs`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was absent before public validation, so no config backup needed restoration.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `git status --short --branch`
+- Searched the changed R1/R3 boundary files for unsafe/fallback/reconnect/retry/GPU/DirectML/FastDeploy/PPOCR/ONNXRuntime references.
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed, including:
+  - `ocr_reads_text_from_frame`
+  - `nn_classifies_frame`
+  - `invalid_frame_size_is_fatal`
+  - `invalid_region_is_fatal`
+  - `unavailable_ocr_backend_fails_loudly`
+  - `unavailable_nn_backend_fails_loudly`
+  - `route_decision_disables_gpu_and_directml`
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed, including the new `actingcommand-vision-ffi` test suite.
+- `git diff --check`: passed.
+- The R1/R3 boundary crate uses `#![forbid(unsafe_code)]`.
+- The changed boundary code does not add fallback, reconnect, retry, GPU, DirectML, UI, SQLite, device access, game logic, or upstream source copying.
+
+### Current blocker
+
+- No blocker for the FFI boundary skeleton.
+- Full R1/R3 remains open until reviewed FastDeploy/PPOCR and ONNXRuntime artifacts are attached behind this boundary and their exact licenses, model/data terms, size delta, and release redistribution obligations are recorded.
+
+### Next step
+
+1. Commit and push this boundary skeleton.
+2. Continue R1/R3 by attaching reviewed FastDeploy/PPOCR and ONNXRuntime artifacts behind `crates/vision-ffi`.
+
 ## 2026-07-02 P6.5-A E FeatureMatch gate
 
 ### Current status

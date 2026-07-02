@@ -1,0 +1,578 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Safe Rust boundary for future OCR and NN engines.
+//!
+//! This crate deliberately stops at the process/FFI contract surface. The real
+//! FastDeploy/PPOCR and ONNXRuntime bindings must live behind this boundary so
+//! runtime callers cannot silently substitute mock recognition for production
+//! OCR or NN results.
+
+#![forbid(unsafe_code)]
+
+use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fmt;
+
+pub type VisionFfiResult<T> = Result<T, VisionFfiError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionFfiErrorSeverity {
+    Fatal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionFfiError {
+    severity: VisionFfiErrorSeverity,
+    module: &'static str,
+    message: String,
+}
+
+impl VisionFfiError {
+    pub fn fatal(module: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            severity: VisionFfiErrorSeverity::Fatal,
+            module,
+            message: message.into(),
+        }
+    }
+
+    pub fn severity(&self) -> VisionFfiErrorSeverity {
+        self.severity
+    }
+
+    pub fn module(&self) -> &'static str {
+        self.module
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for VisionFfiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.severity {
+            VisionFfiErrorSeverity::Fatal => {
+                write!(
+                    f,
+                    "fatal vision FFI error in {}: {}",
+                    self.module, self.message
+                )
+            }
+        }
+    }
+}
+
+impl Error for VisionFfiError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionBackendKind {
+    TestDouble,
+    FastDeployPpocr,
+    OnnxRuntime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionPixelFormat {
+    Rgb8,
+    Rgba8,
+    Gray8,
+}
+
+impl VisionPixelFormat {
+    fn bytes_per_pixel(self) -> usize {
+        match self {
+            Self::Rgb8 => 3,
+            Self::Rgba8 => 4,
+            Self::Gray8 => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionFrame {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: VisionPixelFormat,
+    pub pixels: Vec<u8>,
+}
+
+impl VisionFrame {
+    pub fn new(
+        width: u32,
+        height: u32,
+        pixel_format: VisionPixelFormat,
+        pixels: Vec<u8>,
+    ) -> VisionFfiResult<Self> {
+        validate_frame_pixels(width, height, pixel_format, pixels.len())?;
+        Ok(Self {
+            width,
+            height,
+            pixel_format,
+            pixels,
+        })
+    }
+
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        validate_frame_pixels(
+            self.width,
+            self.height,
+            self.pixel_format,
+            self.pixels.len(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl VisionRect {
+    pub fn full_frame(frame: &VisionFrame) -> VisionFfiResult<Self> {
+        let width = i32::try_from(frame.width)
+            .map_err(|_| VisionFfiError::fatal("vision-frame", "frame width exceeds i32 range"))?;
+        let height = i32::try_from(frame.height)
+            .map_err(|_| VisionFfiError::fatal("vision-frame", "frame height exceeds i32 range"))?;
+        Ok(Self {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OcrInferenceRequest {
+    pub frame: VisionFrame,
+    pub region: VisionRect,
+    pub languages: Vec<String>,
+    pub timeout_ms: u64,
+}
+
+impl OcrInferenceRequest {
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        self.frame.validate()?;
+        validate_rect(self.region, self.frame.width, self.frame.height)?;
+        if self.languages.is_empty() {
+            return Err(VisionFfiError::fatal(
+                "ocr",
+                "OCR request must include at least one language",
+            ));
+        }
+        if self.timeout_ms == 0 {
+            return Err(VisionFfiError::fatal(
+                "ocr",
+                "OCR request timeout_ms must be non-zero",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrTextBlock {
+    pub text: String,
+    pub rect: VisionRect,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrInferenceResult {
+    pub text: String,
+    pub blocks: Vec<OcrTextBlock>,
+    pub confidence: Option<f32>,
+    pub backend: VisionBackendKind,
+    pub warnings: Vec<String>,
+}
+
+pub trait OcrEngine {
+    fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NnInferenceRequest {
+    pub frame: VisionFrame,
+    pub model_id: String,
+    pub labels: Vec<String>,
+    pub timeout_ms: u64,
+}
+
+impl NnInferenceRequest {
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        self.frame.validate()?;
+        if self.model_id.trim().is_empty() {
+            return Err(VisionFfiError::fatal(
+                "nn",
+                "NN request model_id must be non-empty",
+            ));
+        }
+        if self.labels.is_empty() {
+            return Err(VisionFfiError::fatal(
+                "nn",
+                "NN request must include at least one candidate label",
+            ));
+        }
+        if self.timeout_ms == 0 {
+            return Err(VisionFfiError::fatal(
+                "nn",
+                "NN request timeout_ms must be non-zero",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NnLabel {
+    pub label: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NnClassificationResult {
+    pub labels: Vec<NnLabel>,
+    pub backend: VisionBackendKind,
+}
+
+pub trait NnEngine {
+    fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisionFfiRouteDecision {
+    pub route: &'static str,
+    pub ocr_backend: VisionBackendKind,
+    pub nn_backend: VisionBackendKind,
+    pub gpu_enabled: bool,
+    pub directml_enabled: bool,
+    pub bundled_artifacts: bool,
+    pub expected_size_delta_mb: (u16, u16),
+}
+
+pub fn r1_r3_route_decision() -> VisionFfiRouteDecision {
+    VisionFfiRouteDecision {
+        route: "ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime",
+        ocr_backend: VisionBackendKind::FastDeployPpocr,
+        nn_backend: VisionBackendKind::OnnxRuntime,
+        gpu_enabled: false,
+        directml_enabled: false,
+        bundled_artifacts: false,
+        expected_size_delta_mb: (150, 250),
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct UnavailableOcrBackend;
+
+impl OcrEngine for UnavailableOcrBackend {
+    fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
+        request.validate()?;
+        Err(VisionFfiError::fatal(
+            "ocr",
+            "FastDeploy/PPOCR backend is not linked or configured",
+        ))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct UnavailableNnBackend;
+
+impl NnEngine for UnavailableNnBackend {
+    fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
+        request.validate()?;
+        Err(VisionFfiError::fatal(
+            "nn",
+            "ONNXRuntime backend is not linked or configured",
+        ))
+    }
+}
+
+pub struct VisionFfiBoundary<O, N> {
+    ocr: O,
+    nn: N,
+}
+
+impl<O, N> VisionFfiBoundary<O, N> {
+    pub fn new(ocr: O, nn: N) -> Self {
+        Self { ocr, nn }
+    }
+}
+
+impl<O, N> VisionFfiBoundary<O, N>
+where
+    O: OcrEngine,
+    N: NnEngine,
+{
+    pub fn read_text(
+        &mut self,
+        request: OcrInferenceRequest,
+    ) -> VisionFfiResult<OcrInferenceResult> {
+        self.ocr.read_text(request)
+    }
+
+    pub fn classify(
+        &mut self,
+        request: NnInferenceRequest,
+    ) -> VisionFfiResult<NnClassificationResult> {
+        self.nn.classify(request)
+    }
+}
+
+fn validate_frame_pixels(
+    width: u32,
+    height: u32,
+    pixel_format: VisionPixelFormat,
+    pixel_len: usize,
+) -> VisionFfiResult<()> {
+    if width == 0 || height == 0 {
+        return Err(VisionFfiError::fatal(
+            "vision-frame",
+            format!("frame dimensions must be non-zero: {width}x{height}"),
+        ));
+    }
+    let expected = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(pixel_format.bytes_per_pixel()))
+        .ok_or_else(|| {
+            VisionFfiError::fatal(
+                "vision-frame",
+                format!("frame dimensions overflow: {width}x{height}"),
+            )
+        })?;
+    if pixel_len != expected {
+        return Err(VisionFfiError::fatal(
+            "vision-frame",
+            format!(
+                "frame pixel length mismatch for {width}x{height}: got {pixel_len}, expected {expected}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> VisionFfiResult<()> {
+    if rect.x < 0 || rect.y < 0 {
+        return Err(VisionFfiError::fatal(
+            "vision-rect",
+            format!(
+                "rect coordinates must be non-negative: ({}, {})",
+                rect.x, rect.y
+            ),
+        ));
+    }
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(VisionFfiError::fatal(
+            "vision-rect",
+            format!(
+                "rect dimensions must be positive: {}x{}",
+                rect.width, rect.height
+            ),
+        ));
+    }
+
+    let x = u32::try_from(rect.x)
+        .map_err(|_| VisionFfiError::fatal("vision-rect", "rect x cannot be converted to u32"))?;
+    let y = u32::try_from(rect.y)
+        .map_err(|_| VisionFfiError::fatal("vision-rect", "rect y cannot be converted to u32"))?;
+    let width = u32::try_from(rect.width).map_err(|_| {
+        VisionFfiError::fatal("vision-rect", "rect width cannot be converted to u32")
+    })?;
+    let height = u32::try_from(rect.height).map_err(|_| {
+        VisionFfiError::fatal("vision-rect", "rect height cannot be converted to u32")
+    })?;
+    let right = x
+        .checked_add(width)
+        .ok_or_else(|| VisionFfiError::fatal("vision-rect", "rect x + width overflows u32"))?;
+    let bottom = y
+        .checked_add(height)
+        .ok_or_else(|| VisionFfiError::fatal("vision-rect", "rect y + height overflows u32"))?;
+
+    if right > frame_width || bottom > frame_height {
+        return Err(VisionFfiError::fatal(
+            "vision-rect",
+            format!(
+                "rect {}x{} at ({}, {}) exceeds frame {}x{}",
+                width, height, x, y, frame_width, frame_height
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestOcrEngine;
+
+    impl OcrEngine for TestOcrEngine {
+        fn read_text(
+            &mut self,
+            request: OcrInferenceRequest,
+        ) -> VisionFfiResult<OcrInferenceResult> {
+            request.validate()?;
+            Ok(OcrInferenceResult {
+                text: "公开招募 09:00".to_string(),
+                blocks: vec![OcrTextBlock {
+                    text: "公开招募".to_string(),
+                    rect: request.region,
+                    confidence: Some(0.98),
+                }],
+                confidence: Some(0.98),
+                backend: VisionBackendKind::TestDouble,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestNnEngine;
+
+    impl NnEngine for TestNnEngine {
+        fn classify(
+            &mut self,
+            request: NnInferenceRequest,
+        ) -> VisionFfiResult<NnClassificationResult> {
+            request.validate()?;
+            Ok(NnClassificationResult {
+                labels: vec![NnLabel {
+                    label: request.labels[0].clone(),
+                    score: 0.97,
+                }],
+                backend: VisionBackendKind::TestDouble,
+            })
+        }
+    }
+
+    #[test]
+    fn ocr_reads_text_from_frame() {
+        let frame = test_frame();
+        let region = VisionRect::full_frame(&frame).expect("full frame rect");
+        let request = OcrInferenceRequest {
+            frame,
+            region,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut boundary = VisionFfiBoundary::new(TestOcrEngine, TestNnEngine);
+
+        let result = boundary.read_text(request).expect("ocr result");
+
+        assert_eq!(result.backend, VisionBackendKind::TestDouble);
+        assert!(result.text.contains("公开招募"));
+        assert_eq!(result.blocks.len(), 1);
+    }
+
+    #[test]
+    fn nn_classifies_frame() {
+        let request = NnInferenceRequest {
+            frame: test_frame(),
+            model_id: "ak-recruit-entry".to_string(),
+            labels: vec!["arknights.recruit".to_string(), "unknown".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut boundary = VisionFfiBoundary::new(TestOcrEngine, TestNnEngine);
+
+        let result = boundary.classify(request).expect("nn result");
+
+        assert_eq!(result.backend, VisionBackendKind::TestDouble);
+        assert_eq!(result.labels[0].label, "arknights.recruit");
+        assert!(result.labels[0].score > 0.9);
+    }
+
+    #[test]
+    fn invalid_frame_size_is_fatal() {
+        let err = VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 3])
+            .expect_err("bad frame rejected");
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert_eq!(err.module(), "vision-frame");
+    }
+
+    #[test]
+    fn invalid_region_is_fatal() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            frame,
+            region: VisionRect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+
+        let err = request.validate().expect_err("oversized region rejected");
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert_eq!(err.module(), "vision-rect");
+    }
+
+    #[test]
+    fn unavailable_ocr_backend_fails_loudly() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = UnavailableOcrBackend;
+
+        let err = backend.read_text(request).expect_err("unavailable backend");
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("not linked or configured"));
+    }
+
+    #[test]
+    fn unavailable_nn_backend_fails_loudly() {
+        let request = NnInferenceRequest {
+            frame: test_frame(),
+            model_id: "ak-recruit-entry".to_string(),
+            labels: vec!["arknights.recruit".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = UnavailableNnBackend;
+
+        let err = backend.classify(request).expect_err("unavailable backend");
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("not linked or configured"));
+    }
+
+    #[test]
+    fn route_decision_disables_gpu_and_directml() {
+        let decision = r1_r3_route_decision();
+
+        assert_eq!(
+            decision.route,
+            "ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime"
+        );
+        assert_eq!(decision.ocr_backend, VisionBackendKind::FastDeployPpocr);
+        assert_eq!(decision.nn_backend, VisionBackendKind::OnnxRuntime);
+        assert!(!decision.gpu_enabled);
+        assert!(!decision.directml_enabled);
+        assert_eq!(decision.expected_size_delta_mb, (150, 250));
+    }
+
+    fn test_frame() -> VisionFrame {
+        VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 12]).expect("test frame")
+    }
+}

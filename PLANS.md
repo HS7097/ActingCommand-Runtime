@@ -12,6 +12,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain R1/R3
+
+The 2026-07-02 P6.5-A R1/R3 OCR/NN route is accepted as an FFI-boundary-first implementation path.
+
+Scope:
+
+- `crates/vision-ffi` defines the first safe Rust boundary for future OCR and NN engines.
+- The route decision is `ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime`.
+- OCR is routed toward FastDeploy/PPOCR.
+- NN is routed toward ONNXRuntime.
+- GPU and DirectML are disabled for this route to avoid the known ONNX-GPU/DirectML lifetime risk described in the task file.
+- `UnavailableOcrBackend` and `UnavailableNnBackend` fail loudly when the real engines are not linked or configured.
+- Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through explicit test doubles.
+- `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
+
+This increment does not bundle FastDeploy, PPOCR, ONNXRuntime, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR/NN hot path. The next R1/R3 increment must attach the reviewed FastDeploy/PPOCR and ONNXRuntime artifacts behind this boundary and update NOTICE with the exact artifact licenses and redistribution terms before any release packaging.
+
 ## Current P6.5-A MaaFramework fusion chain E
 
 The 2026-07-02 P6.5-A E FeatureMatch pre-research gate is closed as a benchmark decision report, not as a recognition backend implementation.
