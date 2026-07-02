@@ -39,6 +39,7 @@ No upstream automation source code has been copied into this repository as part 
 - Local destination: none in this repository.
 - Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library. `FastDeployPpocrArtifacts` records the reviewed provider library, PPOCR detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout before artifact-backed invocation.
 - Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include FastDeploy, PPOCR, OCR models, dictionaries, or upstream source.
+- Artifact lock boundary: `apps/vision-provider-check --artifact-lock` can produce size and SHA-256 metadata for locally reviewed artifacts, but that report is provenance metadata only and does not add redistribution rights by itself.
 - License check: FastDeploy repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0. PaddleOCR repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0.
 - Artifact contract status: the contract exists, but no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
 - Release boundary: before any release bundles these artifacts, update this NOTICE with the exact upstream project URLs, license texts, model/data terms, dictionary terms, copied artifact paths, third-party notices, binary provenance, and redistribution obligations.
@@ -49,6 +50,7 @@ No upstream automation source code has been copied into this repository as part 
 - Local destination: none in this repository.
 - Current status: `OnnxRuntimeBackend` can dynamically load an ABI-compatible local provider library. `OnnxRuntimeArtifacts` records the reviewed provider library, ONNX model, labels or label file, CPU-only execution provider, and default timeout before artifact-backed invocation.
 - Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include ONNXRuntime binaries, models, labels, or upstream source.
+- Artifact lock boundary: `apps/vision-provider-check --artifact-lock` can produce size and SHA-256 metadata for locally reviewed artifacts, but that report is provenance metadata only and does not add redistribution rights by itself.
 - License check: ONNX Runtime repository `LICENSE` was verified through GitHub API on 2026-07-02 as MIT.
 - Artifact contract status: the contract exists, but no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, third-party notices, binary provenance, model terms, copied artifact paths, and redistribution obligations.

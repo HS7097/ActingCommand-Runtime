@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider artifact lock report
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `d273a09`.
+- Extended `apps/vision-provider-check` with `--artifact-lock` and optional `--lock-out <json>`.
+- Artifact lock mode loads the reviewed provider manifest, requires selected backend artifact files to exist, and records each artifact's backend, role, path, byte size, and SHA-256 hash.
+- The report includes `total_size_bytes` so release review can replace the earlier 150-250 MB estimate with exact local artifact evidence once reviewed provider/model/data files are supplied.
+- `--artifact-lock` cannot be mixed with `--ocr-frame` or `--nn-frame`, keeping provenance reporting separate from inference smoke runs.
+- Current example manifest still fails loudly in artifact lock mode because real FastDeploy/PPOCR and ONNXRuntime provider artifacts are not present.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `apps/vision-provider-check/Cargo.toml`
+- `apps/vision-provider-check/src/main.rs`
+- `Cargo.lock`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Searched local workspace for existing ONNX/PPOCR/FastDeploy artifacts.
+- Searched local filesystem for ONNXRuntime/FastDeploy/Paddle DLLs.
+- `gh release list --repo microsoft/onnxruntime --limit 10`
+- `gh release list --repo PaddlePaddle/FastDeploy --limit 10`
+- `gh release list --repo PaddlePaddle/PaddleOCR --limit 10`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --artifact-lock`
+- Temporary successful artifact lock smoke with dummy local ONNXRuntime files under `target\vision-lock-smoke`.
+- `cargo clippy -p actingcommand-vision-provider-check -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`: passed with 16 tests.
+- `--artifact-lock` against the example manifest failed as expected with exit code 1 because `external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll` is not present.
+- Temporary successful artifact lock smoke wrote a JSON report with `total_size_bytes: 3` and SHA-256 hashes for dummy ONNXRuntime provider/model files.
+- `cargo clippy -p actingcommand-vision-provider-check -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the provider artifact lock report.
+- Full R1/R3 remains open until reviewed provider binaries/models/data are available, their release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Commit and push this provider artifact lock report increment with `PLANS.md`, `NOTICE.md`, and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 provider smoke entry points
 
 ### Current status

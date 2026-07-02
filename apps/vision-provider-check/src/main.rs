@@ -7,8 +7,10 @@ use actingcommand_vision_ffi::{
 };
 use image::ImageFormat;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,9 @@ enum CheckMode {
     NnSmoke {
         frame: PathBuf,
         model_id: Option<String>,
+    },
+    ArtifactLock {
+        out: Option<PathBuf>,
     },
 }
 
@@ -73,6 +78,24 @@ struct FrameReport {
     pixel_format: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct ArtifactLockReport {
+    ok: bool,
+    schema_version: String,
+    backend: &'static str,
+    total_size_bytes: u64,
+    artifacts: Vec<ArtifactLockEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ArtifactLockEntry {
+    backend: &'static str,
+    role: &'static str,
+    path: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
 fn main() {
     if let Err(err) = run(env::args().skip(1)) {
         eprintln!("FATAL: {err}");
@@ -89,6 +112,9 @@ where
         CheckMode::Manifest => serde_json::to_string_pretty(&build_report(&options)?),
         CheckMode::OcrSmoke { .. } => serde_json::to_string_pretty(&run_ocr_smoke(&options)?),
         CheckMode::NnSmoke { .. } => serde_json::to_string_pretty(&run_nn_smoke(&options)?),
+        CheckMode::ArtifactLock { .. } => {
+            serde_json::to_string_pretty(&run_artifact_lock(&options)?)
+        }
     }
     .map_err(|err| {
         VisionFfiError::fatal(
@@ -111,6 +137,8 @@ where
     let mut ocr_region = None;
     let mut nn_frame = None;
     let mut nn_model_id = None;
+    let mut artifact_lock = false;
+    let mut lock_out = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -173,6 +201,17 @@ where
                 }
                 nn_model_id = Some(value);
             }
+            "--artifact-lock" => artifact_lock = true,
+            "--lock-out" => {
+                let value = args.next().ok_or_else(|| {
+                    VisionFfiError::fatal(
+                        "vision-provider-check",
+                        "--lock-out requires a JSON output path",
+                    )
+                })?;
+                artifact_lock = true;
+                lock_out = Some(PathBuf::from(value));
+            }
             "--help" | "-h" => {
                 return Err(VisionFfiError::fatal("vision-provider-check", usage()));
             }
@@ -189,6 +228,12 @@ where
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
             "--ocr-frame and --nn-frame cannot be used in the same invocation",
+        ));
+    }
+    if artifact_lock && (ocr_frame.is_some() || nn_frame.is_some()) {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "--artifact-lock cannot be used with --ocr-frame or --nn-frame",
         ));
     }
     if ocr_region.is_some() && ocr_frame.is_none() {
@@ -222,17 +267,18 @@ where
             format!("--manifest is required\n{}", usage()),
         )
     })?;
-    let mode = match (ocr_frame, nn_frame) {
-        (Some(frame), None) => CheckMode::OcrSmoke {
+    let mode = match (artifact_lock, ocr_frame, nn_frame) {
+        (true, None, None) => CheckMode::ArtifactLock { out: lock_out },
+        (false, Some(frame), None) => CheckMode::OcrSmoke {
             frame,
             region: ocr_region,
         },
-        (None, Some(frame)) => CheckMode::NnSmoke {
+        (false, None, Some(frame)) => CheckMode::NnSmoke {
             frame,
             model_id: nn_model_id,
         },
-        (None, None) => CheckMode::Manifest,
-        (Some(_), Some(_)) => unreachable!("checked above"),
+        (false, None, None) => CheckMode::Manifest,
+        _ => unreachable!("checked above"),
     };
 
     Ok(CheckOptions {
@@ -386,6 +432,173 @@ fn run_nn_smoke(
     })
 }
 
+fn run_artifact_lock(options: &CheckOptions) -> VisionFfiResult<ArtifactLockReport> {
+    let CheckMode::ArtifactLock { out } = &options.mode else {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "artifact lock was called without --artifact-lock",
+        ));
+    };
+    let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
+    let mut artifacts = Vec::new();
+
+    if matches!(
+        options.backend,
+        BackendSelection::All | BackendSelection::FastDeployPpocr
+    ) {
+        collect_fastdeploy_artifacts(manifest.require_fastdeploy_ppocr()?, &mut artifacts)?;
+    }
+
+    if matches!(
+        options.backend,
+        BackendSelection::All | BackendSelection::OnnxRuntime
+    ) {
+        collect_onnxruntime_artifacts(manifest.require_onnxruntime()?, &mut artifacts)?;
+    }
+
+    let total_size_bytes = artifacts.iter().map(|entry| entry.size_bytes).sum();
+    let report = ArtifactLockReport {
+        ok: true,
+        schema_version: manifest.schema_version,
+        backend: options.backend.as_str(),
+        total_size_bytes,
+        artifacts,
+    };
+    if let Some(path) = out {
+        write_json_file(path, &report)?;
+    }
+    Ok(report)
+}
+
+fn collect_fastdeploy_artifacts(
+    artifacts: &FastDeployPpocrArtifacts,
+    out: &mut Vec<ArtifactLockEntry>,
+) -> VisionFfiResult<()> {
+    out.push(lock_entry(
+        "fastdeploy_ppocr",
+        "provider_library",
+        &artifacts.provider_library_path,
+    )?);
+    out.push(lock_entry(
+        "fastdeploy_ppocr",
+        "detector_model",
+        &artifacts.detector_model_path,
+    )?);
+    out.push(lock_entry(
+        "fastdeploy_ppocr",
+        "recognizer_model",
+        &artifacts.recognizer_model_path,
+    )?);
+    out.push(lock_entry(
+        "fastdeploy_ppocr",
+        "dictionary",
+        &artifacts.dictionary_path,
+    )?);
+    if let Some(path) = &artifacts.classifier_model_path {
+        out.push(lock_entry("fastdeploy_ppocr", "classifier_model", path)?);
+    }
+    Ok(())
+}
+
+fn collect_onnxruntime_artifacts(
+    artifacts: &OnnxRuntimeArtifacts,
+    out: &mut Vec<ArtifactLockEntry>,
+) -> VisionFfiResult<()> {
+    out.push(lock_entry(
+        "onnxruntime",
+        "provider_library",
+        &artifacts.provider_library_path,
+    )?);
+    out.push(lock_entry("onnxruntime", "model", &artifacts.model_path)?);
+    if let Some(path) = &artifacts.labels_path {
+        out.push(lock_entry("onnxruntime", "labels", path)?);
+    }
+    Ok(())
+}
+
+fn lock_entry(
+    backend: &'static str,
+    role: &'static str,
+    path: &Path,
+) -> VisionFfiResult<ArtifactLockEntry> {
+    let mut file = File::open(path).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to read artifact {role} at {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to read artifact metadata {role} at {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("artifact {role} is not a file: {}", path.display()),
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|err| {
+            VisionFfiError::fatal(
+                "vision-provider-check",
+                format!(
+                    "failed to hash artifact {role} at {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(ArtifactLockEntry {
+        backend,
+        role,
+        path: path_string(path),
+        size_bytes: metadata.len(),
+        sha256: hex_sha256(&hasher.finalize()),
+    })
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> VisionFfiResult<()> {
+    let json = serde_json::to_vec_pretty(value).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("failed to serialize artifact lock report: {err}"),
+        )
+    })?;
+    fs::write(path, json).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to write artifact lock report {}: {err}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 fn load_png_frame(path: &Path) -> VisionFfiResult<(FrameReport, VisionFrame)> {
     let bytes = fs::read(path).map_err(|err| {
         VisionFfiError::fatal(
@@ -461,7 +674,7 @@ impl BackendSelection {
 }
 
 fn usage() -> &'static str {
-    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>]]"
+    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>]]"
 }
 
 #[cfg(test)]
@@ -558,6 +771,43 @@ mod tests {
                 model_id: Some("page-classifier".to_string())
             }
         );
+    }
+
+    #[test]
+    fn parses_artifact_lock_with_output_path() {
+        let options = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--backend".to_string(),
+            "onnxruntime".to_string(),
+            "--artifact-lock".to_string(),
+            "--lock-out".to_string(),
+            "lock.json".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(options.backend, BackendSelection::OnnxRuntime);
+        assert_eq!(
+            options.mode,
+            CheckMode::ArtifactLock {
+                out: Some(PathBuf::from("lock.json"))
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_artifact_lock_mixed_with_smoke() {
+        let err = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--artifact-lock".to_string(),
+            "--ocr-frame".to_string(),
+            "frame.png".to_string(),
+        ])
+        .expect_err("mixed artifact lock and smoke rejected");
+
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("cannot be used"));
     }
 
     #[test]
@@ -705,6 +955,102 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn artifact_lock_reports_size_and_sha256_for_selected_backend() {
+        let root = temp_fixture_dir("artifact-lock");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        write_artifact(&artifacts.join("onnx-provider.dll"), b"provider");
+        write_artifact(&artifacts.join("model.onnx"), b"model");
+        write_artifact(&artifacts.join("labels.txt"), b"home\nunknown\n");
+        let manifest = root.join("manifest.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": null,
+                    "onnxruntime": {{
+                        "provider_library_path": "{}",
+                        "model_path": "{}",
+                        "labels": ["home", "unknown"],
+                        "labels_path": "{}",
+                        "execution_provider": "cpu",
+                        "default_timeout_ms": 1000
+                    }}
+                }}"#,
+                json_path(&artifacts.join("onnx-provider.dll")),
+                json_path(&artifacts.join("model.onnx")),
+                json_path(&artifacts.join("labels.txt")),
+            ),
+        )
+        .expect("manifest");
+
+        let report = run_artifact_lock(&CheckOptions {
+            manifest,
+            backend: BackendSelection::OnnxRuntime,
+            require_existing: false,
+            mode: CheckMode::ArtifactLock { out: None },
+        })
+        .expect("artifact lock");
+
+        assert!(report.ok);
+        assert_eq!(report.backend, "onnxruntime");
+        assert_eq!(report.artifacts.len(), 3);
+        assert_eq!(report.total_size_bytes, 8 + 5 + 13);
+        assert_eq!(
+            report.artifacts[0].sha256,
+            "5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn artifact_lock_writes_report_when_requested() {
+        let root = temp_fixture_dir("artifact-lock-out");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        write_artifact(&artifacts.join("provider.dll"), b"nn");
+        write_artifact(&artifacts.join("model.onnx"), b"x");
+        let manifest = root.join("manifest.json");
+        let out = root.join("lock.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": null,
+                    "onnxruntime": {{
+                        "provider_library_path": "{}",
+                        "model_path": "{}",
+                        "labels": ["home"],
+                        "labels_path": null,
+                        "execution_provider": "cpu",
+                        "default_timeout_ms": 1000
+                    }}
+                }}"#,
+                json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("model.onnx")),
+            ),
+        )
+        .expect("manifest");
+
+        run_artifact_lock(&CheckOptions {
+            manifest,
+            backend: BackendSelection::OnnxRuntime,
+            require_existing: false,
+            mode: CheckMode::ArtifactLock {
+                out: Some(out.clone()),
+            },
+        })
+        .expect("artifact lock");
+
+        let written = fs::read_to_string(&out).expect("lock report");
+        assert!(written.contains("\"total_size_bytes\": 3"));
+        assert!(written.contains("\"sha256\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn temp_fixture_dir(label: &str) -> PathBuf {
         let index = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -714,6 +1060,14 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture root");
         root
+    }
+
+    fn write_artifact(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).expect("artifact");
+    }
+
+    fn json_path(path: &Path) -> String {
+        path.display().to_string().replace('\\', "\\\\")
     }
 
     fn example_manifest_json() -> &'static str {
