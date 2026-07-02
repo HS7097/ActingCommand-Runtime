@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    NnClassificationResult, NnEngine, NnInferenceRequest, OcrEngine, OcrInferenceRequest,
-    OcrInferenceResult, VisionFfiError, VisionFfiResult,
+    FastDeployPpocrArtifacts, FastDeployPpocrInvokeRequest, NnClassificationResult, NnEngine,
+    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OnnxRuntimeArtifacts,
+    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiResult,
 };
 use libloading::Library;
 use serde::{Serialize, de::DeserializeOwned};
@@ -44,6 +45,7 @@ pub struct FastDeployPpocrBackend {
     _library: Option<Arc<Library>>,
     read_text_json: VisionFfiInvokeJson,
     free_buffer: VisionFfiFreeBuffer,
+    artifacts: Option<FastDeployPpocrArtifacts>,
 }
 
 impl FastDeployPpocrBackend {
@@ -55,6 +57,20 @@ impl FastDeployPpocrBackend {
             _library: Some(library),
             read_text_json,
             free_buffer,
+            artifacts: None,
+        })
+    }
+
+    pub fn from_artifacts(artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<Self> {
+        artifacts.validate_existing_files()?;
+        let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
+        let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
+        let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
+        Ok(Self {
+            _library: Some(library),
+            read_text_json,
+            free_buffer,
+            artifacts: Some(artifacts),
         })
     }
 
@@ -71,19 +87,51 @@ impl FastDeployPpocrBackend {
             _library: None,
             read_text_json,
             free_buffer,
+            artifacts: None,
         }
+    }
+
+    /// # Safety
+    ///
+    /// The function pointers must follow the ActingCommand OCR JSON envelope
+    /// ABI and the free function must be able to release every buffer returned
+    /// by the invoke function for the lifetime of this backend.
+    pub unsafe fn from_raw_functions_with_artifacts(
+        read_text_json: VisionFfiInvokeJson,
+        free_buffer: VisionFfiFreeBuffer,
+        artifacts: FastDeployPpocrArtifacts,
+    ) -> VisionFfiResult<Self> {
+        artifacts.validate()?;
+        Ok(Self {
+            _library: None,
+            read_text_json,
+            free_buffer,
+            artifacts: Some(artifacts),
+        })
     }
 }
 
 impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
         request.validate()?;
-        invoke_json(
-            "fastdeploy-ppocr",
-            self.read_text_json,
-            self.free_buffer,
-            &request,
-        )
+        if let Some(artifacts) = &self.artifacts {
+            invoke_json(
+                "fastdeploy-ppocr",
+                self.read_text_json,
+                self.free_buffer,
+                &FastDeployPpocrInvokeRequest {
+                    request,
+                    artifacts: artifacts.clone(),
+                },
+            )
+        } else {
+            invoke_json(
+                "fastdeploy-ppocr",
+                self.read_text_json,
+                self.free_buffer,
+                &request,
+            )
+        }
     }
 }
 
@@ -91,6 +139,7 @@ pub struct OnnxRuntimeBackend {
     _library: Option<Arc<Library>>,
     classify_json: VisionFfiInvokeJson,
     free_buffer: VisionFfiFreeBuffer,
+    artifacts: Option<OnnxRuntimeArtifacts>,
 }
 
 impl OnnxRuntimeBackend {
@@ -102,6 +151,20 @@ impl OnnxRuntimeBackend {
             _library: Some(library),
             classify_json,
             free_buffer,
+            artifacts: None,
+        })
+    }
+
+    pub fn from_artifacts(artifacts: OnnxRuntimeArtifacts) -> VisionFfiResult<Self> {
+        artifacts.validate_existing_files()?;
+        let library = load_library("onnxruntime", &artifacts.provider_library_path)?;
+        let classify_json = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
+        let free_buffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
+        Ok(Self {
+            _library: Some(library),
+            classify_json,
+            free_buffer,
+            artifacts: Some(artifacts),
         })
     }
 
@@ -118,19 +181,51 @@ impl OnnxRuntimeBackend {
             _library: None,
             classify_json,
             free_buffer,
+            artifacts: None,
         }
+    }
+
+    /// # Safety
+    ///
+    /// The function pointers must follow the ActingCommand NN JSON envelope ABI
+    /// and the free function must be able to release every buffer returned by
+    /// the invoke function for the lifetime of this backend.
+    pub unsafe fn from_raw_functions_with_artifacts(
+        classify_json: VisionFfiInvokeJson,
+        free_buffer: VisionFfiFreeBuffer,
+        artifacts: OnnxRuntimeArtifacts,
+    ) -> VisionFfiResult<Self> {
+        artifacts.validate()?;
+        Ok(Self {
+            _library: None,
+            classify_json,
+            free_buffer,
+            artifacts: Some(artifacts),
+        })
     }
 }
 
 impl NnEngine for OnnxRuntimeBackend {
     fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
         request.validate()?;
-        invoke_json(
-            "onnxruntime",
-            self.classify_json,
-            self.free_buffer,
-            &request,
-        )
+        if let Some(artifacts) = &self.artifacts {
+            invoke_json(
+                "onnxruntime",
+                self.classify_json,
+                self.free_buffer,
+                &OnnxRuntimeInvokeRequest {
+                    request,
+                    artifacts: artifacts.clone(),
+                },
+            )
+        } else {
+            invoke_json(
+                "onnxruntime",
+                self.classify_json,
+                self.free_buffer,
+                &request,
+            )
+        }
     }
 }
 

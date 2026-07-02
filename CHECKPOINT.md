@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider artifact contract
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `659a684`.
+- Added `crates/vision-ffi/src/artifacts.rs` as the explicit provider artifact contract before attaching real OCR/NN binaries or models.
+- Added `VisionProviderArtifactManifest` with schema version `actingcommand.vision_provider_artifacts.v0.1`.
+- Added `FastDeployPpocrArtifacts` for the FastDeploy/PPOCR provider library, detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout.
+- Added `OnnxRuntimeArtifacts` for the ONNXRuntime provider library, ONNX model, labels or label file, CPU-only execution provider, and default timeout.
+- Added structural validation plus `validate_existing_files()` checks so missing provider libraries, models, dictionaries, or label files fail loudly before a provider is loaded.
+- Added artifact-backed `from_artifacts` constructors for `FastDeployPpocrBackend` and `OnnxRuntimeBackend`.
+- Artifact-backed FFI calls now serialize explicit JSON envelopes containing both the inference request and the reviewed artifact contract.
+- Plain `from_library_path` still keeps the earlier raw request ABI for compatibility.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `crates/vision-ffi/src/artifacts.rs`
+- `crates/vision-ffi/src/ffi.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is still absent in this split Runtime repository.
+- Read `crates/vision-ffi` sources and manifests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- Reviewed the vision-ffi diff and scanned the changed crate for fallback/reconnect/retry/GPU/DirectML/OpenCV/SQLite/device/game terms.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed with 17 tests, including:
+  - `ocr_reads_text_from_frame`
+  - `nn_classifies_frame`
+  - `ocr_artifact_envelope_reads_text_from_frame`
+  - `nn_artifact_envelope_classifies_frame`
+  - `artifact_manifest_accepts_cpu_only_route`
+  - `existing_file_validation_is_fatal_for_missing_artifact`
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed with 482 workspace tests plus crate/doc test suites.
+- The changed vision-ffi crate does not add fallback, reconnect, retry, OpenCV, SQLite, UI, device access, game logic, or upstream source/model/binary copying.
+
+### Current blocker
+
+- No blocker for the provider artifact contract.
+- Full R1/R3 remains open until reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts are available and prove real OCR/NN results behind this ABI.
+
+### Next step
+
+1. Commit and push this provider artifact contract with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider crate once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 callable FFI adapter
 
 ### Current status

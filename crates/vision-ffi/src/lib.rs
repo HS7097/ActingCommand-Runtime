@@ -9,8 +9,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod artifacts;
 pub mod ffi;
 
+pub use artifacts::*;
 pub use ffi::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -418,6 +420,7 @@ fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> Visio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::slice;
 
     #[test]
@@ -584,6 +587,53 @@ mod tests {
         assert!(err.message().contains("failed to load"));
     }
 
+    #[test]
+    fn ocr_artifact_envelope_reads_text_from_frame() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts(
+                fake_ocr_envelope_json,
+                fake_free_buffer,
+                test_ocr_artifacts(),
+            )
+            .expect("test artifact backend")
+        };
+
+        let result = backend.read_text(request).expect("ocr result");
+
+        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
+        assert!(result.text.contains("artifact envelope"));
+    }
+
+    #[test]
+    fn nn_artifact_envelope_classifies_frame() {
+        let request = NnInferenceRequest {
+            frame: test_frame(),
+            model_id: "page-classifier".to_string(),
+            labels: vec!["home".to_string(), "unknown".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = unsafe {
+            OnnxRuntimeBackend::from_raw_functions_with_artifacts(
+                fake_nn_envelope_json,
+                fake_free_buffer,
+                test_nn_artifacts(),
+            )
+            .expect("test artifact backend")
+        };
+
+        let result = backend.classify(request).expect("nn result");
+
+        assert_eq!(result.backend, VisionBackendKind::OnnxRuntime);
+        assert_eq!(result.labels[0].label, "home");
+    }
+
     fn test_frame() -> VisionFrame {
         VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 12]).expect("test frame")
     }
@@ -637,6 +687,49 @@ mod tests {
         7
     }
 
+    unsafe extern "C" fn fake_ocr_envelope_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        let envelope = read_ffi_request::<FastDeployPpocrInvokeRequest>(request_ptr, request_len);
+        write_ffi_response(
+            response_out,
+            &OcrInferenceResult {
+                text: format!(
+                    "artifact envelope: {}",
+                    envelope.artifacts.provider_library_path.display()
+                ),
+                blocks: vec![OcrTextBlock {
+                    text: envelope.artifacts.supported_languages[0].clone(),
+                    rect: envelope.request.region,
+                    confidence: Some(0.95),
+                }],
+                confidence: Some(0.95),
+                backend: VisionBackendKind::FastDeployPpocr,
+                warnings: Vec::new(),
+            },
+        )
+    }
+
+    unsafe extern "C" fn fake_nn_envelope_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        let envelope = read_ffi_request::<OnnxRuntimeInvokeRequest>(request_ptr, request_len);
+        write_ffi_response(
+            response_out,
+            &NnClassificationResult {
+                labels: vec![NnLabel {
+                    label: envelope.artifacts.labels[0].clone(),
+                    score: 0.96,
+                }],
+                backend: VisionBackendKind::OnnxRuntime,
+            },
+        )
+    }
+
     unsafe extern "C" fn fake_free_buffer(buffer: VisionFfiOwnedBuffer) {
         if !buffer.data.is_null() {
             // SAFETY: test fake backends allocate every returned buffer from a Vec<u8>
@@ -677,5 +770,36 @@ mod tests {
             response_out.write(buffer);
         }
         0
+    }
+
+    fn test_ocr_artifacts() -> FastDeployPpocrArtifacts {
+        FastDeployPpocrArtifacts {
+            provider_library_path: PathBuf::from(
+                "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+            ),
+            detector_model_path: PathBuf::from("external-tools/vision/ppocr/det/inference.pdmodel"),
+            recognizer_model_path: PathBuf::from(
+                "external-tools/vision/ppocr/rec/inference.pdmodel",
+            ),
+            dictionary_path: PathBuf::from("external-tools/vision/ppocr/ppocr_keys_v1.txt"),
+            classifier_model_path: None,
+            supported_languages: vec!["zh_cn".to_string(), "en".to_string()],
+            default_timeout_ms: 1_000,
+        }
+    }
+
+    fn test_nn_artifacts() -> OnnxRuntimeArtifacts {
+        OnnxRuntimeArtifacts {
+            provider_library_path: PathBuf::from(
+                "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+            ),
+            model_path: PathBuf::from(
+                "external-tools/vision/onnxruntime/models/page_classifier.onnx",
+            ),
+            labels: vec!["home".to_string(), "unknown".to_string()],
+            labels_path: None,
+            execution_provider: OnnxExecutionProvider::Cpu,
+            default_timeout_ms: 1_000,
+        }
     }
 }
