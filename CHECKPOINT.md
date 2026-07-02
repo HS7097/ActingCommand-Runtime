@@ -5,6 +5,8 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `ee4755d`.
+- Implementation commit: `31ed32d` (`runtime: load vision provider manifests`).
+- GitHub Actions CI run `28575969176` passed after push.
 - Added JSON manifest loading for `VisionProviderArtifactManifest`.
 - Added whole-manifest existing-file validation so reviewed provider libraries, PPOCR model/data files, ONNX model files, and optional label files are checked before real backend construction.
 - Added explicit backend-section requirements for `fastdeploy_ppocr` and `onnxruntime`.
