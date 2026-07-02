@@ -5,6 +5,8 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `c6ac5ae`.
+- Implementation commit: `83ea9a2` (`runtime: add vision provider check CLI`).
+- GitHub Actions CI run `28577188808` passed after push.
 - Added `apps/vision-provider-check` as a small Runtime-owned CLI for provider manifest validation.
 - The CLI loads `VisionProviderArtifactManifest`, requires both R1/R3 backend sections by default, and can validate a single backend with `--backend fastdeploy_ppocr` or `--backend onnxruntime`.
 - The CLI prints a JSON report for a valid manifest.
@@ -32,6 +34,8 @@
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
+- `git push origin main`
+- `gh run watch 28577188808 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -43,6 +47,7 @@
 - `cargo test --workspace`: passed.
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo build --release`: passed.
+- GitHub Actions CI run `28577188808`: passed.
 
 ### Current blocker
 
