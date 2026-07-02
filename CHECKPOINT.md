@@ -5,6 +5,7 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `0155992`.
+- Implementation commit: `9ec061f` (`runtime: add vision provider ABI check`).
 - Added provider ABI export validation for the reviewed FastDeploy/PPOCR and ONNXRuntime provider artifact path.
 - `crates/vision-ffi` now exposes `validate_fastdeploy_ppocr_provider_abi` and `validate_onnxruntime_provider_abi`.
 - `apps/vision-provider-check --abi-check` loads the selected provider library and verifies the required ActingCommand JSON ABI symbols before any OCR/NN smoke result can be trusted.
@@ -65,7 +66,7 @@
 ### Next step
 
 1. Run full Runtime validation.
-2. Commit and push this provider ABI export check increment with `PLANS.md`, `NOTICE.md`, and `CHECKPOINT.md`.
+2. Push this provider ABI export check increment with `PLANS.md`, `NOTICE.md`, and `CHECKPOINT.md`.
 3. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
 
 ## 2026-07-02 P6.5-A R1/R3 provider artifact lock report
