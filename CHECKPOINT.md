@@ -13,6 +13,8 @@
 - Missing libraries, missing symbols, malformed owned buffers, non-zero provider status, empty responses, and invalid provider JSON are fatal errors.
 - The required acceptance-named tests now exercise ABI-compatible function pointers instead of plain Rust-only test doubles.
 - No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+- Targeted local artifact scans did not find FastDeploy/PPOCR/ONNXRuntime binaries or OCR/NN model files under Runtime `external-tools`, Runtime `resources`, or the three local resource repositories.
+- `resources/upstream-manifest.toml` now records planned non-bundled FastDeploy, PaddleOCR/PPOCR, and ONNXRuntime provider locations as pending-license-review artifacts.
 
 ### Files changed
 
@@ -44,6 +46,7 @@
 - `git diff --check`
 - `git status --short --branch`
 - Searched the changed R1/R3 files for fallback/reconnect/retry/GPU/DirectML/unsafe markers.
+- Scanned Runtime `external-tools`, Runtime `resources`, and all three local resource repositories for `.onnx`, `.ort`, `.pdmodel`, `.pdiparams`, `.nb`, `.bin`, `.dll`, `.lib`, `.so`, and `.dylib` files.
 
 ### Test results
 
@@ -61,6 +64,7 @@
 - `git diff --check`: passed.
 - FFI unsafe usage is isolated to `crates/vision-ffi/src/ffi.rs` and test ABI helpers, with safety comments on the dynamic library, symbol, pointer, and buffer ownership boundaries.
 - The changed production code does not add fallback, reconnect, retry, GPU, DirectML, UI, SQLite, device access, game logic, or upstream source copying.
+- Local artifact scan found no FastDeploy/PPOCR/ONNXRuntime binaries, OCR models, NN models, or provider libraries available to attach in this turn.
 
 ### Current blocker
 

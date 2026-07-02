@@ -14,3 +14,36 @@ local_hint = "external-tools/maatouch/maatouch"
 included_in_repository = false
 license_review = "Upstream repository license and file-level attribution must be reviewed before redistribution."
 notes = "Used by apps/device-test through an explicit --local path or ignored external-tools copy. Do not commit the binary."
+
+[[tools]]
+id = "fastdeploy"
+name = "FastDeploy"
+source_project = "PaddlePaddle/FastDeploy"
+source_url = "https://github.com/PaddlePaddle/FastDeploy"
+source_path = ""
+local_hint = "external-tools/vision/fastdeploy"
+included_in_repository = false
+license_review = "Not bundled. Verify the exact release license, notices, binary provenance, and redistribution terms before adding provider artifacts."
+notes = "Planned R1 OCR provider dependency behind crates/vision-ffi. Do not commit binaries, models, or upstream source without an updated NOTICE entry."
+
+[[tools]]
+id = "paddleocr-ppocr"
+name = "PaddleOCR / PPOCR"
+source_project = "PaddlePaddle/PaddleOCR"
+source_url = "https://github.com/PaddlePaddle/PaddleOCR"
+source_path = ""
+local_hint = "external-tools/vision/ppocr"
+included_in_repository = false
+license_review = "Not bundled. Verify the exact model/data/code license, notices, and redistribution terms before adding OCR artifacts."
+notes = "Planned R1 OCR model/data dependency behind crates/vision-ffi. Do not commit models, dictionaries, or OCR data without an updated NOTICE entry."
+
+[[tools]]
+id = "onnxruntime"
+name = "ONNX Runtime"
+source_project = "microsoft/onnxruntime"
+source_url = "https://github.com/microsoft/onnxruntime"
+source_path = ""
+local_hint = "external-tools/vision/onnxruntime"
+included_in_repository = false
+license_review = "Not bundled. Verify the exact release license, third-party notices, binary provenance, and redistribution terms before adding provider artifacts."
+notes = "Planned R3 NN provider dependency behind crates/vision-ffi. GPU and DirectML remain disabled unless a later reviewed task explicitly enables them with lifecycle tests."
