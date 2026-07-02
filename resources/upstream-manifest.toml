@@ -23,8 +23,8 @@ source_url = "https://github.com/PaddlePaddle/FastDeploy"
 source_path = ""
 local_hint = "external-tools/vision/fastdeploy"
 included_in_repository = false
-license_review = "Not bundled. Verify the exact release license, notices, binary provenance, and redistribution terms before adding provider artifacts."
-notes = "Planned R1 OCR provider dependency behind crates/vision-ffi. Do not commit binaries, models, or upstream source without an updated NOTICE entry."
+license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: Apache-2.0, https://github.com/PaddlePaddle/FastDeploy/blob/develop/LICENSE. Release binaries, third-party notices, binary provenance, and redistribution terms still require review before bundling provider artifacts."
+notes = "Planned R1 OCR provider dependency behind crates/vision-ffi. Do not commit binaries or upstream source without an updated NOTICE entry."
 
 [[tools]]
 id = "paddleocr-ppocr"
@@ -34,7 +34,7 @@ source_url = "https://github.com/PaddlePaddle/PaddleOCR"
 source_path = ""
 local_hint = "external-tools/vision/ppocr"
 included_in_repository = false
-license_review = "Not bundled. Verify the exact model/data/code license, notices, and redistribution terms before adding OCR artifacts."
+license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: Apache-2.0, https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE. Model/data terms, dictionaries, notices, and redistribution terms still require review before bundling OCR artifacts."
 notes = "Planned R1 OCR model/data dependency behind crates/vision-ffi. Do not commit models, dictionaries, or OCR data without an updated NOTICE entry."
 
 [[tools]]
@@ -45,5 +45,5 @@ source_url = "https://github.com/microsoft/onnxruntime"
 source_path = ""
 local_hint = "external-tools/vision/onnxruntime"
 included_in_repository = false
-license_review = "Not bundled. Verify the exact release license, third-party notices, binary provenance, and redistribution terms before adding provider artifacts."
+license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: MIT, https://github.com/microsoft/onnxruntime/blob/main/LICENSE. Release binaries, third-party notices, binary provenance, model terms, and redistribution terms still require review before bundling provider artifacts."
 notes = "Planned R3 NN provider dependency behind crates/vision-ffi. GPU and DirectML remain disabled unless a later reviewed task explicitly enables them with lifecycle tests."

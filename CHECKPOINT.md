@@ -1,5 +1,49 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 upstream license metadata
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `9b400c7`.
+- Verified current repository license metadata through GitHub API:
+  - `PaddlePaddle/FastDeploy`: Apache-2.0, `https://github.com/PaddlePaddle/FastDeploy/blob/develop/LICENSE`
+  - `PaddlePaddle/PaddleOCR`: Apache-2.0, `https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE`
+  - `microsoft/onnxruntime`: MIT, `https://github.com/microsoft/onnxruntime/blob/main/LICENSE`
+- Updated `resources/upstream-manifest.toml` with the verified repository LICENSE results.
+- Updated `NOTICE.md` and `PLANS.md` to distinguish repository LICENSE verification from still-pending release binary provenance, third-party notices, model/data terms, dictionary terms, copied artifact paths, and redistribution obligations.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `resources/upstream-manifest.toml`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh api repos/PaddlePaddle/FastDeploy/license --jq ...`
+- `gh api repos/PaddlePaddle/PaddleOCR/license --jq ...`
+- `gh api repos/microsoft/onnxruntime/license --jq ...`
+- `git diff --check`
+- `cargo fmt --all -- --check`
+
+### Test results
+
+- `git diff --check`: passed.
+- `cargo fmt --all -- --check`: passed.
+
+### Current blocker
+
+- No blocker for repository LICENSE metadata.
+- Full R1/R3 remains open until reviewed provider binaries/models/data are available, their release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Run documentation validation.
+2. Commit and push this license metadata increment with `PLANS.md` and `CHECKPOINT.md`.
+3. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 provider manifest readiness
 
 ### Current status
