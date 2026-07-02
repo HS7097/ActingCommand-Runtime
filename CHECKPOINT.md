@@ -5,6 +5,8 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `659a684`.
+- Implementation commit: `9d08b79` (`runtime: add vision provider artifact contract`).
+- GitHub Actions CI run `28575262351` passed after push.
 - Added `crates/vision-ffi/src/artifacts.rs` as the explicit provider artifact contract before attaching real OCR/NN binaries or models.
 - Added `VisionProviderArtifactManifest` with schema version `actingcommand.vision_provider_artifacts.v0.1`.
 - Added `FastDeployPpocrArtifacts` for the FastDeploy/PPOCR provider library, detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout.
