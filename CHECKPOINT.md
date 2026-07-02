@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider ABI export check
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `0155992`.
+- Added provider ABI export validation for the reviewed FastDeploy/PPOCR and ONNXRuntime provider artifact path.
+- `crates/vision-ffi` now exposes `validate_fastdeploy_ppocr_provider_abi` and `validate_onnxruntime_provider_abi`.
+- `apps/vision-provider-check --abi-check` loads the selected provider library and verifies the required ActingCommand JSON ABI symbols before any OCR/NN smoke result can be trusted.
+- Required FastDeploy/PPOCR symbols:
+  - `ac_fastdeploy_ppocr_read_text_json`
+  - `ac_vision_free_buffer`
+- Required ONNXRuntime symbols:
+  - `ac_onnxruntime_classify_json`
+  - `ac_vision_free_buffer`
+- ABI check mode requires selected artifact files to exist first and fails loudly for missing files, invalid dynamic libraries, or providers that do not export the required symbols.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `crates/vision-ffi/src/ffi.rs`
+- `apps/vision-provider-check/src/main.rs`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is still absent in this split Runtime repository.
+- Audited current `crates/vision-ffi`, `apps/vision-provider-check`, `resources`, and local upstream artifact availability.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --abi-check`
+- Temporary invalid-library ABI smoke under `target\vision-abi-bad-provider-smoke`.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- Prohibited-term scan over the touched source and planning files.
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed with 22 tests.
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`: passed with 21 tests.
+- Example manifest `--abi-check` failed as expected with exit code 1 because `external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll` is not present.
+- Temporary invalid ONNXRuntime provider library ABI smoke failed as expected with exit code 1 because the dummy `provider.dll` is not a valid dynamic library and cannot export the required ABI.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- Prohibited-term scan over touched source paths found no fallback, reconnect, retry, OpenCV, SQLite, game logic, `adb shell input`, or `adb shell screencap` additions; broad documentation hits were historical boundary statements only.
+- `cargo test --workspace`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the provider ABI export check increment.
+- Full R1/R3 remains open until reviewed provider binaries/models/data are available, their release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Run full Runtime validation.
+2. Commit and push this provider ABI export check increment with `PLANS.md`, `NOTICE.md`, and `CHECKPOINT.md`.
+3. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 provider artifact lock report
 
 ### Current status

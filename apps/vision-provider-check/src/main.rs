@@ -4,6 +4,7 @@ use actingcommand_vision_ffi::{
     FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine, NnInferenceRequest, OcrEngine,
     OcrInferenceRequest, OnnxRuntimeArtifacts, OnnxRuntimeBackend, VisionFfiError, VisionFfiResult,
     VisionFrame, VisionPixelFormat, VisionProviderArtifactManifest, VisionRect,
+    validate_fastdeploy_ppocr_provider_abi, validate_onnxruntime_provider_abi,
 };
 use image::ImageFormat;
 use serde::Serialize;
@@ -35,6 +36,7 @@ enum CheckMode {
     ArtifactLock {
         out: Option<PathBuf>,
     },
+    AbiCheck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +98,21 @@ struct ArtifactLockEntry {
     sha256: String,
 }
 
+#[derive(Debug, Serialize)]
+struct AbiCheckReport {
+    ok: bool,
+    schema_version: String,
+    backend: &'static str,
+    backends: Vec<ProviderAbiReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderAbiReport {
+    id: &'static str,
+    provider_library_path: String,
+    required_symbols: Vec<&'static str>,
+}
+
 fn main() {
     if let Err(err) = run(env::args().skip(1)) {
         eprintln!("FATAL: {err}");
@@ -115,6 +132,7 @@ where
         CheckMode::ArtifactLock { .. } => {
             serde_json::to_string_pretty(&run_artifact_lock(&options)?)
         }
+        CheckMode::AbiCheck => serde_json::to_string_pretty(&run_abi_check(&options)?),
     }
     .map_err(|err| {
         VisionFfiError::fatal(
@@ -138,6 +156,7 @@ where
     let mut nn_frame = None;
     let mut nn_model_id = None;
     let mut artifact_lock = false;
+    let mut abi_check = false;
     let mut lock_out = None;
     let mut args = args.into_iter();
 
@@ -202,6 +221,7 @@ where
                 nn_model_id = Some(value);
             }
             "--artifact-lock" => artifact_lock = true,
+            "--abi-check" => abi_check = true,
             "--lock-out" => {
                 let value = args.next().ok_or_else(|| {
                     VisionFfiError::fatal(
@@ -236,6 +256,12 @@ where
             "--artifact-lock cannot be used with --ocr-frame or --nn-frame",
         ));
     }
+    if abi_check && (artifact_lock || ocr_frame.is_some() || nn_frame.is_some()) {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "--abi-check cannot be used with --artifact-lock, --ocr-frame, or --nn-frame",
+        ));
+    }
     if ocr_region.is_some() && ocr_frame.is_none() {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
@@ -267,17 +293,18 @@ where
             format!("--manifest is required\n{}", usage()),
         )
     })?;
-    let mode = match (artifact_lock, ocr_frame, nn_frame) {
-        (true, None, None) => CheckMode::ArtifactLock { out: lock_out },
-        (false, Some(frame), None) => CheckMode::OcrSmoke {
+    let mode = match (abi_check, artifact_lock, ocr_frame, nn_frame) {
+        (true, false, None, None) => CheckMode::AbiCheck,
+        (false, true, None, None) => CheckMode::ArtifactLock { out: lock_out },
+        (false, false, Some(frame), None) => CheckMode::OcrSmoke {
             frame,
             region: ocr_region,
         },
-        (false, None, Some(frame)) => CheckMode::NnSmoke {
+        (false, false, None, Some(frame)) => CheckMode::NnSmoke {
             frame,
             model_id: nn_model_id,
         },
-        (false, None, None) => CheckMode::Manifest,
+        (false, false, None, None) => CheckMode::Manifest,
         _ => unreachable!("checked above"),
     };
 
@@ -468,6 +495,55 @@ fn run_artifact_lock(options: &CheckOptions) -> VisionFfiResult<ArtifactLockRepo
         write_json_file(path, &report)?;
     }
     Ok(report)
+}
+
+fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
+    if options.mode != CheckMode::AbiCheck {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "ABI check was called without --abi-check",
+        ));
+    }
+    let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
+    let mut backends = Vec::new();
+
+    if matches!(
+        options.backend,
+        BackendSelection::All | BackendSelection::FastDeployPpocr
+    ) {
+        let artifacts = manifest.require_fastdeploy_ppocr()?;
+        artifacts.validate_existing_files()?;
+        validate_fastdeploy_ppocr_provider_abi(&artifacts.provider_library_path)?;
+        backends.push(ProviderAbiReport {
+            id: "fastdeploy_ppocr",
+            provider_library_path: path_string(&artifacts.provider_library_path),
+            required_symbols: vec![
+                "ac_fastdeploy_ppocr_read_text_json",
+                "ac_vision_free_buffer",
+            ],
+        });
+    }
+
+    if matches!(
+        options.backend,
+        BackendSelection::All | BackendSelection::OnnxRuntime
+    ) {
+        let artifacts = manifest.require_onnxruntime()?;
+        artifacts.validate_existing_files()?;
+        validate_onnxruntime_provider_abi(&artifacts.provider_library_path)?;
+        backends.push(ProviderAbiReport {
+            id: "onnxruntime",
+            provider_library_path: path_string(&artifacts.provider_library_path),
+            required_symbols: vec!["ac_onnxruntime_classify_json", "ac_vision_free_buffer"],
+        });
+    }
+
+    Ok(AbiCheckReport {
+        ok: true,
+        schema_version: manifest.schema_version,
+        backend: options.backend.as_str(),
+        backends,
+    })
 }
 
 fn collect_fastdeploy_artifacts(
@@ -674,7 +750,7 @@ impl BackendSelection {
 }
 
 fn usage() -> &'static str {
-    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>]]"
+    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] | --abi-check]"
 }
 
 #[cfg(test)]
@@ -796,6 +872,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_abi_check_mode() {
+        let options = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--backend".to_string(),
+            "fastdeploy_ppocr".to_string(),
+            "--abi-check".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(options.backend, BackendSelection::FastDeployPpocr);
+        assert_eq!(options.mode, CheckMode::AbiCheck);
+    }
+
+    #[test]
     fn rejects_artifact_lock_mixed_with_smoke() {
         let err = parse_args([
             "--manifest".to_string(),
@@ -808,6 +899,35 @@ mod tests {
 
         assert_eq!(err.module(), "vision-provider-check");
         assert!(err.message().contains("cannot be used"));
+    }
+
+    #[test]
+    fn rejects_abi_check_mixed_with_artifact_lock() {
+        let err = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--abi-check".to_string(),
+            "--artifact-lock".to_string(),
+        ])
+        .expect_err("mixed ABI check and artifact lock rejected");
+
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("--abi-check cannot be used"));
+    }
+
+    #[test]
+    fn rejects_abi_check_mixed_with_smoke() {
+        let err = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--abi-check".to_string(),
+            "--nn-frame".to_string(),
+            "frame.png".to_string(),
+        ])
+        .expect_err("mixed ABI check and smoke rejected");
+
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("--abi-check cannot be used"));
     }
 
     #[test]
@@ -1048,6 +1168,67 @@ mod tests {
         let written = fs::read_to_string(&out).expect("lock report");
         assert!(written.contains("\"total_size_bytes\": 3"));
         assert!(written.contains("\"sha256\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn abi_check_rejects_missing_artifacts_before_symbol_success() {
+        let root = temp_fixture_dir("abi-missing-files");
+        let manifest = root.join("manifest.json");
+        fs::write(&manifest, example_manifest_json()).expect("manifest");
+
+        let err = run_abi_check(&CheckOptions {
+            manifest,
+            backend: BackendSelection::FastDeployPpocr,
+            require_existing: false,
+            mode: CheckMode::AbiCheck,
+        })
+        .expect_err("missing artifacts rejected");
+
+        assert_eq!(err.module(), "fastdeploy-ppocr");
+        assert!(err.message().contains("required artifact"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn abi_check_rejects_existing_file_without_provider_abi() {
+        let root = temp_fixture_dir("abi-bad-provider");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        write_artifact(&artifacts.join("provider.dll"), b"not a dynamic library");
+        write_artifact(&artifacts.join("model.onnx"), b"model");
+        let manifest = root.join("manifest.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": null,
+                    "onnxruntime": {{
+                        "provider_library_path": "{}",
+                        "model_path": "{}",
+                        "labels": ["home"],
+                        "labels_path": null,
+                        "execution_provider": "cpu",
+                        "default_timeout_ms": 1000
+                    }}
+                }}"#,
+                json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("model.onnx")),
+            ),
+        )
+        .expect("manifest");
+
+        let err = run_abi_check(&CheckOptions {
+            manifest,
+            backend: BackendSelection::OnnxRuntime,
+            require_existing: false,
+            mode: CheckMode::AbiCheck,
+        })
+        .expect_err("invalid provider library rejected");
+
+        assert_eq!(err.module(), "onnxruntime");
+        assert!(err.message().contains("failed to load FFI library"));
         let _ = fs::remove_dir_all(root);
     }
 

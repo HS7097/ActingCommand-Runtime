@@ -38,6 +38,8 @@ Scope:
 - `apps/vision-provider-check` provides a small Runtime-owned CLI entry for validating the provider manifest and, with `--require-existing`, failing loudly when reviewed local provider/model/data artifacts are missing.
 - `apps/vision-provider-check` also exposes real-provider smoke entry points through `--ocr-frame <png>` and `--nn-frame <png>` so reviewed FastDeploy/PPOCR and ONNXRuntime artifacts can produce actual OCR/NN JSON output once they are supplied; these smoke paths load real providers from the manifest and fail loudly while artifacts are absent.
 - `apps/vision-provider-check --artifact-lock` can compute artifact sizes and SHA-256 hashes from a reviewed manifest, giving the release/NOTICE review a reproducible size and provenance report without committing provider binaries, models, OCR data, or upstream source.
+- `apps/vision-provider-check --abi-check` now verifies that reviewed provider libraries load and export the ActingCommand JSON ABI symbols before any OCR/NN smoke run is trusted.
+- The ABI check requires selected backend artifacts to exist first and fails loudly for missing files, invalid dynamic libraries, or libraries that do not export the required `ac_*` symbols.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 

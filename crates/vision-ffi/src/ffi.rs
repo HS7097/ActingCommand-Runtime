@@ -115,6 +115,13 @@ impl FastDeployPpocrBackend {
     }
 }
 
+pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
+    let library = load_library("fastdeploy-ppocr", path)?;
+    let _: VisionFfiInvokeJson = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
+    let _: VisionFfiFreeBuffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
+    Ok(())
+}
+
 impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
         request.validate()?;
@@ -211,6 +218,13 @@ impl OnnxRuntimeBackend {
             artifacts: Some(artifacts),
         })
     }
+}
+
+pub fn validate_onnxruntime_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
+    let library = load_library("onnxruntime", path)?;
+    let _: VisionFfiInvokeJson = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
+    let _: VisionFfiFreeBuffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
+    Ok(())
 }
 
 impl NnEngine for OnnxRuntimeBackend {
