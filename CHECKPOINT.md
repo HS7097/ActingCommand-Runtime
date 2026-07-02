@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1 MAA provider export audit
+
+### Current status
+
+- Continued the P6.5-A R1 OCR gate after commit `f9c63a9`.
+- Implementation commit: `fe58141` (`runtime: add vision provider export audit`).
+- Checkpoint tag: `checkpoint/20260702-r1-provider-export-audit`.
+- Synced `main` from `origin/main`; the repository was already up to date before changes.
+- Added `apps/vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]`.
+- `--export-audit` parses PE export tables without loading DLLs or dependency libraries.
+- Audited ignored local MAA release DLLs from `target\maa-r1-ocr-audit\MAA-v6.13.0-win-x64`.
+- Confirmed `fastdeploy_ppocr_maa.dll` exports MSVC C++ FastDeploy/PPOCR-style symbols, not the ActingCommand OCR provider ABI.
+- Confirmed `MaaCore.dll` exports MAA assistant/task-level C APIs, not the ActingCommand OCR provider ABI.
+- Recorded the audit in `benchmarks/reports/2026-07-02-r1-maa-provider-export-audit.md`.
+- Updated `PLANS.md` and `NOTICE.md`.
+- No upstream source code, release binary, OCR model, dictionary, OCR data, UI, SQLite, scheduler behavior, device access, or game logic was committed.
+
+### Files changed
+
+- `apps/vision-provider-check/src/main.rs`
+- `benchmarks/reports/2026-07-02-r1-maa-provider-export-audit.md`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and provider check code.
+- Local PE export inspection of `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, and `onnxruntime_maa.dll`.
+- `cargo run -q -p actingcommand-vision-provider-check -- --export-audit target\maa-r1-ocr-audit\MAA-v6.13.0-win-x64\fastdeploy_ppocr_maa.dll --expect fastdeploy_ppocr_provider`
+- `cargo run -q -p actingcommand-vision-provider-check -- --export-audit target\maa-r1-ocr-audit\MAA-v6.13.0-win-x64\MaaCore.dll --expect fastdeploy_ppocr_provider`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+- `git commit -m "runtime: add vision provider export audit"`
+
+### Test results
+
+- `fastdeploy_ppocr_maa.dll` export audit returned `ok: false`, `export_count: 763`, `msvc_cxx_symbol_count: 763`, and missing `ac_fastdeploy_ppocr_read_text_json` plus `ac_vision_free_buffer`.
+- `MaaCore.dll` export audit returned `ok: false`, `export_count: 33`, task-level `Asst*` sample exports, and missing `ac_fastdeploy_ppocr_read_text_json` plus `ac_vision_free_buffer`.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`: passed with 27 `vision-provider-check` tests and 24 `vision-ffi` tests.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for this provider-export audit increment.
+- Full R1 remains open because no reviewed ActingCommand OCR provider has produced real OCR output through `ac_fastdeploy_ppocr_read_text_json`.
+- Raw `fastdeploy_ppocr_maa.dll` and `MaaCore.dll` cannot be treated as drop-in ActingCommand OCR providers.
+
+### Next step
+
+1. Tag and push the provider-export audit increment.
+2. Watch GitHub Actions for the pushed Runtime commits.
+3. Continue R1 by building or linking a reviewed OCR provider path that exports the ActingCommand JSON ABI and produces real OCR output.
+
 ## 2026-07-02 P6.5-A R1 MAA OCR artifact audit and runtime-library contract
 
 ### Current status
