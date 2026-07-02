@@ -47,3 +47,14 @@ local_hint = "external-tools/vision/onnxruntime"
 included_in_repository = false
 license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: MIT, https://github.com/microsoft/onnxruntime/blob/main/LICENSE. Release binaries, third-party notices, binary provenance, model terms, and redistribution terms still require review before bundling provider artifacts."
 notes = "Planned R3 NN provider dependency behind crates/vision-ffi. GPU and DirectML remain disabled unless a later reviewed task explicitly enables them with lifecycle tests."
+
+[[tools]]
+id = "onnx-models-squeezenet-smoke"
+name = "ONNX Models SqueezeNet smoke model"
+source_project = "onnx/models"
+source_url = "https://github.com/onnx/models"
+source_path = "Computer_Vision/squeezenet1_0_Opset16_torch_hub/squeezenet1_0_Opset16.onnx"
+local_hint = "external-tools/vision/onnxruntime/models/squeezenet1_0_Opset16.onnx"
+included_in_repository = false
+license_review = "Used only as a local ignored R3 NN smoke artifact on 2026-07-02. Repository/model terms and redistribution obligations still require exact review before bundling model artifacts."
+notes = "The local smoke validated ONNXRuntime JSON provider execution through apps/vision-provider-check. Do not commit model files or generated smoke labels without an updated NOTICE entry."

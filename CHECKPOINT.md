@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R3 ONNXRuntime real smoke
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `80fadfa`.
+- Completed a local-only real R3 NN smoke using the Runtime-owned ONNXRuntime JSON provider and reviewed local artifact paths.
+- Downloaded ONNXRuntime `v1.24.4` CPU x64 release asset `onnxruntime-win-x64-1.24.4.zip` into `target\onnxruntime-smoke-artifacts` and copied only `onnxruntime.dll` into ignored `external-tools\vision\onnxruntime` for local validation.
+- Built `providers/onnxruntime-json` and copied the local provider DLL into ignored `external-tools\vision\onnxruntime\ac_onnxruntime.dll` for local validation.
+- Downloaded ONNX Models SqueezeNet `Opset16` model into ignored `external-tools\vision\onnxruntime\models` and generated local smoke labels `class_0` through `class_999`.
+- Generated a local RGB `224x224` PNG under `target\onnxruntime-smoke-artifacts` for the real NN smoke.
+- `apps/vision-provider-check --nn-frame` returned `ok: true`, backend `onnxruntime`, frame `224x224 rgb8`, top label `class_623`, and top score `6.899109363555908`.
+- Added `benchmarks/reports/2026-07-02-r3-onnxruntime-real-smoke.md` to record the local smoke commands, artifact sizes, result, and release-packaging boundary.
+- Updated `PLANS.md`, `NOTICE.md`, and `resources/upstream-manifest.toml` to record the real R3 smoke while preserving the no-bundled-artifacts boundary.
+- No ONNXRuntime binary, ONNX model, generated labels, FastDeploy, PPOCR, OCR data, upstream source, UI, SQLite, scheduler behavior, device access, or game logic was committed.
+
+### Files changed
+
+- `benchmarks/reports/2026-07-02-r3-onnxruntime-real-smoke.md`
+- `resources/upstream-manifest.toml`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is still absent in this split Runtime repository.
+- Targeted scans for existing local FastDeploy/PPOCR/ONNXRuntime artifacts in Runtime and the three resource repositories.
+- `gh release list --repo microsoft/onnxruntime --limit 8`
+- `gh release view v1.24.4 --repo microsoft/onnxruntime --json assets --jq '.assets[].name'`
+- `gh release download v1.24.4 --repo microsoft/onnxruntime --pattern onnxruntime-win-x64-1.24.4.zip --dir target\onnxruntime-smoke-artifacts --clobber`
+- `gh api repos/onnx/models/git/trees/main?recursive=1 --jq '.tree[].path'`
+- `gh api repos/onnx/models/contents/Computer_Vision/squeezenet1_0_Opset16_torch_hub/squeezenet1_0_Opset16.onnx`
+- `Invoke-WebRequest` for the SqueezeNet ONNX model media URL reported by GitHub API.
+- `cargo build -p actingcommand-onnxruntime-json-provider`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest target\onnxruntime-smoke-artifacts\onnxruntime-smoke-manifest.json --backend onnxruntime --require-existing`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest target\onnxruntime-smoke-artifacts\onnxruntime-smoke-manifest.json --backend onnxruntime --abi-check`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest target\onnxruntime-smoke-artifacts\onnxruntime-smoke-manifest.json --backend onnxruntime --artifact-lock --lock-out target\onnxruntime-smoke-artifacts\onnxruntime-smoke-lock.json`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest target\onnxruntime-smoke-artifacts\onnxruntime-smoke-manifest.json --backend onnxruntime --nn-frame target\onnxruntime-smoke-artifacts\squeezenet-rgb224.png --nn-model-id squeezenet1_0_opset16`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-onnxruntime-json-provider`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- Example manifest check with `--backend onnxruntime --require-existing`: passed for the ignored local provider/runtime/model/label artifacts.
+- `--abi-check` passed and verified `ac_onnxruntime_classify_json` plus `ac_vision_free_buffer`.
+- `--artifact-lock` passed with `total_size_bytes: 20389551`.
+- Real NN smoke passed with `ok: true`, backend `onnxruntime`, frame `224x224 rgb8`, top label `class_623`, top score `6.899109363555908`, and 1000 output labels.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-onnxruntime-json-provider`: passed with 26 tests.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the local R3 ONNXRuntime real-smoke increment.
+- Full R1/R3 remains open because R1 OCR still lacks reviewed FastDeploy/PPOCR provider/model/dictionary artifacts and real OCR output.
+- Release packaging remains blocked until exact release-asset provenance, license texts, third-party notices, model terms, copied artifact paths, and redistribution obligations are recorded.
+
+### Next step
+
+1. Run Runtime validation for the documentation/provenance increment.
+2. Commit and push this real R3 smoke record with `PLANS.md`, `NOTICE.md`, `resources/upstream-manifest.toml`, and `CHECKPOINT.md`.
+3. Continue R1/R3 by attaching reviewed FastDeploy/PPOCR OCR artifacts or by implementing a reviewed OCR provider path that can produce real OCR output.
+
 ## 2026-07-02 P6.5-A R1/R3 ONNXRuntime JSON provider crate
 
 ### Current status
