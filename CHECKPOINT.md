@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A E FeatureMatch gate
+
+### Current status
+
+- Closed the E FeatureMatch pre-research gate from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `a7266d8`.
+- Scope is limited to benchmark/pre-research decision documentation.
+- Mirrored all three resource repositories before checking FeatureMatch readiness.
+- Confirmed current `actingcommand-recognition` uses `image` and `imageproc` only.
+- Confirmed no current Runtime source dependency or code path provides SIFT, ORB, AKAZE, RANSAC, OpenCV, or a feature-descriptor matcher.
+- Confirmed refreshed resource repositories contain recognition packs, operation assets, and templates, but not a curated real-frame FeatureMatch corpus with ground-truth cross-resolution matches.
+- Pure Rust FeatureMatch is not accepted at this gate.
+- FeatureMatch is routed to the R-class FFI decision lane.
+- No production dependency, recognition hot-path code, OCR, NN, UI, SQLite, scheduler behavior, device access, game logic, or upstream source copying was added.
+
+### Files changed
+
+- `benchmarks/reports/2026-07-02-feature-match-gate.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource repository freshness
+
+- `ActingCommand-Resources-Arknights`: `2ab7ccd`
+- `ActingCommand-Resources-AzurLane`: `e778cc7c`
+- `ActingCommand-Resources-BlueArchive`: `7cf3bae`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git reset --hard origin/main`
+- `git clean -fd`
+- Resource repo mirror commands for all three resource repositories:
+  - `git fetch --prune --tags origin`
+  - `git reset --hard origin/main`
+  - `git clean -fd`
+- `cargo tree -p actingcommand-recognition --depth 1`
+- `rg -n "ORB|AKAZE|SIFT|FeatureMatcher|features2d|opencv" crates Cargo.toml Cargo.lock benchmarks -S`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo tree -p actingcommand-recognition --depth 1`: passed and showed only `image` and `imageproc` at depth 1.
+- Feature/dependency scan found no current ORB, AKAZE, SIFT, FeatureMatcher, features2d, or OpenCV implementation/dependency.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for the E gate report.
+- FeatureMatch implementation remains blocked on the R-class FFI decision and a real-frame cross-resolution benchmark corpus.
+
+### Next step
+
+1. Commit and push this E gate report with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with the R1/R3 OCR/NN decision and implementation gate.
+
 ## 2026-07-02 P6.5-A A4 replay
 
 ### Current status

@@ -12,6 +12,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain E
+
+The 2026-07-02 P6.5-A E FeatureMatch pre-research gate is closed as a benchmark decision report, not as a recognition backend implementation.
+
+Scope:
+
+- `benchmarks/reports/2026-07-02-feature-match-gate.md` records the FeatureMatch gate review.
+- The three ActingCommand resource repositories were mirrored before the review.
+- The current `actingcommand-recognition` dependency surface was checked and remains `image` plus `imageproc`.
+- No current Runtime code or dependency exposes SIFT, ORB, AKAZE, RANSAC, OpenCV, or a feature-descriptor matcher.
+- The refreshed resource repositories do not yet provide a curated real-frame FeatureMatch benchmark corpus with ground-truth cross-resolution matches.
+- Pure Rust FeatureMatch is not accepted at this gate.
+- FeatureMatch is routed to the R-class FFI decision lane; no FeatureMatch primitive is exposed as passing.
+
+E is complete as a pre-research gate. It adds no production dependencies, no recognition hot-path code, no OCR, no NN, no UI, no SQLite, no scheduler behavior, no device access, no game logic, and no upstream source copying.
+
 ## Current P6.5-A MaaFramework fusion chain A4
 
 The 2026-07-02 P6.5-A A4 replay unit is implemented as a clean-room Rust JSON-line input record and replay layer in `crates/device`.
@@ -121,10 +137,10 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0, A2, A1.1, A3, the first B recovery executor slice, O1 ProjectInterface, and A4 replay are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, A1.1, A3, the first B recovery executor slice, E FeatureMatch gate, O1 ProjectInterface, and A4 replay are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
-- Phase 2 recognition/FeatureMatch work and any live recovery wiring beyond the pure executor.
-- Phase 3 OCR/NN gates before Lab-2 CLI.
+- Live recovery wiring beyond the pure executor.
+- R-class FFI decision and OCR/NN gates before Lab-2 CLI.
 
 ## Current P6.5-A1 device input fallback
 
