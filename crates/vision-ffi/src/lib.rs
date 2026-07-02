@@ -827,6 +827,9 @@ mod tests {
             provider_library_path: PathBuf::from(
                 "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
             ),
+            runtime_library_path: Some(PathBuf::from(
+                "external-tools/vision/onnxruntime/onnxruntime.dll",
+            )),
             model_path: PathBuf::from(
                 "external-tools/vision/onnxruntime/models/page_classifier.onnx",
             ),

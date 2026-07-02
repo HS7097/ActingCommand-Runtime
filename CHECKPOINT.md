@@ -1,5 +1,83 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 ONNXRuntime JSON provider crate
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `fa39972`.
+- Implementation commit: `6f7050d` (`runtime: add onnxruntime json provider`).
+- Added explicit ONNX Runtime runtime-library provenance to `OnnxRuntimeArtifacts` with optional `runtime_library_path`.
+- Updated `resources/vision-provider-artifacts.example.json` so reviewed ONNXRuntime provider DLL and reviewed `onnxruntime.dll` are separate artifact paths.
+- Added `providers/onnxruntime-json` as a Runtime-owned source-only ONNXRuntime JSON-ABI provider crate.
+- The provider exports `ac_onnxruntime_classify_json` and `ac_vision_free_buffer`.
+- The provider uses the `ort` Rust wrapper with default features disabled and dynamic CPU-only runtime loading. It does not enable `download-binaries`, `copy-dylibs`, CUDA, DirectML, or other GPU execution providers.
+- The provider requires `runtime_library_path` for real invocation, validates the artifact envelope, loads the ONNX model, converts compatible RGB/RGBA/gray frames to f32 NHWC or NCHW tensors, applies request timeouts through `RunOptions::terminate`, and fails loudly for invalid JSON, missing artifacts, incompatible input shape, inference failure, non-f32 outputs, output/label count mismatch, or non-finite scores.
+- ABI smoke with the locally built provider DLL passed through `apps/vision-provider-check --abi-check`.
+- No FastDeploy, PPOCR, ONNXRuntime runtime binary, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR provider binary was added.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/vision-ffi/src/artifacts.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `apps/vision-provider-check/src/main.rs`
+- `providers/onnxruntime-json/Cargo.toml`
+- `providers/onnxruntime-json/src/lib.rs`
+- `resources/vision-provider-artifacts.example.json`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is still absent in this split Runtime repository.
+- `cargo info ort`
+- `cargo info ort-sys`
+- `cargo tree -p actingcommand-onnxruntime-json-provider`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`
+- `cargo test -p actingcommand-onnxruntime-json-provider -- --nocapture`
+- `cargo clippy -p actingcommand-onnxruntime-json-provider -- -D warnings`
+- `cargo build -p actingcommand-onnxruntime-json-provider`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --backend onnxruntime --require-existing`
+- Temporary ONNXRuntime provider ABI smoke under `target\onnxruntime-provider-abi-smoke`.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed with 23 tests.
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`: passed with 21 tests.
+- `cargo test -p actingcommand-onnxruntime-json-provider -- --nocapture`: passed with 5 tests.
+- `cargo clippy -p actingcommand-onnxruntime-json-provider -- -D warnings`: passed.
+- `cargo build -p actingcommand-onnxruntime-json-provider`: passed and produced `target\debug\actingcommand_onnxruntime_json_provider.dll`.
+- Example manifest check without `--require-existing`: passed and now reports `runtime_library_path` as an ONNXRuntime required path.
+- Example manifest check with `--backend onnxruntime --require-existing`: failed as expected with exit code 1 because reviewed provider/runtime/model artifacts are not present at `external-tools/vision/onnxruntime`.
+- Temporary ABI smoke using the locally built provider DLL and dummy runtime/model/labels files passed, confirming the provider exports `ac_onnxruntime_classify_json` and `ac_vision_free_buffer`.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the ONNXRuntime JSON provider crate increment.
+- Full R1/R3 remains open until reviewed ONNXRuntime runtime/model artifacts and FastDeploy/PPOCR provider/model/data artifacts are supplied, release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Commit and push this ONNXRuntime JSON provider increment with `PLANS.md`, `NOTICE.md`, and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed ONNXRuntime runtime/model artifacts for real NN smoke and adding or linking reviewed FastDeploy/PPOCR OCR provider artifacts.
+
 ## 2026-07-02 P6.5-A R1/R3 provider ABI export check
 
 ### Current status

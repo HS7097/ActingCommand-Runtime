@@ -14,6 +14,7 @@ members = [
     "crates/runtime-core",
     "crates/task-loop",
     "crates/vision-ffi",
+    "providers/onnxruntime-json",
 ]
 resolver = "3"
 

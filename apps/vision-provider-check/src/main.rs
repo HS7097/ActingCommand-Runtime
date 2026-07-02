@@ -585,6 +585,9 @@ fn collect_onnxruntime_artifacts(
         "provider_library",
         &artifacts.provider_library_path,
     )?);
+    if let Some(path) = &artifacts.runtime_library_path {
+        out.push(lock_entry("onnxruntime", "runtime_library", path)?);
+    }
     out.push(lock_entry("onnxruntime", "model", &artifacts.model_path)?);
     if let Some(path) = &artifacts.labels_path {
         out.push(lock_entry("onnxruntime", "labels", path)?);
@@ -723,6 +726,9 @@ fn fastdeploy_report(artifacts: &FastDeployPpocrArtifacts) -> BackendReport {
 
 fn onnxruntime_report(artifacts: &OnnxRuntimeArtifacts) -> BackendReport {
     let mut required_paths = vec![path_string(&artifacts.model_path)];
+    if let Some(path) = &artifacts.runtime_library_path {
+        required_paths.push(path_string(path));
+    }
     if let Some(path) = &artifacts.labels_path {
         required_paths.push(path_string(path));
     }
@@ -1081,6 +1087,7 @@ mod tests {
         let artifacts = root.join("artifacts");
         fs::create_dir_all(&artifacts).expect("artifact dir");
         write_artifact(&artifacts.join("onnx-provider.dll"), b"provider");
+        write_artifact(&artifacts.join("onnxruntime.dll"), b"runtime");
         write_artifact(&artifacts.join("model.onnx"), b"model");
         write_artifact(&artifacts.join("labels.txt"), b"home\nunknown\n");
         let manifest = root.join("manifest.json");
@@ -1092,6 +1099,7 @@ mod tests {
                     "fastdeploy_ppocr": null,
                     "onnxruntime": {{
                         "provider_library_path": "{}",
+                        "runtime_library_path": "{}",
                         "model_path": "{}",
                         "labels": ["home", "unknown"],
                         "labels_path": "{}",
@@ -1100,6 +1108,7 @@ mod tests {
                     }}
                 }}"#,
                 json_path(&artifacts.join("onnx-provider.dll")),
+                json_path(&artifacts.join("onnxruntime.dll")),
                 json_path(&artifacts.join("model.onnx")),
                 json_path(&artifacts.join("labels.txt")),
             ),
@@ -1116,8 +1125,8 @@ mod tests {
 
         assert!(report.ok);
         assert_eq!(report.backend, "onnxruntime");
-        assert_eq!(report.artifacts.len(), 3);
-        assert_eq!(report.total_size_bytes, 8 + 5 + 13);
+        assert_eq!(report.artifacts.len(), 4);
+        assert_eq!(report.total_size_bytes, 8 + 7 + 5 + 13);
         assert_eq!(
             report.artifacts[0].sha256,
             "5c4c1964340aca5b65393bbe9d3249cdd71be26665b3320ad694f034f2743283"
@@ -1131,6 +1140,7 @@ mod tests {
         let artifacts = root.join("artifacts");
         fs::create_dir_all(&artifacts).expect("artifact dir");
         write_artifact(&artifacts.join("provider.dll"), b"nn");
+        write_artifact(&artifacts.join("runtime.dll"), b"rt");
         write_artifact(&artifacts.join("model.onnx"), b"x");
         let manifest = root.join("manifest.json");
         let out = root.join("lock.json");
@@ -1142,6 +1152,7 @@ mod tests {
                     "fastdeploy_ppocr": null,
                     "onnxruntime": {{
                         "provider_library_path": "{}",
+                        "runtime_library_path": "{}",
                         "model_path": "{}",
                         "labels": ["home"],
                         "labels_path": null,
@@ -1150,6 +1161,7 @@ mod tests {
                     }}
                 }}"#,
                 json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("runtime.dll")),
                 json_path(&artifacts.join("model.onnx")),
             ),
         )
@@ -1166,7 +1178,7 @@ mod tests {
         .expect("artifact lock");
 
         let written = fs::read_to_string(&out).expect("lock report");
-        assert!(written.contains("\"total_size_bytes\": 3"));
+        assert!(written.contains("\"total_size_bytes\": 5"));
         assert!(written.contains("\"sha256\""));
         let _ = fs::remove_dir_all(root);
     }
@@ -1196,6 +1208,7 @@ mod tests {
         let artifacts = root.join("artifacts");
         fs::create_dir_all(&artifacts).expect("artifact dir");
         write_artifact(&artifacts.join("provider.dll"), b"not a dynamic library");
+        write_artifact(&artifacts.join("runtime.dll"), b"runtime");
         write_artifact(&artifacts.join("model.onnx"), b"model");
         let manifest = root.join("manifest.json");
         fs::write(
@@ -1206,6 +1219,7 @@ mod tests {
                     "fastdeploy_ppocr": null,
                     "onnxruntime": {{
                         "provider_library_path": "{}",
+                        "runtime_library_path": "{}",
                         "model_path": "{}",
                         "labels": ["home"],
                         "labels_path": null,
@@ -1214,6 +1228,7 @@ mod tests {
                     }}
                 }}"#,
                 json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("runtime.dll")),
                 json_path(&artifacts.join("model.onnx")),
             ),
         )
@@ -1265,6 +1280,7 @@ mod tests {
             },
             "onnxruntime": {
                 "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+                "runtime_library_path": "external-tools/vision/onnxruntime/onnxruntime.dll",
                 "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
                 "labels": ["home", "unknown"],
                 "labels_path": null,

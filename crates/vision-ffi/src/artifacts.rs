@@ -175,6 +175,8 @@ impl FastDeployPpocrArtifacts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnnxRuntimeArtifacts {
     pub provider_library_path: PathBuf,
+    #[serde(default)]
+    pub runtime_library_path: Option<PathBuf>,
     pub model_path: PathBuf,
     pub labels: Vec<String>,
     pub labels_path: Option<PathBuf>,
@@ -189,6 +191,9 @@ impl OnnxRuntimeArtifacts {
             "provider_library_path",
             &self.provider_library_path,
         )?;
+        if let Some(path) = &self.runtime_library_path {
+            validate_required_path("onnxruntime", "runtime_library_path", path)?;
+        }
         validate_required_path("onnxruntime", "model_path", &self.model_path)?;
         if let Some(path) = &self.labels_path {
             validate_required_path("onnxruntime", "labels_path", path)?;
@@ -221,6 +226,9 @@ impl OnnxRuntimeArtifacts {
             "provider_library_path",
             &self.provider_library_path,
         )?;
+        if let Some(path) = &self.runtime_library_path {
+            require_existing_file("onnxruntime", "runtime_library_path", path)?;
+        }
         require_existing_file("onnxruntime", "model_path", &self.model_path)?;
         if let Some(path) = &self.labels_path {
             require_existing_file("onnxruntime", "labels_path", path)?;
@@ -323,6 +331,7 @@ mod tests {
                 },
                 "onnxruntime": {
                     "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+                    "runtime_library_path": "external-tools/vision/onnxruntime/onnxruntime.dll",
                     "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
                     "labels": ["home", "unknown"],
                     "labels_path": null,
@@ -405,6 +414,33 @@ mod tests {
     }
 
     #[test]
+    fn nn_artifacts_accept_missing_runtime_library_for_legacy_manifests() {
+        let manifest = VisionProviderArtifactManifest::from_json_slice(
+            br#"{
+                "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                "fastdeploy_ppocr": null,
+                "onnxruntime": {
+                    "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+                    "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
+                    "labels": ["home", "unknown"],
+                    "labels_path": null,
+                    "execution_provider": "cpu",
+                    "default_timeout_ms": 1000
+                }
+            }"#,
+        )
+        .expect("legacy manifest JSON");
+
+        assert!(
+            manifest
+                .require_onnxruntime()
+                .expect("nn artifacts")
+                .runtime_library_path
+                .is_none()
+        );
+    }
+
+    #[test]
     fn existing_file_validation_is_fatal_for_missing_artifact() {
         let err = test_nn_artifacts()
             .validate_existing_files()
@@ -430,6 +466,7 @@ mod tests {
     pub(crate) fn test_nn_artifacts() -> OnnxRuntimeArtifacts {
         OnnxRuntimeArtifacts {
             provider_library_path: "external-tools/vision/onnxruntime/ac_onnxruntime.dll".into(),
+            runtime_library_path: Some("external-tools/vision/onnxruntime/onnxruntime.dll".into()),
             model_path: "external-tools/vision/onnxruntime/models/page_classifier.onnx".into(),
             labels: vec!["home".to_string(), "unknown".to_string()],
             labels_path: None,

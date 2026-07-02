@@ -48,13 +48,15 @@ No upstream automation source code has been copied into this repository as part 
 ### ONNXRuntime
 
 - Intended role: future R3 NN backend behind `crates/vision-ffi`.
-- Local destination: none in this repository.
-- Current status: `OnnxRuntimeBackend` can dynamically load an ABI-compatible local provider library. `OnnxRuntimeArtifacts` records the reviewed provider library, ONNX model, labels or label file, CPU-only execution provider, and default timeout before artifact-backed invocation.
+- Local destination: `providers/onnxruntime-json` contains ActingCommand-owned Rust provider source. No ONNXRuntime runtime binary or model is bundled.
+- Current status: `OnnxRuntimeBackend` can dynamically load an ABI-compatible local provider library. `OnnxRuntimeArtifacts` records the reviewed provider library, optional reviewed ONNX Runtime dynamic library path, ONNX model, labels or label file, CPU-only execution provider, and default timeout before artifact-backed invocation.
+- Provider implementation: `providers/onnxruntime-json` exports `ac_onnxruntime_classify_json` and `ac_vision_free_buffer`. It uses the Rust `ort` wrapper with default features disabled and dynamic CPU-only runtime loading. It does not enable `download-binaries`, `copy-dylibs`, CUDA, DirectML, or other GPU execution providers.
+- Rust dependency license check: `ort` 2.0.0-rc.12 and `ort-sys` 2.0.0-rc.12 were checked through `cargo info` on 2026-07-02 and report `MIT OR Apache-2.0`.
 - Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include ONNXRuntime binaries, models, labels, or upstream source.
 - Artifact lock boundary: `apps/vision-provider-check --artifact-lock` can produce size and SHA-256 metadata for locally reviewed artifacts, but that report is provenance metadata only and does not add redistribution rights by itself.
 - ABI check boundary: `apps/vision-provider-check --abi-check` can verify that a locally reviewed provider library exports `ac_onnxruntime_classify_json` and `ac_vision_free_buffer`, but it does not grant redistribution rights or replace NN smoke validation.
 - License check: ONNX Runtime repository `LICENSE` was verified through GitHub API on 2026-07-02 as MIT.
-- Artifact contract status: the contract exists, but no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
+- Artifact contract status: the contract exists, and the source-only provider crate exists, but no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, third-party notices, binary provenance, model terms, copied artifact paths, and redistribution obligations.
 
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:

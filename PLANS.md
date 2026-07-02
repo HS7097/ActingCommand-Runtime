@@ -40,10 +40,14 @@ Scope:
 - `apps/vision-provider-check --artifact-lock` can compute artifact sizes and SHA-256 hashes from a reviewed manifest, giving the release/NOTICE review a reproducible size and provenance report without committing provider binaries, models, OCR data, or upstream source.
 - `apps/vision-provider-check --abi-check` now verifies that reviewed provider libraries load and export the ActingCommand JSON ABI symbols before any OCR/NN smoke run is trusted.
 - The ABI check requires selected backend artifacts to exist first and fails loudly for missing files, invalid dynamic libraries, or libraries that do not export the required `ac_*` symbols.
+- `OnnxRuntimeArtifacts` now distinguishes the ActingCommand JSON provider library from the reviewed ONNX Runtime dynamic library through `provider_library_path` and optional `runtime_library_path`.
+- `providers/onnxruntime-json` is the first Runtime-owned ONNXRuntime JSON-ABI provider crate. It builds a cdylib exporting `ac_onnxruntime_classify_json` and `ac_vision_free_buffer`.
+- The provider uses the `ort` Rust wrapper with default features disabled and `load-dynamic`/CPU-only runtime loading. It does not enable `download-binaries`, `copy-dylibs`, CUDA, DirectML, or other GPU execution providers.
+- The provider requires `runtime_library_path` during real invocation, validates reviewed artifact paths, loads the ONNX model, converts RGB/RGBA/gray frames to f32 NHWC or NCHW tensors only when the model input shape is compatible, and fails loudly for missing runtime libraries, unsupported model input shapes, non-f32 outputs, output/label count mismatches, or non-finite scores.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 
-This increment does not bundle FastDeploy, PPOCR, ONNXRuntime, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR/NN provider library. The next R1/R3 increment must provide or link reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts behind this ABI and update NOTICE with the exact artifact licenses and redistribution terms before any release packaging.
+This increment does not bundle FastDeploy, PPOCR, ONNXRuntime runtime binaries, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR provider library. The ONNXRuntime provider crate is source-only and still needs reviewed local `onnxruntime.dll` plus model artifacts before it can produce real NN output. The next R1/R3 increment must provide or link reviewed FastDeploy/PPOCR artifacts and reviewed ONNXRuntime runtime/model artifacts behind this ABI and update NOTICE with exact artifact licenses and redistribution terms before any release packaging.
 
 ## Current P6.5-A MaaFramework fusion chain E
 
