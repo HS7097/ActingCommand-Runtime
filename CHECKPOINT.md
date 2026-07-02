@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A MaaFramework fusion chain closeout
+
+### Current status
+
+- Audited `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md` against the current Runtime repository state.
+- Recorded closeout evidence in `benchmarks/reports/2026-07-02-p65a-maa-fusion-chain-closeout.md`.
+- Updated `PLANS.md` to mark the Runtime source-level P6.5-A gate closed.
+- Current head before this closeout docs commit: `c4e7a54` (`docs: record ppocr full-frame ci`).
+- Latest implementation commit: `961bca8` (`runtime: add ppocr onnx full-frame ocr`).
+- Checkpoint tag: `checkpoint/20260702-r1-ppocr-onnx-full-frame-smoke`.
+- GitHub Actions CI runs `28590433168` and `28590692727`: passed.
+- No MAA C++ source, MAA release binary, ONNXRuntime binary, OCR model, OCR dictionary, OCR data, upstream source, UI, SQLite, scheduler behavior, device operation, or game logic was committed.
+
+### Files changed
+
+- `benchmarks/reports/2026-07-02-p65a-maa-fusion-chain-closeout.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg` audit for task-file test names and current evidence.
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before closeout validation.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+- `gh run watch 28590433168 --repo HS7097/ActingCommand-Runtime --exit-status`
+- `gh run watch 28590692727 --repo HS7097/ActingCommand-Runtime --exit-status`
+
+### Test results
+
+- P0 evidence: `fallback_skipped_on_serious_input_error`, `fallback_on_transient_backend_failure`, `fallback_records_full_context`, `fixed_priority_fails_loud_when_all_backends_fail`.
+- A2 evidence: `capture_autotune_caches_probe`, `capture_static_page_same_hash_does_not_switch`, `capture_switches_backend_after_expected_change_stall`.
+- A1.1 evidence: `minitouch_in_priority_chain`, `minitouch_transient_failure_degrades`.
+- A3 evidence: `discovery_lists_running_mumu_serials`.
+- B evidence: `recovery_follows_on_error_edge`, `recovery_wait_freezes_waits_until_stable`, `recovery_stops_at_max_attempts`.
+- E evidence: `benchmarks/reports/2026-07-02-feature-match-gate.md`.
+- R1 evidence: `ocr_reads_text_from_frame`, source-only `providers/ppocr-onnx-json`, and full-frame smoke text `ABC123` with confidence `0.9998682141304016`.
+- R3 evidence: `nn_classifies_frame`, source-only `providers/onnxruntime-json`, and real NN smoke top label `class_623` with score `6.899109363555908`.
+- A4 evidence: `replay_reproduces_recorded_action_types`.
+- O1 evidence: `project_interface_assembles_runnable_config`.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+- GitHub Actions CI run `28590433168`: passed.
+- GitHub Actions CI run `28590692727`: passed.
+
+### Current blocker
+
+- No blocker for the P6.5-A Runtime source-level gate.
+- Release packaging review for OCR/NN binary/model/dictionary artifacts remains a future task before any such artifacts are bundled.
+
+### Next step
+
+1. Commit and push this closeout report with planning/checkpoint updates.
+2. Watch GitHub Actions for the closeout docs commit.
+3. Start Lab-2 CLI work only after the user confirms the closeout is accepted.
+
 ## 2026-07-02 P6.5-A R1 PPOCR ONNX full-frame provider smoke
 
 ### Current status

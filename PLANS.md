@@ -12,6 +12,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain closeout
+
+The `TASK-P6.5-A-maa-fusion-chain.md` Runtime source-level gate is closed as of 2026-07-02.
+
+Closeout evidence:
+
+- `benchmarks/reports/2026-07-02-p65a-maa-fusion-chain-closeout.md` maps the task-file gates to current tests, reports, and source modules.
+- P0, A2, A1.1, A3, B, E, R1, R3, A4, and O1 all have recorded evidence.
+- The public validation commands passed locally: `cargo fmt --all -- --check`, `git diff --check`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, and `cargo build --release`.
+- The latest Runtime GitHub Actions CI runs for the full-frame OCR implementation and checkpoint commits passed.
+- The local `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` file was absent before closeout validation, matching the task-file CI-style test input requirement.
+
+This closeout does not bundle ONNXRuntime, FastDeploy/PPOCR, MAA release artifacts, OCR models, OCR dictionaries, OCR data, upstream source, UI, SQLite, scheduler behavior, device operation, or game logic. Release packaging review for OCR/NN artifacts remains future work and must be tracked as a separate task.
+
 ## Current P6.5-A MaaFramework fusion chain R1/R3
 
 The 2026-07-02 P6.5-A R1/R3 OCR/NN route is accepted as an FFI-boundary-first implementation path and now has a callable dynamic-library adapter surface plus a provider artifact contract.
