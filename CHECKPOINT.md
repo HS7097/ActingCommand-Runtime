@@ -50,6 +50,10 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
 - `git commit -m "runtime: add ppocr onnx roi provider"`
+- `git commit -m "docs: record ppocr onnx roi checkpoint"`
+- `git push origin main`
+- `git push origin checkpoint/20260702-r1-ppocr-onnx-roi-smoke`
+- `gh run watch 28589186337 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -65,6 +69,7 @@
 - Local provider ABI check: passed for `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
 - Local real OCR smoke: passed with text `ABC123`, confidence `0.9997550845146179`, frame `320x80 rgb8`.
 - Local artifact lock: passed with total size `26100706` bytes. Provider DLL size `498688` bytes, SHA-256 `c708a4b48c19e163b46e66a787a1e449750e10176c341c64d612d4f43884220f`.
+- GitHub Actions CI run `28589186337`: passed.
 
 ### Current blocker
 
@@ -75,9 +80,8 @@
 
 ### Next step
 
-1. Commit and push this checkpoint.
-2. Watch GitHub Actions for the pushed Runtime commits.
-3. Continue R1 by implementing detector/full-frame OCR or by explicitly closing R1 scope around ROI recognizer-only OCR if accepted.
+1. Continue R1 by implementing detector/full-frame OCR or by explicitly closing R1 scope around ROI recognizer-only OCR if accepted.
+2. Before packaging, finish binary/model/dictionary redistribution review for ONNXRuntime and PPOCR artifacts.
 
 ## 2026-07-02 P6.5-A R1 MAA provider export audit
 
