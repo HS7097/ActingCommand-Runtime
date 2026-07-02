@@ -15,6 +15,7 @@ members = [
     "crates/task-loop",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
+    "providers/ppocr-onnx-json",
 ]
 resolver = "3"
 
