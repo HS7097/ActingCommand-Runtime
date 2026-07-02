@@ -36,6 +36,7 @@ Scope:
 - Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through ABI-compatible test functions.
 - Unit tests also cover artifact contract validation, CPU-only NN artifact configuration, missing artifact fatal errors, and artifact-envelope OCR/NN invocation.
 - `apps/vision-provider-check` provides a small Runtime-owned CLI entry for validating the provider manifest and, with `--require-existing`, failing loudly when reviewed local provider/model/data artifacts are missing.
+- `apps/vision-provider-check` also exposes real-provider smoke entry points through `--ocr-frame <png>` and `--nn-frame <png>` so reviewed FastDeploy/PPOCR and ONNXRuntime artifacts can produce actual OCR/NN JSON output once they are supplied; these smoke paths load real providers from the manifest and fail loudly while artifacts are absent.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 

@@ -135,6 +135,7 @@ name = "actingcommand-vision-provider-check"
 version = "0.1.0"
 dependencies = [
  "actingcommand-vision-ffi",
+ "image",
  "serde",
  "serde_json",
 ]

@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider smoke entry points
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after checkpoint tag `checkpoint/20260702-r1-r3-provider-check-cli`.
+- Extended `apps/vision-provider-check` with real-provider smoke modes:
+  - `--ocr-frame <png>` loads `FastDeployPpocrBackend` from the reviewed manifest and emits OCR JSON output when artifacts exist.
+  - `--nn-frame <png>` loads `OnnxRuntimeBackend` from the reviewed manifest and emits NN JSON output when artifacts exist.
+- Added optional `--ocr-region x,y,width,height` and `--nn-model-id <id>` arguments.
+- Smoke modes validate and load real provider artifacts before decoding the input frame, so missing reviewed provider libraries/models/data fail loudly before any fake inference output can be reported.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `apps/vision-provider-check/Cargo.toml`
+- `apps/vision-provider-check/src/main.rs`
+- `Cargo.lock`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --ocr-frame target\missing-ocr-frame.png`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --nn-frame target\missing-nn-frame.png`
+- `cargo clippy -p actingcommand-vision-provider-check -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`: passed with 12 tests.
+- Default manifest smoke still passed and printed `ok: true` JSON for both configured backends.
+- OCR smoke failed as expected with exit code 1 because `external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll` is not present.
+- NN smoke failed as expected with exit code 1 because `external-tools/vision/onnxruntime/ac_onnxruntime.dll` is not present.
+- `cargo clippy -p actingcommand-vision-provider-check -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the provider smoke CLI entry points.
+- Full R1/R3 remains open until reviewed provider binaries/models/data are available, their release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Commit and push this provider smoke CLI increment with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 provider manifest check CLI
 
 ### Current status
