@@ -5,7 +5,7 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `fa39972`.
-- Implementation commit: `6f7050d` (`runtime: add onnxruntime json provider`).
+- Implementation commit: `4552765` (`runtime: add onnxruntime json provider`).
 - Added explicit ONNX Runtime runtime-library provenance to `OnnxRuntimeArtifacts` with optional `runtime_library_path`.
 - Updated `resources/vision-provider-artifacts.example.json` so reviewed ONNXRuntime provider DLL and reviewed `onnxruntime.dll` are separate artifact paths.
 - Added `providers/onnxruntime-json` as a Runtime-owned source-only ONNXRuntime JSON-ABI provider crate.
