@@ -4,6 +4,7 @@
 members = [
     "apps/actinglab",
     "apps/device-test",
+    "apps/vision-provider-check",
     "benchmarks/rust",
     "crates/actingcommand-contract",
     "crates/device",

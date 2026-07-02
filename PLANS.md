@@ -35,6 +35,7 @@ Scope:
 - `from_manifest` constructors let real OCR/NN backends be created from the reviewed manifest once artifact files are supplied.
 - Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through ABI-compatible test functions.
 - Unit tests also cover artifact contract validation, CPU-only NN artifact configuration, missing artifact fatal errors, and artifact-envelope OCR/NN invocation.
+- `apps/vision-provider-check` provides a small Runtime-owned CLI entry for validating the provider manifest and, with `--require-existing`, failing loudly when reviewed local provider/model/data artifacts are missing.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 

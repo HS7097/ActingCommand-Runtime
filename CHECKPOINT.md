@@ -1,5 +1,59 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider manifest check CLI
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `c6ac5ae`.
+- Added `apps/vision-provider-check` as a small Runtime-owned CLI for provider manifest validation.
+- The CLI loads `VisionProviderArtifactManifest`, requires both R1/R3 backend sections by default, and can validate a single backend with `--backend fastdeploy_ppocr` or `--backend onnxruntime`.
+- The CLI prints a JSON report for a valid manifest.
+- `--require-existing` checks reviewed local provider libraries, PPOCR model/data files, ONNX model files, and optional label files before real provider use.
+- Missing artifacts fail loudly with exit code 1 and a fatal error instead of returning fake success.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `Cargo.toml`
+- `apps/vision-provider-check/Cargo.toml`
+- `apps/vision-provider-check/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read current workspace app patterns and Cargo manifests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --require-existing`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+
+### Test results
+
+- `cargo test -p actingcommand-vision-provider-check -- --nocapture`: passed with 6 tests.
+- Example manifest smoke without `--require-existing`: passed and printed `ok: true` JSON for both backends.
+- Example manifest smoke with `--require-existing`: failed as expected with exit code 1 because real provider artifacts are not present locally.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+
+### Current blocker
+
+- No blocker for the provider manifest check CLI.
+- Full R1/R3 remains open until reviewed provider binaries/models/data are available, their release-specific notices and redistribution terms are recorded, and real OCR/NN results are produced behind the ABI.
+
+### Next step
+
+1. Commit and push this provider manifest check CLI with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 upstream license metadata
 
 ### Current status
