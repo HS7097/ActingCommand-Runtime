@@ -555,6 +555,9 @@ fn collect_fastdeploy_artifacts(
         "provider_library",
         &artifacts.provider_library_path,
     )?);
+    for path in &artifacts.runtime_library_paths {
+        out.push(lock_entry("fastdeploy_ppocr", "runtime_library", path)?);
+    }
     out.push(lock_entry(
         "fastdeploy_ppocr",
         "detector_model",
@@ -712,6 +715,12 @@ fn fastdeploy_report(artifacts: &FastDeployPpocrArtifacts) -> BackendReport {
         path_string(&artifacts.recognizer_model_path),
         path_string(&artifacts.dictionary_path),
     ];
+    required_paths.extend(
+        artifacts
+            .runtime_library_paths
+            .iter()
+            .map(|path| path_string(path)),
+    );
     if let Some(path) = &artifacts.classifier_model_path {
         required_paths.push(path_string(path));
     }
@@ -1135,6 +1144,70 @@ mod tests {
     }
 
     #[test]
+    fn artifact_lock_includes_fastdeploy_runtime_libraries() {
+        let root = temp_fixture_dir("artifact-lock-fastdeploy-runtime");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        write_artifact(&artifacts.join("provider.dll"), b"provider");
+        write_artifact(&artifacts.join("runtime.dll"), b"runtime");
+        write_artifact(&artifacts.join("det.pdmodel"), b"det");
+        write_artifact(&artifacts.join("rec.pdmodel"), b"rec");
+        write_artifact(&artifacts.join("keys.txt"), b"keys");
+        let manifest = root.join("manifest.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": {{
+                        "provider_library_path": "{}",
+                        "runtime_library_paths": ["{}"],
+                        "detector_model_path": "{}",
+                        "recognizer_model_path": "{}",
+                        "dictionary_path": "{}",
+                        "classifier_model_path": null,
+                        "supported_languages": ["zh_cn"],
+                        "default_timeout_ms": 1000
+                    }},
+                    "onnxruntime": null
+                }}"#,
+                json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("runtime.dll")),
+                json_path(&artifacts.join("det.pdmodel")),
+                json_path(&artifacts.join("rec.pdmodel")),
+                json_path(&artifacts.join("keys.txt")),
+            ),
+        )
+        .expect("manifest");
+
+        let report = run_artifact_lock(&CheckOptions {
+            manifest,
+            backend: BackendSelection::FastDeployPpocr,
+            require_existing: false,
+            mode: CheckMode::ArtifactLock { out: None },
+        })
+        .expect("artifact lock");
+
+        let roles: Vec<_> = report
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.role)
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                "provider_library",
+                "runtime_library",
+                "detector_model",
+                "recognizer_model",
+                "dictionary",
+            ]
+        );
+        assert_eq!(report.total_size_bytes, 8 + 7 + 3 + 3 + 4);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn artifact_lock_writes_report_when_requested() {
         let root = temp_fixture_dir("artifact-lock-out");
         let artifacts = root.join("artifacts");
@@ -1271,6 +1344,9 @@ mod tests {
             "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
             "fastdeploy_ppocr": {
                 "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+                "runtime_library_paths": [
+                    "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll"
+                ],
                 "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
                 "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
                 "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",

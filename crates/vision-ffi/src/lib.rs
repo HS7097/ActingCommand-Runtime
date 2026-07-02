@@ -811,6 +811,9 @@ mod tests {
             provider_library_path: PathBuf::from(
                 "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
             ),
+            runtime_library_paths: vec![PathBuf::from(
+                "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll",
+            )],
             detector_model_path: PathBuf::from("external-tools/vision/ppocr/det/inference.pdmodel"),
             recognizer_model_path: PathBuf::from(
                 "external-tools/vision/ppocr/rec/inference.pdmodel",

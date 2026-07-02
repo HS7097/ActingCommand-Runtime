@@ -2,6 +2,9 @@
   "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
   "fastdeploy_ppocr": {
     "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+    "runtime_library_paths": [
+      "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll"
+    ],
     "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
     "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
     "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",

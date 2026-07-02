@@ -19,7 +19,7 @@ The 2026-07-02 P6.5-A R1/R3 OCR/NN route is accepted as an FFI-boundary-first im
 Scope:
 
 - `crates/vision-ffi` defines the first safe Rust boundary for future OCR and NN engines.
-- `crates/vision-ffi` now defines `VisionProviderArtifactManifest`, `FastDeployPpocrArtifacts`, and `OnnxRuntimeArtifacts` so real provider libraries, PPOCR model/data paths, ONNX model paths, labels, CPU-only execution, and default timeouts have an explicit contract before any real binary/model is attached.
+- `crates/vision-ffi` now defines `VisionProviderArtifactManifest`, `FastDeployPpocrArtifacts`, and `OnnxRuntimeArtifacts` so real provider libraries, OCR runtime dependency libraries, PPOCR model/data paths, ONNX model paths, labels, CPU-only execution, and default timeouts have an explicit contract before any real binary/model is attached.
 - `VisionProviderArtifactManifest` can be loaded from JSON and now exposes fail-loud backend section requirements plus whole-manifest existing-file validation.
 - `resources/vision-provider-artifacts.example.json` documents the expected local artifact layout without bundling binaries, models, OCR data, or upstream source.
 - The route decision is `ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime`.
@@ -38,6 +38,7 @@ Scope:
 - `apps/vision-provider-check` provides a small Runtime-owned CLI entry for validating the provider manifest and, with `--require-existing`, failing loudly when reviewed local provider/model/data artifacts are missing.
 - `apps/vision-provider-check` also exposes real-provider smoke entry points through `--ocr-frame <png>` and `--nn-frame <png>` so reviewed FastDeploy/PPOCR and ONNXRuntime artifacts can produce actual OCR/NN JSON output once they are supplied; these smoke paths load real providers from the manifest and fail loudly while artifacts are absent.
 - `apps/vision-provider-check --artifact-lock` can compute artifact sizes and SHA-256 hashes from a reviewed manifest, giving the release/NOTICE review a reproducible size and provenance report without committing provider binaries, models, OCR data, or upstream source.
+- FastDeploy/PPOCR artifact locks now include configured `runtime_library_paths`, so OCR dependency DLLs are hashed and reviewed together with the provider library, detector model, recognizer model, dictionary, and optional classifier model.
 - `apps/vision-provider-check --abi-check` now verifies that reviewed provider libraries load and export the ActingCommand JSON ABI symbols before any OCR/NN smoke run is trusted.
 - The ABI check requires selected backend artifacts to exist first and fails loudly for missing files, invalid dynamic libraries, or libraries that do not export the required `ac_*` symbols.
 - `OnnxRuntimeArtifacts` now distinguishes the ActingCommand JSON provider library from the reviewed ONNX Runtime dynamic library through `provider_library_path` and optional `runtime_library_path`.
@@ -46,10 +47,11 @@ Scope:
 - The provider requires `runtime_library_path` during real invocation, validates reviewed artifact paths, loads the ONNX model, converts RGB/RGBA/gray frames to f32 NHWC or NCHW tensors only when the model input shape is compatible, and fails loudly for missing runtime libraries, unsupported model input shapes, non-f32 outputs, output/label count mismatches, or non-finite scores.
 - A local-only real R3 NN smoke passed with reviewed local paths for ONNXRuntime `v1.24.4` CPU x64, the Runtime-built ONNXRuntime JSON provider DLL, and an ONNX Models SqueezeNet `Opset16` model. The smoke used `apps/vision-provider-check --nn-frame`, returned `ok: true`, frame `224x224 rgb8`, top label `class_623`, and top score `6.899109363555908`.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
+- `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md` records the local-only MAA `v6.13.0` OCR artifact audit, including `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, PaddleOCR/PaddleCharOCR ONNX model files, dictionaries, sizes, hashes, and the release-packaging boundary.
 - `benchmarks/reports/2026-07-02-r3-onnxruntime-real-smoke.md` records the local-only real ONNXRuntime smoke, artifact sizes, commands, and release-packaging boundary.
 - `resources/upstream-manifest.toml` now records current repository LICENSE verification through GitHub API for FastDeploy/PaddleOCR/ONNXRuntime, while keeping binary provenance, model/data terms, third-party notices, and redistribution review as release blockers.
 
-This increment does not bundle FastDeploy, PPOCR, ONNXRuntime runtime binaries, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR provider library. The ONNXRuntime provider crate is source-only; the real NN smoke used ignored local artifacts and does not grant redistribution rights. The next R1/R3 increment must provide or link reviewed FastDeploy/PPOCR artifacts, produce real OCR output, and update NOTICE with exact artifact licenses and redistribution terms before any release packaging.
+This increment does not bundle FastDeploy, PPOCR, ONNXRuntime runtime binaries, MAA release binaries, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR provider library. The ONNXRuntime provider crate is source-only; the real NN smoke and MAA OCR artifact audit used ignored local artifacts and do not grant redistribution rights. The next R1/R3 increment must provide or link reviewed FastDeploy/PPOCR artifacts, produce real OCR output, and update NOTICE with exact artifact licenses and redistribution terms before any release packaging.
 
 ## Current P6.5-A MaaFramework fusion chain E
 

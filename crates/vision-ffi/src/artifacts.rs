@@ -93,6 +93,8 @@ impl VisionProviderArtifactManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FastDeployPpocrArtifacts {
     pub provider_library_path: PathBuf,
+    #[serde(default)]
+    pub runtime_library_paths: Vec<PathBuf>,
     pub detector_model_path: PathBuf,
     pub recognizer_model_path: PathBuf,
     pub dictionary_path: PathBuf,
@@ -108,6 +110,9 @@ impl FastDeployPpocrArtifacts {
             "provider_library_path",
             &self.provider_library_path,
         )?;
+        for path in &self.runtime_library_paths {
+            validate_required_path("fastdeploy-ppocr", "runtime_library_paths", path)?;
+        }
         validate_required_path(
             "fastdeploy-ppocr",
             "detector_model_path",
@@ -154,6 +159,9 @@ impl FastDeployPpocrArtifacts {
             "provider_library_path",
             &self.provider_library_path,
         )?;
+        for path in &self.runtime_library_paths {
+            require_existing_file("fastdeploy-ppocr", "runtime_library_paths", path)?;
+        }
         require_existing_file(
             "fastdeploy-ppocr",
             "detector_model_path",
@@ -322,6 +330,9 @@ mod tests {
                 "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
                 "fastdeploy_ppocr": {
                     "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+                    "runtime_library_paths": [
+                        "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll"
+                    ],
                     "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
                     "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
                     "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
@@ -342,6 +353,13 @@ mod tests {
         )
         .expect("manifest JSON");
 
+        assert_eq!(
+            manifest
+                .require_fastdeploy_ppocr()
+                .expect("ocr artifacts")
+                .runtime_library_paths[0],
+            PathBuf::from("external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll")
+        );
         assert_eq!(
             manifest
                 .require_fastdeploy_ppocr()
@@ -404,6 +422,34 @@ mod tests {
     }
 
     #[test]
+    fn ocr_artifacts_accept_missing_runtime_libraries_for_legacy_manifests() {
+        let manifest = VisionProviderArtifactManifest::from_json_slice(
+            br#"{
+                "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                "fastdeploy_ppocr": {
+                    "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+                    "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
+                    "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
+                    "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
+                    "classifier_model_path": null,
+                    "supported_languages": ["zh_cn", "en"],
+                    "default_timeout_ms": 1000
+                },
+                "onnxruntime": null
+            }"#,
+        )
+        .expect("legacy manifest JSON");
+
+        assert!(
+            manifest
+                .require_fastdeploy_ppocr()
+                .expect("ocr artifacts")
+                .runtime_library_paths
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn nn_artifacts_reject_empty_labels() {
         let mut artifacts = test_nn_artifacts();
         artifacts.labels.clear();
@@ -454,6 +500,9 @@ mod tests {
         FastDeployPpocrArtifacts {
             provider_library_path: "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll"
                 .into(),
+            runtime_library_paths: vec![
+                "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll".into(),
+            ],
             detector_model_path: "external-tools/vision/ppocr/det/inference.pdmodel".into(),
             recognizer_model_path: "external-tools/vision/ppocr/rec/inference.pdmodel".into(),
             dictionary_path: "external-tools/vision/ppocr/ppocr_keys_v1.txt".into(),

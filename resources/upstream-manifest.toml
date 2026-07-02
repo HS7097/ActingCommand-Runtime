@@ -38,6 +38,17 @@ license_review = "Repository LICENSE verified from GitHub API on 2026-07-02: Apa
 notes = "Planned R1 OCR model/data dependency behind crates/vision-ffi. Do not commit models, dictionaries, or OCR data without an updated NOTICE entry."
 
 [[tools]]
+id = "maa-v6-13-0-win-x64-ocr-audit"
+name = "MAA v6.13.0 Windows x64 OCR artifact audit"
+source_project = "MaaAssistantArknights/MaaAssistantArknights"
+source_url = "https://github.com/MaaAssistantArknights/MaaAssistantArknights"
+source_path = "releases/download/v6.13.0/MAA-v6.13.0-win-x64.zip"
+local_hint = "target/maa-r1-ocr-audit"
+included_in_repository = false
+license_review = "Release asset was downloaded only to ignored target/ for R1 OCR artifact audit on 2026-07-02. Exact binary, model, dictionary, third-party notice, and redistribution terms remain release blockers before any bundling."
+notes = "The audit found fastdeploy_ppocr_maa.dll, MaaCore.dll, PaddleOCR/PaddleCharOCR ONNX models, and dictionaries. See benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md. Do not commit release binaries, OCR models, dictionaries, or upstream source without an updated NOTICE entry."
+
+[[tools]]
 id = "onnxruntime"
 name = "ONNX Runtime"
 source_project = "microsoft/onnxruntime"

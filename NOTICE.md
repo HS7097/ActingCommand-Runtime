@@ -37,11 +37,12 @@ No upstream automation source code has been copied into this repository as part 
 
 - Intended role: future R1 OCR backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
-- Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library. `FastDeployPpocrArtifacts` records the reviewed provider library, PPOCR detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout before artifact-backed invocation.
+- Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library. `FastDeployPpocrArtifacts` records the reviewed provider library, optional OCR runtime dependency libraries, PPOCR detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout before artifact-backed invocation.
 - Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include FastDeploy, PPOCR, OCR models, dictionaries, or upstream source.
 - Artifact lock boundary: `apps/vision-provider-check --artifact-lock` can produce size and SHA-256 metadata for locally reviewed artifacts, but that report is provenance metadata only and does not add redistribution rights by itself.
 - ABI check boundary: `apps/vision-provider-check --abi-check` can verify that a locally reviewed provider library exports `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`, but it does not grant redistribution rights or replace OCR smoke validation.
 - License check: FastDeploy repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0. PaddleOCR repository `LICENSE` was verified through GitHub API on 2026-07-02 as Apache-2.0.
+- MAA release audit: `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md` records a local-only inspection of `MaaAssistantArknights/MaaAssistantArknights` release `v6.13.0` asset `MAA-v6.13.0-win-x64.zip`. The inspected artifact set includes `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, PaddleOCR/PaddleCharOCR ONNX model files, and dictionaries. These files remain ignored under `target/` and are not bundled here.
 - Artifact contract status: the contract exists, but no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
 - Release boundary: before any release bundles these artifacts, update this NOTICE with the exact upstream project URLs, license texts, model/data terms, dictionary terms, copied artifact paths, third-party notices, binary provenance, and redistribution obligations.
 

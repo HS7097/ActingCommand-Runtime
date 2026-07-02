@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1 MAA OCR artifact audit and runtime-library contract
+
+### Current status
+
+- Continued the P6.5-A R1 OCR gate after commit `7b7d3cb`.
+- Synced `main` from `origin/main`; the repository was already up to date before changes.
+- Inspected `MaaAssistantArknights/MaaAssistantArknights` release `v6.13.0` asset `MAA-v6.13.0-win-x64.zip` under ignored `target/maa-r1-ocr-audit`.
+- Recorded a local-only OCR artifact audit in `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md`.
+- Extended `FastDeployPpocrArtifacts` with optional `runtime_library_paths`, preserving legacy manifest compatibility through `serde(default)`.
+- Existing-file validation and `apps/vision-provider-check --artifact-lock` now include configured FastDeploy/PPOCR OCR runtime dependency libraries.
+- Updated the example provider manifest, `PLANS.md`, `NOTICE.md`, and `resources/upstream-manifest.toml`.
+- No MAA release binary, FastDeploy/PPOCR binary, OCR model, dictionary, upstream source, UI, SQLite, scheduler behavior, device access, or game logic was committed.
+
+### Files changed
+
+- `crates/vision-ffi/src/artifacts.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `apps/vision-provider-check/src/main.rs`
+- `resources/vision-provider-artifacts.example.json`
+- `benchmarks/reports/2026-07-02-r1-maa-ocr-artifact-audit.md`
+- `resources/upstream-manifest.toml`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, `NOTICE.md`, and provider artifact code.
+- `gh release view v6.13.0 --repo MaaAssistantArknights/MaaAssistantArknights --json assets`
+- `gh api repos/MaaAssistantArknights/MaaAssistantArknights --jq '.default_branch'`
+- `gh api repos/MaaAssistantArknights/MaaAssistantArknights/git/trees/dev-v2?recursive=1`
+- Local read-only scan of `C:\Users\Alice\Documents\Azur\upstream-sources\MaaAssistantArknights` for OCR/ONNX artifact references.
+- `gh release download v6.13.0 --repo MaaAssistantArknights/MaaAssistantArknights --pattern MAA-v6.13.0-win-x64.zip --dir target\maa-r1-ocr-audit --clobber`
+- `Expand-Archive` of the MAA release ZIP under ignored `target\maa-r1-ocr-audit`.
+- `Get-FileHash -Algorithm SHA256` for the release ZIP and selected OCR-related artifacts.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -p actingcommand-vision-provider-check`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json`
+- `cargo run -q -p actingcommand-vision-provider-check -- --manifest resources\vision-provider-artifacts.example.json --backend fastdeploy_ppocr --require-existing`
+
+### Test results
+
+- MAA release ZIP audit completed locally with asset size `268602958` bytes and SHA-256 `244d3baa2b3fd5077f5b1f7166d8cdbfebd0610c36308bd4e1ca04e4dd5a8df2`.
+- Selected OCR audit artifacts recorded: `fastdeploy_ppocr_maa.dll`, `MaaCore.dll`, PaddleOCR/PaddleCharOCR ONNX model files, and dictionaries.
+- `cargo test -p actingcommand-vision-ffi -p actingcommand-vision-provider-check`: passed with 24 `vision-ffi` tests and 22 `vision-provider-check` tests.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+- Example manifest report without `--require-existing`: passed and now lists `fastdeploy_ppocr` `runtime_library_paths` as required paths.
+- Example manifest `--backend fastdeploy_ppocr --require-existing`: failed loudly as expected because reviewed local OCR provider artifacts are not present at `external-tools/vision/fastdeploy`.
+
+### Current blocker
+
+- No blocker for this R1 artifact-contract/audit increment.
+- Full R1 remains open because no reviewed ActingCommand FastDeploy/PPOCR OCR provider has produced real OCR output through `ac_fastdeploy_ppocr_read_text_json`.
+- Release packaging remains blocked until exact binary, model, dictionary, third-party notice, and redistribution terms are recorded for any OCR artifacts that would be bundled.
+
+### Next step
+
+1. Commit and push this R1 OCR artifact audit and runtime-library contract increment.
+2. Continue R1 by adding or linking a reviewed OCR provider path that can produce real OCR output through the existing FFI boundary.
+3. Keep R1 fail-loud: no fake OCR success and no silent fallback while artifacts are absent.
+
 ## 2026-07-02 P6.5-A R3 ONNXRuntime real smoke
 
 ### Current status
