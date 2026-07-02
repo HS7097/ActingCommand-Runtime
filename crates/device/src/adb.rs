@@ -107,7 +107,7 @@ fn mumu_folder_candidates() -> Vec<PathBuf> {
     dedup_paths(candidates)
 }
 
-fn mumu_adb_candidates(folder: &Path) -> Vec<PathBuf> {
+pub(crate) fn mumu_adb_candidates(folder: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![folder.join("nx_main").join("adb.exe")];
     candidates.extend(mumu_nx_device_adb_candidates(folder));
     candidates

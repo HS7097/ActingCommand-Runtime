@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A A3 device discovery
+
+### Current status
+
+- Implemented the A3 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `42c8d02`.
+- Scope is limited to clean-room MuMu process-metadata discovery in `crates/device`.
+- Added `DiscoveredDevice` and `DeviceDiscoveryProcess` to the device crate public surface.
+- `discover_devices()` enumerates Windows process metadata and derives MuMu localhost serials and MuMu-provided ADB paths without mutating the ADB server.
+- `discover_mumu_devices_from_processes()` provides a deterministic mock-process path for tests.
+- MuMu instance ids are parsed from `MuMuNxDevice.exe` command lines and mapped to the known `127.0.0.1:<port>` pattern.
+- No app lifecycle control, capture, touch execution, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or ADB server-control command was added.
+
+### Files changed
+
+- `crates/device/src/discovery.rs`
+- `crates/device/src/adb.rs`
+- `crates/device/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`
+- `git status --short --branch`
+- `gh run list --repo HS7097/ActingCommand-Runtime --branch main --limit 5`
+- `Get-CimInstance Win32_Process ...`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-device discovery`
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`
+- `rg -n "println!|eprintln!" crates/device/src`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- A1.1 remote CI run `28569647584` for commit `42c8d02` passed before A3 work started.
+- `cargo test -p actingcommand-device discovery`: passed, 5 tests.
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`: passed.
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`: passed.
+- `rg -n "println!|eprintln!" crates/device/src`: passed with no matches.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for A3 offline implementation.
+
+### Next step
+
+1. Commit and push this A3 unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with Phase 2 recovery/recognition work as separate units.
+
 ## 2026-07-02 P6.5-A A1.1 Minitouch backend
 
 ### Current status

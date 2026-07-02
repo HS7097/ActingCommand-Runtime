@@ -9,6 +9,7 @@
 
 pub mod adb;
 pub mod capture;
+pub mod discovery;
 pub mod error;
 pub mod input;
 pub mod maatouch;
@@ -17,6 +18,7 @@ pub mod touch;
 
 pub use adb::*;
 pub use capture::*;
+pub use discovery::*;
 pub use error::*;
 pub use input::*;
 pub use maatouch::*;

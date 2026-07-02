@@ -12,6 +12,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain A3
+
+The 2026-07-02 P6.5-A A3 device discovery unit is implemented as clean-room Rust process-metadata discovery for MuMu devices.
+
+Scope:
+
+- `crates/device` now exposes `DiscoveredDevice` and `DeviceDiscoveryProcess`.
+- `discover_devices()` enumerates Windows process metadata and derives running MuMu device serials without calling ADB device-listing or server-control commands.
+- MuMu serials are inferred from `MuMuNxDevice.exe` instance ids with the known localhost port pattern.
+- MuMu ADB paths are inferred from the running MuMu device process path, keeping discovery on MuMu-provided ADB instead of PATH ADB.
+- A pure `discover_mumu_devices_from_processes` path supports deterministic tests with mocked process snapshots.
+
+A3 is complete and remains limited to discovery metadata. It does not add app lifecycle control, capture, touch execution, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or ADB server mutation.
+
 ## Current P6.5-A MaaFramework fusion chain A1.1
 
 The 2026-07-02 P6.5-A A1.1 Minitouch unit is implemented as clean-room Rust support for the public minitouch text protocol.
@@ -63,9 +77,8 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0, A2, and A1.1 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, A1.1, and A3 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
-- A3 device discovery.
 - Phase 2 recovery/recognition work.
 - Phase 3 OCR/NN, replay, and ProjectInterface gates before Lab-2 CLI.
 
