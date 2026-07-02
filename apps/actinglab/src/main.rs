@@ -1318,8 +1318,8 @@ fn help_data() -> Value {
             "--game <game>",
             "--server <server>",
             "--runtime-endpoint <url>",
-            "--capture-backend <auto|adb|droidcast_raw|nemu_ipc>",
-            "--backend <auto|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
+            "--capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc>",
+            "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
             "--touch-backend <auto|auto-fastest|maatouch|adb_shell_input>",
             "--require-session",
             "--dry-run",
@@ -1458,7 +1458,8 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
             {"id": "adb", "backend": "adb_screencap", "external_tool": false},
             {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK"},
             {"id": "nemu_ipc", "backend": "nemu_ipc", "external_tool_env": "ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL"},
-            {"id": "auto", "fallback_allowed": true, "diagnostics_required": true}
+            {"id": "auto", "fallback_allowed": true, "diagnostics_required": true},
+            {"id": "auto-fastest", "probe_all_backends": true, "diagnostics_required": true}
         ],
         "discovered_recognition_packs": discovered
     }))
@@ -4277,7 +4278,7 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
         "control" => json!({
             "schema_version": "Lab-1y.control.v1",
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
-            "capture_backend": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+            "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
             "touch_backend": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
             "frame_store": {
                 "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
@@ -4422,7 +4423,12 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
     let device_config = device_config(global, &config)?;
     let requested = device_config.capture_backend;
     let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
-    let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+    let expectation = if flags.bool("--require-fresh") {
+        CaptureFreshnessExpectation::ExpectedChange
+    } else {
+        CaptureFreshnessExpectation::StaticPageAllowed
+    };
+    let report = capture_fresh_probe_report(&device_config, requested, fresh_delay, expectation)?;
     Ok(json!({
         "status": report.status.as_str(),
         "mode": "capture_diagnose",
@@ -4438,6 +4444,9 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
 
 fn submit_capture_diagnose_request(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let mut args = vec!["diagnose".to_string()];
+    if flags.bool("--require-fresh") {
+        args.push("--require-fresh".to_string());
+    }
     push_optional_flag_value(&mut args, flags, "--fresh-delay-ms");
     submit_session_command_request(global, flags, "capture_diagnose", args)
 }
@@ -4712,6 +4721,7 @@ struct CaptureFreshProbeReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureFreshProbeStatus {
     Fresh,
+    StaticUnchanged,
     StaleSuspected,
     Unavailable,
 }
@@ -4720,10 +4730,26 @@ impl CaptureFreshProbeStatus {
     fn as_str(self) -> &'static str {
         match self {
             Self::Fresh => "fresh",
+            Self::StaticUnchanged => "static_unchanged",
             Self::StaleSuspected => "stale_suspected",
             Self::Unavailable => "capture_unavailable",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureFreshnessExpectation {
+    StaticPageAllowed,
+    ExpectedChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaptureFreshnessDecision {
+    status: CaptureFreshProbeStatus,
+    ok: bool,
+    stale_suspected: bool,
+    switch_backend: bool,
+    reason: &'static str,
 }
 
 struct MonitorSceneInput {
@@ -4763,7 +4789,12 @@ fn capture_require_fresh(
     requested: CaptureBackendChoice,
     fresh_delay: Duration,
 ) -> CliOutcome<CaptureCommandResult> {
-    let report = capture_fresh_probe_report(device_config, requested, fresh_delay)?;
+    let report = capture_fresh_probe_report(
+        device_config,
+        requested,
+        fresh_delay,
+        CaptureFreshnessExpectation::ExpectedChange,
+    )?;
     if let Some(frame) = report.frame {
         return Ok(CaptureCommandResult {
             frame,
@@ -4782,6 +4813,7 @@ fn capture_fresh_probe_report(
     device_config: &DeviceRuntimeConfig,
     requested: CaptureBackendChoice,
     fresh_delay: Duration,
+    expectation: CaptureFreshnessExpectation,
 ) -> CliOutcome<CaptureFreshProbeReport> {
     let mut attempts = Vec::new();
     let mut stale_suspected = false;
@@ -4832,26 +4864,32 @@ fn capture_fresh_probe_report(
         };
         let first_hash = frame_digest(&first);
         let second_hash = frame_digest(&second);
-        let fresh = first_hash != second_hash;
-        stale_suspected |= !fresh;
+        let decision = classify_capture_freshness(&first_hash, &second_hash, expectation);
+        stale_suspected |= decision.stale_suspected;
         attempts.push(json!({
             "backend": backend_used,
-            "ok": fresh,
+            "ok": decision.ok,
             "stage": "fresh_probe",
             "first_hash": first_hash,
             "second_hash": second_hash,
-            "stale_suspected": !fresh,
+            "expectation": capture_freshness_expectation_label(expectation),
+            "reason": decision.reason,
+            "stale_suspected": decision.stale_suspected,
+            "switch_backend": decision.switch_backend,
             "delay_ms": fresh_delay.as_millis()
         }));
-        if fresh {
+        if decision.ok {
             return Ok(CaptureFreshProbeReport {
-                status: CaptureFreshProbeStatus::Fresh,
+                status: decision.status,
                 frame: Some(second),
                 attempts,
                 freshness: json!({
                     "required": true,
                     "fresh": true,
+                    "status": decision.status.as_str(),
                     "backend": backend_used,
+                    "expectation": capture_freshness_expectation_label(expectation),
+                    "reason": decision.reason,
                     "first_hash": first_hash,
                     "second_hash": second_hash
                 }),
@@ -4871,9 +4909,50 @@ fn capture_fresh_probe_report(
         freshness: json!({
             "required": true,
             "fresh": false,
-            "status": status.as_str()
+            "status": status.as_str(),
+            "expectation": capture_freshness_expectation_label(expectation)
         }),
     })
+}
+
+fn classify_capture_freshness(
+    first_hash: &str,
+    second_hash: &str,
+    expectation: CaptureFreshnessExpectation,
+) -> CaptureFreshnessDecision {
+    if first_hash != second_hash {
+        return CaptureFreshnessDecision {
+            status: CaptureFreshProbeStatus::Fresh,
+            ok: true,
+            stale_suspected: false,
+            switch_backend: false,
+            reason: "frame_changed",
+        };
+    }
+
+    match expectation {
+        CaptureFreshnessExpectation::StaticPageAllowed => CaptureFreshnessDecision {
+            status: CaptureFreshProbeStatus::StaticUnchanged,
+            ok: true,
+            stale_suspected: false,
+            switch_backend: false,
+            reason: "static_page_unchanged",
+        },
+        CaptureFreshnessExpectation::ExpectedChange => CaptureFreshnessDecision {
+            status: CaptureFreshProbeStatus::StaleSuspected,
+            ok: false,
+            stale_suspected: true,
+            switch_backend: true,
+            reason: "expected_change_not_observed",
+        },
+    }
+}
+
+fn capture_freshness_expectation_label(expectation: CaptureFreshnessExpectation) -> &'static str {
+    match expectation {
+        CaptureFreshnessExpectation::StaticPageAllowed => "static_page_allowed",
+        CaptureFreshnessExpectation::ExpectedChange => "expected_change",
+    }
 }
 
 fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt]) -> Vec<Value> {
@@ -4883,7 +4962,9 @@ fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt
             json!({
                 "backend": attempt.backend.as_str(),
                 "ok": attempt.ok,
-                "message": attempt.message
+                "message": attempt.message,
+                "elapsed_ms": attempt.elapsed_ms,
+                "cached": attempt.cached
             })
         })
         .collect()
@@ -4891,7 +4972,7 @@ fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt
 
 fn fresh_probe_choices(requested: CaptureBackendChoice) -> Vec<CaptureBackendChoice> {
     match requested {
-        CaptureBackendChoice::Auto => vec![
+        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest => vec![
             CaptureBackendChoice::NemuIpc,
             CaptureBackendChoice::DroidcastRaw,
             CaptureBackendChoice::Adb,
@@ -4936,6 +5017,7 @@ fn capture_fresh_probe_report_json(
 fn instance_health_status(capture_status: Option<CaptureFreshProbeStatus>) -> &'static str {
     match capture_status {
         Some(CaptureFreshProbeStatus::Fresh) => "healthy",
+        Some(CaptureFreshProbeStatus::StaticUnchanged) => "healthy_static",
         Some(CaptureFreshProbeStatus::StaleSuspected) => "capture_stale_suspected",
         Some(CaptureFreshProbeStatus::Unavailable) => "capture_unavailable",
         None => "device_connected",
@@ -4947,10 +5029,14 @@ fn capture_diagnosis_recovery_json(
     requested: CaptureBackendChoice,
 ) -> Value {
     match status {
-        CaptureFreshProbeStatus::Fresh => json!({
+        CaptureFreshProbeStatus::Fresh | CaptureFreshProbeStatus::StaticUnchanged => json!({
             "needed": false,
             "available": false,
-            "reason": "fresh_frame_observed"
+            "reason": match status {
+                CaptureFreshProbeStatus::Fresh => "fresh_frame_observed",
+                CaptureFreshProbeStatus::StaticUnchanged => "static_page_unchanged",
+                _ => "fresh_frame_observed",
+            }
         }),
         CaptureFreshProbeStatus::StaleSuspected => {
             let mut recommendations = Vec::new();
@@ -5967,7 +6053,12 @@ fn run_session_stale_capture_recover(
     let run_diagnosis = flags.bool("--capture") || flags.bool("--diagnose");
     if run_diagnosis {
         let device_config = device_config(global, &config)?;
-        let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+        let report = capture_fresh_probe_report(
+            &device_config,
+            requested,
+            fresh_delay,
+            CaptureFreshnessExpectation::ExpectedChange,
+        )?;
         return Ok(stale_capture_recovery_json(
             requested,
             fresh_delay,
@@ -6005,7 +6096,9 @@ fn stale_capture_recovery_json(
     );
     let status = report
         .map(|report| match report.status {
-            CaptureFreshProbeStatus::Fresh => "diagnosed_fresh",
+            CaptureFreshProbeStatus::Fresh | CaptureFreshProbeStatus::StaticUnchanged => {
+                "diagnosed_fresh"
+            }
             CaptureFreshProbeStatus::StaleSuspected => "diagnosed_stale",
             CaptureFreshProbeStatus::Unavailable => "diagnosis_unavailable",
         })
@@ -7656,7 +7749,9 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
         let diagnosis = match capture_status {
             CaptureFreshProbeStatus::StaleSuspected => MonitorDiagnosis::CaptureStaleSuspected,
             CaptureFreshProbeStatus::Unavailable => MonitorDiagnosis::CaptureUnavailable,
-            CaptureFreshProbeStatus::Fresh => unreachable!(),
+            CaptureFreshProbeStatus::Fresh | CaptureFreshProbeStatus::StaticUnchanged => {
+                unreachable!()
+            }
         };
         return Ok(json!({
             "status": diagnosis.status(),
@@ -13140,7 +13235,7 @@ fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> 
         "count": instances.len(),
         "required_fields": ["serial", "game", "server"],
         "recommended_fields": ["package", "adb_path", "capture_backend", "touch_backend"],
-        "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+        "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc", "auto-fastest"],
         "touch_backends": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
         "instances": instances
     }))
@@ -17122,6 +17217,7 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
                     &device_config,
                     requested,
                     fresh_delay,
+                    CaptureFreshnessExpectation::StaticPageAllowed,
                 )?)
             } else {
                 None
@@ -22848,7 +22944,12 @@ fn load_monitor_scene_from_flags(
         let requested = device_config.capture_backend;
         let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
         if flags.bool("--require-fresh") {
-            let report = capture_fresh_probe_report(&device_config, requested, fresh_delay)?;
+            let report = capture_fresh_probe_report(
+                &device_config,
+                requested,
+                fresh_delay,
+                CaptureFreshnessExpectation::ExpectedChange,
+            )?;
             let source = json!({
                 "kind": "capture",
                 "capture_backend_requested": requested.as_str(),
@@ -48619,6 +48720,34 @@ mod tests {
     }
 
     #[test]
+    fn capture_static_page_same_hash_does_not_switch() {
+        let decision = classify_capture_freshness(
+            "same-frame",
+            "same-frame",
+            CaptureFreshnessExpectation::StaticPageAllowed,
+        );
+
+        assert_eq!(decision.status, CaptureFreshProbeStatus::StaticUnchanged);
+        assert!(decision.ok);
+        assert!(!decision.stale_suspected);
+        assert!(!decision.switch_backend);
+    }
+
+    #[test]
+    fn capture_switches_backend_after_expected_change_stall() {
+        let decision = classify_capture_freshness(
+            "same-frame",
+            "same-frame",
+            CaptureFreshnessExpectation::ExpectedChange,
+        );
+
+        assert_eq!(decision.status, CaptureFreshProbeStatus::StaleSuspected);
+        assert!(!decision.ok);
+        assert!(decision.stale_suspected);
+        assert!(decision.switch_backend);
+    }
+
+    #[test]
     fn capture_diagnosis_recommends_fast_backends_before_restart_for_adb_stale() {
         let recovery = capture_diagnosis_recovery_json(
             CaptureFreshProbeStatus::StaleSuspected,
@@ -48666,6 +48795,10 @@ mod tests {
         assert_eq!(
             instance_health_status(Some(CaptureFreshProbeStatus::Fresh)),
             "healthy"
+        );
+        assert_eq!(
+            instance_health_status(Some(CaptureFreshProbeStatus::StaticUnchanged)),
+            "healthy_static"
         );
         assert_eq!(
             instance_health_status(Some(CaptureFreshProbeStatus::StaleSuspected)),

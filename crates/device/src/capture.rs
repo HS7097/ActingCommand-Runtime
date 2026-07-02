@@ -7,12 +7,13 @@ use image::{
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
 use libloading::Library;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -24,6 +25,7 @@ const DEFAULT_DROIDCAST_REMOTE_PATH: &str = "/data/local/tmp/DroidCast_raw.apk";
 const DROIDCAST_MAIN_CLASS: &str = "ink.mol.droidcast_raw.Main";
 const DROIDCAST_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const DROIDCAST_READ_CHUNK_BYTES: usize = 16 * 1024;
+const DEFAULT_CAPTURE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Single-shot screenshot boundary for device capture backends.
 pub trait CaptureBackend {
@@ -59,9 +61,11 @@ impl PixelFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CaptureBackendName {
     AdbScreencap,
+    AdbScreencapEncode,
+    AdbScreencapRawGzip,
     DroidcastRaw,
     NemuIpc,
 }
@@ -70,6 +74,8 @@ impl CaptureBackendName {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AdbScreencap => "adb_screencap",
+            Self::AdbScreencapEncode => "adb_screencap_encode",
+            Self::AdbScreencapRawGzip => "adb_screencap_raw_gzip",
             Self::DroidcastRaw => "droidcast_raw",
             Self::NemuIpc => "nemu_ipc",
         }
@@ -80,6 +86,7 @@ impl CaptureBackendName {
 pub enum CaptureBackendChoice {
     #[default]
     Auto,
+    AutoFastest,
     Adb,
     DroidcastRaw,
     NemuIpc,
@@ -89,11 +96,12 @@ impl CaptureBackendChoice {
     pub fn parse(value: &str) -> DeviceResult<Self> {
         match value {
             "auto" => Ok(Self::Auto),
+            "auto-fastest" | "auto_fastest" => Ok(Self::AutoFastest),
             "adb" | "adb_screencap" | "screencap" => Ok(Self::Adb),
             "droidcast_raw" | "droidcast" => Ok(Self::DroidcastRaw),
             "nemu_ipc" | "nemu" => Ok(Self::NemuIpc),
             other => Err(DeviceError::fatal(format!(
-                "unknown capture backend '{other}', expected auto, adb, droidcast_raw, or nemu_ipc"
+                "unknown capture backend '{other}', expected auto, auto-fastest, adb, droidcast_raw, or nemu_ipc"
             ))),
         }
     }
@@ -101,6 +109,7 @@ impl CaptureBackendChoice {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
+            Self::AutoFastest => "auto-fastest",
             Self::Adb => "adb",
             Self::DroidcastRaw => "droidcast_raw",
             Self::NemuIpc => "nemu_ipc",
@@ -201,6 +210,40 @@ pub struct CaptureBackendAttempt {
     pub backend: CaptureBackendName,
     pub ok: bool,
     pub message: String,
+    pub elapsed_ms: Option<u128>,
+    pub cached: bool,
+}
+
+impl CaptureBackendAttempt {
+    fn success(
+        backend: CaptureBackendName,
+        message: String,
+        elapsed_ms: Option<u128>,
+        cached: bool,
+    ) -> Self {
+        Self {
+            backend,
+            ok: true,
+            message,
+            elapsed_ms,
+            cached,
+        }
+    }
+
+    fn failure(
+        backend: CaptureBackendName,
+        message: String,
+        elapsed_ms: Option<u128>,
+        cached: bool,
+    ) -> Self {
+        Self {
+            backend,
+            ok: false,
+            message,
+            elapsed_ms,
+            cached,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +263,7 @@ pub fn create_capture_backend(
 ) -> DeviceResult<SelectedCaptureBackend> {
     match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config),
+        CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config),
         CaptureBackendChoice::Adb => {
             let used = CaptureBackendName::AdbScreencap;
             Ok(SelectedCaptureBackend {
@@ -230,11 +274,12 @@ pub fn create_capture_backend(
                 diagnostics: CaptureBackendDiagnostics {
                     requested: config.requested,
                     used,
-                    attempts: vec![CaptureBackendAttempt {
-                        backend: used,
-                        ok: true,
-                        message: "explicit backend selected".to_string(),
-                    }],
+                    attempts: vec![CaptureBackendAttempt::success(
+                        used,
+                        "explicit backend selected".to_string(),
+                        None,
+                        false,
+                    )],
                 },
             })
         }
@@ -272,125 +317,272 @@ fn selected_explicit(
         diagnostics: CaptureBackendDiagnostics {
             requested,
             used,
-            attempts: vec![CaptureBackendAttempt {
-                backend: used,
-                ok: true,
-                message: "explicit backend selected".to_string(),
-            }],
+            attempts: vec![CaptureBackendAttempt::success(
+                used,
+                "explicit backend selected".to_string(),
+                None,
+                false,
+            )],
         },
     }
 }
 
+const AUTO_CAPTURE_BACKEND_ORDER: [CaptureBackendName; 3] = [
+    CaptureBackendName::NemuIpc,
+    CaptureBackendName::DroidcastRaw,
+    CaptureBackendName::AdbScreencap,
+];
+
 fn create_auto_capture_backend(
     config: CaptureBackendConfig,
 ) -> DeviceResult<SelectedCaptureBackend> {
+    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Priority)
+}
+
+fn create_auto_fastest_capture_backend(
+    config: CaptureBackendConfig,
+) -> DeviceResult<SelectedCaptureBackend> {
+    create_auto_capture_backend_with_mode(config, AutoCaptureMode::Fastest)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoCaptureMode {
+    Priority,
+    Fastest,
+}
+
+fn create_auto_capture_backend_with_mode(
+    config: CaptureBackendConfig,
+    mode: AutoCaptureMode,
+) -> DeviceResult<SelectedCaptureBackend> {
     let mut attempts = Vec::new();
+    let requested = match mode {
+        AutoCaptureMode::Priority => CaptureBackendChoice::Auto,
+        AutoCaptureMode::Fastest => CaptureBackendChoice::AutoFastest,
+    };
+    let mut successful = Vec::new();
 
-    match NemuIpcBackend::new(
-        config.target.clone(),
-        config.nemu.clone(),
-        config.capture_timeout,
-    ) {
-        Ok(backend) => {
-            match prime_capture_backend(CaptureBackendName::NemuIpc, Box::new(backend)) {
-                Ok((backend, message)) => {
-                    let used = CaptureBackendName::NemuIpc;
-                    attempts.push(CaptureBackendAttempt {
-                        backend: used,
-                        ok: true,
-                        message,
-                    });
+    for name in AUTO_CAPTURE_BACKEND_ORDER {
+        match probe_or_cached_capture_backend(&config, name)? {
+            CaptureProbeOutcome::Available(backend, attempt, elapsed_ms) => {
+                attempts.push(attempt);
+                if mode == AutoCaptureMode::Priority {
                     return Ok(SelectedCaptureBackend {
                         backend,
                         diagnostics: CaptureBackendDiagnostics {
-                            requested: CaptureBackendChoice::Auto,
-                            used,
+                            requested,
+                            used: name,
                             attempts,
                         },
                     });
                 }
-                Err(message) => attempts.push(CaptureBackendAttempt {
-                    backend: CaptureBackendName::NemuIpc,
-                    ok: false,
-                    message,
-                }),
+                successful.push((name, elapsed_ms, backend));
             }
+            CaptureProbeOutcome::Unavailable(attempt) => attempts.push(attempt),
         }
-        Err(err) => attempts.push(CaptureBackendAttempt {
-            backend: CaptureBackendName::NemuIpc,
-            ok: false,
-            message: err.message().to_string(),
-        }),
     }
 
-    match DroidcastRawBackend::new(
-        config.adb_config.clone(),
-        config.target.clone(),
-        config.droidcast,
-        config.capture_timeout,
-    ) {
-        Ok(backend) => {
-            match prime_capture_backend(CaptureBackendName::DroidcastRaw, Box::new(backend)) {
-                Ok((backend, message)) => {
-                    let used = CaptureBackendName::DroidcastRaw;
-                    attempts.push(CaptureBackendAttempt {
-                        backend: used,
-                        ok: true,
-                        message,
-                    });
-                    return Ok(SelectedCaptureBackend {
-                        backend,
-                        diagnostics: CaptureBackendDiagnostics {
-                            requested: CaptureBackendChoice::Auto,
-                            used,
-                            attempts,
-                        },
-                    });
-                }
-                Err(message) => attempts.push(CaptureBackendAttempt {
-                    backend: CaptureBackendName::DroidcastRaw,
-                    ok: false,
-                    message,
-                }),
-            }
-        }
-        Err(err) => attempts.push(CaptureBackendAttempt {
-            backend: CaptureBackendName::DroidcastRaw,
-            ok: false,
-            message: err.message().to_string(),
-        }),
-    }
-
-    let adb_backend = ScreencapBackend::new(config.adb_config, config.target)
-        .with_capture_timeout(config.capture_timeout);
-    match prime_capture_backend(CaptureBackendName::AdbScreencap, Box::new(adb_backend)) {
-        Ok((backend, message)) => {
-            let used = CaptureBackendName::AdbScreencap;
-            attempts.push(CaptureBackendAttempt {
-                backend: used,
-                ok: true,
-                message,
-            });
-            return Ok(SelectedCaptureBackend {
-                backend,
-                diagnostics: CaptureBackendDiagnostics {
-                    requested: CaptureBackendChoice::Auto,
-                    used,
-                    attempts,
-                },
-            });
-        }
-        Err(err) => attempts.push(CaptureBackendAttempt {
-            backend: CaptureBackendName::AdbScreencap,
-            ok: false,
-            message: err,
-        }),
+    if mode == AutoCaptureMode::Fastest
+        && let Some((used, _elapsed_ms, backend)) = successful
+            .into_iter()
+            .min_by_key(|(_name, elapsed_ms, _backend)| *elapsed_ms)
+    {
+        return Ok(SelectedCaptureBackend {
+            backend,
+            diagnostics: CaptureBackendDiagnostics {
+                requested,
+                used,
+                attempts,
+            },
+        });
     }
 
     Err(DeviceError::fatal(format!(
-        "auto capture backend selection failed; attempts: {}",
+        "{} capture backend selection failed; attempts: {}",
+        requested.as_str(),
         format_backend_attempts(&attempts)
     )))
+}
+
+fn probe_or_cached_capture_backend(
+    config: &CaptureBackendConfig,
+    name: CaptureBackendName,
+) -> DeviceResult<CaptureProbeOutcome> {
+    let key = CaptureProbeCacheKey::new(config, name);
+    if let Some(cached) = capture_probe_cache_lookup(&key, DEFAULT_CAPTURE_PROBE_CACHE_TTL)? {
+        if !cached.ok {
+            return Ok(CaptureProbeOutcome::Unavailable(cached.to_attempt(name)));
+        }
+        match build_capture_backend(config, name) {
+            Ok(backend) => {
+                return Ok(CaptureProbeOutcome::Available(
+                    backend,
+                    cached.to_attempt(name),
+                    cached.elapsed_ms,
+                ));
+            }
+            Err(err) => {
+                let attempt =
+                    CaptureBackendAttempt::failure(name, err.message().to_string(), None, false);
+                capture_probe_cache_store(key, &attempt)?;
+                return Ok(CaptureProbeOutcome::Unavailable(attempt));
+            }
+        }
+    }
+
+    let started = Instant::now();
+    match build_capture_backend(config, name) {
+        Ok(backend) => match prime_capture_backend(name, backend) {
+            Ok((backend, message)) => {
+                let elapsed_ms = started.elapsed().as_millis();
+                let attempt =
+                    CaptureBackendAttempt::success(name, message, Some(elapsed_ms), false);
+                capture_probe_cache_store(key, &attempt)?;
+                Ok(CaptureProbeOutcome::Available(backend, attempt, elapsed_ms))
+            }
+            Err(message) => {
+                let elapsed_ms = started.elapsed().as_millis();
+                let attempt =
+                    CaptureBackendAttempt::failure(name, message, Some(elapsed_ms), false);
+                capture_probe_cache_store(key, &attempt)?;
+                Ok(CaptureProbeOutcome::Unavailable(attempt))
+            }
+        },
+        Err(err) => {
+            let elapsed_ms = started.elapsed().as_millis();
+            let attempt = CaptureBackendAttempt::failure(
+                name,
+                err.message().to_string(),
+                Some(elapsed_ms),
+                false,
+            );
+            capture_probe_cache_store(key, &attempt)?;
+            Ok(CaptureProbeOutcome::Unavailable(attempt))
+        }
+    }
+}
+
+enum CaptureProbeOutcome {
+    Available(Box<dyn CaptureBackend>, CaptureBackendAttempt, u128),
+    Unavailable(CaptureBackendAttempt),
+}
+
+fn build_capture_backend(
+    config: &CaptureBackendConfig,
+    name: CaptureBackendName,
+) -> DeviceResult<Box<dyn CaptureBackend>> {
+    match name {
+        CaptureBackendName::NemuIpc => Ok(Box::new(NemuIpcBackend::new(
+            config.target.clone(),
+            config.nemu.clone(),
+            config.capture_timeout,
+        )?)),
+        CaptureBackendName::DroidcastRaw => Ok(Box::new(DroidcastRawBackend::new(
+            config.adb_config.clone(),
+            config.target.clone(),
+            config.droidcast.clone(),
+            config.capture_timeout,
+        )?)),
+        CaptureBackendName::AdbScreencap => Ok(Box::new(
+            ScreencapBackend::new(config.adb_config.clone(), config.target.clone())
+                .with_capture_timeout(config.capture_timeout),
+        )),
+        CaptureBackendName::AdbScreencapEncode | CaptureBackendName::AdbScreencapRawGzip => {
+            Err(DeviceError::fatal(format!(
+                "{} is a reserved ADB capture mode and is not implemented in this milestone",
+                name.as_str()
+            )))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CaptureProbeCacheKey {
+    serial: String,
+    adb_path: String,
+    backend: CaptureBackendName,
+}
+
+impl CaptureProbeCacheKey {
+    fn new(config: &CaptureBackendConfig, backend: CaptureBackendName) -> Self {
+        Self {
+            serial: config.target.resolved_serial(),
+            adb_path: config.adb_config.adb_path.clone(),
+            backend,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CaptureProbeCacheEntry {
+    ok: bool,
+    message: String,
+    elapsed_ms: u128,
+    inserted_at: Instant,
+}
+
+impl CaptureProbeCacheEntry {
+    fn to_attempt(&self, backend: CaptureBackendName) -> CaptureBackendAttempt {
+        if self.ok {
+            CaptureBackendAttempt::success(
+                backend,
+                format!("cached capture probe result: {}", self.message),
+                Some(self.elapsed_ms),
+                true,
+            )
+        } else {
+            CaptureBackendAttempt::failure(
+                backend,
+                format!("cached capture probe result: {}", self.message),
+                Some(self.elapsed_ms),
+                true,
+            )
+        }
+    }
+}
+
+static CAPTURE_PROBE_CACHE: OnceLock<Mutex<HashMap<CaptureProbeCacheKey, CaptureProbeCacheEntry>>> =
+    OnceLock::new();
+
+fn capture_probe_cache() -> &'static Mutex<HashMap<CaptureProbeCacheKey, CaptureProbeCacheEntry>> {
+    CAPTURE_PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn capture_probe_cache_lookup(
+    key: &CaptureProbeCacheKey,
+    ttl: Duration,
+) -> DeviceResult<Option<CaptureProbeCacheEntry>> {
+    let mut cache = capture_probe_cache()
+        .lock()
+        .map_err(|_| DeviceError::fatal("capture probe cache lock was poisoned"))?;
+    let Some(entry) = cache.get(key) else {
+        return Ok(None);
+    };
+    if entry.inserted_at.elapsed() > ttl {
+        cache.remove(key);
+        return Ok(None);
+    }
+    Ok(Some(entry.clone()))
+}
+
+fn capture_probe_cache_store(
+    key: CaptureProbeCacheKey,
+    attempt: &CaptureBackendAttempt,
+) -> DeviceResult<()> {
+    let elapsed_ms = attempt.elapsed_ms.unwrap_or(0);
+    let mut cache = capture_probe_cache()
+        .lock()
+        .map_err(|_| DeviceError::fatal("capture probe cache lock was poisoned"))?;
+    cache.insert(
+        key,
+        CaptureProbeCacheEntry {
+            ok: attempt.ok,
+            message: attempt.message.clone(),
+            elapsed_ms,
+            inserted_at: Instant::now(),
+        },
+    );
+    Ok(())
 }
 
 struct PrimedCaptureBackend {
@@ -436,9 +628,14 @@ fn format_backend_attempts(attempts: &[CaptureBackendAttempt]) -> String {
         .iter()
         .map(|attempt| {
             format!(
-                "{}={}:{}",
+                "{}={}:elapsed_ms={}:cached={}:{}",
                 attempt.backend.as_str(),
                 attempt.ok,
+                attempt
+                    .elapsed_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                attempt.cached,
                 attempt.message
             )
         })
@@ -1598,6 +1795,10 @@ mod tests {
     #[test]
     fn parses_capture_backend_choice_aliases() {
         assert_eq!(
+            CaptureBackendChoice::parse("auto-fastest").expect("auto-fastest"),
+            CaptureBackendChoice::AutoFastest
+        );
+        assert_eq!(
             CaptureBackendChoice::parse("adb").expect("adb"),
             CaptureBackendChoice::Adb
         );
@@ -1609,6 +1810,82 @@ mod tests {
             CaptureBackendChoice::parse("nemu").expect("nemu"),
             CaptureBackendChoice::NemuIpc
         );
+    }
+
+    #[test]
+    fn capture_autotune_caches_probe() {
+        clear_capture_probe_cache_for_tests();
+
+        let config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: String::new(),
+                command_timeout: Duration::from_millis(1),
+            },
+            DeviceTarget::default(),
+        )
+        .with_requested(CaptureBackendChoice::Auto);
+        let key = CaptureProbeCacheKey::new(&config, CaptureBackendName::AdbScreencap);
+        capture_probe_cache_store(
+            key,
+            &CaptureBackendAttempt::success(
+                CaptureBackendName::AdbScreencap,
+                "cached ok".to_string(),
+                Some(7),
+                false,
+            ),
+        )
+        .expect("store cache");
+
+        let selected = create_capture_backend(config).expect("cached adb backend selected");
+
+        assert_eq!(selected.diagnostics.used, CaptureBackendName::AdbScreencap);
+        assert!(
+            selected
+                .diagnostics
+                .attempts
+                .iter()
+                .any(
+                    |attempt| attempt.backend == CaptureBackendName::AdbScreencap
+                        && attempt.ok
+                        && attempt.cached
+                        && attempt.elapsed_ms == Some(7)
+                )
+        );
+        clear_capture_probe_cache_for_tests();
+    }
+
+    #[test]
+    fn capture_autotune_cache_expires_after_ttl() {
+        clear_capture_probe_cache_for_tests();
+        let config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: String::new(),
+                command_timeout: Duration::from_millis(1),
+            },
+            DeviceTarget::default(),
+        );
+        let key = CaptureProbeCacheKey::new(&config, CaptureBackendName::AdbScreencap);
+        capture_probe_cache().lock().expect("cache lock").insert(
+            key.clone(),
+            CaptureProbeCacheEntry {
+                ok: true,
+                message: "old ok".to_string(),
+                elapsed_ms: 4,
+                inserted_at: Instant::now() - Duration::from_secs(2),
+            },
+        );
+
+        let cached =
+            capture_probe_cache_lookup(&key, Duration::from_millis(500)).expect("cache lookup");
+
+        assert!(cached.is_none());
+        assert!(
+            !capture_probe_cache()
+                .lock()
+                .expect("cache lock")
+                .contains_key(&key)
+        );
+        clear_capture_probe_cache_for_tests();
     }
 
     #[test]
@@ -1759,6 +2036,10 @@ mod tests {
     fn assert_fatal(result: DeviceResult<(u32, u32)>) {
         let err = result.expect_err("expected fatal device error");
         assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
+    }
+
+    fn clear_capture_probe_cache_for_tests() {
+        capture_probe_cache().lock().expect("cache lock").clear();
     }
 
     fn rgb8_ids(ids: &[u8]) -> Vec<u8> {

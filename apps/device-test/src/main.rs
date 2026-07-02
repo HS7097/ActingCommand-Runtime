@@ -521,7 +521,9 @@ fn measure_capture_backend(
         CaptureBackendChoice::Adb => CaptureBackendName::AdbScreencap,
         CaptureBackendChoice::DroidcastRaw => CaptureBackendName::DroidcastRaw,
         CaptureBackendChoice::NemuIpc => CaptureBackendName::NemuIpc,
-        CaptureBackendChoice::Auto => CaptureBackendName::AdbScreencap,
+        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest => {
+            CaptureBackendName::AdbScreencap
+        }
     };
     let selected = create_capture_backend(
         CaptureBackendConfig::new(config.adb.clone(), config.target.clone())
@@ -1799,7 +1801,7 @@ fn print_help() {
          Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode uses the selected CaptureBackend.\n\
          Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps through the touch backend selector.\n\
          Benchmark compares adb_screencap, droidcast_raw, and nemu_ipc availability plus touch reset submission. Runner executes profile probes once and exits.\n\
-         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|adb|droidcast_raw|nemu_ipc> --touch-backend <auto|auto-fastest|maatouch|adb_shell_input> \\\n\
+         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> --touch-backend <auto|auto-fastest|maatouch|adb_shell_input> \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
 }

@@ -12,6 +12,24 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain A2
+
+The 2026-07-02 P6.5-A A2 capture autotune unit is implemented as clean-room Rust capture-selection and freshness behavior.
+
+Scope:
+
+- `CaptureBackendChoice` now includes explicit `auto-fastest` selection.
+- Auto capture probing records per-backend availability, elapsed time, cache status, and diagnostics.
+- Auto capture probe results are cached by serial, adb path, and backend with a bounded TTL so repeated backend creation does not probe every backend every time.
+- `auto` keeps priority order: `nemu_ipc -> droidcast_raw -> adb_screencap`.
+- `auto-fastest` probes or uses cached probe results across the same bounded backend set and selects the lowest elapsed successful backend.
+- `CaptureBackendName` reserves ADB-side `adb_screencap_encode` and `adb_screencap_raw_gzip` names for the ADB encode/raw-gzip lane; these modes are not active capture implementations in this unit.
+- Capture freshness classification is context-aware: static unchanged frames are not treated as stale unless the caller explicitly expects a change.
+- Expected-change freshness checks still classify unchanged consecutive frames as stale and request a backend switch/recovery path.
+- Capture diagnose preserves `--require-fresh` through session request routing.
+
+A2 is complete and remains limited to capture autotune/freshness plumbing. It does not add Minitouch, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new external binaries.
+
 ## Current P6.5-A MaaFramework fusion chain P0
 
 The 2026-07-02 P6.5-A MaaFramework fusion chain is being implemented as clean-room Rust behavior and protocol work.
@@ -28,9 +46,8 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0 is the first completed unit in the larger P6.5-A chain. Later chain work remains separate:
+P0 and A2 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
-- A2 capture autotune and freshness.
 - A1.1 Minitouch backend after binary/source/license decision.
 - A3 device discovery.
 - Phase 2 recovery/recognition work.

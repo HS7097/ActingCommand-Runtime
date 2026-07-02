@@ -1,5 +1,79 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A A2 capture autotune and context-aware freshness
+
+### Current status
+
+- Implemented the A2 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `ea47f62df808ee213d651e1717e0b0f0b1c82363`.
+- Scope stayed limited to clean-room capture backend selection, probe caching, context-aware freshness classification, diagnostics, and planning/checkpoint updates.
+- Added capture `auto-fastest` as an explicit selection mode.
+- Auto capture probe results now carry backend availability, elapsed time, cache status, and diagnostic messages.
+- Auto capture probe cache is keyed by serial, adb path, and backend, and is bounded by a TTL.
+- `auto` keeps priority order while `auto-fastest` chooses the lowest elapsed successful backend from the bounded probe set.
+- Reserved ADB-side capture backend names for `adb_screencap_encode` and `adb_screencap_raw_gzip`; these are named future lanes, not active implementations in this unit.
+- Capture freshness classification now separates static-page unchanged frames from expected-change stalls.
+- Static unchanged frames are not treated as stale unless the caller explicitly asks for expected-change freshness with `--require-fresh`.
+- Capture diagnose session routing now preserves `--require-fresh`.
+- No Minitouch, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new external binary was added.
+
+### Files changed
+
+- `crates/device/src/capture.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/device-test/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-device capture_autotune_caches_probe`
+- `cargo test -p actingcommand-device capture_autotune_cache_expires_after_ttl`
+- `cargo test -p actingcommand-actinglab capture_static_page_same_hash_does_not_switch`
+- `cargo test -p actingcommand-actinglab capture_switches_backend_after_expected_change_stall`
+- `cargo test -p actingcommand-actinglab fresh_auto_probe_prefers_fast_backends_before_adb`
+- `cargo test -p actingcommand-device`
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `capture_autotune_caches_probe`: passed.
+- `capture_autotune_cache_expires_after_ttl`: passed.
+- `capture_static_page_same_hash_does_not_switch`: passed.
+- `capture_switches_backend_after_expected_change_stall`: passed.
+- `fresh_auto_probe_prefers_fast_backends_before_adb`: passed.
+- `cargo test -p actingcommand-device`: passed, 45 tests.
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`: passed.
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for A2 offline implementation.
+
+### Next step
+
+1. Commit and push this A2 unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with A1.1 Minitouch and A3 device discovery as separate units.
+
 ## 2026-07-02 P6.5-A MaaFramework fusion chain P0 transient touch fallback
 
 ### Current status
