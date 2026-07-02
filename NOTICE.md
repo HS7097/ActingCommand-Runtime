@@ -38,6 +38,7 @@ No upstream automation source code has been copied into this repository as part 
 - Intended role: future R1 OCR backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
 - Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library. `FastDeployPpocrArtifacts` records the reviewed provider library, PPOCR detector model, recognizer model, optional classifier model, dictionary, supported languages, and default timeout before artifact-backed invocation.
+- Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include FastDeploy, PPOCR, OCR models, dictionaries, or upstream source.
 - Artifact contract status: the contract exists, but no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
 - Release boundary: before any release bundles these artifacts, update this NOTICE with the exact upstream project URLs, license texts, model/data terms, copied artifact paths, and redistribution obligations.
 
@@ -46,6 +47,7 @@ No upstream automation source code has been copied into this repository as part 
 - Intended role: future R3 NN backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
 - Current status: `OnnxRuntimeBackend` can dynamically load an ABI-compatible local provider library. `OnnxRuntimeArtifacts` records the reviewed provider library, ONNX model, labels or label file, CPU-only execution provider, and default timeout before artifact-backed invocation.
+- Manifest boundary: `resources/vision-provider-artifacts.example.json` shows the local path contract only. It does not include ONNXRuntime binaries, models, labels, or upstream source.
 - Artifact contract status: the contract exists, but no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, binary provenance, model terms, copied artifact paths, and redistribution obligations.
 

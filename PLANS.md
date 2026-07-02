@@ -20,6 +20,8 @@ Scope:
 
 - `crates/vision-ffi` defines the first safe Rust boundary for future OCR and NN engines.
 - `crates/vision-ffi` now defines `VisionProviderArtifactManifest`, `FastDeployPpocrArtifacts`, and `OnnxRuntimeArtifacts` so real provider libraries, PPOCR model/data paths, ONNX model paths, labels, CPU-only execution, and default timeouts have an explicit contract before any real binary/model is attached.
+- `VisionProviderArtifactManifest` can be loaded from JSON and now exposes fail-loud backend section requirements plus whole-manifest existing-file validation.
+- `resources/vision-provider-artifacts.example.json` documents the expected local artifact layout without bundling binaries, models, OCR data, or upstream source.
 - The route decision is `ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime`.
 - OCR is routed toward FastDeploy/PPOCR.
 - NN is routed toward ONNXRuntime.
@@ -30,6 +32,7 @@ Scope:
 - Both backends require a paired `ac_vision_free_buffer` symbol and treat missing libraries, missing symbols, malformed buffers, non-zero provider status, empty responses, and invalid JSON as fatal errors.
 - `from_artifacts` constructors require reviewed local artifact paths to exist before loading a provider; missing provider libraries, models, dictionaries, or label files fail loudly.
 - Artifact-backed FFI calls send explicit JSON envelopes containing both the inference request and the reviewed artifact contract. Plain `from_library_path` keeps the earlier raw request ABI for compatibility.
+- `from_manifest` constructors let real OCR/NN backends be created from the reviewed manifest once artifact files are supplied.
 - Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through ABI-compatible test functions.
 - Unit tests also cover artifact contract validation, CPU-only NN artifact configuration, missing artifact fatal errors, and artifact-envelope OCR/NN invocation.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.

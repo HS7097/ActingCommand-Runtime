@@ -3,7 +3,7 @@
 use crate::{
     FastDeployPpocrArtifacts, FastDeployPpocrInvokeRequest, NnClassificationResult, NnEngine,
     NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OnnxRuntimeArtifacts,
-    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiResult,
+    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiResult, VisionProviderArtifactManifest,
 };
 use libloading::Library;
 use serde::{Serialize, de::DeserializeOwned};
@@ -72,6 +72,10 @@ impl FastDeployPpocrBackend {
             free_buffer,
             artifacts: Some(artifacts),
         })
+    }
+
+    pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
+        Self::from_artifacts(manifest.require_fastdeploy_ppocr()?.clone())
     }
 
     /// # Safety
@@ -166,6 +170,10 @@ impl OnnxRuntimeBackend {
             free_buffer,
             artifacts: Some(artifacts),
         })
+    }
+
+    pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
+        Self::from_artifacts(manifest.require_onnxruntime()?.clone())
     }
 
     /// # Safety

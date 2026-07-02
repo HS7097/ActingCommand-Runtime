@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 provider manifest readiness
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `ee4755d`.
+- Added JSON manifest loading for `VisionProviderArtifactManifest`.
+- Added whole-manifest existing-file validation so reviewed provider libraries, PPOCR model/data files, ONNX model files, and optional label files are checked before real backend construction.
+- Added explicit backend-section requirements for `fastdeploy_ppocr` and `onnxruntime`.
+- Added `FastDeployPpocrBackend::from_manifest` and `OnnxRuntimeBackend::from_manifest` to build real dynamic-library backends from the reviewed manifest once artifact files are supplied.
+- Added `resources/vision-provider-artifacts.example.json` to document the expected local artifact layout without bundling binaries, models, OCR data, labels, or upstream source.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `crates/vision-ffi/src/artifacts.rs`
+- `crates/vision-ffi/src/ffi.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `resources/vision-provider-artifacts.example.json`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git pull --ff-only`
+- `git status --short --branch`
+- Read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Audited P6.5-A test anchors with `rg`.
+- Scanned Runtime `external-tools` and `resources` for FastDeploy/PPOCR/ONNXRuntime artifacts.
+- Read `crates/vision-ffi` sources.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- Scanned the changed vision-ffi paths and example manifest for fallback/reconnect/retry/OpenCV/SQLite/device/game terms; only the existing GPU/DirectML-disabled route decision fields/tests matched.
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed with 22 tests, including:
+  - `ocr_reads_text_from_frame`
+  - `nn_classifies_frame`
+  - `artifact_manifest_parses_json_contract`
+  - `artifact_manifest_rejects_invalid_json`
+  - `artifact_manifest_requires_requested_backend_section`
+  - `backend_from_manifest_requires_artifact_files`
+  - `backend_from_manifest_requires_backend_section`
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed with 482 workspace tests plus crate/doc test suites.
+- The changed files do not add fallback, reconnect, retry, OpenCV, SQLite, UI, device access, game logic, or upstream source/model/binary copying.
+
+### Current blocker
+
+- No blocker for manifest readiness.
+- Full R1/R3 remains open until reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts are available and prove real OCR/NN results behind this ABI.
+
+### Next step
+
+1. Commit and push this provider manifest readiness increment with `PLANS.md` and `CHECKPOINT.md`.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider implementation once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 provider artifact contract
 
 ### Current status

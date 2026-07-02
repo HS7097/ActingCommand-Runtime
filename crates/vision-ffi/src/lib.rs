@@ -588,6 +588,40 @@ mod tests {
     }
 
     #[test]
+    fn backend_from_manifest_requires_artifact_files() {
+        let manifest = VisionProviderArtifactManifest {
+            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
+            fastdeploy_ppocr: Some(test_ocr_artifacts()),
+            onnxruntime: Some(test_nn_artifacts()),
+        };
+
+        let err = match FastDeployPpocrBackend::from_manifest(&manifest) {
+            Ok(_) => panic!("missing OCR artifacts were accepted"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("required artifact"));
+    }
+
+    #[test]
+    fn backend_from_manifest_requires_backend_section() {
+        let manifest = VisionProviderArtifactManifest {
+            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
+            fastdeploy_ppocr: None,
+            onnxruntime: None,
+        };
+
+        let err = match OnnxRuntimeBackend::from_manifest(&manifest) {
+            Ok(_) => panic!("missing NN section was accepted"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("onnxruntime"));
+    }
+
+    #[test]
     fn ocr_artifact_envelope_reads_text_from_frame() {
         let frame = test_frame();
         let request = OcrInferenceRequest {

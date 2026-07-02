@@ -2,6 +2,7 @@
 
 use crate::{NnInferenceRequest, OcrInferenceRequest, VisionFfiError, VisionFfiResult};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION: &str =
@@ -15,6 +16,31 @@ pub struct VisionProviderArtifactManifest {
 }
 
 impl VisionProviderArtifactManifest {
+    pub fn from_json_slice(bytes: &[u8]) -> VisionFfiResult<Self> {
+        let manifest: Self = serde_json::from_slice(bytes).map_err(|err| {
+            VisionFfiError::fatal(
+                "vision-artifacts",
+                format!("failed to parse provider artifact manifest JSON: {err}"),
+            )
+        })?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    pub fn load_json_file(path: impl AsRef<Path>) -> VisionFfiResult<Self> {
+        let path = path.as_ref();
+        let bytes = fs::read(path).map_err(|err| {
+            VisionFfiError::fatal(
+                "vision-artifacts",
+                format!(
+                    "failed to read provider artifact manifest {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        Self::from_json_slice(&bytes)
+    }
+
     pub fn validate(&self) -> VisionFfiResult<()> {
         if self.schema_version != VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION {
             return Err(VisionFfiError::fatal(
@@ -32,6 +58,35 @@ impl VisionProviderArtifactManifest {
             artifacts.validate()?;
         }
         Ok(())
+    }
+
+    pub fn validate_existing_files(&self) -> VisionFfiResult<()> {
+        self.validate()?;
+        if let Some(artifacts) = &self.fastdeploy_ppocr {
+            artifacts.validate_existing_files()?;
+        }
+        if let Some(artifacts) = &self.onnxruntime {
+            artifacts.validate_existing_files()?;
+        }
+        Ok(())
+    }
+
+    pub fn require_fastdeploy_ppocr(&self) -> VisionFfiResult<&FastDeployPpocrArtifacts> {
+        self.fastdeploy_ppocr.as_ref().ok_or_else(|| {
+            VisionFfiError::fatal(
+                "vision-artifacts",
+                "provider artifact manifest does not include fastdeploy_ppocr",
+            )
+        })
+    }
+
+    pub fn require_onnxruntime(&self) -> VisionFfiResult<&OnnxRuntimeArtifacts> {
+        self.onnxruntime.as_ref().ok_or_else(|| {
+            VisionFfiError::fatal(
+                "vision-artifacts",
+                "provider artifact manifest does not include onnxruntime",
+            )
+        })
     }
 }
 
@@ -250,6 +305,73 @@ mod tests {
         let err = manifest.validate().expect_err("unknown schema rejected");
 
         assert_eq!(err.module(), "vision-artifacts");
+    }
+
+    #[test]
+    fn artifact_manifest_parses_json_contract() {
+        let manifest = VisionProviderArtifactManifest::from_json_slice(
+            br#"{
+                "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                "fastdeploy_ppocr": {
+                    "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+                    "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
+                    "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
+                    "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
+                    "classifier_model_path": null,
+                    "supported_languages": ["zh_cn", "en"],
+                    "default_timeout_ms": 1000
+                },
+                "onnxruntime": {
+                    "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+                    "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
+                    "labels": ["home", "unknown"],
+                    "labels_path": null,
+                    "execution_provider": "cpu",
+                    "default_timeout_ms": 1000
+                }
+            }"#,
+        )
+        .expect("manifest JSON");
+
+        assert_eq!(
+            manifest
+                .require_fastdeploy_ppocr()
+                .expect("ocr artifacts")
+                .supported_languages[0],
+            "zh_cn"
+        );
+        assert_eq!(
+            manifest
+                .require_onnxruntime()
+                .expect("nn artifacts")
+                .execution_provider,
+            OnnxExecutionProvider::Cpu
+        );
+    }
+
+    #[test]
+    fn artifact_manifest_rejects_invalid_json() {
+        let err =
+            VisionProviderArtifactManifest::from_json_slice(br#"{"#).expect_err("bad JSON fatal");
+
+        assert_eq!(err.module(), "vision-artifacts");
+        assert!(err.message().contains("failed to parse"));
+    }
+
+    #[test]
+    fn artifact_manifest_requires_requested_backend_section() {
+        let manifest = VisionProviderArtifactManifest {
+            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
+            fastdeploy_ppocr: None,
+            onnxruntime: None,
+        };
+
+        let err = manifest
+            .require_fastdeploy_ppocr()
+            .expect_err("missing OCR section rejected");
+
+        assert_eq!(err.module(), "vision-artifacts");
+        assert!(err.message().contains("fastdeploy_ppocr"));
     }
 
     #[test]

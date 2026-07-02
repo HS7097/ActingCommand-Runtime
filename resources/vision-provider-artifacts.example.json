@@ -1,0 +1,26 @@
+{
+  "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+  "fastdeploy_ppocr": {
+    "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+    "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
+    "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
+    "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
+    "classifier_model_path": null,
+    "supported_languages": [
+      "zh_cn",
+      "en"
+    ],
+    "default_timeout_ms": 1000
+  },
+  "onnxruntime": {
+    "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
+    "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
+    "labels": [
+      "home",
+      "unknown"
+    ],
+    "labels_path": null,
+    "execution_provider": "cpu",
+    "default_timeout_ms": 1000
+  }
+}
