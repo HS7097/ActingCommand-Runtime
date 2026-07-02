@@ -14,6 +14,7 @@ pub mod error;
 pub mod input;
 pub mod maatouch;
 pub mod minitouch;
+pub mod replay;
 pub mod touch;
 
 pub use adb::*;
@@ -23,4 +24,5 @@ pub use error::*;
 pub use input::*;
 pub use maatouch::*;
 pub use minitouch::*;
+pub use replay::*;
 pub use touch::*;

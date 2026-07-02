@@ -12,6 +12,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain A4
+
+The 2026-07-02 P6.5-A A4 replay unit is implemented as a clean-room Rust JSON-line input record and replay layer in `crates/device`.
+
+Scope:
+
+- `crates/device/src/replay.rs` defines recorded input actions and JSON-line input events.
+- `RecordingInputBackend` wraps an explicit `InputBackend` and records successful input actions as JSON-line-compatible events.
+- `parse_replay_json_lines` and `write_replay_json_lines` handle replay stream boundaries with fatal errors for empty or malformed streams.
+- `replay_input_records` reads recorded actions and executes them against a supplied backend in order.
+- Replay does not select fallback backends, retry, reconnect, capture frames, run recognition, open UI, write SQLite, or add game logic.
+- Backend replay failures are promoted to fatal replay errors so replay cannot silently proceed after a missed input action.
+
+A4 is complete as a device input record/replay slice. It remains limited to device input record/replay plumbing and does not add OCR, NN, FeatureMatch, live recovery wiring, resources, scheduler behavior, UI, upstream source copying, or new CLI surface.
+
 ## Current P6.5-A MaaFramework fusion chain O1
 
 The 2026-07-02 P6.5-A O1 ProjectInterface unit is implemented as a declarative assembly contract in ActingLab.
@@ -106,10 +121,10 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0, A2, A1.1, A3, the first B recovery executor slice, and O1 ProjectInterface are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, A1.1, A3, the first B recovery executor slice, O1 ProjectInterface, and A4 replay are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
 - Phase 2 recognition/FeatureMatch work and any live recovery wiring beyond the pure executor.
-- Phase 3 OCR/NN and replay gates before Lab-2 CLI.
+- Phase 3 OCR/NN gates before Lab-2 CLI.
 
 ## Current P6.5-A1 device input fallback
 

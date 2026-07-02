@@ -48,6 +48,8 @@ version = "0.1.0"
 dependencies = [
  "image",
  "libloading",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A A4 replay
+
+### Current status
+
+- Implemented the A4 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `5044746`.
+- Scope is limited to clean-room Rust input action recording and replay in `crates/device`.
+- Added JSON-line-compatible recorded input events for `tap`, `long_tap`, `swipe`, `key`, `text`, and `reset`.
+- Added `RecordingInputBackend` to wrap an explicit backend and record successful input actions.
+- Added replay parsing, JSON-line writing, and ordered action execution against an explicit backend.
+- Replay does not choose fallback backends, retry, reconnect, capture screenshots, run recognition, write SQLite, add UI, or add game logic.
+- Backend replay failure is converted into a fatal replay error so missed replay actions do not silently continue.
+- No resource repository was read or modified.
+
+### Files changed
+
+- `crates/device/Cargo.toml`
+- `crates/device/src/lib.rs`
+- `crates/device/src/replay.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git reset --hard origin/main`
+- `git clean -fd`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-device replay`
+- `cargo clippy -p actingcommand-device -- -D warnings`
+- `git diff --check`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `replay_reproduces_recorded_action_types`: passed.
+- `recording_backend_writes_json_lines`: passed.
+- `replay_rejects_malformed_json_line`: passed.
+- `replay_backend_failure_is_fatal`: passed.
+- `cargo clippy -p actingcommand-device -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for the A4 replay implementation so far.
+
+### Next step
+
+1. Commit and push this A4 unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with E FeatureMatch pre-research or the R1/R3 OCR/NN decision/implementation gate as separate units.
+
 ## 2026-07-02 P6.5-A O1 ProjectInterface
 
 ### Current status
