@@ -5,6 +5,9 @@
 ### Current status
 
 - Continued the P6.5-A R1 OCR gate after commit `c78abd9`.
+- Implementation commit: `961bca8` (`runtime: add ppocr onnx full-frame ocr`).
+- Checkpoint tag: `checkpoint/20260702-r1-ppocr-onnx-full-frame-smoke`.
+- GitHub Actions CI run `28590433168`: passed.
 - Added detector-plus-recognizer full-frame OCR to the source-only `providers/ppocr-onnx-json` provider.
 - Full-frame OCR requests now load the reviewed detector ONNX model, run detector inference, convert the detector probability map into bounded text regions, merge nearby text boxes, and run recognizer inference on detected regions.
 - Sub-frame OCR requests still use recognizer-only ROI OCR and return an explicit warning for that path.
@@ -41,6 +44,11 @@
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
+- `git commit -m "runtime: add ppocr onnx full-frame ocr"`
+- `git tag checkpoint/20260702-r1-ppocr-onnx-full-frame-smoke HEAD`
+- `git push origin main`
+- `git push origin checkpoint/20260702-r1-ppocr-onnx-full-frame-smoke`
+- `gh run watch 28590433168 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -56,6 +64,7 @@
 - Local provider ABI check: passed for `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
 - Local real full-frame OCR smoke: passed with text `ABC123`, confidence `0.9998682141304016`, frame `320x80 rgb8`, block rect `(15,14,190,48)`, and no warnings.
 - Local artifact lock: passed with total size `26136034` bytes. Provider DLL size `534016` bytes, SHA-256 `d45b0967f4fc1589afc614c39b5835f48fa2f2e20eea140dfc5c62b21025f225`.
+- GitHub Actions CI run `28590433168`: passed.
 
 ### Current blocker
 
@@ -64,8 +73,8 @@
 
 ### Next step
 
-1. Commit and push this increment with updated planning/checkpoint files.
-2. Watch GitHub Actions for the pushed Runtime commit.
+1. Continue P6.5-A closeout by auditing remaining task-file gates against current evidence.
+2. Before any release bundles OCR/NN artifacts, finish binary/model/dictionary redistribution review.
 
 ## 2026-07-02 P6.5-A R1 PPOCR ONNX ROI provider smoke
 
