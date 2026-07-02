@@ -229,6 +229,7 @@ fn touch_backend_config(config: &MaaTouchValidationConfig) -> TouchBackendConfig
         config.target.clone(),
         config.maatouch.clone(),
     )
+    .with_minitouch_config(config.minitouch.clone())
     .with_requested(config.touch_backend)
 }
 
@@ -1234,11 +1235,14 @@ where
                 cfg.target.port = parse_token(&tokens, &mut index, "--port")?;
             }
             "--local" => {
-                cfg.maatouch.local_path =
-                    PathBuf::from(next_token(&tokens, &mut index, "--local")?);
+                let local = PathBuf::from(next_token(&tokens, &mut index, "--local")?);
+                cfg.maatouch.local_path = local.clone();
+                cfg.minitouch.local_path = local;
             }
             "--remote" => {
-                cfg.maatouch.remote_path = next_token(&tokens, &mut index, "--remote")?;
+                let remote = next_token(&tokens, &mut index, "--remote")?;
+                cfg.maatouch.remote_path = remote.clone();
+                cfg.minitouch.remote_path = remote;
             }
             "--no-connect" => {
                 cfg.target.connect = false;
@@ -1246,6 +1250,7 @@ where
             }
             "--no-push" => {
                 cfg.maatouch.push = false;
+                cfg.minitouch.push = false;
                 index += 1;
             }
             "--capture-backend" => {
@@ -1269,6 +1274,7 @@ where
                     &mut index,
                     "--handshake-timeout-ms",
                 )?);
+                cfg.minitouch.handshake_timeout = cfg.maatouch.handshake_timeout;
             }
             "--shutdown-timeout-ms" => {
                 cfg.maatouch.shutdown_timeout = Duration::from_millis(parse_token(
@@ -1276,6 +1282,7 @@ where
                     &mut index,
                     "--shutdown-timeout-ms",
                 )?);
+                cfg.minitouch.shutdown_timeout = cfg.maatouch.shutdown_timeout;
             }
             "--help" | "-h" => {
                 print_help();
@@ -1801,7 +1808,7 @@ fn print_help() {
          Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode uses the selected CaptureBackend.\n\
          Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps through the touch backend selector.\n\
          Benchmark compares adb_screencap, droidcast_raw, and nemu_ipc availability plus touch reset submission. Runner executes profile probes once and exits.\n\
-         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> --touch-backend <auto|auto-fastest|maatouch|adb_shell_input> \\\n\
+         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> --touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input> \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
 }

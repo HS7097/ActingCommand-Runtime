@@ -12,6 +12,23 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain A1.1
+
+The 2026-07-02 P6.5-A A1.1 Minitouch unit is implemented as clean-room Rust support for the public minitouch text protocol.
+
+Scope:
+
+- `MinitouchBackend` is added as an optional input backend behind the existing `InputBackend` trait.
+- The default touch priority chain becomes `MaaTouch -> Minitouch -> adb_shell_input`.
+- `TouchBackendChoice` accepts explicit `minitouch` selection.
+- Minitouch uses a local operator-provided binary path and does not vendor or commit minitouch binaries.
+- Minitouch transport, startup, handshake, push/chmod, process, stdin, and flush failures are transient fallback-eligible errors.
+- Minitouch input validation, default pressure validation, and invalid coordinate mapping remain fatal.
+- Minitouch maps screen-space coordinates into minitouch raw coordinates with scale and basic orientation handling.
+- NOTICE records the upstream minitouch source and Apache-2.0 license reference without importing upstream source code.
+
+A1.1 is complete and remains limited to input backend selection and minitouch protocol plumbing. It does not add recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new vendored binaries. The only capture-area touch in this unit is a test-only cache guard added after full device tests exposed the previous A2 cache test as parallel-order sensitive.
+
 ## Current P6.5-A MaaFramework fusion chain A2
 
 The 2026-07-02 P6.5-A A2 capture autotune unit is implemented as clean-room Rust capture-selection and freshness behavior.
@@ -46,9 +63,8 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0 and A2 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, and A1.1 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
-- A1.1 Minitouch backend after binary/source/license decision.
 - A3 device discovery.
 - Phase 2 recovery/recognition work.
 - Phase 3 OCR/NN, replay, and ProjectInterface gates before Lab-2 CLI.

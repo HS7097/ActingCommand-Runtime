@@ -2,7 +2,7 @@
 
 use crate::{
     Adb, AdbConfig, DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo,
-    InputBackend, MaaTouchBackend, MaaTouchConfig,
+    InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig,
 };
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ const MAX_ADB_INPUT_GESTURE_MS: u64 = 60_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchBackendName {
     MaaTouch,
+    Minitouch,
     AdbShellInput,
 }
 
@@ -18,6 +19,7 @@ impl TouchBackendName {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MaaTouch => "maatouch",
+            Self::Minitouch => "minitouch",
             Self::AdbShellInput => "adb_shell_input",
         }
     }
@@ -29,6 +31,7 @@ pub enum TouchBackendChoice {
     Auto,
     AutoFastest,
     MaaTouch,
+    Minitouch,
     AdbShellInput,
 }
 
@@ -38,11 +41,12 @@ impl TouchBackendChoice {
             "auto" => Ok(Self::Auto),
             "auto-fastest" | "auto_fastest" => Ok(Self::AutoFastest),
             "maatouch" | "maa_touch" => Ok(Self::MaaTouch),
+            "minitouch" | "mini_touch" => Ok(Self::Minitouch),
             "adb" | "adb_input" | "adb-input" | "adb_shell_input" | "adb-shell-input" => {
                 Ok(Self::AdbShellInput)
             }
             other => Err(DeviceError::fatal(format!(
-                "unknown touch backend '{other}', expected auto, auto-fastest, maatouch, or adb_shell_input"
+                "unknown touch backend '{other}', expected auto, auto-fastest, maatouch, minitouch, or adb_shell_input"
             ))),
         }
     }
@@ -52,6 +56,7 @@ impl TouchBackendChoice {
             Self::Auto => "auto",
             Self::AutoFastest => "auto-fastest",
             Self::MaaTouch => "maatouch",
+            Self::Minitouch => "minitouch",
             Self::AdbShellInput => "adb_shell_input",
         }
     }
@@ -62,6 +67,7 @@ pub struct TouchBackendConfig {
     pub adb_config: AdbConfig,
     pub target: DeviceTarget,
     pub maatouch_config: MaaTouchConfig,
+    pub minitouch_config: MinitouchConfig,
     pub requested: TouchBackendChoice,
 }
 
@@ -75,8 +81,14 @@ impl TouchBackendConfig {
             adb_config,
             target,
             maatouch_config,
+            minitouch_config: MinitouchConfig::default(),
             requested: TouchBackendChoice::Auto,
         }
+    }
+
+    pub fn with_minitouch_config(mut self, minitouch_config: MinitouchConfig) -> Self {
+        self.minitouch_config = minitouch_config;
+        self
     }
 
     pub fn with_requested(mut self, requested: TouchBackendChoice) -> Self {
@@ -348,7 +360,11 @@ impl SelectedTouchBackend {
     }
 
     fn validate_action_points(&self, action: &str, points: &[(i32, i32)]) -> DeviceResult<()> {
-        let bounds = touch_bounds_from_device(self.active.handshake.as_ref(), &self.active.device)?;
+        let bounds = touch_bounds_for_backend(
+            self.active.name,
+            self.active.handshake.as_ref(),
+            &self.active.device,
+        )?;
         for (index, (x, y)) in points.iter().enumerate() {
             validate_touch_coordinate(&format!("{action} point {index} x"), *x, bounds.max_x)?;
             validate_touch_coordinate(&format!("{action} point {index} y"), *y, bounds.max_y)?;
@@ -402,6 +418,13 @@ pub fn create_touch_backend(config: TouchBackendConfig) -> DeviceResult<Selected
             factories
                 .into_iter()
                 .filter(|factory| factory.name() == TouchBackendName::MaaTouch)
+                .collect(),
+        ),
+        TouchBackendChoice::Minitouch => select_fixed_priority(
+            requested,
+            factories
+                .into_iter()
+                .filter(|factory| factory.name() == TouchBackendName::Minitouch)
                 .collect(),
         ),
         TouchBackendChoice::AdbShellInput => select_fixed_priority(
@@ -467,9 +490,13 @@ fn selected_backend_from_probe(
     successful: &[(TouchBackendName, u128)],
 ) -> Option<TouchBackendName> {
     match requested {
-        TouchBackendChoice::Auto => [TouchBackendName::MaaTouch, TouchBackendName::AdbShellInput]
-            .into_iter()
-            .find(|name| successful.iter().any(|(backend, _)| backend == name)),
+        TouchBackendChoice::Auto => [
+            TouchBackendName::MaaTouch,
+            TouchBackendName::Minitouch,
+            TouchBackendName::AdbShellInput,
+        ]
+        .into_iter()
+        .find(|name| successful.iter().any(|(backend, _)| backend == name)),
         TouchBackendChoice::AutoFastest => successful
             .iter()
             .min_by_key(|(_backend, elapsed_ms)| *elapsed_ms)
@@ -477,6 +504,10 @@ fn selected_backend_from_probe(
         TouchBackendChoice::MaaTouch => successful
             .iter()
             .find(|(backend, _)| *backend == TouchBackendName::MaaTouch)
+            .map(|(backend, _)| *backend),
+        TouchBackendChoice::Minitouch => successful
+            .iter()
+            .find(|(backend, _)| *backend == TouchBackendName::Minitouch)
             .map(|(backend, _)| *backend),
         TouchBackendChoice::AdbShellInput => successful
             .iter()
@@ -626,6 +657,11 @@ fn default_touch_factories(config: TouchBackendConfig) -> Vec<Box<dyn TouchBacke
             target: config.target.clone(),
             maatouch_config: config.maatouch_config,
         }),
+        Box::new(MinitouchFactory {
+            adb_config: config.adb_config.clone(),
+            target: config.target.clone(),
+            minitouch_config: config.minitouch_config,
+        }),
         Box::new(AdbShellInputFactory {
             adb_config: config.adb_config,
             target: config.target,
@@ -689,6 +725,34 @@ impl TouchBackendFactory for MaaTouchFactory {
         let handshake = backend.handshake_info().cloned();
         Ok(ConnectedTouchBackend {
             name: TouchBackendName::MaaTouch,
+            backend: Box::new(backend),
+            device,
+            handshake,
+        })
+    }
+}
+
+struct MinitouchFactory {
+    adb_config: AdbConfig,
+    target: DeviceTarget,
+    minitouch_config: MinitouchConfig,
+}
+
+impl TouchBackendFactory for MinitouchFactory {
+    fn name(&self) -> TouchBackendName {
+        TouchBackendName::Minitouch
+    }
+
+    fn connect(&self) -> DeviceResult<ConnectedTouchBackend> {
+        let mut backend = MinitouchBackend::new(
+            self.adb_config.clone(),
+            self.target.clone(),
+            self.minitouch_config.clone(),
+        );
+        let device = backend.connect()?;
+        let handshake = backend.handshake_info().cloned();
+        Ok(ConnectedTouchBackend {
+            name: TouchBackendName::Minitouch,
             backend: Box::new(backend),
             device,
             handshake,
@@ -842,6 +906,19 @@ fn touch_bounds_from_device(
         });
     }
     touch_bounds_from_screen_size(&device.screen_size)
+}
+
+fn touch_bounds_for_backend(
+    backend: TouchBackendName,
+    handshake: Option<&HandshakeInfo>,
+    device: &DeviceInfo,
+) -> DeviceResult<TouchBounds> {
+    match backend {
+        TouchBackendName::Minitouch => touch_bounds_from_screen_size(&device.screen_size),
+        TouchBackendName::MaaTouch | TouchBackendName::AdbShellInput => {
+            touch_bounds_from_device(handshake, device)
+        }
+    }
 }
 
 fn touch_bounds_from_screen_size(screen_size: &str) -> DeviceResult<TouchBounds> {
@@ -1176,5 +1253,56 @@ mod tests {
                     && attempt.ok
                     && attempt.selected)
         );
+    }
+
+    #[test]
+    fn minitouch_in_priority_chain() {
+        let selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(
+                    TouchBackendName::MaaTouch,
+                    Err(DeviceError::transient("maatouch unavailable")),
+                    Ok(()),
+                ),
+                fake_factory(TouchBackendName::Minitouch, Ok(()), Ok(())),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        assert_eq!(selected.backend_name(), TouchBackendName::Minitouch);
+        assert_eq!(
+            selected.diagnostics().selected,
+            Some(TouchBackendName::Minitouch)
+        );
+        assert!(selected.diagnostics().attempts.iter().any(|attempt| {
+            attempt.backend == TouchBackendName::Minitouch && attempt.ok && attempt.selected
+        }));
+    }
+
+    #[test]
+    fn minitouch_transient_failure_degrades() {
+        let mut selected = select_fixed_priority(
+            TouchBackendChoice::Auto,
+            vec![
+                fake_factory(
+                    TouchBackendName::Minitouch,
+                    Ok(()),
+                    Err(DeviceError::transient("minitouch socket write failed")),
+                ),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        selected.tap(10, 20).expect("degraded to adb");
+
+        assert_eq!(selected.backend_name(), TouchBackendName::AdbShellInput);
+        assert!(selected.diagnostics().attempts.iter().any(|attempt| {
+            attempt.backend == TouchBackendName::Minitouch
+                && !attempt.ok
+                && attempt.fallback_backend == Some(TouchBackendName::AdbShellInput)
+        }));
     }
 }

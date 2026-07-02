@@ -1814,6 +1814,7 @@ mod tests {
 
     #[test]
     fn capture_autotune_caches_probe() {
+        let _guard = capture_probe_cache_test_guard();
         clear_capture_probe_cache_for_tests();
 
         let config = CaptureBackendConfig::new(
@@ -1856,6 +1857,7 @@ mod tests {
 
     #[test]
     fn capture_autotune_cache_expires_after_ttl() {
+        let _guard = capture_probe_cache_test_guard();
         clear_capture_probe_cache_for_tests();
         let config = CaptureBackendConfig::new(
             AdbConfig {
@@ -2040,6 +2042,13 @@ mod tests {
 
     fn clear_capture_probe_cache_for_tests() {
         capture_probe_cache().lock().expect("cache lock").clear();
+    }
+
+    fn capture_probe_cache_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("test lock")
     }
 
     fn rgb8_ids(ids: &[u8]) -> Vec<u8> {

@@ -717,6 +717,7 @@ fn ensure_touch_backend<'a>(
                 config.target.clone(),
                 config.maatouch.clone(),
             )
+            .with_minitouch_config(config.minitouch.clone())
             .with_requested(config.touch_backend),
         )?;
         let device = created.device_info().clone();

@@ -1320,7 +1320,7 @@ fn help_data() -> Value {
             "--runtime-endpoint <url>",
             "--capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc>",
             "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
-            "--touch-backend <auto|auto-fastest|maatouch|adb_shell_input>",
+            "--touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input>",
             "--require-session",
             "--dry-run",
             "--verbose",
@@ -4263,7 +4263,7 @@ fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "adb_stderr": output.stderr,
         "adb_path": resolved.path,
         "adb_source": resolved.source.as_str(),
-        "touch_backends": ["auto", "auto-fastest", "maatouch", "adb_shell_input"]
+        "touch_backends": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"]
     }))
 }
 
@@ -4279,7 +4279,7 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "schema_version": "Lab-1y.control.v1",
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
             "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
-            "touch_backend": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
+            "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
             "frame_store": {
                 "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
                 "tier1_ratio": "warning watermark; CLI --tier1-ratio",
@@ -4360,7 +4360,7 @@ fn parse_touch_backend_override(flags: &FlagArgs) -> CliOutcome<Option<TouchBack
     };
     if value == "true" {
         return Err(CliError::usage(
-            "--touch-backend expects auto, auto-fastest, maatouch, or adb_shell_input",
+            "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
         ));
     }
     TouchBackendChoice::parse(&value)
@@ -13236,7 +13236,7 @@ fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> 
         "required_fields": ["serial", "game", "server"],
         "recommended_fields": ["package", "adb_path", "capture_backend", "touch_backend"],
         "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc", "auto-fastest"],
-        "touch_backends": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
+        "touch_backends": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
         "instances": instances
     }))
 }

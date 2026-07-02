@@ -161,6 +161,7 @@ pub struct MaaTouchValidationConfig {
     pub adb: AdbConfig,
     pub target: DeviceTarget,
     pub maatouch: MaaTouchConfig,
+    pub minitouch: crate::MinitouchConfig,
     pub capture_backend: crate::CaptureBackendChoice,
     pub touch_backend: crate::TouchBackendChoice,
     pub touch_plan: TouchPlan,

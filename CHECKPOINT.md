@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A A1.1 Minitouch backend
+
+### Current status
+
+- Implemented the A1.1 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `f9be81ae68754eb8f03811654c52ab74ff0c14c2`.
+- Scope is limited to clean-room minitouch text-protocol input backend support, touch backend selection, diagnostics, NOTICE, and planning/checkpoint updates.
+- `MinitouchBackend` has been added as an optional `InputBackend`.
+- The default touch priority chain now includes `MaaTouch -> Minitouch -> adb_shell_input`.
+- Explicit `--touch-backend minitouch` parsing is wired through the Runtime CLI surfaces that share `TouchBackendChoice`.
+- Minitouch uses an operator-provided local binary path and does not vendor or commit minitouch binaries.
+- Minitouch transport/startup/handshake/write/flush failures are transient fallback-eligible; validation and coordinate mapping failures remain fatal.
+- NOTICE now records `openstf/minitouch` source and Apache-2.0 license provenance without copying upstream source code.
+- A previous A2 capture cache test was made deterministic with a test-only cache guard after full device tests exposed parallel-order sensitivity.
+- No capture runtime behavior changes, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new vendored binary was added.
+
+### Files changed
+
+- `crates/device/src/minitouch.rs`
+- `crates/device/src/lib.rs`
+- `crates/device/src/maatouch.rs`
+- `crates/device/src/touch.rs`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `apps/actinglab/src/main.rs`
+- `crates/device/src/capture.rs`
+- `NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-device minitouch`
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab touch_backend`
+- `cargo test -p actingcommand-device`
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`: passed.
+- `cargo test -p actingcommand-device minitouch`: passed, 5 tests.
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab touch_backend`: passed, 4 filtered tests.
+- `cargo test -p actingcommand-device`: passed, 50 tests.
+- `cargo clippy -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for the offline A1.1 implementation so far.
+- Live minitouch smoke requires an operator-provided local minitouch binary path.
+
+### Next step
+
+1. Commit and push this A1.1 unit with Runtime source plus `NOTICE.md`, `PLANS.md`, and `CHECKPOINT.md`.
+2. Continue the P6.5-A chain with A3 device discovery as a separate unit.
+
 ## 2026-07-02 P6.5-A A2 capture autotune and context-aware freshness
 
 ### Current status

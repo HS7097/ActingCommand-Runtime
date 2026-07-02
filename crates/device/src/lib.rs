@@ -12,6 +12,7 @@ pub mod capture;
 pub mod error;
 pub mod input;
 pub mod maatouch;
+pub mod minitouch;
 pub mod touch;
 
 pub use adb::*;
@@ -19,4 +20,5 @@ pub use capture::*;
 pub use error::*;
 pub use input::*;
 pub use maatouch::*;
+pub use minitouch::*;
 pub use touch::*;
