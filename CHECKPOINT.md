@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A O1 ProjectInterface
+
+### Current status
+
+- Implemented the O1 unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `889a0c0`.
+- Scope is limited to a declarative project assembly contract in `apps/actinglab`.
+- Added `ProjectInterface`, options, presets, operation specs, recognition specs, selections, and runnable config bindings.
+- `assemble_runnable_config` merges option defaults, preset options, and explicit user selections.
+- Presets can select an operation and recognition resources.
+- Explicit selections can override operation and append recognition resources.
+- Missing operation, missing recognition, unknown option, invalid option value, and malformed interface declarations fail visibly.
+- No resource repository was read or modified.
+- No resource execution, recognition execution, device access, scheduler mutation, UI, SQLite, OCR, NN, live recovery, game logic, upstream source copying, or new CLI surface was added.
+
+### Files changed
+
+- `apps/actinglab/src/project_interface.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git reset --hard origin/main`
+- `git clean -fd`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab project_interface`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `git diff --check`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `project_interface_assembles_runnable_config`: passed.
+- `project_interface_rejects_unknown_option_value`: passed.
+- `project_interface_rejects_missing_operation`: passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for O1 assembly-contract implementation.
+
+### Next step
+
+1. Run the public validation gate.
+2. Commit and push this O1 unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+3. Continue the P6.5-A chain with E FeatureMatch pre-research, A4 replay, or the R1/R3 OCR/NN decision gate as separate units.
+
 ## 2026-07-02 P6.5-A Phase 2 B recovery executor
 
 ### Current status

@@ -32,6 +32,7 @@ use zip::{ZipArchive, ZipWriter};
 mod frame_store;
 mod lab_run;
 mod package_build;
+pub mod project_interface;
 pub mod recovery_exec;
 mod resource_convert;
 

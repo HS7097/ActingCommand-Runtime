@@ -12,6 +12,20 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain O1
+
+The 2026-07-02 P6.5-A O1 ProjectInterface unit is implemented as a declarative assembly contract in ActingLab.
+
+Scope:
+
+- `apps/actinglab/src/project_interface.rs` defines `ProjectInterface`, options, presets, operation specs, recognition specs, selections, and runnable configs.
+- `assemble_runnable_config` merges option defaults, preset options, and user selections with validation.
+- Presets can select an operation and recognition resources.
+- User selections can override the operation and append recognition resources.
+- Missing operations, missing recognition refs, unknown options, invalid option values, and malformed interface declarations fail visibly.
+
+O1 is complete as an assembly-contract slice. It does not read resources, execute operations, run recognition, open devices, touch scheduler state, add UI, SQLite, OCR, NN, live recovery, game logic, upstream source copying, or a new CLI surface.
+
 ## Current P6.5-A MaaFramework fusion chain B
 
 The 2026-07-02 P6.5-A Phase 2 B recovery executor unit is implemented as a pure declarative recovery graph executor.
@@ -92,10 +106,10 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0, A2, A1.1, A3, and the first B recovery executor slice are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, A1.1, A3, the first B recovery executor slice, and O1 ProjectInterface are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
 - Phase 2 recognition/FeatureMatch work and any live recovery wiring beyond the pure executor.
-- Phase 3 OCR/NN, replay, and ProjectInterface gates before Lab-2 CLI.
+- Phase 3 OCR/NN and replay gates before Lab-2 CLI.
 
 ## Current P6.5-A1 device input fallback
 
