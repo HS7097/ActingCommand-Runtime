@@ -1,5 +1,62 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A Phase 2 B recovery executor
+
+### Current status
+
+- Implemented the first Phase 2 B unit from `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Runtime baseline before this unit: `1258e7d`.
+- Scope is limited to a pure declarative recovery graph executor in `apps/actinglab`.
+- Added `RecoveryGraph`, `RecoveryNode`, `RecoverySignal`, `DetectKind`, and `RecoveryAction`.
+- Recovery nodes support `next`, `on_error`, `save_on_error`, `reco_timeout`, and `action_escalation`.
+- `execute_recovery_graph` follows success to `next`, failure to `on_error`, and fails visibly when a failure has no recovery edge.
+- `wait_freezes` is modeled as an explicit recovery action primitive delegated to a caller-provided `RecoveryRuntime`.
+- `max_attempts` and `max_node_visits` stop unbounded retry or loop behavior.
+- No live recovery execution, capture, touch execution, app restart execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resource repository write, game logic, upstream source copying, or new CLI surface was added.
+
+### Files changed
+
+- `apps/actinglab/src/recovery_exec.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab recovery_exec`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `git diff --check`
+- Temporarily checked/moved `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` for CI-like validation; no backup remained afterward.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `recovery_follows_on_error_edge`: passed.
+- `recovery_wait_freezes_waits_until_stable`: passed.
+- `recovery_stops_at_max_attempts`: passed.
+- `recovery_detects_loop_before_unbounded_retry`: passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- None for this pure executor slice.
+- Live recovery wiring, resource-lane recovery JSON, and device execution remain separate follow-up work.
+
+### Next step
+
+1. Run the public validation gate.
+2. Commit and push this B unit with Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+3. Continue the P6.5-A chain with E FeatureMatch pre-research or the next Phase 3 gate as a separate unit.
+
 ## 2026-07-02 P6.5-A A3 device discovery
 
 ### Current status

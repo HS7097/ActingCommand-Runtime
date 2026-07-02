@@ -12,6 +12,21 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A MaaFramework fusion chain B
+
+The 2026-07-02 P6.5-A Phase 2 B recovery executor unit is implemented as a pure declarative recovery graph executor.
+
+Scope:
+
+- `apps/actinglab/src/recovery_exec.rs` defines `RecoveryGraph`, `RecoveryNode`, `RecoverySignal`, `DetectKind`, and `RecoveryAction`.
+- Recovery nodes support `next`, `on_error`, `save_on_error`, `reco_timeout`, and `action_escalation`.
+- `execute_recovery_graph` follows the MAA-style run result branch shape: detect/action success follows `next`, failure follows `on_error`, and missing `on_error` fails visibly.
+- `wait_freezes` is represented as an explicit recovery action primitive and is delegated to the caller-provided `RecoveryRuntime`.
+- `max_attempts` and `max_node_visits` bound recovery execution and report max-attempt or loop-detected status instead of retrying indefinitely.
+- The executor is device-independent and testable with a fake runtime.
+
+B is complete as the first pure executor slice. It does not add live recovery execution, capture, touch execution, app restart execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resource repository writes, game logic, upstream source copying, or a new CLI surface.
+
 ## Current P6.5-A MaaFramework fusion chain A3
 
 The 2026-07-02 P6.5-A A3 device discovery unit is implemented as clean-room Rust process-metadata discovery for MuMu devices.
@@ -77,9 +92,9 @@ Scope:
 - Shared touch coordinate validation runs before dispatch so `adb shell input` cannot bypass stricter MaaTouch coordinate bounds.
 - Touch diagnostics include attempt id, action, original backend, error reason, fallback backend, elapsed time, selection state, and WARNING-level fallback context.
 
-P0, A2, A1.1, and A3 are the completed units in the larger P6.5-A chain. Later chain work remains separate:
+P0, A2, A1.1, A3, and the first B recovery executor slice are the completed units in the larger P6.5-A chain. Later chain work remains separate:
 
-- Phase 2 recovery/recognition work.
+- Phase 2 recognition/FeatureMatch work and any live recovery wiring beyond the pure executor.
 - Phase 3 OCR/NN, replay, and ProjectInterface gates before Lab-2 CLI.
 
 ## Current P6.5-A1 device input fallback
