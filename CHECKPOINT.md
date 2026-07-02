@@ -7,6 +7,7 @@
 - Continued the P6.5-A R1 OCR gate after commit `f9c63a9`.
 - Implementation commit: `fe58141` (`runtime: add vision provider export audit`).
 - Checkpoint tag: `checkpoint/20260702-r1-provider-export-audit`.
+- GitHub Actions CI run `28584634563` passed after push.
 - Synced `main` from `origin/main`; the repository was already up to date before changes.
 - Added `apps/vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]`.
 - `--export-audit` parses PE export tables without loading DLLs or dependency libraries.
@@ -41,6 +42,11 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
 - `git commit -m "runtime: add vision provider export audit"`
+- `git commit -m "docs: record provider export audit checkpoint"`
+- `git tag checkpoint/20260702-r1-provider-export-audit 3680140`
+- `git push origin main`
+- `git push origin checkpoint/20260702-r1-provider-export-audit`
+- `gh run watch 28584634563 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -52,6 +58,7 @@
 - `cargo test --workspace`: passed with 482 tests.
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo build --release`: passed.
+- GitHub Actions CI run `28584634563`: passed.
 
 ### Current blocker
 
@@ -61,9 +68,8 @@
 
 ### Next step
 
-1. Tag and push the provider-export audit increment.
-2. Watch GitHub Actions for the pushed Runtime commits.
-3. Continue R1 by building or linking a reviewed OCR provider path that exports the ActingCommand JSON ABI and produces real OCR output.
+1. Continue R1 by building or linking a reviewed OCR provider path that exports the ActingCommand JSON ABI and produces real OCR output.
+2. Keep R1 fail-loud: no fake OCR success and no silent fallback while OCR artifacts are absent.
 
 ## 2026-07-02 P6.5-A R1 MAA OCR artifact audit and runtime-library contract
 
