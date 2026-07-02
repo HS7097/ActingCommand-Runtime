@@ -5,6 +5,8 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after commit `d273a09`.
+- Implementation commit: `4bc4474` (`runtime: add vision artifact lock report`).
+- GitHub Actions CI run `28579120873` passed after push.
 - Extended `apps/vision-provider-check` with `--artifact-lock` and optional `--lock-out <json>`.
 - Artifact lock mode loads the reviewed provider manifest, requires selected backend artifact files to exist, and records each artifact's backend, role, path, byte size, and SHA-256 hash.
 - The report includes `total_size_bytes` so release review can replace the earlier 150-250 MB estimate with exact local artifact evidence once reviewed provider/model/data files are supplied.
@@ -40,6 +42,8 @@
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
+- `git push origin main`
+- `gh run watch 28579120873 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -52,6 +56,7 @@
 - `cargo test --workspace`: passed.
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo build --release`: passed.
+- GitHub Actions CI run `28579120873`: passed.
 
 ### Current blocker
 
