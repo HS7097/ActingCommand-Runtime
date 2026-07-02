@@ -5,6 +5,8 @@
 ### Current status
 
 - Continued the R1/R3 OCR/NN gate after checkpoint tag `checkpoint/20260702-r1-r3-provider-check-cli`.
+- Implementation commit: `1e7bbf7` (`runtime: add vision provider smoke modes`).
+- GitHub Actions CI run `28577975728` passed after push.
 - Extended `apps/vision-provider-check` with real-provider smoke modes:
   - `--ocr-frame <png>` loads `FastDeployPpocrBackend` from the reviewed manifest and emits OCR JSON output when artifacts exist.
   - `--nn-frame <png>` loads `OnnxRuntimeBackend` from the reviewed manifest and emits NN JSON output when artifacts exist.
@@ -35,6 +37,8 @@
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo build --release`
+- `git push origin main`
+- `gh run watch 28577975728 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -48,6 +52,7 @@
 - `cargo test --workspace`: passed.
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo build --release`: passed.
+- GitHub Actions CI run `28577975728`: passed.
 
 ### Current blocker
 
