@@ -37,6 +37,10 @@ enum CheckMode {
         out: Option<PathBuf>,
     },
     AbiCheck,
+    ExportAudit {
+        library: PathBuf,
+        expectation: ExportExpectation,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +48,28 @@ enum BackendSelection {
     All,
     FastDeployPpocr,
     OnnxRuntime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportExpectation {
+    None,
+    FastDeployPpocrProvider,
+    OnnxRuntimeProvider,
+}
+
+impl ExportExpectation {
+    fn required_symbols(self) -> &'static [&'static str] {
+        match self {
+            ExportExpectation::None => &[],
+            ExportExpectation::FastDeployPpocrProvider => &[
+                "ac_fastdeploy_ppocr_read_text_json",
+                "ac_vision_free_buffer",
+            ],
+            ExportExpectation::OnnxRuntimeProvider => {
+                &["ac_onnxruntime_classify_json", "ac_vision_free_buffer"]
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +133,18 @@ struct AbiCheckReport {
 }
 
 #[derive(Debug, Serialize)]
+struct ExportAuditReport {
+    ok: bool,
+    library_path: String,
+    export_count: usize,
+    expected_symbols: Vec<&'static str>,
+    present_symbols: Vec<&'static str>,
+    missing_symbols: Vec<&'static str>,
+    msvc_cxx_symbol_count: usize,
+    sample_exports: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct ProviderAbiReport {
     id: &'static str,
     provider_library_path: String,
@@ -133,6 +171,7 @@ where
             serde_json::to_string_pretty(&run_artifact_lock(&options)?)
         }
         CheckMode::AbiCheck => serde_json::to_string_pretty(&run_abi_check(&options)?),
+        CheckMode::ExportAudit { .. } => serde_json::to_string_pretty(&run_export_audit(&options)?),
     }
     .map_err(|err| {
         VisionFfiError::fatal(
@@ -157,6 +196,9 @@ where
     let mut nn_model_id = None;
     let mut artifact_lock = false;
     let mut abi_check = false;
+    let mut export_audit = None;
+    let mut export_expectation = ExportExpectation::None;
+    let mut backend_set = false;
     let mut lock_out = None;
     let mut args = args.into_iter();
 
@@ -179,6 +221,7 @@ where
                     )
                 })?;
                 backend = parse_backend(&value)?;
+                backend_set = true;
             }
             "--require-existing" => require_existing = true,
             "--ocr-frame" => {
@@ -222,6 +265,24 @@ where
             }
             "--artifact-lock" => artifact_lock = true,
             "--abi-check" => abi_check = true,
+            "--export-audit" => {
+                let value = args.next().ok_or_else(|| {
+                    VisionFfiError::fatal(
+                        "vision-provider-check",
+                        "--export-audit requires a DLL path",
+                    )
+                })?;
+                export_audit = Some(PathBuf::from(value));
+            }
+            "--expect" => {
+                let value = args.next().ok_or_else(|| {
+                    VisionFfiError::fatal(
+                        "vision-provider-check",
+                        "--expect requires none, fastdeploy_ppocr_provider, or onnxruntime_provider",
+                    )
+                })?;
+                export_expectation = parse_export_expectation(&value)?;
+            }
             "--lock-out" => {
                 let value = args.next().ok_or_else(|| {
                     VisionFfiError::fatal(
@@ -262,6 +323,26 @@ where
             "--abi-check cannot be used with --artifact-lock, --ocr-frame, or --nn-frame",
         ));
     }
+    if export_audit.is_some()
+        && (artifact_lock || abi_check || ocr_frame.is_some() || nn_frame.is_some())
+    {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "--export-audit cannot be used with --artifact-lock, --abi-check, --ocr-frame, or --nn-frame",
+        ));
+    }
+    if export_audit.is_some() && (backend_set || require_existing || lock_out.is_some()) {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "--export-audit cannot be used with --backend, --require-existing, or --lock-out",
+        ));
+    }
+    if export_audit.is_none() && export_expectation != ExportExpectation::None {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "--expect requires --export-audit",
+        ));
+    }
     if ocr_region.is_some() && ocr_frame.is_none() {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
@@ -287,25 +368,33 @@ where
         ));
     }
 
-    let manifest = manifest.ok_or_else(|| {
-        VisionFfiError::fatal(
-            "vision-provider-check",
-            format!("--manifest is required\n{}", usage()),
-        )
-    })?;
-    let mode = match (abi_check, artifact_lock, ocr_frame, nn_frame) {
-        (true, false, None, None) => CheckMode::AbiCheck,
-        (false, true, None, None) => CheckMode::ArtifactLock { out: lock_out },
-        (false, false, Some(frame), None) => CheckMode::OcrSmoke {
+    let mode = match (export_audit, abi_check, artifact_lock, ocr_frame, nn_frame) {
+        (Some(library), false, false, None, None) => CheckMode::ExportAudit {
+            library,
+            expectation: export_expectation,
+        },
+        (None, true, false, None, None) => CheckMode::AbiCheck,
+        (None, false, true, None, None) => CheckMode::ArtifactLock { out: lock_out },
+        (None, false, false, Some(frame), None) => CheckMode::OcrSmoke {
             frame,
             region: ocr_region,
         },
-        (false, false, None, Some(frame)) => CheckMode::NnSmoke {
+        (None, false, false, None, Some(frame)) => CheckMode::NnSmoke {
             frame,
             model_id: nn_model_id,
         },
-        (false, false, None, None) => CheckMode::Manifest,
+        (None, false, false, None, None) => CheckMode::Manifest,
         _ => unreachable!("checked above"),
+    };
+    let manifest = if matches!(mode, CheckMode::ExportAudit { .. }) {
+        manifest.unwrap_or_default()
+    } else {
+        manifest.ok_or_else(|| {
+            VisionFfiError::fatal(
+                "vision-provider-check",
+                format!("--manifest is required\n{}", usage()),
+            )
+        })?
     };
 
     Ok(CheckOptions {
@@ -314,6 +403,18 @@ where
         require_existing,
         mode,
     })
+}
+
+fn parse_export_expectation(value: &str) -> VisionFfiResult<ExportExpectation> {
+    match value {
+        "none" => Ok(ExportExpectation::None),
+        "fastdeploy_ppocr_provider" => Ok(ExportExpectation::FastDeployPpocrProvider),
+        "onnxruntime_provider" => Ok(ExportExpectation::OnnxRuntimeProvider),
+        _ => Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("unsupported export expectation: {value}"),
+        )),
+    }
 }
 
 fn parse_backend(value: &str) -> VisionFfiResult<BackendSelection> {
@@ -546,6 +647,222 @@ fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
     })
 }
 
+fn run_export_audit(options: &CheckOptions) -> VisionFfiResult<ExportAuditReport> {
+    let CheckMode::ExportAudit {
+        library,
+        expectation,
+    } = &options.mode
+    else {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "export audit was called without --export-audit",
+        ));
+    };
+    let bytes = fs::read(library).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to read export audit library {}: {err}",
+                library.display()
+            ),
+        )
+    })?;
+    let exports = parse_pe_exports(&bytes)?;
+    let expected_symbols = expectation.required_symbols().to_vec();
+    let present_symbols: Vec<_> = expected_symbols
+        .iter()
+        .copied()
+        .filter(|symbol| exports.iter().any(|export| export == symbol))
+        .collect();
+    let missing_symbols: Vec<_> = expected_symbols
+        .iter()
+        .copied()
+        .filter(|symbol| !exports.iter().any(|export| export == symbol))
+        .collect();
+    let msvc_cxx_symbol_count = exports
+        .iter()
+        .filter(|export| export.starts_with('?') || export.starts_with("??"))
+        .count();
+    let sample_exports = exports.iter().take(80).cloned().collect();
+
+    Ok(ExportAuditReport {
+        ok: missing_symbols.is_empty(),
+        library_path: path_string(library),
+        export_count: exports.len(),
+        expected_symbols,
+        present_symbols,
+        missing_symbols,
+        msvc_cxx_symbol_count,
+        sample_exports,
+    })
+}
+
+fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
+    if bytes.len() < 0x40 {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "PE export audit input is too small",
+        ));
+    }
+    if &bytes[0..2] != b"MZ" {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "PE export audit input is not an MZ executable",
+        ));
+    }
+    let pe_offset = read_u32(bytes, 0x3c)? as usize;
+    require_range(bytes, pe_offset, 24, "PE header")?;
+    if &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "PE export audit input is missing PE signature",
+        ));
+    }
+    let coff_offset = pe_offset + 4;
+    let section_count = read_u16(bytes, coff_offset + 2)? as usize;
+    let optional_header_size = read_u16(bytes, coff_offset + 16)? as usize;
+    let optional_offset = coff_offset + 20;
+    require_range(
+        bytes,
+        optional_offset,
+        optional_header_size,
+        "PE optional header",
+    )?;
+    let magic = read_u16(bytes, optional_offset)?;
+    let data_directory_offset = match magic {
+        0x10b => optional_offset + 96,
+        0x20b => optional_offset + 112,
+        _ => {
+            return Err(VisionFfiError::fatal(
+                "vision-provider-check",
+                format!("unsupported PE optional header magic: 0x{magic:04x}"),
+            ));
+        }
+    };
+    require_range(bytes, data_directory_offset, 8, "PE export data directory")?;
+    let export_rva = read_u32(bytes, data_directory_offset)?;
+    if export_rva == 0 {
+        return Ok(Vec::new());
+    }
+    let section_table_offset = optional_offset + optional_header_size;
+    require_range(
+        bytes,
+        section_table_offset,
+        section_count.saturating_mul(40),
+        "PE section table",
+    )?;
+    let mut sections = Vec::with_capacity(section_count);
+    for index in 0..section_count {
+        let section_offset = section_table_offset + index * 40;
+        let virtual_size = read_u32(bytes, section_offset + 8)?;
+        let virtual_address = read_u32(bytes, section_offset + 12)?;
+        let raw_size = read_u32(bytes, section_offset + 16)?;
+        let raw_pointer = read_u32(bytes, section_offset + 20)?;
+        sections.push(PeSection {
+            virtual_address,
+            size: virtual_size.max(raw_size),
+            raw_pointer,
+        });
+    }
+
+    let export_offset = rva_to_offset(export_rva, &sections)?;
+    require_range(bytes, export_offset, 40, "PE export directory")?;
+    let name_count = read_u32(bytes, export_offset + 24)? as usize;
+    let names_rva = read_u32(bytes, export_offset + 32)?;
+    if name_count == 0 {
+        return Ok(Vec::new());
+    }
+    let names_offset = rva_to_offset(names_rva, &sections)?;
+    require_range(
+        bytes,
+        names_offset,
+        name_count.saturating_mul(4),
+        "PE export name table",
+    )?;
+
+    let mut exports = Vec::with_capacity(name_count);
+    for index in 0..name_count {
+        let name_rva = read_u32(bytes, names_offset + index * 4)?;
+        let name_offset = rva_to_offset(name_rva, &sections)?;
+        exports.push(read_c_string(bytes, name_offset)?);
+    }
+    exports.sort();
+    Ok(exports)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PeSection {
+    virtual_address: u32,
+    size: u32,
+    raw_pointer: u32,
+}
+
+fn rva_to_offset(rva: u32, sections: &[PeSection]) -> VisionFfiResult<usize> {
+    for section in sections {
+        let section_end = section.virtual_address.saturating_add(section.size);
+        if rva >= section.virtual_address && rva < section_end {
+            return Ok((section.raw_pointer + (rva - section.virtual_address)) as usize);
+        }
+    }
+    Err(VisionFfiError::fatal(
+        "vision-provider-check",
+        format!("PE export RVA is not mapped by any section: 0x{rva:x}"),
+    ))
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> VisionFfiResult<u16> {
+    require_range(bytes, offset, 2, "u16")?;
+    Ok(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> VisionFfiResult<u32> {
+    require_range(bytes, offset, 4, "u32")?;
+    Ok(u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ]))
+}
+
+fn read_c_string(bytes: &[u8], offset: usize) -> VisionFfiResult<String> {
+    if offset >= bytes.len() {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export string offset is out of bounds: {offset}"),
+        ));
+    }
+    let Some(end) = bytes[offset..].iter().position(|byte| *byte == 0) else {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            "PE export string is not null-terminated",
+        ));
+    };
+    let slice = &bytes[offset..offset + end];
+    String::from_utf8(slice.to_vec()).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export name is not valid UTF-8: {err}"),
+        )
+    })
+}
+
+fn require_range(bytes: &[u8], offset: usize, len: usize, label: &str) -> VisionFfiResult<()> {
+    let Some(end) = offset.checked_add(len) else {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export audit range overflow while reading {label}"),
+        ));
+    };
+    if end > bytes.len() {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export audit input ended while reading {label}"),
+        ));
+    }
+    Ok(())
+}
+
 fn collect_fastdeploy_artifacts(
     artifacts: &FastDeployPpocrArtifacts,
     out: &mut Vec<ArtifactLockEntry>,
@@ -765,7 +1082,7 @@ impl BackendSelection {
 }
 
 fn usage() -> &'static str {
-    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] | --abi-check]"
+    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] | --abi-check]\n       actingcommand-vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]"
 }
 
 #[cfg(test)]
@@ -899,6 +1216,54 @@ mod tests {
 
         assert_eq!(options.backend, BackendSelection::FastDeployPpocr);
         assert_eq!(options.mode, CheckMode::AbiCheck);
+    }
+
+    #[test]
+    fn parses_export_audit_without_manifest() {
+        let options = parse_args([
+            "--export-audit".to_string(),
+            "provider.dll".to_string(),
+            "--expect".to_string(),
+            "fastdeploy_ppocr_provider".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(options.manifest, PathBuf::new());
+        assert_eq!(
+            options.mode,
+            CheckMode::ExportAudit {
+                library: PathBuf::from("provider.dll"),
+                expectation: ExportExpectation::FastDeployPpocrProvider,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_expect_without_export_audit() {
+        let err = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--expect".to_string(),
+            "fastdeploy_ppocr_provider".to_string(),
+        ])
+        .expect_err("expect without export audit rejected");
+
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("--expect requires --export-audit"));
+    }
+
+    #[test]
+    fn rejects_export_audit_mixed_with_backend() {
+        let err = parse_args([
+            "--export-audit".to_string(),
+            "provider.dll".to_string(),
+            "--backend".to_string(),
+            "fastdeploy_ppocr".to_string(),
+        ])
+        .expect_err("mixed export audit rejected");
+
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(err.message().contains("--export-audit cannot be used"));
     }
 
     #[test]
@@ -1320,6 +1685,55 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn pe_export_parser_reads_synthetic_exports() {
+        let exports = parse_pe_exports(&synthetic_pe_with_exports(&[
+            "ac_vision_free_buffer",
+            "?CxxSymbol@@YAXXZ",
+        ]))
+        .expect("parse exports");
+
+        assert_eq!(
+            exports,
+            vec![
+                "?CxxSymbol@@YAXXZ".to_string(),
+                "ac_vision_free_buffer".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn export_audit_reports_missing_provider_symbols_without_fake_success() {
+        let root = temp_fixture_dir("export-audit");
+        let library = root.join("runtime.dll");
+        fs::write(
+            &library,
+            synthetic_pe_with_exports(&["?CxxSymbol@@YAXXZ", "ac_vision_free_buffer"]),
+        )
+        .expect("synthetic PE");
+
+        let report = run_export_audit(&CheckOptions {
+            manifest: PathBuf::new(),
+            backend: BackendSelection::All,
+            require_existing: false,
+            mode: CheckMode::ExportAudit {
+                library,
+                expectation: ExportExpectation::FastDeployPpocrProvider,
+            },
+        })
+        .expect("export audit");
+
+        assert!(!report.ok);
+        assert_eq!(report.export_count, 2);
+        assert_eq!(report.msvc_cxx_symbol_count, 1);
+        assert_eq!(report.present_symbols, vec!["ac_vision_free_buffer"]);
+        assert_eq!(
+            report.missing_symbols,
+            vec!["ac_fastdeploy_ppocr_read_text_json"]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn temp_fixture_dir(label: &str) -> PathBuf {
         let index = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -1337,6 +1751,54 @@ mod tests {
 
     fn json_path(path: &Path) -> String {
         path.display().to_string().replace('\\', "\\\\")
+    }
+
+    fn synthetic_pe_with_exports(exports: &[&str]) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 0x800];
+        bytes[0] = b'M';
+        bytes[1] = b'Z';
+        write_u32(&mut bytes, 0x3c, 0x80);
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84;
+        write_u16(&mut bytes, coff, 0x8664);
+        write_u16(&mut bytes, coff + 2, 1);
+        write_u16(&mut bytes, coff + 16, 240);
+        let optional = coff + 20;
+        write_u16(&mut bytes, optional, 0x20b);
+        let data_directory = optional + 112;
+        write_u32(&mut bytes, data_directory, 0x1000);
+        write_u32(&mut bytes, data_directory + 4, 0x80);
+        let section = optional + 240;
+        bytes[section..section + 6].copy_from_slice(b".rdata");
+        write_u32(&mut bytes, section + 8, 0x1000);
+        write_u32(&mut bytes, section + 12, 0x1000);
+        write_u32(&mut bytes, section + 16, 0x400);
+        write_u32(&mut bytes, section + 20, 0x200);
+
+        let export_dir = 0x200;
+        write_u32(&mut bytes, export_dir + 24, exports.len() as u32);
+        write_u32(&mut bytes, export_dir + 32, 0x1040);
+        let name_table = 0x240;
+        let mut string_offset = 0x260;
+        for (index, export) in exports.iter().enumerate() {
+            write_u32(
+                &mut bytes,
+                name_table + index * 4,
+                0x1000 + (string_offset - 0x200) as u32,
+            );
+            bytes[string_offset..string_offset + export.len()].copy_from_slice(export.as_bytes());
+            bytes[string_offset + export.len()] = 0;
+            string_offset += export.len() + 1;
+        }
+        bytes
+    }
+
+    fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     fn example_manifest_json() -> &'static str {
