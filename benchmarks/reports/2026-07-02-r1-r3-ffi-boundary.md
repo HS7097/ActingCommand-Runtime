@@ -19,7 +19,12 @@ This report records the P6.5-A R1/R3 route after Alice approved the recommended 
 - `VisionFrame`, `VisionRect`, OCR request/result, and NN request/result models.
 - Fail-loud unavailable OCR and NN backends.
 - Route decision metadata with the planned backend choices and size estimate.
-- Unit tests named `ocr_reads_text_from_frame` and `nn_classifies_frame`.
+- Dynamic-library adapter structs:
+  - `FastDeployPpocrBackend`, loading `ac_fastdeploy_ppocr_read_text_json`.
+  - `OnnxRuntimeBackend`, loading `ac_onnxruntime_classify_json`.
+- A shared owned-buffer ABI with paired `ac_vision_free_buffer`.
+- Unit tests named `ocr_reads_text_from_frame` and `nn_classifies_frame` through ABI-compatible test functions.
+- Fatal tests for non-zero provider status and missing provider libraries.
 
 ## Size delta
 
@@ -42,4 +47,4 @@ Before the next R1/R3 implementation step can be release-packaged, the exact art
 
 ## Validation expectation
 
-This report closes only the boundary skeleton sub-step. The full R1/R3 gate remains open until the real FastDeploy/PPOCR and ONNXRuntime-backed implementations produce OCR and NN results behind this boundary and pass the public workspace validation commands.
+This report closes the Rust-side FFI boundary and dynamic adapter sub-step. The full R1/R3 gate remains open until reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts produce OCR and NN results behind this boundary and pass the public workspace validation commands.

@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1/R3 callable FFI adapter
+
+### Current status
+
+- Continued the R1/R3 OCR/NN gate after commit `609fe42`.
+- Added a callable dynamic-library FFI adapter layer in `crates/vision-ffi/src/ffi.rs`.
+- `FastDeployPpocrBackend` now loads an OCR provider symbol named `ac_fastdeploy_ppocr_read_text_json`.
+- `OnnxRuntimeBackend` now loads an NN provider symbol named `ac_onnxruntime_classify_json`.
+- Both provider paths require a paired `ac_vision_free_buffer` symbol for owned response buffers.
+- The FFI path serializes current Rust request/result models as JSON at the boundary.
+- Missing libraries, missing symbols, malformed owned buffers, non-zero provider status, empty responses, and invalid provider JSON are fatal errors.
+- The required acceptance-named tests now exercise ABI-compatible function pointers instead of plain Rust-only test doubles.
+- No FastDeploy, PPOCR, ONNXRuntime, model, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or production OCR/NN provider binary was added.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/vision-ffi/Cargo.toml`
+- `crates/vision-ffi/src/lib.rs`
+- `crates/vision-ffi/src/ffi.rs`
+- `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- Re-read `C:\合作工作区\ActingCommand\TASK-P6.5-A-maa-fusion-chain.md`.
+- Re-read `crates/vision-ffi` files and existing crate manifests.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was absent before public validation, so no config backup needed restoration.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `git status --short --branch`
+- Searched the changed R1/R3 files for fallback/reconnect/retry/GPU/DirectML/unsafe markers.
+
+### Test results
+
+- `cargo test -p actingcommand-vision-ffi -- --nocapture`: passed with 9 tests, including:
+  - `ocr_reads_text_from_frame`
+  - `nn_classifies_frame`
+  - `ffi_nonzero_status_is_fatal`
+  - `missing_ffi_library_is_fatal`
+  - `unavailable_ocr_backend_fails_loudly`
+  - `unavailable_nn_backend_fails_loudly`
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed, including the updated `actingcommand-vision-ffi` suite.
+- `git diff --check`: passed.
+- FFI unsafe usage is isolated to `crates/vision-ffi/src/ffi.rs` and test ABI helpers, with safety comments on the dynamic library, symbol, pointer, and buffer ownership boundaries.
+- The changed production code does not add fallback, reconnect, retry, GPU, DirectML, UI, SQLite, device access, game logic, or upstream source copying.
+
+### Current blocker
+
+- No blocker for the callable FFI adapter layer.
+- Full R1/R3 remains open until reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts are available and prove real OCR/NN results behind this ABI.
+
+### Next step
+
+1. Commit and push the callable FFI adapter.
+2. Continue R1/R3 by attaching reviewed provider artifacts or by adding a separate provider crate once artifact paths and licenses are available.
+
 ## 2026-07-02 P6.5-A R1/R3 FFI boundary skeleton
 
 ### Current status
@@ -59,7 +131,7 @@
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo test --workspace`: passed, including the new `actingcommand-vision-ffi` test suite.
 - `git diff --check`: passed.
-- The R1/R3 boundary crate uses `#![forbid(unsafe_code)]`.
+- The initial R1/R3 boundary crate used `#![forbid(unsafe_code)]`; the later callable adapter layer replaces this with audited FFI-only unsafe blocks.
 - The changed boundary code does not add fallback, reconnect, retry, GPU, DirectML, UI, SQLite, device access, game logic, or upstream source copying.
 
 ### Current blocker

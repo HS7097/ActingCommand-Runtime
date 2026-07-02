@@ -7,8 +7,11 @@
 //! runtime callers cannot silently substitute mock recognition for production
 //! OCR or NN results.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod ffi;
+
+pub use ffi::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -415,48 +418,7 @@ fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> Visio
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Debug)]
-    struct TestOcrEngine;
-
-    impl OcrEngine for TestOcrEngine {
-        fn read_text(
-            &mut self,
-            request: OcrInferenceRequest,
-        ) -> VisionFfiResult<OcrInferenceResult> {
-            request.validate()?;
-            Ok(OcrInferenceResult {
-                text: "公开招募 09:00".to_string(),
-                blocks: vec![OcrTextBlock {
-                    text: "公开招募".to_string(),
-                    rect: request.region,
-                    confidence: Some(0.98),
-                }],
-                confidence: Some(0.98),
-                backend: VisionBackendKind::TestDouble,
-                warnings: Vec::new(),
-            })
-        }
-    }
-
-    #[derive(Debug)]
-    struct TestNnEngine;
-
-    impl NnEngine for TestNnEngine {
-        fn classify(
-            &mut self,
-            request: NnInferenceRequest,
-        ) -> VisionFfiResult<NnClassificationResult> {
-            request.validate()?;
-            Ok(NnClassificationResult {
-                labels: vec![NnLabel {
-                    label: request.labels[0].clone(),
-                    score: 0.97,
-                }],
-                backend: VisionBackendKind::TestDouble,
-            })
-        }
-    }
+    use std::slice;
 
     #[test]
     fn ocr_reads_text_from_frame() {
@@ -468,11 +430,21 @@ mod tests {
             languages: vec!["zh_cn".to_string()],
             timeout_ms: 1_000,
         };
-        let mut boundary = VisionFfiBoundary::new(TestOcrEngine, TestNnEngine);
+        let mut boundary = VisionFfiBoundary::new(
+            unsafe {
+                FastDeployPpocrBackend::from_raw_functions(
+                    fake_ocr_read_text_json,
+                    fake_free_buffer,
+                )
+            },
+            unsafe {
+                OnnxRuntimeBackend::from_raw_functions(fake_nn_classify_json, fake_free_buffer)
+            },
+        );
 
         let result = boundary.read_text(request).expect("ocr result");
 
-        assert_eq!(result.backend, VisionBackendKind::TestDouble);
+        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
         assert!(result.text.contains("公开招募"));
         assert_eq!(result.blocks.len(), 1);
     }
@@ -485,11 +457,21 @@ mod tests {
             labels: vec!["arknights.recruit".to_string(), "unknown".to_string()],
             timeout_ms: 1_000,
         };
-        let mut boundary = VisionFfiBoundary::new(TestOcrEngine, TestNnEngine);
+        let mut boundary = VisionFfiBoundary::new(
+            unsafe {
+                FastDeployPpocrBackend::from_raw_functions(
+                    fake_ocr_read_text_json,
+                    fake_free_buffer,
+                )
+            },
+            unsafe {
+                OnnxRuntimeBackend::from_raw_functions(fake_nn_classify_json, fake_free_buffer)
+            },
+        );
 
         let result = boundary.classify(request).expect("nn result");
 
-        assert_eq!(result.backend, VisionBackendKind::TestDouble);
+        assert_eq!(result.backend, VisionBackendKind::OnnxRuntime);
         assert_eq!(result.labels[0].label, "arknights.recruit");
         assert!(result.labels[0].score > 0.9);
     }
@@ -572,7 +554,128 @@ mod tests {
         assert_eq!(decision.expected_size_delta_mb, (150, 250));
     }
 
+    #[test]
+    fn ffi_nonzero_status_is_fatal() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions(fake_failing_json, fake_free_buffer)
+        };
+
+        let err = backend.read_text(request).expect_err("nonzero status");
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("status 7"));
+    }
+
+    #[test]
+    fn missing_ffi_library_is_fatal() {
+        let err = match FastDeployPpocrBackend::from_library_path("missing-fastdeploy-ppocr.dll") {
+            Ok(_) => panic!("missing library was accepted"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
+        assert!(err.message().contains("failed to load"));
+    }
+
     fn test_frame() -> VisionFrame {
         VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 12]).expect("test frame")
+    }
+
+    unsafe extern "C" fn fake_ocr_read_text_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        let request = read_ffi_request::<OcrInferenceRequest>(request_ptr, request_len);
+        write_ffi_response(
+            response_out,
+            &OcrInferenceResult {
+                text: "公开招募 09:00".to_string(),
+                blocks: vec![OcrTextBlock {
+                    text: "公开招募".to_string(),
+                    rect: request.region,
+                    confidence: Some(0.98),
+                }],
+                confidence: Some(0.98),
+                backend: VisionBackendKind::FastDeployPpocr,
+                warnings: Vec::new(),
+            },
+        )
+    }
+
+    unsafe extern "C" fn fake_nn_classify_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        let request = read_ffi_request::<NnInferenceRequest>(request_ptr, request_len);
+        write_ffi_response(
+            response_out,
+            &NnClassificationResult {
+                labels: vec![NnLabel {
+                    label: request.labels[0].clone(),
+                    score: 0.97,
+                }],
+                backend: VisionBackendKind::OnnxRuntime,
+            },
+        )
+    }
+
+    unsafe extern "C" fn fake_failing_json(
+        _request_ptr: *const u8,
+        _request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        write_ffi_response(response_out, "fake backend failure");
+        7
+    }
+
+    unsafe extern "C" fn fake_free_buffer(buffer: VisionFfiOwnedBuffer) {
+        if !buffer.data.is_null() {
+            // SAFETY: test fake backends allocate every returned buffer from a Vec<u8>
+            // and transfer its original length/capacity through VisionFfiOwnedBuffer.
+            unsafe {
+                drop(Vec::from_raw_parts(
+                    buffer.data,
+                    buffer.len,
+                    buffer.capacity,
+                ));
+            }
+        }
+    }
+
+    fn read_ffi_request<T>(request_ptr: *const u8, request_len: usize) -> T
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        // SAFETY: test callers pass a non-null request pointer and exact length
+        // produced by the production FFI adapter serialization path.
+        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len) };
+        serde_json::from_slice(bytes).expect("decode fake FFI request")
+    }
+
+    fn write_ffi_response<T>(response_out: *mut VisionFfiOwnedBuffer, response: &T) -> i32
+    where
+        T: Serialize + ?Sized,
+    {
+        let mut bytes = serde_json::to_vec(response).expect("encode fake FFI response");
+        let buffer = VisionFfiOwnedBuffer {
+            data: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            capacity: bytes.capacity(),
+        };
+        std::mem::forget(bytes);
+        // SAFETY: test callers pass a valid output pointer owned by the FFI adapter.
+        unsafe {
+            response_out.write(buffer);
+        }
+        0
     }
 }

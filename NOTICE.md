@@ -37,14 +37,14 @@ No upstream automation source code has been copied into this repository as part 
 
 - Intended role: future R1 OCR backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
-- Current status: no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
+- Current status: `FastDeployPpocrBackend` can dynamically load an ABI-compatible local provider library, but no FastDeploy, PPOCR, OCR model, OCR data, or upstream OCR source file is copied or redistributed in this increment.
 - Release boundary: before any release bundles these artifacts, update this NOTICE with the exact upstream project URLs, license texts, model/data terms, copied artifact paths, and redistribution obligations.
 
 ### ONNXRuntime
 
 - Intended role: future R3 NN backend behind `crates/vision-ffi`.
 - Local destination: none in this repository.
-- Current status: no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
+- Current status: `OnnxRuntimeBackend` can dynamically load an ABI-compatible local provider library, but no ONNXRuntime binary, NN model, NN data, or upstream NN source file is copied or redistributed in this increment.
 - Release boundary: GPU and DirectML are disabled for the selected route unless a later reviewed task explicitly enables them with lifecycle tests. Before any release bundles ONNXRuntime or models, update this NOTICE with exact licenses, binary provenance, model terms, copied artifact paths, and redistribution obligations.
 
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:

@@ -14,7 +14,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 
 ## Current P6.5-A MaaFramework fusion chain R1/R3
 
-The 2026-07-02 P6.5-A R1/R3 OCR/NN route is accepted as an FFI-boundary-first implementation path.
+The 2026-07-02 P6.5-A R1/R3 OCR/NN route is accepted as an FFI-boundary-first implementation path and now has a callable dynamic-library adapter surface.
 
 Scope:
 
@@ -24,10 +24,13 @@ Scope:
 - NN is routed toward ONNXRuntime.
 - GPU and DirectML are disabled for this route to avoid the known ONNX-GPU/DirectML lifetime risk described in the task file.
 - `UnavailableOcrBackend` and `UnavailableNnBackend` fail loudly when the real engines are not linked or configured.
-- Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through explicit test doubles.
+- `FastDeployPpocrBackend` dynamically loads an OCR provider exporting `ac_fastdeploy_ppocr_read_text_json`.
+- `OnnxRuntimeBackend` dynamically loads an NN provider exporting `ac_onnxruntime_classify_json`.
+- Both backends require a paired `ac_vision_free_buffer` symbol and treat missing libraries, missing symbols, malformed buffers, non-zero provider status, empty responses, and invalid JSON as fatal errors.
+- Unit tests cover the required `ocr_reads_text_from_frame` and `nn_classifies_frame` acceptance names through ABI-compatible test functions.
 - `benchmarks/reports/2026-07-02-r1-r3-ffi-boundary.md` records the boundary decision, size estimate, and redistribution boundary.
 
-This increment does not bundle FastDeploy, PPOCR, ONNXRuntime, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR/NN hot path. The next R1/R3 increment must attach the reviewed FastDeploy/PPOCR and ONNXRuntime artifacts behind this boundary and update NOTICE with the exact artifact licenses and redistribution terms before any release packaging.
+This increment does not bundle FastDeploy, PPOCR, ONNXRuntime, models, OCR data, upstream source code, UI, SQLite, scheduler behavior, device access, game logic, or a production OCR/NN provider library. The next R1/R3 increment must provide or link reviewed FastDeploy/PPOCR and ONNXRuntime provider artifacts behind this ABI and update NOTICE with the exact artifact licenses and redistribution terms before any release packaging.
 
 ## Current P6.5-A MaaFramework fusion chain E
 
