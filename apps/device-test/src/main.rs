@@ -2,8 +2,9 @@
 
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
-    Frame, InputBackend, MaaTouchBackend, MaaTouchValidationConfig, PixelFormat,
-    combine_operation_and_close, create_capture_backend, resolve_adb_path,
+    Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
+    TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
+    create_capture_backend, create_touch_backend, resolve_adb_path,
 };
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
@@ -195,10 +196,10 @@ fn run() -> DeviceResult<()> {
         _ => {}
     }
 
-    let mut backend = MaaTouchBackend::new(config.adb, config.target, config.maatouch);
+    let mut backend = create_touch_backend(touch_backend_config(&config))?;
 
     println!("Target device: {}", backend.serial());
-    let device = backend.connect()?;
+    let device = backend.device_info().clone();
     println!("Device state: {}", device.state);
     println!("Device screen: {}", device.screen_size);
     if let Some(handshake) = backend.handshake_info() {
@@ -211,6 +212,8 @@ fn run() -> DeviceResult<()> {
             handshake.pid
         );
     }
+    println!("Touch backend: {}", backend.backend_name().as_str());
+    print_touch_diagnostics(backend.diagnostics());
 
     let operation_result = run_commands(&mut backend, &commands);
     let close_result = backend.close();
@@ -218,6 +221,39 @@ fn run() -> DeviceResult<()> {
 
     println!("PASS");
     Ok(())
+}
+
+fn touch_backend_config(config: &MaaTouchValidationConfig) -> TouchBackendConfig {
+    TouchBackendConfig::new(
+        config.adb.clone(),
+        config.target.clone(),
+        config.maatouch.clone(),
+    )
+    .with_requested(config.touch_backend)
+}
+
+fn print_touch_diagnostics(diagnostics: &TouchBackendDiagnostics) {
+    println!(
+        "Touch backend requested: {} selected: {}",
+        diagnostics.requested.as_str(),
+        diagnostics
+            .selected
+            .map(TouchBackendName::as_str)
+            .unwrap_or("none")
+    );
+    for attempt in &diagnostics.attempts {
+        println!(
+            "touch_attempt backend={} ok={} elapsed_ms={} selected={} error_reason={}",
+            attempt.backend.as_str(),
+            attempt.ok,
+            attempt.elapsed_ms,
+            attempt.selected,
+            attempt.error_reason.as_deref().unwrap_or("")
+        );
+    }
+    for warning in &diagnostics.warnings {
+        println!("touch_warning={warning}");
+    }
 }
 
 fn resolve_adb_for_device_commands(
@@ -450,12 +486,7 @@ fn run_benchmark_command(
             DeviceError::fatal("benchmark could not capture a frame with any backend")
         })?;
 
-    let mut control_backend = MaaTouchBackend::new(
-        config.adb.clone(),
-        config.target.clone(),
-        config.maatouch.clone(),
-    );
-    let _device = control_backend.connect()?;
+    let mut control_backend = create_touch_backend(touch_backend_config(&config))?;
     let mut control_ms = Vec::with_capacity(options.rounds);
     for _ in 0..options.rounds {
         let started = Instant::now();
@@ -636,7 +667,7 @@ fn format_benchmark_report(
          screenshot_measurement=end_to_end_capture_plus_artifact_png\n\
          control_measurement=command_submission_only\n\
          control_roundtrip_available=false\n\
-         control_note=maatouch_reset_writes_only_no_device_ack\n\
+         control_note=touch_reset_submission_no_device_ack\n\
          control_submit_best_ms={}\n\
          control_submit_median_ms={}\n\
          control_submit_p90_ms={}\n\
@@ -1106,7 +1137,7 @@ fn task_error(err: actingcommand_task_loop::TaskLoopError) -> DeviceError {
     DeviceError::fatal(err.to_string())
 }
 
-fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> DeviceResult<()> {
+fn run_commands(backend: &mut dyn InputBackend, commands: &[DeviceCommand]) -> DeviceResult<()> {
     for command in commands {
         match *command {
             DeviceCommand::Reset => {
@@ -1133,37 +1164,37 @@ fn run_commands(backend: &mut MaaTouchBackend, commands: &[DeviceCommand]) -> De
             }
             DeviceCommand::Capture { .. } => {
                 return Err(DeviceError::fatal(
-                    "capture cannot run through MaaTouchBackend",
+                    "capture cannot run through touch input backend",
                 ));
             }
             DeviceCommand::Recognize { .. } => {
                 return Err(DeviceError::fatal(
-                    "recognize cannot run through MaaTouchBackend",
+                    "recognize cannot run through touch input backend",
                 ));
             }
             DeviceCommand::DetectPage { .. } => {
                 return Err(DeviceError::fatal(
-                    "detect-page cannot run through MaaTouchBackend",
+                    "detect-page cannot run through touch input backend",
                 ));
             }
             DeviceCommand::TaskDryRun { .. } => {
                 return Err(DeviceError::fatal(
-                    "task-dry-run cannot run through MaaTouchBackend",
+                    "task-dry-run cannot run through touch input backend",
                 ));
             }
             DeviceCommand::ProbeRun { .. } => {
                 return Err(DeviceError::fatal(
-                    "probe-run cannot run through MaaTouchBackend command list",
+                    "probe-run cannot run through touch input backend command list",
                 ));
             }
             DeviceCommand::Benchmark { .. } => {
                 return Err(DeviceError::fatal(
-                    "benchmark cannot run through MaaTouchBackend command list",
+                    "benchmark cannot run through touch input backend command list",
                 ));
             }
             DeviceCommand::Runner { .. } => {
                 return Err(DeviceError::fatal(
-                    "runner cannot run through MaaTouchBackend command list",
+                    "runner cannot run through touch input backend command list",
                 ));
             }
         }
@@ -1212,6 +1243,10 @@ where
             "--capture-backend" => {
                 let value = next_token(&tokens, &mut index, "--capture-backend")?;
                 cfg.capture_backend = CaptureBackendChoice::parse(&value)?;
+            }
+            "--touch-backend" => {
+                let value = next_token(&tokens, &mut index, "--touch-backend")?;
+                cfg.touch_backend = TouchBackendChoice::parse(&value)?;
             }
             "--command-timeout-ms" => {
                 cfg.adb.command_timeout = Duration::from_millis(parse_token(
@@ -1756,9 +1791,9 @@ fn print_help() {
          Multiple commands may be provided in one invocation and will reuse one MaaTouch session.\n\
          Capture is a single-shot adb exec-out screencap command and cannot be combined with touch commands.\n\
          Recognize, detect-page, and task-dry-run are read-only: offline scene mode does not connect to a device; capture mode uses the selected CaptureBackend.\n\
-         Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps only through MaaTouch.\n\
-         Benchmark compares adb_screencap, droidcast_raw, and nemu_ipc availability plus MaaTouch reset submission. Runner executes profile probes once and exits.\n\
-         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|adb|droidcast_raw|nemu_ipc> \\\n\
+         Probe-run is a controlled limited-resource probe: it captures, safety-checks, then taps through the touch backend selector.\n\
+         Benchmark compares adb_screencap, droidcast_raw, and nemu_ipc availability plus touch reset submission. Runner executes profile probes once and exits.\n\
+         Options: --adb --serial --host --port --local --remote --no-connect --no-push --capture-backend <auto|adb|droidcast_raw|nemu_ipc> --touch-backend <auto|auto-fastest|maatouch|adb_shell_input> \\\n\
          --command-timeout-ms --handshake-timeout-ms --shutdown-timeout-ms"
     );
 }
@@ -1876,6 +1911,21 @@ mod tests {
                 options: RecognizeOptions { capture: true, .. }
             }]
         ));
+    }
+
+    #[test]
+    fn parses_global_touch_backend_option() {
+        let (config, commands) = parse_args([
+            "--touch-backend".to_string(),
+            "adb_shell_input".to_string(),
+            "tap".to_string(),
+            "10".to_string(),
+            "20".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(config.touch_backend, TouchBackendChoice::AdbShellInput);
+        assert_eq!(commands, vec![DeviceCommand::Tap { x: 10, y: 20 }]);
     }
 
     #[test]

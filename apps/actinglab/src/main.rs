@@ -2,8 +2,9 @@
 
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    Frame, HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, PixelFormat,
-    combine_operation_and_close, create_capture_backend, resolve_adb_path,
+    Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
+    TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
+    create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
@@ -310,6 +311,7 @@ struct GlobalOptions {
     server: Option<String>,
     runtime_endpoint: Option<String>,
     capture_backend: Option<CaptureBackendChoice>,
+    touch_backend: Option<TouchBackendChoice>,
     require_session: bool,
     version: bool,
     // Daemon request handlers must execute local command implementations instead of
@@ -335,6 +337,7 @@ struct InstanceConfig {
     package: Option<String>,
     adb_path: Option<String>,
     capture_backend: Option<String>,
+    touch_backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -689,6 +692,8 @@ struct SessionCommandGlobal {
     server: Option<String>,
     resource_root: Option<String>,
     capture_backend: Option<String>,
+    #[serde(default)]
+    touch_backend: Option<String>,
     dry_run: bool,
 }
 
@@ -1163,6 +1168,17 @@ where
                         )
                     })?);
             }
+            "--touch-backend" => {
+                index += 1;
+                let value = require_raw(&raw, index, "--touch-backend")?;
+                global.touch_backend = Some(TouchBackendChoice::parse(&value).map_err(|err| {
+                    (
+                        "help".to_string(),
+                        global.json,
+                        CliError::usage(err.to_string()),
+                    )
+                })?);
+            }
             "--require-session" => global.require_session = true,
             "--version" => global.version = true,
             other => rest.push(other.to_string()),
@@ -1237,6 +1253,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "devices" => run_devices(&invocation.global, &invocation.args),
         [cmd] if cmd == "schema" => run_schema(&invocation.args),
         [cmd] if cmd == "list" => run_list(&invocation.global, &invocation.args),
+        [cmd] if cmd == "touch-probe" => run_touch_probe(&invocation.global, &invocation.args),
         [cmd] if cmd == "tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "swipe" => run_direct_touch(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "long-tap" => run_direct_touch(&invocation.global, cmd, &invocation.args),
@@ -1303,6 +1320,7 @@ fn help_data() -> Value {
             "--runtime-endpoint <url>",
             "--capture-backend <auto|adb|droidcast_raw|nemu_ipc>",
             "--backend <auto|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
+            "--touch-backend <auto|auto-fastest|maatouch|adb_shell_input>",
             "--require-session",
             "--dry-run",
             "--verbose",
@@ -4243,7 +4261,8 @@ fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "adb_stdout": output.stdout,
         "adb_stderr": output.stderr,
         "adb_path": resolved.path,
-        "adb_source": resolved.source.as_str()
+        "adb_source": resolved.source.as_str(),
+        "touch_backends": ["auto", "auto-fastest", "maatouch", "adb_shell_input"]
     }))
 }
 
@@ -4259,6 +4278,7 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "schema_version": "Lab-1y.control.v1",
             "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
             "capture_backend": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+            "touch_backend": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
             "frame_store": {
                 "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
                 "tier1_ratio": "warning watermark; CLI --tier1-ratio",
@@ -4308,6 +4328,43 @@ fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         }
         other => Err(CliError::usage(format!("unknown list kind: {other}"))),
     }
+}
+
+fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    flags.expect_positionals("touch-probe", 0)?;
+    let requested = parse_touch_backend_override(&flags)?;
+    let config = read_user_config()?;
+    let device_config = device_config(global, &config)?;
+    let requested = requested.unwrap_or(device_config.touch_backend);
+    let report = touch_probe_report(
+        device_config
+            .touch_backend_config()
+            .with_requested(requested),
+    );
+    Ok(json!({
+        "status": if report.selected.is_some() { "available" } else { "unavailable" },
+        "mode": "touch_probe",
+        "requested_backend": requested.as_str(),
+        "selected_backend": report.selected.map(actingcommand_device::TouchBackendName::as_str),
+        "action_executed": false,
+        "touch_backend_attempts": touch_attempts_json(&report),
+        "touch_backend_warnings": report.warnings
+    }))
+}
+
+fn parse_touch_backend_override(flags: &FlagArgs) -> CliOutcome<Option<TouchBackendChoice>> {
+    let Some(value) = flags.optional("--touch-backend") else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "--touch-backend expects auto, auto-fastest, maatouch, or adb_shell_input",
+        ));
+    }
+    TouchBackendChoice::parse(&value)
+        .map(Some)
+        .map_err(|err| CliError::usage(err.to_string()))
 }
 
 fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -5055,7 +5112,7 @@ impl DirectTouchCommand {
         }
     }
 
-    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
         match *self {
             Self::Tap { x, y } => backend.tap(x, y),
             Self::Swipe {
@@ -5110,6 +5167,22 @@ fn handshake_json(handshake: HandshakeInfo) -> Value {
     })
 }
 
+fn touch_attempts_json(diagnostics: &TouchBackendDiagnostics) -> Value {
+    json!(
+        diagnostics
+            .attempts
+            .iter()
+            .map(|attempt| json!({
+                "backend": attempt.backend.as_str(),
+                "ok": attempt.ok,
+                "elapsed_ms": attempt.elapsed_ms,
+                "error_reason": attempt.error_reason.as_deref(),
+                "selected": attempt.selected
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
 fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if should_route_control_via_session_daemon(global, &flags)? {
@@ -5118,15 +5191,10 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
     let command = DirectTouchCommand::parse(command, &flags)?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
-    let mut backend = MaaTouchBackend::new(
-        device_config.adb,
-        device_config.target,
-        MaaTouchConfig::default(),
-    );
-    let serial = backend.serial().to_string();
-    let device = backend
-        .connect()
+    let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
+    let serial = backend.serial().to_string();
+    let device = backend.device_info().clone();
     let handshake = backend.handshake_info().cloned();
     let operation = command.run(&mut backend);
     let close = backend.close();
@@ -5134,7 +5202,10 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": "maatouch",
+        "backend": backend.backend_name().as_str(),
+        "touch_backend_requested": device_config.touch_backend.as_str(),
+        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
+        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "direct_trusted_manual",
         "safety_gate": "not_required_for_manual_control",
         "serial": serial,
@@ -5153,15 +5224,10 @@ fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> C
     let command = DirectInputCommand::parse(command, &flags)?;
     let config = read_user_config()?;
     let device_config = device_config(global, &config)?;
-    let mut backend = MaaTouchBackend::new(
-        device_config.adb,
-        device_config.target,
-        MaaTouchConfig::default(),
-    );
-    let serial = backend.serial().to_string();
-    let device = backend
-        .connect()
+    let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
+    let serial = backend.serial().to_string();
+    let device = backend.device_info().clone();
     let handshake = backend.handshake_info().cloned();
     let operation = command.run(&mut backend);
     let close = backend.close();
@@ -5169,7 +5235,10 @@ fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> C
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": "maatouch",
+        "backend": backend.backend_name().as_str(),
+        "touch_backend_requested": device_config.touch_backend.as_str(),
+        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
+        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "direct_trusted_manual",
         "safety_gate": "not_required_for_manual_control",
         "serial": serial,
@@ -5210,7 +5279,7 @@ impl DirectInputCommand {
         }
     }
 
-    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
         match self {
             Self::Key(key) => backend.key(key),
             Self::Text(text) => backend.text(text),
@@ -5307,7 +5376,7 @@ impl StreamInputRelayAction {
         }
     }
 
-    fn run(&self, backend: &mut MaaTouchBackend) -> actingcommand_device::DeviceResult<()> {
+    fn run(&self, backend: &mut dyn InputBackend) -> actingcommand_device::DeviceResult<()> {
         match self {
             Self::Touch(command) => command.run(backend),
             Self::Input(command) => command.run(backend),
@@ -5368,15 +5437,10 @@ fn run_stream_input_relay(
         }));
     }
     let device_config = device_config(global, config)?;
-    let mut backend = MaaTouchBackend::new(
-        device_config.adb,
-        device_config.target,
-        MaaTouchConfig::default(),
-    );
-    let serial = backend.serial().to_string();
-    let device = backend
-        .connect()
+    let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
+    let serial = backend.serial().to_string();
+    let device = backend.device_info().clone();
     let handshake = backend.handshake_info().cloned();
     let operation = actions
         .iter()
@@ -5386,7 +5450,10 @@ fn run_stream_input_relay(
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": "maatouch",
+        "backend": backend.backend_name().as_str(),
+        "touch_backend_requested": device_config.touch_backend.as_str(),
+        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
+        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "stream_input_relay",
         "serial": serial,
         "device_state": device.state,
@@ -6921,15 +6988,10 @@ fn send_semantic_input(
     input: &SemanticInput,
 ) -> CliOutcome<Value> {
     let device_config = device_config(global, config)?;
-    let mut backend = MaaTouchBackend::new(
-        device_config.adb,
-        device_config.target,
-        MaaTouchConfig::default(),
-    );
-    let serial = backend.serial().to_string();
-    let device = backend
-        .connect()
+    let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
+    let serial = backend.serial().to_string();
+    let device = backend.device_info().clone();
     let handshake = backend.handshake_info().cloned();
     let operation = match input {
         SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
@@ -6944,7 +7006,10 @@ fn send_semantic_input(
     combine_operation_and_close(operation, close)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
-        "backend": "maatouch",
+        "backend": backend.backend_name().as_str(),
+        "touch_backend_requested": device_config.touch_backend.as_str(),
+        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
+        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "semantic",
         "serial": serial,
         "device_state": device.state,
@@ -13041,12 +13106,14 @@ fn session_instance_registry_diagnostics(config: Option<&UserConfig>) -> Value {
                 "package": instance.package,
                 "adb_path": instance.adb_path,
                 "capture_backend": instance.capture_backend,
+                "touch_backend": instance.touch_backend,
                 "serial_configured": instance.serial.is_some(),
                 "game_configured": instance.game.is_some(),
                 "server_configured": instance.server.is_some(),
                 "package_configured": instance.package.is_some(),
                 "adb_path_configured": instance.adb_path.is_some(),
-                "capture_backend_configured": instance.capture_backend.is_some()
+                "capture_backend_configured": instance.capture_backend.is_some(),
+                "touch_backend_configured": instance.touch_backend.is_some()
             })
         })
         .collect::<Vec<_>>();
@@ -13069,8 +13136,9 @@ fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> 
         "available": true,
         "count": instances.len(),
         "required_fields": ["serial", "game", "server"],
-        "recommended_fields": ["package", "adb_path", "capture_backend"],
+        "recommended_fields": ["package", "adb_path", "capture_backend", "touch_backend"],
         "capture_backends": ["auto", "adb", "droidcast_raw", "nemu_ipc"],
+        "touch_backends": ["auto", "auto-fastest", "maatouch", "adb_shell_input"],
         "instances": instances
     }))
 }
@@ -13087,6 +13155,17 @@ fn session_instance_registry_entry(id: &str, instance: &InstanceConfig) -> CliOu
             .to_string(),
         None => CaptureBackendChoice::Auto.as_str().to_string(),
     };
+    let effective_touch_backend = match instance.touch_backend.as_deref() {
+        Some(value) => TouchBackendChoice::parse(value)
+            .map_err(|err| {
+                CliError::usage(format!(
+                    "invalid instance.{id}.touch_backend '{value}': {err}"
+                ))
+            })?
+            .as_str()
+            .to_string(),
+        None => TouchBackendChoice::Auto.as_str().to_string(),
+    };
     let missing_required_fields = instance_missing_required_fields(instance);
     let missing_recommended_fields = instance_missing_recommended_fields(instance);
     Ok(json!({
@@ -13097,16 +13176,19 @@ fn session_instance_registry_entry(id: &str, instance: &InstanceConfig) -> CliOu
         "package": instance.package,
         "adb_path": instance.adb_path,
         "capture_backend": instance.capture_backend,
+        "touch_backend": instance.touch_backend,
         "configured": {
             "serial": instance.serial.is_some(),
             "game": instance.game.is_some(),
             "server": instance.server.is_some(),
             "package": instance.package.is_some(),
             "adb_path": instance.adb_path.is_some(),
-            "capture_backend": instance.capture_backend.is_some()
+            "capture_backend": instance.capture_backend.is_some(),
+            "touch_backend": instance.touch_backend.is_some()
         },
         "effective": {
             "capture_backend": effective_capture_backend,
+            "touch_backend": effective_touch_backend,
             "adb_path": instance.adb_path,
             "adb_path_source": if instance.adb_path.is_some() { "instance_config" } else { "resolver_default" }
         },
@@ -13134,6 +13216,7 @@ fn instance_missing_recommended_fields(instance: &InstanceConfig) -> Vec<&'stati
         ("package", instance.package.is_none()),
         ("adb_path", instance.adb_path.is_none()),
         ("capture_backend", instance.capture_backend.is_none()),
+        ("touch_backend", instance.touch_backend.is_none()),
     ]
     .into_iter()
     .filter_map(|(field, missing)| missing.then_some(field))
@@ -15011,6 +15094,9 @@ impl SessionCommandGlobal {
             capture_backend: global
                 .capture_backend
                 .map(|backend| backend.as_str().to_string()),
+            touch_backend: global
+                .touch_backend
+                .map(|backend| backend.as_str().to_string()),
             dry_run: global.dry_run,
         }
     }
@@ -15022,12 +15108,19 @@ impl SessionCommandGlobal {
             .map(CaptureBackendChoice::parse)
             .transpose()
             .map_err(|err| CliError::usage(err.to_string()))?;
+        let touch_backend = self
+            .touch_backend
+            .as_deref()
+            .map(TouchBackendChoice::parse)
+            .transpose()
+            .map_err(|err| CliError::usage(err.to_string()))?;
         Ok(GlobalOptions {
             instance: self.instance.clone(),
             game: self.game.clone(),
             server: self.server.clone(),
             resource_root: self.resource_root.as_ref().map(PathBuf::from),
             capture_backend,
+            touch_backend,
             dry_run: self.dry_run,
             json: true,
             inside_session_daemon: true,
@@ -20663,10 +20756,12 @@ fn device_config_for_instance(
         ..Default::default()
     };
     let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
+    let touch_backend = effective_touch_backend_choice(global, &instance_id, instance)?;
     Ok(DeviceRuntimeConfig {
         adb,
         target,
         capture_backend,
+        touch_backend,
     })
 }
 
@@ -20675,12 +20770,22 @@ struct DeviceRuntimeConfig {
     adb: AdbConfig,
     target: DeviceTarget,
     capture_backend: CaptureBackendChoice,
+    touch_backend: TouchBackendChoice,
 }
 
 impl DeviceRuntimeConfig {
     fn capture_backend_config(&self) -> CaptureBackendConfig {
         CaptureBackendConfig::new(self.adb.clone(), self.target.clone())
             .with_requested(self.capture_backend)
+    }
+
+    fn touch_backend_config(&self) -> TouchBackendConfig {
+        TouchBackendConfig::new(
+            self.adb.clone(),
+            self.target.clone(),
+            MaaTouchConfig::default(),
+        )
+        .with_requested(self.touch_backend)
     }
 }
 
@@ -20698,6 +20803,24 @@ fn effective_capture_backend_choice(
     CaptureBackendChoice::parse(value).map_err(|err| {
         CliError::usage(format!(
             "invalid instance.{instance_id}.capture_backend '{value}': {err}"
+        ))
+    })
+}
+
+fn effective_touch_backend_choice(
+    global: &GlobalOptions,
+    instance_id: &str,
+    instance: Option<&InstanceConfig>,
+) -> CliOutcome<TouchBackendChoice> {
+    if let Some(choice) = global.touch_backend {
+        return Ok(choice);
+    }
+    let Some(value) = instance.and_then(|instance| instance.touch_backend.as_deref()) else {
+        return Ok(TouchBackendChoice::Auto);
+    };
+    TouchBackendChoice::parse(value).map_err(|err| {
+        CliError::usage(format!(
+            "invalid instance.{instance_id}.touch_backend '{value}': {err}"
         ))
     })
 }
@@ -21951,7 +22074,7 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend",
+            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend",
         ));
     }
     let instance = config.instances.get(parts[1]);
@@ -21962,6 +22085,7 @@ fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
         "package" => instance.and_then(|instance| instance.package.clone()),
         "adb_path" => instance.and_then(|instance| instance.adb_path.clone()),
         "capture_backend" => instance.and_then(|instance| instance.capture_backend.clone()),
+        "touch_backend" => instance.and_then(|instance| instance.touch_backend.clone()),
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     };
     Ok(json!(value))
@@ -21971,7 +22095,7 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
     let parts = key.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend",
+            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend",
         ));
     }
     let instance = config.instances.entry(parts[1].to_string()).or_default();
@@ -21984,6 +22108,10 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
         "capture_backend" => {
             CaptureBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;
             instance.capture_backend = Some(value.to_string());
+        }
+        "touch_backend" => {
+            TouchBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;
+            instance.touch_backend = Some(value.to_string());
         }
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     }
@@ -22882,6 +23010,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("operation explain", ["offline"], "available"),
         command_cap("status", ["running_runtime"], "available"),
         command_cap("devices", ["device"], "available"),
+        command_cap("touch-probe", ["device"], "available"),
         command_cap("tap", ["device"], "available"),
         command_cap("swipe", ["device"], "available"),
         command_cap("long-tap", ["device"], "available"),
@@ -24660,6 +24789,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -25141,6 +25271,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         unsafe {
@@ -25203,6 +25334,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
             },
         );
         config.instances.insert(
@@ -25214,6 +25346,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -25310,6 +25443,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -25366,6 +25500,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -25484,6 +25619,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -25554,6 +25690,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -25643,6 +25780,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let queue_request = SessionCommandRequest {
@@ -25740,6 +25878,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -26096,6 +26235,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "2".to_string()],
@@ -26207,6 +26347,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "2".to_string()],
@@ -27109,6 +27250,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -27266,6 +27408,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -27326,6 +27469,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -27383,6 +27527,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -27525,6 +27670,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -27724,6 +27870,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -27736,6 +27883,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["status".to_string()],
@@ -28138,6 +28286,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -28407,6 +28556,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -28478,6 +28628,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let policy_request = SessionCommandRequest {
@@ -28677,6 +28828,7 @@ mod tests {
                 server: Some("jp".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -28752,6 +28904,7 @@ mod tests {
             server: Some("jp".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let policy_request = SessionCommandRequest {
@@ -28939,6 +29092,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -29046,6 +29200,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let policy_request = SessionCommandRequest {
@@ -29433,6 +29588,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -29535,6 +29691,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -29863,6 +30020,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -30098,6 +30256,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -30209,6 +30368,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let policy_request = SessionCommandRequest {
@@ -30452,6 +30612,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -32278,6 +32439,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -32326,6 +32488,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -32537,6 +32700,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -37455,6 +37619,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -37489,6 +37654,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -37586,6 +37752,7 @@ mod tests {
                     server: None,
                     resource_root: None,
                     capture_backend: None,
+                    touch_backend: None,
                     dry_run: false,
                 },
                 args,
@@ -37611,6 +37778,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -37640,6 +37808,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -37669,6 +37838,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -37697,6 +37867,7 @@ mod tests {
                     server: None,
                     resource_root: None,
                     capture_backend: None,
+                    touch_backend: None,
                     dry_run: false,
                 },
                 args: vec![action.to_string()],
@@ -37730,6 +37901,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -37765,6 +37937,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["back".to_string()],
@@ -37792,6 +37965,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--recover".to_string(), "--capture".to_string()],
@@ -37824,6 +37998,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--recover".to_string(), "--capture".to_string()],
@@ -37851,6 +38026,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--recover".to_string(), "--capture".to_string()],
@@ -37905,6 +38081,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--diagnostics".to_string()],
@@ -38032,6 +38209,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: Some("C:\\Tools\\adb.exe".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
+                touch_backend: None,
             },
         );
 
@@ -38835,6 +39013,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec![
@@ -38865,6 +39044,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec![
@@ -38922,6 +39102,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec![
@@ -38975,6 +39156,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -39330,6 +39512,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["get".to_string(), "daemon_response".to_string()],
@@ -39382,6 +39565,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -39428,6 +39612,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let ba_global = SessionCommandGlobal {
@@ -39436,6 +39621,7 @@ mod tests {
             server: Some("jp".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, global, lease_holder, ok, completed_at_unix_ms) in [
@@ -39568,6 +39754,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -39650,6 +39837,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -39782,6 +39970,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -39842,6 +40031,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let first = SessionCommandRequest {
@@ -39937,6 +40127,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for request_id in ["event-a", "event-b"] {
@@ -40009,6 +40200,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, command, completed_at_unix_ms) in [
@@ -40091,6 +40283,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, command, data, completed_at_unix_ms) in [
@@ -40241,6 +40434,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let command_check_request = SessionCommandRequest {
@@ -40365,6 +40559,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -40374,6 +40569,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let submit_plan_request = SessionCommandRequest {
@@ -40506,6 +40702,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -40515,6 +40712,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let phase_c_plan_request = SessionCommandRequest {
@@ -40636,6 +40834,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let readiness_request = SessionCommandRequest {
@@ -40747,6 +40946,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let bootstrap_request = SessionCommandRequest {
@@ -40859,6 +41059,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, command, ok, completed_at_unix_ms) in [
@@ -40953,6 +41154,7 @@ mod tests {
             server: Some("cn-bilibili".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let ba_global = SessionCommandGlobal {
@@ -40961,6 +41163,7 @@ mod tests {
             server: Some("jp".to_string()),
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, command, global, completed_at_unix_ms) in [
@@ -41043,6 +41246,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         for (request_id, lease_holder, completed_at_unix_ms) in [
@@ -41126,6 +41330,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--status".to_string(), "waiting".to_string()],
@@ -41149,6 +41354,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let request = SessionCommandRequest {
@@ -41203,6 +41409,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -41295,6 +41502,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: None,
                 capture_backend: Some("nemu_ipc".to_string()),
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -41307,6 +41515,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["registry".to_string()],
@@ -41341,6 +41550,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -41493,6 +41703,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -42058,6 +42269,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -42166,6 +42378,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let acquire = SessionCommandRequest {
@@ -42233,6 +42446,7 @@ mod tests {
             server: None,
             resource_root: None,
             capture_backend: None,
+            touch_backend: None,
             dry_run: false,
         };
         let start = SessionCommandRequest {
@@ -43279,6 +43493,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -43460,6 +43675,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--diagnostics".to_string()],
@@ -43560,6 +43776,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -43625,6 +43842,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -43671,6 +43889,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -43721,6 +43940,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -43784,6 +44004,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["100".to_string(), "200".to_string()],
@@ -43879,6 +44100,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -43943,6 +44165,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "1".to_string()],
@@ -44000,6 +44223,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--diagnostics".to_string()],
@@ -44101,6 +44325,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44230,6 +44455,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "1".to_string()],
@@ -44283,6 +44509,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44421,6 +44648,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: Vec::new(),
@@ -44437,6 +44665,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -44477,6 +44706,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44497,6 +44727,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["get".to_string(), "daemon-queued".to_string()],
@@ -44528,6 +44759,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--diagnostics".to_string()],
@@ -44548,6 +44780,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "1".to_string()],
@@ -44586,6 +44819,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44679,6 +44913,7 @@ mod tests {
                     server: None,
                     resource_root: None,
                     capture_backend: None,
+                    touch_backend: None,
                     dry_run: false,
                 },
                 args: Vec::new(),
@@ -44747,6 +44982,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44806,6 +45042,7 @@ mod tests {
                     server: Some("jp".to_string()),
                     resource_root: None,
                     capture_backend: None,
+                    touch_backend: None,
                     dry_run: false,
                 },
                 args: Vec::new(),
@@ -44906,6 +45143,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -44926,6 +45164,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["list".to_string(), "--limit".to_string(), "5".to_string()],
@@ -44990,6 +45229,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -45024,6 +45264,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: Vec::new(),
@@ -45070,6 +45311,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -45354,6 +45596,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: Some("adb".to_string()),
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec!["--stale-capture".to_string()],
@@ -45396,6 +45639,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec![
@@ -45430,6 +45674,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -45455,6 +45700,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--require-fresh".to_string()],
@@ -45478,6 +45724,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: Some("nemu_ipc".to_string()),
+                touch_backend: None,
                 dry_run: true,
             },
             args: vec!["--max-frames".to_string(), "1".to_string()],
@@ -46330,6 +46577,7 @@ mod tests {
                 server: Some("cn-bilibili".to_string()),
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             }),
             args: vec!["10".to_string(), "20".to_string()],
@@ -46423,6 +46671,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: Some("C:\\Tools\\adb.exe".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -46514,6 +46763,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -46839,6 +47089,7 @@ mod tests {
                 package: Some("com.hypergryph.arknights.bilibili".to_string()),
                 adb_path: Some("C:\\Tools\\adb.exe".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
+                touch_backend: None,
             },
         );
         config.instances.insert(
@@ -46850,6 +47101,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: None,
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -46923,6 +47175,7 @@ mod tests {
                 package: None,
                 adb_path: None,
                 capture_backend: Some("not-a-backend".to_string()),
+                touch_backend: None,
             },
         );
         write_user_config(&config).unwrap();
@@ -47985,6 +48238,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -48025,6 +48279,7 @@ mod tests {
                 server: None,
                 resource_root: None,
                 capture_backend: None,
+                touch_backend: None,
                 dry_run: false,
             },
             args: vec![
@@ -49035,6 +49290,50 @@ mod tests {
     }
 
     #[test]
+    fn touch_backend_flag_is_global_even_after_subcommand() {
+        let invocation = parse_invocation(
+            [
+                "--json",
+                "tap",
+                "10",
+                "20",
+                "--touch-backend",
+                "adb_shell_input",
+            ],
+            true,
+        )
+        .expect("invocation");
+
+        assert_eq!(
+            invocation.global.touch_backend,
+            Some(TouchBackendChoice::AdbShellInput)
+        );
+        assert_eq!(invocation.command, ["tap"]);
+        assert_eq!(invocation.args, ["10", "20"]);
+    }
+
+    #[test]
+    fn session_command_global_preserves_touch_backend_choice() {
+        let global = GlobalOptions {
+            instance: Some("ak-b".to_string()),
+            touch_backend: Some(TouchBackendChoice::AdbShellInput),
+            ..Default::default()
+        };
+
+        let session_global = SessionCommandGlobal::from_global(&global);
+        let restored = session_global.to_global().expect("session global");
+
+        assert_eq!(
+            session_global.touch_backend.as_deref(),
+            Some("adb_shell_input")
+        );
+        assert_eq!(
+            restored.touch_backend,
+            Some(TouchBackendChoice::AdbShellInput)
+        );
+    }
+
+    #[test]
     fn help_lists_capture_backend_short_alias() {
         let help = help_data();
         assert!(
@@ -49101,6 +49400,28 @@ mod tests {
         let resolved = device_config(&global, &config).expect("device config");
 
         assert_eq!(resolved.capture_backend, CaptureBackendChoice::Adb);
+    }
+
+    #[test]
+    fn device_config_cli_touch_backend_overrides_instance_default() {
+        let global = GlobalOptions {
+            instance: Some("ak-b".to_string()),
+            touch_backend: Some(TouchBackendChoice::AdbShellInput),
+            ..Default::default()
+        };
+        let (_adb_dir, mut config) = user_config_with_test_adb();
+        config.instances.insert(
+            "ak-b".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                touch_backend: Some("maatouch".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resolved = device_config(&global, &config).expect("device config");
+
+        assert_eq!(resolved.touch_backend, TouchBackendChoice::AdbShellInput);
     }
 
     #[test]

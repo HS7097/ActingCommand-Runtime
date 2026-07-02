@@ -2,8 +2,9 @@
 
 use super::{load_evaluator_and_detector, page_error, task_error};
 use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, MaaTouchBackend,
-    MaaTouchValidationConfig, PixelFormat, ScreencapBackend, combine_operation_and_close,
+    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, MaaTouchValidationConfig,
+    PixelFormat, ScreencapBackend, SelectedTouchBackend, TouchBackendConfig,
+    TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close, create_touch_backend,
 };
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::{Rect as RecognitionRect, Scene, ScenePixelFormat};
@@ -348,7 +349,7 @@ fn execute_probe_run(
     }
     let mut scene = scene_from_frame(&before)?;
     let seed_base = run_seed();
-    let mut backend = None::<MaaTouchBackend>;
+    let mut backend = None::<SelectedTouchBackend>;
     let initial_page = detect_current_page(&detector, &evaluator, &scene)?;
     state.initial_page = initial_page.clone();
     state.final_page = initial_page.clone();
@@ -365,7 +366,7 @@ fn execute_probe_run(
             "standby_wake_started",
             json!({"point": {"x": wake_point[0], "y": wake_point[1]}}),
         )?;
-        let backend_ref = ensure_maatouch_backend(&mut backend, &config, journal)?;
+        let backend_ref = ensure_touch_backend(&mut backend, &config, journal)?;
         if let Err(err) = backend_ref.tap(wake_point[0], wake_point[1]) {
             return close_backend_after_error(&mut backend, err);
         }
@@ -526,7 +527,7 @@ fn execute_probe_run(
                     }),
                 )?;
 
-                let backend_ref = ensure_maatouch_backend(&mut backend, &config, journal)?;
+                let backend_ref = ensure_touch_backend(&mut backend, &config, journal)?;
                 journal.event(
                     "click_started",
                     json!({
@@ -607,7 +608,7 @@ fn execute_probe_run(
 }
 
 fn close_backend_after_error<T>(
-    backend: &mut Option<MaaTouchBackend>,
+    backend: &mut Option<SelectedTouchBackend>,
     err: DeviceError,
 ) -> DeviceResult<T> {
     if let Some(mut backend) = backend.take() {
@@ -704,27 +705,51 @@ fn write_checkpoint_artifact(
     Ok(())
 }
 
-fn ensure_maatouch_backend<'a>(
-    backend: &'a mut Option<MaaTouchBackend>,
+fn ensure_touch_backend<'a>(
+    backend: &'a mut Option<SelectedTouchBackend>,
     config: &MaaTouchValidationConfig,
     journal: &OperationJournal,
-) -> DeviceResult<&'a mut MaaTouchBackend> {
+) -> DeviceResult<&'a mut SelectedTouchBackend> {
     if backend.is_none() {
-        let mut created = MaaTouchBackend::new(
-            config.adb.clone(),
-            config.target.clone(),
-            config.maatouch.clone(),
-        );
-        let device = created.connect()?;
+        let created = create_touch_backend(
+            TouchBackendConfig::new(
+                config.adb.clone(),
+                config.target.clone(),
+                config.maatouch.clone(),
+            )
+            .with_requested(config.touch_backend),
+        )?;
+        let device = created.device_info().clone();
         journal.event(
-            "maatouch_connected",
-            json!({"serial": device.serial, "state": device.state, "screen_size": device.screen_size}),
+            "touch_backend_selected",
+            json!({
+                "serial": device.serial,
+                "state": device.state,
+                "screen_size": device.screen_size,
+                "backend": created.backend_name().as_str(),
+                "diagnostics": touch_diagnostics_json(created.diagnostics())
+            }),
         )?;
         *backend = Some(created);
     }
     backend
         .as_mut()
-        .ok_or_else(|| DeviceError::fatal("failed to initialize MaaTouch backend"))
+        .ok_or_else(|| DeviceError::fatal("failed to initialize touch backend"))
+}
+
+fn touch_diagnostics_json(diagnostics: &TouchBackendDiagnostics) -> serde_json::Value {
+    json!({
+        "requested": diagnostics.requested.as_str(),
+        "selected": diagnostics.selected.map(TouchBackendName::as_str),
+        "attempts": diagnostics.attempts.iter().map(|attempt| json!({
+            "backend": attempt.backend.as_str(),
+            "ok": attempt.ok,
+            "elapsed_ms": attempt.elapsed_ms,
+            "error_reason": attempt.error_reason.as_deref(),
+            "selected": attempt.selected
+        })).collect::<Vec<_>>(),
+        "warnings": diagnostics.warnings
+    })
 }
 
 fn detect_current_page(
@@ -1437,7 +1462,7 @@ fn validate_input_action(
 }
 
 fn execute_input_action(
-    backend: &mut MaaTouchBackend,
+    backend: &mut dyn InputBackend,
     action: ActualInputAction,
 ) -> DeviceResult<()> {
     match action {

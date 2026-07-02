@@ -11,8 +11,8 @@ use super::{
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
-    CaptureBackendName, DeviceTarget, Frame, InputBackend, MaaTouchBackend, MaaTouchConfig,
-    PixelFormat, combine_operation_and_close, create_capture_backend,
+    CaptureBackendName, DeviceTarget, Frame, InputBackend, PixelFormat, SelectedTouchBackend,
+    TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
@@ -291,7 +291,7 @@ fn execute_lab_run(
         )?;
     }
     let mut capture = selected_capture.backend;
-    let mut input = None::<MaaTouchBackend>;
+    let mut input = None::<SelectedTouchBackend>;
     let started = Instant::now();
     let mut state = RunState {
         control,
@@ -393,7 +393,12 @@ fn execute_lab_run(
         )?;
 
         let action = operation.input_action(&state.control.resolution, ctx.run_seed)?;
-        let backend = ensure_maatouch(&mut input, &device.target, &device.adb)?;
+        let backend = ensure_touch_backend(
+            &mut input,
+            &device.target,
+            &device.adb,
+            device.touch_backend,
+        )?;
         match &action {
             LabInputAction::Tap(point) => {
                 let action_started = Instant::now();
@@ -699,14 +704,14 @@ fn push_resolved_page_id(
 }
 
 fn close_backend_after_error<T>(
-    backend: &mut Option<MaaTouchBackend>,
+    backend: &mut Option<SelectedTouchBackend>,
     err: CliError,
 ) -> CliOutcome<T> {
     if let Some(mut backend) = backend.take() {
         let close = backend.close();
         if let Err(close_err) = close {
             return Err(CliError::device(format!(
-                "{}; MaaTouch close also failed: {}",
+                "{}; touch backend close also failed: {}",
                 err.message, close_err
             )));
         }
@@ -714,22 +719,27 @@ fn close_backend_after_error<T>(
     Err(err)
 }
 
-fn ensure_maatouch<'a>(
-    backend: &'a mut Option<MaaTouchBackend>,
+fn ensure_touch_backend<'a>(
+    backend: &'a mut Option<SelectedTouchBackend>,
     target: &DeviceTarget,
     adb: &actingcommand_device::AdbConfig,
-) -> CliOutcome<&'a mut MaaTouchBackend> {
+    requested: actingcommand_device::TouchBackendChoice,
+) -> CliOutcome<&'a mut SelectedTouchBackend> {
     if backend.is_none() {
-        let mut created =
-            MaaTouchBackend::new(adb.clone(), target.clone(), MaaTouchConfig::default());
-        created
-            .connect()
-            .map_err(|err| CliError::device(err.to_string()))?;
+        let created = create_touch_backend(
+            TouchBackendConfig::new(
+                adb.clone(),
+                target.clone(),
+                actingcommand_device::MaaTouchConfig::default(),
+            )
+            .with_requested(requested),
+        )
+        .map_err(|err| CliError::device(err.to_string()))?;
         *backend = Some(created);
     }
     backend
         .as_mut()
-        .ok_or_else(|| CliError::device("failed to initialize MaaTouch backend"))
+        .ok_or_else(|| CliError::device("failed to initialize touch backend"))
 }
 
 fn poll_after_operation(

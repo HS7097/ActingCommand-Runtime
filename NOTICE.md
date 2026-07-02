@@ -18,7 +18,7 @@ No upstream automation source code has been copied into this repository as part 
 - License text: `external-tools/maatouch/LICENSE`
 - Attribution: MaaTouch is maintained by the `MaaAssistantArknights/MaaTouch` upstream project and contributors. The upstream repository and the reviewed `touch.zip/LICENSE.txt` do not provide a separate filled copyright notice beyond the Apache-2.0 license text.
 - Purpose: MaaTouch/minitouch-compatible input backend binary used by `MaaTouchBackend`.
-- Notes: included after license review by project owner instruction. Runtime input still goes through ActingCommand's `MaaTouchBackend`; no ADB input fallback is added.
+- Notes: included after license review by project owner instruction. Runtime touch input prefers ActingCommand's `MaaTouchBackend`; P6.5-A1 adds a public-protocol `adb shell input` fallback implemented in clean-room Rust without adding another external binary.
 
 Before any upstream code, assets, screenshots, templates, OCR data, or model files are copied, adapted, or merged, update this file with:
 

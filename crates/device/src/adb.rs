@@ -189,6 +189,40 @@ impl Adb {
         Ok(output.stdout.trim().to_string())
     }
 
+    pub fn shell_input_tap(&self, serial: &str, x: i32, y: i32) -> DeviceResult<CommandOutput> {
+        let x = x.to_string();
+        let y = y.to_string();
+        self.run(&["-s", serial, "shell", "input", "tap", &x, &y])
+    }
+
+    pub fn shell_input_swipe(
+        &self,
+        serial: &str,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        duration_ms: u64,
+    ) -> DeviceResult<CommandOutput> {
+        let x1 = x1.to_string();
+        let y1 = y1.to_string();
+        let x2 = x2.to_string();
+        let y2 = y2.to_string();
+        let duration_ms = duration_ms.to_string();
+        self.run(&[
+            "-s",
+            serial,
+            "shell",
+            "input",
+            "swipe",
+            &x1,
+            &y1,
+            &x2,
+            &y2,
+            &duration_ms,
+        ])
+    }
+
     pub fn force_stop(&self, serial: &str, package: &str) -> DeviceResult<CommandOutput> {
         self.run(&["-s", serial, "shell", "am", "force-stop", package])
     }

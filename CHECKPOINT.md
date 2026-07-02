@@ -1,5 +1,82 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A1 device input fallback from `04ca117`
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\TASK-P6.5-A1-device-input-fallback.md`.
+- Runtime baseline before this task: `04ca1171b70f6da3cc8b3a8f0d48b52360e6cd12`.
+- Scope is limited to clean-room Rust touch input fallback, CLI routing, diagnostics, tests, and planning/checkpoint updates.
+- Touch fallback chain is `MaaTouch -> adb shell input`.
+- Default `auto` uses fixed priority. `auto-fastest` is available only when explicitly requested.
+- `adb shell input` covers `tap`, `long_tap`, and `swipe`; `key` and `text` fallback semantics remain out of A1 and fail loudly if routed to adb input.
+- All app-level touch entry points now route through the shared touch selector instead of directly constructing `MaaTouchBackend`.
+- Session Layer request routing now preserves global `--touch-backend` so daemon-routed control commands use the requested selector path.
+- `touch-probe` reports input backend availability/latency without sending tap/swipe actions.
+- No resource repositories were read or modified.
+- No Minitouch, UI, OCR, SQLite, game logic, capture backend work, reconnect loop, upstream source copying, or new external binary was added.
+
+### Files changed
+
+- `crates/device/src/adb.rs`
+- `crates/device/src/lib.rs`
+- `crates/device/src/maatouch.rs`
+- `crates/device/src/touch.rs`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `NOTICE.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content C:\合作工作区\ActingCommand\TASK-P6.5-A1-device-input-fallback.md`
+- `git status --short --branch`
+- `git fetch --prune --tags origin`
+- `git reset --hard origin/main`
+- `git clean -fd`
+- `cargo check -p actingcommand-device`
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab --no-run`
+- `cargo test -p actingcommand-device touch`
+- `cargo test -p actingcommand-device-test parses_global_touch_backend_option`
+- `cargo test -p actingcommand-actinglab touch_backend_flag_is_global_even_after_subcommand`
+- `cargo test -p actingcommand-actinglab device_config_cli_touch_backend_overrides_instance_default`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab session_command_global_preserves_touch_backend_choice`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `git diff --check`
+- Source scans for remaining app-level `MaaTouchBackend::new`, `kill-server`, and `adb shell input` touch paths.
+
+### Test results
+
+- Focused device touch fallback tests passed.
+- Focused device-test `--touch-backend` parser test passed.
+- Focused actinglab global touch backend parser/config tests passed.
+- Focused actinglab Session Layer global touch backend preservation test passed.
+- `cargo test -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`: passed.
+- `cargo test --workspace`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `git diff --check`: passed.
+- Source scans passed: no app-level direct `MaaTouchBackend::new`, no `kill-server`, and no `println!/eprintln!` in `crates/device/src`.
+
+### Current blocker
+
+- None for offline implementation.
+- Live smoke on AK 16416 / AzurLane 16384 remains device-gated and has not been run in this checkpoint.
+
+### Next step
+
+1. Commit and push Runtime source plus `PLANS.md` and `CHECKPOINT.md`.
+2. If the user wants live smoke, run safe-coordinate main-route and forced-fallback touch tests separately.
+
 ## 2026-07-02 full validation rerun and release-clippy cleanup
 
 ### Current status

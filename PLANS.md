@@ -12,6 +12,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A1 device input fallback
+
+The 2026-07-02 P6.5-A1 device input fallback from baseline `04ca117` is implemented as a clean-room Rust device-control milestone.
+
+Scope:
+
+- Touch fallback chain is `MaaTouch -> adb shell input`.
+- `adb shell input` is implemented only for the touch subset: `tap`, `long_tap`, and `swipe`.
+- `key` and `text` remain out of A1 fallback semantics; they fail loudly if the selected fallback backend cannot support them.
+- Minitouch remains deferred to A1.1 pending binary/source/license decisions.
+- No UI, OCR, SQLite, game logic, capture backend work, resource repository reads, upstream code copying, reconnect loop, or new external binary was added.
+
+Completed A1 work:
+
+- `crates/device` now exposes `TouchBackendChoice`, `TouchBackendConfig`, `SelectedTouchBackend`, `AdbShellInputBackend`, structured `TouchBackendDiagnostics`, and `touch_probe_report`.
+- Default touch selection uses fixed priority `MaaTouch -> adb shell input`; `auto-fastest` is available as an explicit manual choice.
+- Single-backend failures are recorded in structured attempts/warnings and then fall back to the next backend.
+- Full-chain touch failure returns a fatal error containing backend attempts and warnings.
+- `apps/actinglab` direct touch, stream input relay, semantic tap/navigation, and Lab run device input now use the shared selector instead of constructing `MaaTouchBackend` directly.
+- ActingLab Session Layer routed requests preserve the global touch backend choice so daemon-routed control commands use the same selector request as local commands.
+- `apps/device-test` direct touch/reset, benchmark control submission, and probe-run input now use the shared selector.
+- `touch-probe` exposes an input-side probe report without sending tap/swipe actions.
+- `--touch-backend <auto|auto-fastest|maatouch|adb_shell_input>` is available for Runtime CLI entry points that resolve device config.
+
 ## Current full-validation rerun
 
 The 2026-07-02 full Runtime validation rerun rechecked the old B0/B1 "one failure amplified into 109 failures" concern against the current `main` code path.
@@ -90,6 +114,7 @@ No resource repositories were used in this audit fix, and no UI, OCR, SQLite, ga
 
 ## Current completed milestones
 
+- P6.5-A1 device input fallback: touch input now uses a structured `MaaTouch -> adb shell input` selector with `auto`, `auto-fastest`, explicit backend selection, fallback diagnostics, and CLI routing through the shared selector.
 - ActingLab Session Layer D6 reliability close-out: request acknowledgement fail-fast, PID creation-time verification, explicit unsupported-platform PID-reuse degradation, and documented same-user forgery accepted risk for deferred trusted-channel work.
 - ActingLab Session Layer Round 2 close-out: daemon identity-bound liveness, canonical artifact containment, corrupt-journal skip diagnostics, orphan temp cleanup, request-processing failure-window regression coverage, and no-endpoint connect-plan regression coverage.
 - ActingLab Session Layer audit close-out: liveness/process readiness, lease preemption, local stream relay lease gating, durable request journaling, atomic JSON writes, artifact path containment, and safe transport defaults.
@@ -6132,8 +6157,9 @@ Routine Runtime updates must stay in `HS7097/ActingCommand-Runtime`. Do not merg
 
 ## Active boundaries
 
-- No ADB input fallback.
-- MaaTouch failure is fatal.
+- Touch input fallback is limited to the P6.5-A1 chain: `MaaTouch -> adb shell input`.
+- `adb shell input` is available only for `tap`, `long_tap`, and `swipe`; `key`, `text`, Minitouch, reconnect, retry loops, and arbitrary fallback remain out of scope.
+- MaaTouch failure is recorded as structured diagnostics and may fall back to `adb shell input`; full-chain input failure is fatal.
 - Capture failure is fatal.
 - Recognition primitive errors are fatal.
 - Recognition pack validation and evaluation errors are fatal.
