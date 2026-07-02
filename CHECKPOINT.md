@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-07-02 P6.5-A R1 PPOCR ONNX ROI provider smoke
+
+### Current status
+
+- Continued the P6.5-A R1 OCR gate after commit `e940a86`.
+- Implementation commit: `6c9d68d` (`runtime: add ppocr onnx roi provider`).
+- Confirmed the worktree was clean and `main` matched `origin/main` after the user's forced reboot warning.
+- `git fsck --full` reported only one dangling blob, with no current commit/object corruption.
+- Added source-only provider crate `providers/ppocr-onnx-json`.
+- The provider exports `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
+- The provider uses dynamic CPU ONNXRuntime loading through reviewed local artifacts and runs PPOCR recognizer inference on the requested ROI.
+- The provider explicitly warns that detector/full-frame OCR is not enabled in this increment.
+- Updated `resources/vision-provider-artifacts.example.json` to use ONNX-style PPOCR artifact paths.
+- Recorded the local-only smoke in `benchmarks/reports/2026-07-02-r1-ppocr-onnx-roi-smoke.md`.
+- Updated `PLANS.md` and `NOTICE.md`.
+- No MAA release binary, ONNXRuntime DLL, OCR model, dictionary, OCR data, upstream source, UI, SQLite, scheduler behavior, device access, or game logic was committed.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `providers/ppocr-onnx-json/Cargo.toml`
+- `providers/ppocr-onnx-json/src/lib.rs`
+- `resources/vision-provider-artifacts.example.json`
+- `benchmarks/reports/2026-07-02-r1-ppocr-onnx-roi-smoke.md`
+- `PLANS.md`
+- `NOTICE.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -5 --oneline --decorate`
+- `git fsck --full`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`
+- `cargo test -p actingcommand-ppocr-onnx-json-provider`
+- `cargo build -p actingcommand-ppocr-onnx-json-provider --release`
+- Copied the built provider DLL to ignored `external-tools\vision\fastdeploy\ac_fastdeploy_ppocr.dll` for local smoke validation.
+- Generated ignored local smoke frame `target\ppocr-smoke\ocr_ascii.png`.
+- Generated ignored local smoke manifest `target\ppocr-smoke\ppocr-char-manifest.json`.
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --require-existing`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --abi-check`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --ocr-frame target\ppocr-smoke\ocr_ascii.png --ocr-region 0,0,320,80`
+- `target\debug\actingcommand-vision-provider-check.exe --manifest target\ppocr-smoke\ppocr-char-manifest.json --backend fastdeploy_ppocr --artifact-lock --lock-out target\ppocr-smoke\ppocr-char-lock.json`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo build --release`
+- `git commit -m "runtime: add ppocr onnx roi provider"`
+
+### Test results
+
+- Forced-reboot follow-up check: worktree clean before new edits, `main...origin/main`, key files readable, and `git fsck --full` reported only a dangling blob.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo test -p actingcommand-ppocr-onnx-json-provider`: passed with 6 tests.
+- `cargo test -p actingcommand-vision-provider-check -p actingcommand-vision-ffi`: passed with 27 provider-check tests and 24 vision-ffi tests.
+- `cargo test --workspace`: passed with 482 tests.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo build --release`: passed.
+- Local provider manifest check: passed.
+- Local provider ABI check: passed for `ac_fastdeploy_ppocr_read_text_json` and `ac_vision_free_buffer`.
+- Local real OCR smoke: passed with text `ABC123`, confidence `0.9997550845146179`, frame `320x80 rgb8`.
+- Local artifact lock: passed with total size `26100706` bytes. Provider DLL size `498688` bytes, SHA-256 `c708a4b48c19e163b46e66a787a1e449750e10176c341c64d612d4f43884220f`.
+
+### Current blocker
+
+- No blocker for this PPOCR ONNX ROI provider increment.
+- Full R1 remains open unless ROI recognizer-only OCR is explicitly accepted as sufficient for the CLI gate.
+- Detector/full-frame OCR text box detection is not implemented yet.
+- Release packaging remains blocked until exact ONNXRuntime/PPOCR model/dictionary license texts, third-party notices, binary provenance, and redistribution obligations are recorded for any bundled artifacts.
+
+### Next step
+
+1. Commit and push this checkpoint.
+2. Watch GitHub Actions for the pushed Runtime commits.
+3. Continue R1 by implementing detector/full-frame OCR or by explicitly closing R1 scope around ROI recognizer-only OCR if accepted.
+
 ## 2026-07-02 P6.5-A R1 MAA provider export audit
 
 ### Current status
