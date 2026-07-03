@@ -175,6 +175,7 @@ impl OperationConverter {
         let pack = self.build_pack()?;
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
+        validate_page_rule_targets(&pack, &self.bundles)?;
         let navigation = self.build_navigation()?;
         let index = self.build_index()?;
         let primitives = self.build_primitives()?;
@@ -441,6 +442,7 @@ impl OperationConverter {
                 }
             }
         }
+        self.apply_page_rules(&mut pages)?;
         Ok(ordered_object([
             (
                 "schema_version",
@@ -462,6 +464,29 @@ impl OperationConverter {
                 ),
             ),
         ]))
+    }
+
+    fn apply_page_rules(&self, pages: &mut HashMap<String, Value>) -> CliOutcome<()> {
+        for bundle in &self.bundles {
+            let Some(rules) = bundle.data.get("page_rules").and_then(Value::as_object) else {
+                continue;
+            };
+            for (page_key, rule) in rules {
+                let page_id = normalize_page_rule_id(&self.game, page_key);
+                let page = pages.get_mut(&page_id).ok_or_else(|| {
+                    CliError::package_invalid(format!(
+                        "{}: page_rules references unknown page '{page_key}'",
+                        bundle.task_json_path().display()
+                    ))
+                })?;
+                for field in ["required", "optional", "forbidden"] {
+                    if let Some(values) = rule.get(field) {
+                        append_unique_strings(page, field, values, &bundle.task_json_path())?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn build_navigation(&self) -> CliOutcome<Value> {
@@ -1320,6 +1345,14 @@ fn page_id(game: &str, anchor_id: &str) -> String {
     format!("{game}/{anchor_id}")
 }
 
+fn normalize_page_rule_id(game: &str, page_key: &str) -> String {
+    if page_key.contains('/') {
+        page_key.to_string()
+    } else {
+        page_id(game, page_key)
+    }
+}
+
 fn anchor_target_id(anchor_id: &str) -> String {
     format!("page/{anchor_id}")
 }
@@ -1360,6 +1393,42 @@ fn validate_pack_targets_exist(root: &Path, pack: &Value) -> CliOutcome<()> {
     } else {
         Err(CliError::package_invalid(format!(
             "resource convert validation failed:\n  - {}",
+            errors.join("\n  - ")
+        )))
+    }
+}
+
+fn validate_page_rule_targets(pack: &Value, bundles: &[Bundle]) -> CliOutcome<()> {
+    let targets = array_field(pack, "targets")
+        .iter()
+        .filter_map(|target| target.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<HashSet<_>>();
+    let mut errors = Vec::new();
+    for bundle in bundles {
+        let Some(rules) = bundle.data.get("page_rules").and_then(Value::as_object) else {
+            continue;
+        };
+        let source = bundle.task_json_path();
+        for field in ["required", "optional", "forbidden"] {
+            for (page_key, rule) in rules {
+                for target in array_field(rule, field) {
+                    let target_id = target.as_str().unwrap_or("");
+                    if targets.contains(target_id) {
+                        continue;
+                    }
+                    errors.push(format!(
+                        "{}: page_rules.{page_key}.{field} target '{target_id}' does not exist in pack",
+                        source.display()
+                    ));
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::package_invalid(format!(
+            "resource convert page rule validation failed:\n  - {}",
             errors.join("\n  - ")
         )))
     }
@@ -1499,6 +1568,52 @@ fn array_field<'a>(value: &'a Value, key: &str) -> &'a [Value] {
         .unwrap_or(&[])
 }
 
+fn append_unique_strings(
+    page: &mut Value,
+    field: &str,
+    values: &Value,
+    source: &Path,
+) -> CliOutcome<()> {
+    let values = values.as_array().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: page_rules.{field} must be an array",
+            source.display()
+        ))
+    })?;
+    let Some(page_object) = page.as_object_mut() else {
+        return Err(CliError::package_invalid(format!(
+            "{}: generated page is not an object",
+            source.display()
+        )));
+    };
+    let target_list = page_object
+        .get_mut(field)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: generated page missing {field} array",
+                source.display()
+            ))
+        })?;
+    let mut seen = target_list
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    for value in values {
+        let Some(id) = value.as_str() else {
+            return Err(CliError::package_invalid(format!(
+                "{}: page_rules.{field} entries must be strings",
+                source.display()
+            )));
+        };
+        if seen.insert(id.to_string()) {
+            target_list.push(Value::String(id.to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn required_field<'a>(value: &'a Value, key: &str) -> CliOutcome<&'a Value> {
     value
         .get(key)
@@ -1603,6 +1718,102 @@ mod tests {
             resolve_required("operator", &ids),
             vec!["page/operator_0", "page/operator_1"]
         );
+    }
+
+    #[test]
+    fn build_pages_applies_page_rules() {
+        let converter = OperationConverter {
+            root: PathBuf::from("."),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "home-check".to_string(),
+                dir: PathBuf::from("operations/home-check"),
+                data: json!({
+                    "schema_version": "0.5",
+                    "task_id": "home-check",
+                    "anchors": [
+                        {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}},
+                        {"id":"mission_result_negative","template":"assets/MISSION_RESULT.png","region":{"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}}}
+                    ],
+                    "entry_page": "home",
+                    "target_page": "home",
+                    "page_rules": {
+                        "home": {
+                            "optional": ["page/extra_context"],
+                            "forbidden": ["page/mission_result_negative"]
+                        }
+                    },
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let pages = converter.build_pages().unwrap();
+        let home = pages.pointer("/pages/0").unwrap();
+        assert_eq!(
+            home.pointer("/optional/0").and_then(Value::as_str),
+            Some("page/extra_context")
+        );
+        assert_eq!(
+            home.pointer("/forbidden/0").and_then(Value::as_str),
+            Some("page/mission_result_negative")
+        );
+    }
+
+    #[test]
+    fn build_pages_rejects_unknown_page_rule() {
+        let converter = OperationConverter {
+            root: PathBuf::from("."),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "home-check".to_string(),
+                dir: PathBuf::from("operations/home-check"),
+                data: json!({
+                    "schema_version": "0.5",
+                    "task_id": "home-check",
+                    "anchors": [{"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}}],
+                    "entry_page": "home",
+                    "target_page": "home",
+                    "page_rules": {"missing": {"forbidden": ["page/home"]}},
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let err = converter.build_pages().expect_err("unknown page rule");
+        assert!(err.message.contains("unknown page"));
+    }
+
+    #[test]
+    fn validate_page_rule_targets_rejects_missing_targets() {
+        let pack = json!({"targets":[{"id":"page/home"}]});
+        let bundles = vec![Bundle {
+            task_id: "home-check".to_string(),
+            dir: PathBuf::from("operations/home-check"),
+            data: json!({
+                "page_rules": {
+                    "home": {
+                        "required": ["page/home"],
+                        "forbidden": ["page/missing"]
+                    }
+                }
+            }),
+        }];
+
+        let err = validate_page_rule_targets(&pack, &bundles).expect_err("missing target");
+        assert!(err.message.contains("page/missing"));
     }
 
     #[test]

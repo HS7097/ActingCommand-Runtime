@@ -24,10 +24,11 @@ Codex validation status:
 - Real AK MAA task-family compile smoke passed against `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` at commit `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`, compiling 3252 raw tasks into 4284 tasks.
 - M6 structural re-conversion is now unblocked for the three current resource repositories. `resource convert` writes validated schema `0.5` outputs for Arknights CN, AzurLane JP, and BlueArchive JP, and `detect-page --check-pages` passes for all three generated page packs.
 - Runtime guard synthesis now supports three reviewed sources: explicit `verify_templates`, source-page anchors, and operation-level verify templates with click-derived expected rects. `page_id: "any"` guards remain target-checked and are used only for generic recovery controls.
+- M6 retained-frame false-positive calibration is partially closed for the available AK corpus. Runtime `resource convert` now supports source `page_rules`, and the AK resource pack adds a retained mission-result negative target plus forbidden-target rules so current home frames match only `arknights/home` and the retained mission-result frame matches no generated page.
 
 Remaining chain gates before the broader CLI entry condition:
 
-- M6 threshold calibration/reporting remains pending outside this structural conversion slice. The generated packs validate structurally, but the task file's offline threshold-distribution calibration report is not yet proven complete.
+- M6 threshold calibration/reporting remains incomplete for destination-page positives. The available AK retained corpus proves the home and mission-result false-positive repair, but it does not contain positive retained frames for `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`, `mission`, `operator`, `terminal`, or the actual QuickSwitch dropdown overlay.
 - M5 overlay layering remains intentionally non-blocking for CLI entry.
 - M3 Phase B/C masked NCC and RGB/HSV count engines remain future work; Phase A fail-loud handling prevents silent misuse until they are implemented.
 

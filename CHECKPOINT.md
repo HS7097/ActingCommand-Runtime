@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-07-03 AK MAA data fidelity M6 retained-frame calibration continuation
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the structural M6 resource conversion slice.
+- Fetched Runtime and all three resource repositories before this resource-dependent pass; all local heads matched `origin/main` before local calibration edits.
+- Added Runtime `resource convert` support for source `page_rules`, allowing Operation Bundles to add required/optional/forbidden page targets without hand-editing generated page packs.
+- Added page-rule target validation scoped to source `page_rules` entries, so newly authored page rules fail loudly when they reference a missing pack target without rejecting legacy generated page placeholders that do not yet have anchors.
+- Added AK retained-frame negative target `page/negative_mission_result` from the existing local `ak16416-current.png` mission-result frame.
+- Added AK page forbidden-target rules:
+  - all generated pages forbid `page/negative_mission_result`;
+  - all non-home pages also forbid `page/home`.
+- Re-ran actual `resource convert` for Arknights CN, AzurLane JP, and BlueArchive JP. AzurLane and BlueArchive remained unchanged; Arknights generated pack/pages changed as expected.
+- Re-ran `detect-page --check-pages` for all three resource repositories.
+- Added `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md` with M6 retained-frame evidence and remaining destination-positive evidence gap.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `c8a110a3b285f519934307a1897a13564ad245b4` before local calibration changes; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4df72b0c86efb5f65fb4`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `apps/actinglab/src/resource_convert.rs`
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/return_home/assets/NEGATIVE_MISSION_RESULT.png`
+  - `ours/operations/return_home/task.json`
+  - `ours/recognition/arknights.cn.pack.json`
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `git fetch origin --prune --tags` in Runtime and all three resource repositories.
+- `cargo test -p actingcommand-actinglab resource_convert::tests::build_pages_`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp detect-page --check-pages`
+- `actingcommand-device-test.exe recognize` for `page/home` and `page/negative_mission_result` against retained AK frames.
+- `actingcommand-device-test.exe detect-page --all --scene` against retained AK frames.
+- `cargo test -p actingcommand-actinglab resource_convert::tests::build_primitives_`
+- `cargo test -p actingcommand-actinglab resource_convert::tests::validate_page_rule_targets_rejects_missing_targets`
+- `cargo test -p actingcommand-actinglab resource_convert::tests::build_pages_`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `git diff --check` in Runtime and Arknights resource repositories.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Runtime focused `page_rules` tests passed.
+- Runtime focused guard/page-rule regression tests passed after scoping page-rule target validation to source `page_rules`.
+- Arknights CN `resource convert`: written, 10 bundles, 15 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- AzurLane JP `resource convert`: written, 41 bundles, 81 targets, 41 pages, 43 edges, 17 page operations, 89 primitives.
+- BlueArchive JP `resource convert`: written, 20 bundles, 22 targets, 20 pages, 19 edges, 23 page operations, 53 primitives.
+- `detect-page --check-pages`: passed for Arknights CN, AzurLane JP, and BlueArchive JP.
+- Retained AK frame results after calibration:
+  - `home_retest`: matches `arknights/home` only.
+  - `home_run`: matches `arknights/home` only.
+  - `mission_result`: matches no generated page.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+- Arknights resource repository whitespace validation passed with `git diff --check`.
+
+### Current blocker
+
+- The prior false-positive issue on the available AK retained corpus is fixed.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks positive destination-page frames for `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`, `mission`, `operator`, `terminal`, and the actual QuickSwitch dropdown overlay.
+
+### Next step
+
+1. Commit and push the Runtime calibration-support/report slice.
+2. Commit and push the Arknights resource calibration slice.
+3. Keep the broader goal active until destination-positive retained-frame calibration evidence exists or the task is explicitly narrowed.
+
 ## 2026-07-03 AK MAA data fidelity structural M6 continuation
 
 ### Current status
