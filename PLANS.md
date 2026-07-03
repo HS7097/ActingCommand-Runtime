@@ -12,6 +12,22 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A punchlist repair
+
+The `FIX-P6.5-A-punchlist-6ca6b0c.md` punchlist is implemented as the final P6.5-A acceptance tail repair.
+
+Scope:
+
+- `benchmarks/reports/2026-07-03-p65a-punchlist.md` records P1-P4 and S1-S6 status.
+- The old P6.5-A closeout report now matches the A2 option-B wording: startup/request-level fresh probe is complete, while runtime-persistent backend switching remains deferred.
+- MuMu discovery now exposes `DeviceDiscoveryReport` from both the production `discover_devices()` entry and the process-snapshot API, so discovery diagnostics are no longer silently discarded.
+- MuMu processes without a recoverable instance id are skipped with diagnostics instead of being aliased to instance `0`.
+- Artifact-lock expected-lock mismatch is covered at the `run()` process-gate level.
+- Runtime library loadability has direct corrupt-DLL test coverage.
+- Additional base64 decode, base64 padding, watchdog timeout, and FFI oversized-response boundary comments are included.
+
+This punchlist does not add upstream source, upstream binaries, OCR models, resource repository data, UI, SQLite, scheduler behavior, device live operation, or game logic.
+
 ## Current P6.5-A acceptance defect fix
 
 The `FIX-P6.5-A-acceptance-aea10a4.md` acceptance repair is implemented as a focused Runtime hardening pass on top of the README-only remote head `bb10374`.
@@ -163,10 +179,10 @@ The 2026-07-02 P6.5-A A3 device discovery unit is implemented as clean-room Rust
 Scope:
 
 - `crates/device` now exposes `DiscoveredDevice` and `DeviceDiscoveryProcess`.
-- `discover_devices()` enumerates Windows process metadata and derives running MuMu device serials without calling ADB device-listing or server-control commands.
+- `discover_devices()` enumerates Windows process metadata and derives running MuMu device serials without calling ADB device-listing or server-control commands, returning `DeviceDiscoveryReport` so diagnostics stay visible to callers.
 - MuMu serials are inferred from `MuMuNxDevice.exe` instance ids with the known localhost port pattern.
 - MuMu ADB paths are inferred from the running MuMu device process path, keeping discovery on MuMu-provided ADB instead of PATH ADB.
-- A pure `discover_mumu_devices_from_processes` path supports deterministic tests with mocked process snapshots.
+- A pure `discover_mumu_devices_from_processes` report path supports deterministic tests with mocked process snapshots and preserves diagnostics for skipped processes.
 
 A3 is complete and remains limited to discovery metadata. It does not add app lifecycle control, capture, touch execution, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or ADB server mutation.
 

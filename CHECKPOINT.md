@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-07-03 P6.5-A punchlist
+
+### Current status
+
+- Implemented the punchlist task from `C:\合作工作区\ActingCommand\FIX-P6.5-A-punchlist-6ca6b0c.md`.
+- Baseline before this punchlist: `6ca6b0c` (`docs: record p6.5-a acceptance ci`).
+- Implementation commits:
+  - `2377315` (`docs: align p6.5-a a2 closeout evidence`)
+  - `17cc77e` (`device: expose MuMu discovery diagnostics`)
+  - `2c6485b` (`runtime: harden punchlist tests and ffi bounds`)
+- P1-P4 are implemented.
+- S1, S2, S3, and S5 are implemented.
+- S4 and S6 are documented as deferred because they require larger provider test seams or no longer have a current trigger path after P2.
+- Added `benchmarks/reports/2026-07-03-p65a-punchlist.md`.
+- No upstream source, upstream binaries, OCR models, resource repository data, UI, SQLite, scheduler behavior, device live operation, or game logic was added.
+
+### Files changed
+
+- `benchmarks/reports/2026-07-02-p65a-maa-fusion-chain-closeout.md`
+- `benchmarks/reports/2026-07-03-p65a-punchlist.md`
+- `crates/device/src/discovery.rs`
+- `crates/onnx-provider-support/src/lib.rs`
+- `crates/vision-ffi/src/ffi.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `apps/vision-provider-check/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- Read `C:\合作工作区\ActingCommand\FIX-P6.5-A-punchlist-6ca6b0c.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- `rg -n "capture_switches_backend_after_expected_change_stall" .`
+- `cargo test -p actingcommand-device discovery`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-vision-ffi -p actingcommand-vision-provider-check -p actingcommand-onnx-provider-support`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before final validation.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- P1 closeout grep: old `capture_switches_backend_after_expected_change_stall` test name has no remaining repository hits.
+- P2 discovery tests passed:
+  - `discovery_skips_mumu_device_without_recoverable_instance_id`
+  - `discovery_accepts_explicit_dash_v_zero`
+  - `discovery_skips_invalid_dash_v_without_aliasing_to_zero`
+  - `discovery_recovers_mumu_player_instance_from_non_final_segment`
+  - existing discovery regression tests
+- P3 provider-check tests passed:
+  - `artifact_lock_expected_mismatch_fails_run_gate`
+  - `artifact_lock_verify_reports_mismatch`
+- P4 vision FFI tests passed:
+  - `runtime_library_loadability_rejects_corrupt_file`
+- Suggested hardening tests passed:
+  - `vision_frame_rejects_invalid_base64_pixel_payloads`
+  - `vision_frame_round_trips_base64_padding_payload`
+  - `watchdog_terminates_after_timeout_without_cancel`
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No current implementation blocker.
+- GitHub CI is still pending until the pushed punchlist commits run.
+
+### Next step
+
+1. Commit and push the punchlist documentation update.
+2. Watch GitHub Actions for the pushed punchlist commits.
+
 ## 2026-07-03 P6.5-A acceptance defect fix
 
 ### Current status
