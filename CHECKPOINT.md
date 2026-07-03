@@ -1,5 +1,96 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity modal false-positive rejection
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the depot/friends/mission calibration checkpoint.
+- Fetched Runtime and all three resource repositories before this resource-dependent pass; each local head matched `origin/main`.
+- Found retained AK modal frames in the local temp scratchpad:
+  - daily sign-in modal: `wf_arknights_recruit.png`
+  - announcement modal: `recak_close0.png`, with sibling announcement frames `recak_close1.png` and `recak_close2.png`
+- Added `page/negative_signin` and `page/negative_announcement` as forbidden page-rule targets so modal overlays no longer satisfy QuickSwitch-derived destination pages.
+- Re-converted the Arknights CN resource outputs and re-ran page-pack validation.
+- Committed and pushed the Arknights resource calibration as `0b318bf` (`resources: reject AK modal false positives`).
+- Updated the AK M6 acceptance report and planning/checkpoint files. The broader task remains active because several destination-page positive retained frames and a discriminative QuickSwitch dropdown target are still missing.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`: `ccf35312531bc7255cb6190ad78546f6952d6509`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `7ad8688f2107d36ec2c016c99bfbeef0b85443aa` before local modal-negative calibration changes; `origin/main` matched.
+- Arknights modal-negative result: `0b318bf8517344e45eeea502b5da0d3ea78b2dd7` pushed to `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/return_home/assets/NEGATIVE_ANNOUNCEMENT.png`
+  - `ours/operations/return_home/assets/NEGATIVE_SIGNIN.png`
+  - `ours/operations/return_home/task.json`
+  - `ours/recognition/arknights.cn.pack.json`
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` in Runtime and all three resource repositories.
+- Generated retained modal-negative crops from local scratchpad frames into `NEGATIVE_SIGNIN.png` and `NEGATIVE_ANNOUNCEMENT.png`.
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained modal/page frame>` for sign-in, announcement, home, depot, friends, mission, and QuickSwitch overlay frames.
+- `target\release\actinglab.exe --json recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame> --target page/negative_signin|page/negative_announcement`
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --check-pages`
+- `git diff --check` in the Arknights resource repository.
+- `git commit -m "resources: reject AK modal false positives"` and `git push origin main` in the Arknights resource repository.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check` in the Runtime repository.
+
+### Test results
+
+- Arknights CN `resource convert` passed: 10 bundles, 18 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- Arknights CN `detect-page --check-pages` passed.
+- Modal false-positive checks now resolve to standby/no generated page:
+  - `wf_arknights_recruit.png`
+  - `wf_arknights_gacha.png`
+  - `wf_arknights_infrast.png`
+  - `wf_arknights_mall.png`
+  - `recak_close0.png`
+  - `recak_close1.png`
+  - `recak_close2.png`
+  - `wf_arknights_recov_qsh.png`
+- Existing positive retained pages still match their intended page only:
+  - `akpg_home.png` -> `arknights/home`
+  - `akpg_depot.png` -> `arknights/depot`
+  - `akpg_friends.png` -> `arknights/friends`
+  - `akpg_mission.png` -> `arknights/mission`
+- New negative target threshold samples:
+  - `page/negative_signin` on sign-in modal: score `1.000000`, threshold `0.920000`, passed.
+  - `page/negative_signin` on home: score `0.637873`, threshold `0.920000`, failed.
+  - `page/negative_signin` on depot: score `0.738727`, threshold `0.920000`, failed.
+  - `page/negative_announcement` on announcement modal: score `1.000000`, threshold `0.920000`, passed.
+  - `page/negative_announcement` on home: score `0.649569`, threshold `0.920000`, failed.
+  - `page/negative_announcement` on depot: score `0.791150`, threshold `0.920000`, failed.
+- Arknights resource repository whitespace validation passed with `git diff --check`.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
+### Current blocker
+
+- No blocker for this implementation slice.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks accepted positive destination-page frames for `recruit`, `gacha`, `infrast`, and `mall`.
+- Several actual QuickSwitch dropdown frames exist, but they still multi-match QuickSwitch-derived destination anchors, so a discriminative QuickSwitch dropdown target remains unclosed.
+- The single-frame depot/friends/mission/operator positives are not full threshold distributions.
+
+### Next step
+
+1. Commit and push the Runtime report/planning/checkpoint update.
+2. Continue M6 by adding accepted positive retained-frame evidence for `recruit`, `gacha`, `infrast`, `mall`, and a discriminative QuickSwitch dropdown target, or record a later accepted narrowing of those evidence requirements.
+
 ## 2026-07-04 AK MAA data fidelity depot/friends/mission retained-frame calibration
 
 ### Current status
