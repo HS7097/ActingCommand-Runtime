@@ -7,7 +7,7 @@
 - Implemented the fourth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
 - Slice completed locally: C1 trigger classification and deterministic priority routing.
 - Implementation commit: `a9d33e9` (`actinglab: route self-heal triggers by priority`).
-- GitHub Actions CI: pending remote push/observation.
+- GitHub Actions CI run `28647953931`: passed.
 - `session self-heal-policy` now reports the canonical trigger set and priority order.
 - `session self-heal-plan` now normalizes legacy aliases to canonical triggers while preserving raw trigger values for compatibility.
 - Repeated `--trigger` values and comma-separated `--triggers` values are supported for concurrent trigger injection.
@@ -44,6 +44,10 @@
 - `cargo test --workspace`
 - `git diff --check`
 - `git commit -m "actinglab: route self-heal triggers by priority"`
+- `git commit -m "docs: record lab self-heal c1 checkpoint"`
+- `git push origin main`
+- `gh run list --repo HS7097/ActingCommand-Runtime --branch main --limit 5`
+- `gh run watch 28647953931 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -57,6 +61,7 @@
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
+- GitHub Actions CI run `28647953931`: passed.
 
 ### Current blocker
 
@@ -65,9 +70,7 @@
 
 ### Next step
 
-1. Push C1 implementation and checkpoint updates to GitHub.
-2. Observe the GitHub Actions result.
-3. Continue with C2 live recovery loop wiring plus H1 loop detection as the next independent slice.
+1. Continue with C2 live recovery loop wiring plus H1 loop detection as the next independent slice.
 
 ## 2026-07-03 Lab self-heal chain C0.a resource drift stop-loss
 
