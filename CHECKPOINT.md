@@ -1,5 +1,88 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C2 live recovery loop and H1 loop detection
+
+### Current status
+
+- Implemented the fifth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed locally: C2 live recovery loop wiring plus H1 loop detection fix.
+- Implementation commit: `1aaf204` (`actinglab: wire monitor recovery resources`).
+- `monitor --recover --use-recovery-resource` now resolves `ours/recovery/<game>.<server>.recovery.json` from the selected resource root.
+- `monitor --recover --recovery-resource <path>` now uses an explicit recovery resource path and fails loudly when it is missing or invalid.
+- Monitor recovery selects recovery rules by the C1 canonical self-heal trigger and executes them through `recovery_exec`.
+- Daemon monitor policy recovery can run the same resource graph when lease holder and lease id match.
+- Recovery actions are represented as Session Layer signal actions; direct device execution is not allowed.
+- Restart-class resource actions are skipped and recorded instead of executed.
+- Resource drift remains a stop-loss condition, and unstable page remains an action gate; neither enters the recovery graph.
+- Recovery output records journal metadata, selected rule id, graph status, visited nodes, attempted actions, skipped restart actions, and the no-direct-device boundary.
+- H1 is fixed: loop detection is checked before max-attempt exhaustion can mask a repeated node.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c2.md`.
+- C3 remains pending.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `7cf3bae27d473d29efde1f5605f106b28a2df9fb`.
+- All three local resource worktrees were clean and tracking `origin/main` after refresh.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/recovery_exec.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c2.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- `git fetch origin --prune --tags`
+- `git status --short --branch`
+- `Test-Path -LiteralPath "$env:LOCALAPPDATA\ActingCommand\actinglab\config.json"`
+- Refreshed each resource repository with `git fetch origin --prune --tags` and `git pull --ff-only`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab recovery_reports_loop_before_max_attempts`
+- `cargo test -p actingcommand-actinglab monitor_loop_resolves_recovery_resource_from_resource_root`
+- `cargo test -p actingcommand-actinglab monitor_loop_recover_uses_recovery_resource_graph`
+- `cargo test -p actingcommand-actinglab monitor_loop_recovery_resource_missing_is_fatal_when_explicit`
+- `cargo test -p actingcommand-actinglab daemon_monitor_policy_recovery_runs_resource_graph_with_matching_lease`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `git commit -m "actinglab: wire monitor recovery resources"`
+
+### Test results
+
+- `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` was absent before public validation.
+- `cargo test -p actingcommand-actinglab recovery_reports_loop_before_max_attempts`: passed.
+- `cargo test -p actingcommand-actinglab monitor_loop_resolves_recovery_resource_from_resource_root`: passed.
+- `cargo test -p actingcommand-actinglab monitor_loop_recover_uses_recovery_resource_graph`: passed.
+- `cargo test -p actingcommand-actinglab monitor_loop_recovery_resource_missing_is_fatal_when_explicit`: passed.
+- `cargo test -p actingcommand-actinglab daemon_monitor_policy_recovery_runs_resource_graph_with_matching_lease`: passed.
+- `cargo test -p actingcommand-actinglab`: passed with 512 unit tests and 3 integration tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C2/H1.
+- Remaining self-heal chain item is intentionally pending: C3 automatic login/wake resource wiring.
+
+### Next step
+
+1. Commit and push this checkpoint.
+2. Continue with C3 automatic login/wake resource wiring as the next independent slice.
+
 ## 2026-07-03 Lab self-heal chain C1 trigger classification and priority routing
 
 ### Current status
