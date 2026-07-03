@@ -1,5 +1,101 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity QuickSwitch dropdown retained-frame calibration
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the modal false-positive rejection checkpoint.
+- Used retained AK QuickSwitch dropdown frames from the local temp scratchpad, including `akqs_overlay.png`, `akqs_mall_try.png`, and `qs4_recruit_via_qs.png`.
+- Replaced the small `QuickSwitch__Menu.png` home-icon dropdown anchor with a wider retained dropdown navigation-strip anchor, `QUICKSWITCH_DROPDOWN_NAV.png`, across the QuickSwitch-derived AK operations.
+- Added `page/quickswitch_dropdown` as a forbidden page-rule target on non-dropdown pages.
+- Re-converted the Arknights CN resource outputs and re-ran page-pack validation.
+- Committed and pushed the Arknights resource calibration as `b0b0d76` (`resources: add AK quickswitch dropdown anchor`).
+- Updated the AK M6 acceptance report and planning/checkpoint files. Per the updated user instruction, this round stops after committing this completed slice.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`: `169ad688a64ab42ee577ae6ea1af633c2df04969`; `origin/main` matched before local documentation changes.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `0b318bf8517344e45eeea502b5da0d3ea78b2dd7` before local QuickSwitch changes; `origin/main` matched.
+- Arknights QuickSwitch result: `b0b0d7657323f0b18595574d75d72e7b7ef5b97a` pushed to `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/do_recruit/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/do_recruit/task.json`
+  - `ours/operations/open_gacha/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/open_gacha/task.json`
+  - `ours/operations/open_infrast/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/open_infrast/task.json`
+  - `ours/operations/open_mall/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/open_mall/task.json`
+  - `ours/operations/open_operator/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/open_operator/task.json`
+  - `ours/operations/open_terminal/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/open_terminal/task.json`
+  - `ours/operations/return_home/assets/QUICKSWITCH_DROPDOWN_NAV.png`
+  - `ours/operations/return_home/task.json`
+  - `ours/operations/operations.primitives.json`
+  - `ours/recognition/arknights.cn.pack.json`
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame>` for QuickSwitch dropdown, home, depot, friends, mission, sign-in, and announcement frames.
+- `target\release\actinglab.exe --json recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame> --target page/quickswitch_dropdown`
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --check-pages`
+- `git diff --check` in the Arknights resource repository.
+- `git commit -m "resources: add AK quickswitch dropdown anchor"` and `git push origin main` in the Arknights resource repository.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check` in the Runtime repository.
+
+### Test results
+
+- Arknights CN `resource convert` passed: 10 bundles, 18 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- Arknights CN `detect-page --check-pages` passed.
+- QuickSwitch dropdown retained frames now match `arknights/quickswitch_dropdown` only:
+  - `akqs_overlay.png`
+  - `akqs_mall_try.png`
+  - `qs4_recruit_via_qs.png`
+  - `qs4_recruit2.png`
+- Existing positive retained pages still match their intended page only:
+  - `akpg_home.png` -> `arknights/home`
+  - `akpg_depot.png` -> `arknights/depot`
+  - `akpg_friends.png` -> `arknights/friends`
+  - `akpg_mission.png` -> `arknights/mission`
+- Modal false-positive frames still resolve to standby/no generated page:
+  - `wf_arknights_recruit.png`
+  - `recak_close0.png`
+- QuickSwitch target threshold samples:
+  - `page/quickswitch_dropdown` on QuickSwitch dropdown: score `1.000000`, threshold `0.900000`, passed.
+  - `page/quickswitch_dropdown` on depot: score `0.810085`, threshold `0.900000`, failed.
+  - `page/quickswitch_dropdown` on home: score `0.684120`, threshold `0.900000`, failed.
+  - `page/quickswitch_dropdown` on sign-in modal: score `0.716161`, threshold `0.900000`, failed.
+  - `page/quickswitch_dropdown` on announcement modal: score `0.768541`, threshold `0.900000`, failed.
+- Arknights resource repository whitespace validation passed with `git diff --check`.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
+### Current blocker
+
+- No blocker for this implementation slice.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks accepted positive destination-page frames for `recruit`, `gacha`, `infrast`, and `mall`.
+- The single-frame QuickSwitch/depot/friends/mission/operator positives are not full threshold distributions.
+
+### Next step
+
+1. Commit and push the Runtime report/planning/checkpoint update for this slice.
+2. Stop after this completed slice per the updated user instruction.
+
 ## 2026-07-04 AK MAA data fidelity modal false-positive rejection
 
 ### Current status

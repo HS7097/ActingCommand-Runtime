@@ -15,12 +15,12 @@ remote `origin/main` heads before local calibration changes:
 
 | Repository | Path | Base commit |
 | --- | --- | --- |
-| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `7ad8688f2107d36ec2c016c99bfbeef0b85443aa` |
+| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `0b318bf8517344e45eeea502b5da0d3ea78b2dd7` |
 | AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
 | BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
 
 The Runtime repository was also fetched before the 2026-07-04 continuation and
-was aligned with `origin/main` at `ccf35312531bc7255cb6190ad78546f6952d6509`.
+was aligned with `origin/main` at `169ad688a64ab42ee577ae6ea1af633c2df04969`.
 
 ## Structural reconversion
 
@@ -49,6 +49,7 @@ The current local retained-frame corpus found for AK page calibration contains:
 | `mission_positive` | `arknights/mission` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_mission.png` |
 | `signin_modal` | no generated page should match | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\wf_arknights_recruit.png` |
 | `announcement_modal` | no generated page should match | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\recak_close0.png` |
+| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akqs_overlay.png` |
 
 ## Calibration decision
 
@@ -98,6 +99,12 @@ though no destination navigation had completed. The new negative targets are
 used only as forbidden page-rule targets, so modal overlays now resolve to
 standby/no generated page instead of silently claiming arrival.
 
+The QuickSwitch dropdown calibration pass replaces the small home-icon menu
+anchor with a wider retained dropdown navigation-strip anchor and adds it as a
+forbidden target on non-dropdown pages. This makes actual dropdown frames match
+`arknights/quickswitch_dropdown` only, while retained home, depot, friends,
+mission, sign-in, and announcement frames no longer satisfy the dropdown page.
+
 ## Threshold samples
 
 | Target | Frame | Score | Threshold | Passed |
@@ -118,6 +125,11 @@ standby/no generated page instead of silently claiming arrival.
 | `page/negative_announcement` | `announcement_modal` | 1.000000 | 0.920000 | true |
 | `page/negative_announcement` | `home` | 0.649569 | 0.920000 | false |
 | `page/negative_announcement` | `depot_positive` | 0.791150 | 0.920000 | false |
+| `page/quickswitch_dropdown` | `quickswitch_dropdown_positive` | 1.000000 | 0.900000 | true |
+| `page/quickswitch_dropdown` | `depot_positive` | 0.810085 | 0.900000 | false |
+| `page/quickswitch_dropdown` | `home` | 0.684120 | 0.900000 | false |
+| `page/quickswitch_dropdown` | `signin_modal` | 0.716161 | 0.900000 | false |
+| `page/quickswitch_dropdown` | `announcement_modal` | 0.768541 | 0.900000 | false |
 | `page/terminal_stage_map` | `home_retest` | 0.721208 | 0.920000 | false |
 | `page/terminal_stage_map` | `home_run` | 0.712677 | 0.920000 | false |
 | `page/terminal_stage_map` | `mission_result` | 0.628819 | 0.920000 | false |
@@ -157,6 +169,7 @@ After conversion, retained-frame page detection produced:
 | `mission_positive` | `arknights/mission` |
 | `signin_modal` | none |
 | `announcement_modal` | none |
+| `quickswitch_dropdown_positive` | `arknights/quickswitch_dropdown` |
 
 An additional release-build scan across 93 retained AK screenshots under the
 current Runtime `target` tree found 91 home matches, one terminal match, and
@@ -174,13 +187,11 @@ evidence.
 ## Remaining evidence gap
 
 The local retained-frame corpus does not contain accepted positive captures for
-the destination pages `recruit`, `gacha`, `infrast`, or `mall`. It contains
-several QuickSwitch dropdown overlay frames, but those frames still multi-match
-QuickSwitch-derived destination anchors and therefore are not accepted as
-discriminative QuickSwitch page evidence yet. The depot, friends, mission, and
-operator pages now each have one positive retained frame, but a single frame is
-not a full threshold distribution. Positive threshold distribution for the
-remaining destination pages is not proven by the current corpus.
+the destination pages `recruit`, `gacha`, `infrast`, or `mall`. The QuickSwitch
+dropdown, depot, friends, mission, and operator pages now each have at least one
+positive retained frame, but single-frame evidence is not a full threshold
+distribution. Positive threshold distribution for the remaining destination
+pages is not proven by the current corpus.
 
 The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
 closed until destination-page positive retained frames are added or a later
