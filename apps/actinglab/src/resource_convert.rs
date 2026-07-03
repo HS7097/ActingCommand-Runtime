@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const GENERATED_BY: &str = "actinglab resource convert";
+const CONVERTER_SCHEMA_VERSION: &str = "0.4";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 
 pub(super) fn run_resource_convert(
@@ -172,11 +173,16 @@ impl OperationConverter {
     pub(super) fn build_all(&self) -> CliOutcome<ConvertOutputs> {
         let pack = self.build_pack()?;
         validate_pack_targets_exist(&self.root, &pack)?;
+        let pages = self.build_pages()?;
+        let navigation = self.build_navigation()?;
+        let index = self.build_index()?;
+        let primitives = self.build_primitives()?;
+        validate_converted_guard_references(&pack, &pages, &primitives)?;
         Ok(ConvertOutputs {
-            pages: self.build_pages()?,
-            navigation: self.build_navigation()?,
-            index: self.build_index()?,
-            primitives: self.build_primitives()?,
+            pages,
+            navigation,
+            index,
+            primitives,
             pack,
         })
     }
@@ -372,6 +378,10 @@ impl OperationConverter {
         propagate_color_checks(&mut targets, &order);
         Ok(ordered_object([
             ("schema_version", Value::String("0.3".to_string())),
+            (
+                "converter_schema_version",
+                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
+            ),
             ("generated", Value::Bool(true)),
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("game", Value::String(self.game.clone())),
@@ -423,6 +433,10 @@ impl OperationConverter {
         }
         Ok(ordered_object([
             ("schema_version", Value::String("0.3".to_string())),
+            (
+                "converter_schema_version",
+                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
+            ),
             ("generated", Value::Bool(true)),
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             (
@@ -478,6 +492,10 @@ impl OperationConverter {
         let page_operations = self.build_page_operations()?;
         Ok(ordered_object([
             ("schema_version", Value::String("0.3".to_string())),
+            (
+                "converter_schema_version",
+                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
+            ),
             ("generated", Value::Bool(true)),
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("game", Value::String(self.game.clone())),
@@ -596,6 +614,10 @@ impl OperationConverter {
         }
         Ok(ordered_object([
             ("schema_version", Value::String("0.3".to_string())),
+            (
+                "converter_schema_version",
+                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
+            ),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
             ("generated", Value::Bool(true)),
@@ -619,6 +641,7 @@ impl OperationConverter {
                     .map(template_target_id)
                     .map(Value::String)
                     .unwrap_or(Value::Null);
+                let guard = self.operation_guard(bundle, operation)?;
                 primitives.push(ordered_object([
                     ("id", Value::String(operation_id)),
                     ("task_id", Value::String(bundle.task_id.clone())),
@@ -633,6 +656,16 @@ impl OperationConverter {
                     ("to", operation.get("to").cloned().unwrap_or(Value::Null)),
                     ("click", required_field(operation, "click")?.clone()),
                     ("verify_template", verify_template),
+                    ("guard", guard),
+                    (
+                        "unguarded_trusted_coordinate",
+                        Value::Bool(
+                            operation
+                                .get("unguarded_trusted_coordinate")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        ),
+                    ),
                     (
                         "consumes",
                         operation
@@ -652,11 +685,65 @@ impl OperationConverter {
         }
         Ok(ordered_object([
             ("schema_version", Value::String("0.3".to_string())),
+            (
+                "converter_schema_version",
+                Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
+            ),
             ("game", Value::String(self.game.clone())),
             ("server", Value::String(self.server.clone())),
             ("generated", Value::Bool(true)),
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("primitives", Value::Array(primitives)),
+        ]))
+    }
+
+    fn operation_guard(&self, bundle: &Bundle, operation: &Value) -> CliOutcome<Value> {
+        if let Some(guard) = operation.get("guard") {
+            return Ok(guard.clone());
+        }
+        if operation
+            .get("unguarded_trusted_coordinate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(Value::Null);
+        }
+        let operation_id = required_string(operation, "id")?;
+        let verify_template = operation
+            .get("verify_template")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "operation '{operation_id}' cannot synthesize guard without verify_template; add guard or set unguarded_trusted_coordinate"
+                ))
+            })?;
+        if operation.get("to").and_then(Value::as_str).is_none() {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' cannot synthesize guard without a string to page"
+            )));
+        }
+        let verify = array_field(&bundle.data, "verify_templates")
+            .iter()
+            .find(|entry| entry.get("template").and_then(Value::as_str) == Some(verify_template))
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "operation '{operation_id}' verify_template '{verify_template}' has no matching verify_templates entry with a region"
+                ))
+            })?;
+        let target_id = required_string(verify, "id")?;
+        let expected_rect = region_to_guard_rect(required_field(verify, "region")?)?;
+        Ok(ordered_object([
+            (
+                "page_id",
+                page_or_any(&self.game, &required_string(operation, "from")?),
+            ),
+            ("target_id", Value::String(target_id)),
+            ("expected_rect", expected_rect),
+            (
+                "verify_template",
+                Value::String(verify_template.to_string()),
+            ),
         ]))
     }
 
@@ -969,6 +1056,26 @@ fn region_to_pack(region: &Value) -> CliOutcome<Value> {
     }
 }
 
+fn region_to_guard_rect(region: &Value) -> CliOutcome<Value> {
+    match region.get("mode").and_then(Value::as_str) {
+        Some("rect") => {
+            let rect = required_field(region, "rect")?;
+            Ok(ordered_object([
+                ("x", required_field(rect, "x")?.clone()),
+                ("y", required_field(rect, "y")?.clone()),
+                ("width", required_field(rect, "width")?.clone()),
+                ("height", required_field(rect, "height")?.clone()),
+            ]))
+        }
+        Some("full_frame") => Err(CliError::package_invalid(
+            "cannot synthesize guard expected_rect from full_frame verify_template region",
+        )),
+        other => Err(CliError::package_invalid(format!(
+            "unknown guard region mode: {other:?}"
+        ))),
+    }
+}
+
 fn color_check_to_pack(color_check: Option<&Value>) -> CliOutcome<Option<Value>> {
     let Some(color_check) = color_check else {
         return Ok(None);
@@ -1072,6 +1179,81 @@ fn validate_pack_targets_exist(root: &Path, pack: &Value) -> CliOutcome<()> {
             errors.join("\n  - ")
         )))
     }
+}
+
+fn validate_converted_guard_references(
+    pack: &Value,
+    pages: &Value,
+    primitives: &Value,
+) -> CliOutcome<()> {
+    let game = pack.get("game").and_then(Value::as_str).unwrap_or("");
+    let targets = array_field(pack, "targets")
+        .iter()
+        .filter_map(|target| {
+            target
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), target))
+        })
+        .collect::<HashMap<_, _>>();
+    let page_ids = array_field(pages, "pages")
+        .iter()
+        .filter_map(|page| page.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<HashSet<_>>();
+    let mut errors = Vec::new();
+    for operation in array_field(primitives, "primitives") {
+        let operation_id = operation
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let Some(guard) = operation.get("guard").filter(|guard| !guard.is_null()) else {
+            continue;
+        };
+        let page_id = guard.get("page_id").and_then(Value::as_str).unwrap_or("");
+        if !converted_page_id_exists(game, &page_ids, page_id) {
+            errors.push(format!(
+                "operation '{operation_id}' guard.page_id '{page_id}' does not exist in pages"
+            ));
+        }
+        let target_id = guard.get("target_id").and_then(Value::as_str).unwrap_or("");
+        let Some(target) = targets.get(target_id) else {
+            errors.push(format!(
+                "operation '{operation_id}' guard.target_id '{target_id}' does not exist in pack"
+            ));
+            continue;
+        };
+        if guard
+            .get("verify_template")
+            .and_then(Value::as_str)
+            .is_some()
+            && target.get("type").and_then(Value::as_str) != Some("template")
+        {
+            errors.push(format!(
+                "operation '{operation_id}' guard.verify_template points to non-template target '{target_id}'"
+            ));
+        }
+        if guard.get("color_probe").and_then(Value::as_str).is_some()
+            && target.get("type").and_then(Value::as_str) != Some("color")
+        {
+            errors.push(format!(
+                "operation '{operation_id}' guard.color_probe points to non-color target '{target_id}'"
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::package_invalid(format!(
+            "resource convert guard validation failed:\n  - {}",
+            errors.join("\n  - ")
+        )))
+    }
+}
+
+fn converted_page_id_exists(game: &str, page_ids: &HashSet<String>, guard_page_id: &str) -> bool {
+    guard_page_id == "any"
+        || page_ids.contains(guard_page_id)
+        || (!game.is_empty() && page_ids.contains(&page_id(game, guard_page_id)))
 }
 
 fn read_json_value(path: &Path) -> CliOutcome<Value> {
@@ -1339,6 +1521,162 @@ mod tests {
         assert_eq!(
             target_value.pointer("/threshold").and_then(Value::as_f64),
             Some(0.97)
+        );
+    }
+
+    #[test]
+    fn build_primitives_synthesizes_guard_from_operation_verify_template() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/daily-check");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "daily-check".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "anchors": [],
+                    "verify_templates": [{
+                        "id": "template/verify_ready",
+                        "template": "assets/VERIFY_READY.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}},
+                        "threshold": 0.97
+                    }],
+                    "operations": [{
+                        "id": "home_to_target",
+                        "purpose": "go target",
+                        "from": "home",
+                        "to": "target",
+                        "click": {"kind":"rect","x":100,"y":110,"width":20,"height":25},
+                        "verify_template": "assets/VERIFY_READY.png"
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs
+            .primitives
+            .pointer("/primitives/0")
+            .expect("primitive");
+
+        assert_eq!(
+            primitive.pointer("/guard/page_id").and_then(Value::as_str),
+            Some("arknights/home")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/target_id")
+                .and_then(Value::as_str),
+            Some("template/verify_ready")
+        );
+        assert_eq!(
+            primitive.pointer("/guard/expected_rect"),
+            Some(&json!({"x":10,"y":20,"width":30,"height":40}))
+        );
+        assert_eq!(
+            outputs
+                .primitives
+                .get("converter_schema_version")
+                .and_then(Value::as_str),
+            Some("0.4")
+        );
+    }
+
+    #[test]
+    fn build_primitives_rejects_unmatched_verify_template_without_trusted_opt_in() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/daily-check");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/VERIFY_READY.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "daily-check".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "anchors": [],
+                    "operations": [{
+                        "id": "home_to_target",
+                        "purpose": "go target",
+                        "from": "home",
+                        "to": "target",
+                        "click": {"kind":"rect","x":100,"y":110,"width":20,"height":25},
+                        "verify_template": "assets/VERIFY_READY.png"
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let err = converter
+            .build_all()
+            .expect_err("guard synthesis should fail");
+
+        assert!(err.message.contains("no matching verify_templates entry"));
+    }
+
+    #[test]
+    fn build_primitives_allows_explicit_trusted_unguarded_coordinate() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/daily-check");
+        fs::create_dir_all(&task_dir).unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "daily-check".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "daily-check",
+                    "anchors": [],
+                    "operations": [{
+                        "id": "home_to_target",
+                        "purpose": "go target",
+                        "from": "home",
+                        "to": "target",
+                        "click": {"kind":"rect","x":100,"y":110,"width":20,"height":25},
+                        "verify_template": null,
+                        "unguarded_trusted_coordinate": true
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert!(primitive.get("guard").is_some_and(Value::is_null));
+        assert_eq!(
+            primitive
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

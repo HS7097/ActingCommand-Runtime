@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal acceptance repair R4
+
+### Current status
+
+- Active task: `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.
+- Implemented R4 stored operation package guard migration in `resource_convert`.
+- `resource convert` now synthesizes `guard` metadata for stored operations when the operation has `to` plus `verify_template`, and the same bundle has a matching `verify_templates` entry with a rectangular region.
+- Synthesized guard metadata uses the operation `from` page as `guard.page_id`, the matching generated pack target id as `guard.target_id`, and the matching verify-template region as `guard.expected_rect`.
+- Operations that cannot derive a guard fail during conversion unless they explicitly set `unguarded_trusted_coordinate`.
+- Converter outputs now include `converter_schema_version: "0.4"` and validate converted guard page/target/type references across pack/pages/primitives after generation.
+- R1-R5 are now implemented locally and have passed the task's public local validation commands.
+
+### Files changed
+
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab build_primitives_`
+- `cargo test -p actingcommand-actinglab resource_convert::tests`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab package_build::tests::build_task_package_validates_and_rewrites_template_paths`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab build_primitives_`: passed with 3 focused tests.
+- `cargo test -p actingcommand-actinglab resource_convert::tests`: passed with 10 tests.
+- First `cargo test --workspace` after R4 failed because the new converter guard validation also enforced the P1-style `expected_rect` versus pack-region check on legacy explicit guards; the validation was narrowed to R4-required page/target/type reference consistency, with namespaced and unnamespaced page ids accepted consistently with runtime page matching.
+- `cargo test -p actingcommand-actinglab package_build::tests::build_task_package_validates_and_rewrites_template_paths`: passed after the validation narrowing.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No known implementation blocker.
+
+### Next step
+
+1. Commit and push the R4/final acceptance repair.
+2. Watch remote CI and record the final result if available.
+
 ## 2026-07-03 Lab self-heal acceptance repair R1-R3
 
 ### Current status

@@ -16,9 +16,9 @@ Blocking repair status:
 - R1 C2 recovery loop true execution: implemented locally. Non-dry-run monitor resource recovery now executes through an injectable Session Layer throat adapter; dry-run remains plan-only; non-constant detect routes through the injected detector path.
 - R2 recovery lease-yield: implemented locally. Active mismatched leases defer recovery before any page-changing Session Layer action; no active lease or a matching lease allows execution.
 - R3 C3 escalation ladder and reference resolvability: implemented locally. Recovery actions preserve resource order, failed/not-arrived actions advance to the next escalation action, and named flows/control points/external sources must resolve during plan construction without game-specific branching.
-- R4 stored operation package guard migration: pending.
+- R4 stored operation package guard migration: implemented locally. `resource convert` now synthesizes guard metadata from operation-level `verify_template` data when the matching `verify_templates` entry provides a rectangular region, preserves explicit trusted unguarded opt-in, fails loudly when guard data cannot be derived, and validates converted guard page/target/type references across pack/pages/primitives.
 
-Until R4 is implemented and public validation passes, the full C0.c -> C3 self-heal chain remains under acceptance repair.
+The full C0.c -> C3 self-heal acceptance repair has passed local public validation and is ready for remote CI verification.
 
 ## Current implementation line
 
