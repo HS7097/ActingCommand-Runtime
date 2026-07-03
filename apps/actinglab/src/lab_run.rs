@@ -3514,6 +3514,8 @@ fn page_evaluation_json(evaluation: &PageEvaluation) -> Value {
         "message": evaluation.message,
         "required_passed": evaluation.required_passed,
         "required_total": evaluation.required_total,
+        "any_of_passed": evaluation.any_of_passed,
+        "any_of_total": evaluation.any_of_total,
         "optional_passed": evaluation.optional_passed,
         "optional_total": evaluation.optional_total,
         "forbidden_passed": evaluation.forbidden_passed,

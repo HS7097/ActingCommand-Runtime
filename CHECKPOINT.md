@@ -1,5 +1,94 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity operator any-of continuation
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` from the retained-frame M6 calibration checkpoint.
+- Refreshed Runtime and all three resource repositories from `origin/main` before this resource-dependent pass.
+- Added page-detector `any_of` groups so a page can require one passing target from each mutually exclusive target group while still requiring all `required` targets and zero `forbidden` targets.
+- Extended page evaluation output with `any_of_passed` and `any_of_total`, and exposed the `AnyOf` target role in CLI/device-test diagnostics.
+- Updated Runtime resource conversion so generated pages with anchor variants such as AK `operator_0` and `operator_1` emit `required: []` plus `any_of: [[...]]` rather than requiring impossible simultaneous visual states.
+- Kept AzurLane and BlueArchive generated resources unchanged after re-conversion; Arknights generated pages changed only for the operator page.
+- Updated the AK M6 acceptance report and this checkpoint. The broader task remains active because positive retained frames for several destination pages are still missing.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `7834241c34db258d1ef7f18ce9c1a4165e381f59` before local operator page changes; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `crates/page-detector/src/lib.rs`
+  - `crates/task-loop/src/lib.rs`
+  - `crates/task-loop/src/probe.rs`
+  - `apps/actinglab/src/resource_convert.rs`
+  - `apps/actinglab/src/package_build.rs`
+  - `apps/actinglab/src/lab_run.rs`
+  - `apps/actinglab/src/main.rs`
+  - `apps/device-test/src/main.rs`
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `git fetch --prune --tags origin` and `git pull --ff-only` in Runtime and all three resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-page-detector`
+- `cargo test -p actingcommand-actinglab resource_convert`
+- `cargo check -p actingcommand-device-test`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game ba --server jp --locale ja-JP`
+- Initial `detect-page --repo ... --check-pages` commands failed with the expected usage error because `detect-page` requires `--resource-root` rather than `--repo`; the corrected commands below were used for validation.
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game ba --server jp --check-pages`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- First `cargo test --workspace` failed because an existing package-build golden expected both operator variants under `required`; the golden was updated to assert `required: []` and `any_of: [["page/operator_0","page/operator_1"]]`.
+- `cargo test -p actingcommand-actinglab package_build::tests::build_task_package_validates_and_rewrites_template_paths -- --nocapture`
+- `actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame>` for `home_retest`, `home_run`, `mission_result`, and `terminal_stage_map`.
+- Final public gate run: `cargo fmt --all -- --check`; `cargo build --release`; `cargo clippy --workspace -- -D warnings`; `cargo test --workspace`; `git diff --check`.
+
+### Test results
+
+- Focused page-detector tests passed, including new any-of pass, fail, duplicate, conflict, empty-group, and click-only target coverage.
+- Focused resource-converter tests passed, including generated any-of page variant coverage.
+- Focused package-build golden passed after updating the operator page expectation to the new any-of semantics.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Final `cargo test --workspace` passed after the package-build golden update.
+- Runtime `git diff --check` passed.
+- Three-repo `resource convert` passed:
+  - Arknights CN: 10 bundles, 16 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+  - AzurLane JP: 41 bundles, 81 targets, 41 pages, 43 edges, 17 page operations, 89 primitives.
+  - BlueArchive JP: 20 bundles, 22 targets, 20 pages, 19 edges, 23 page operations, 53 primitives.
+- `detect-page --check-pages` passed for Arknights CN, AzurLane JP, and BlueArchive JP.
+- Retained AK frame spot-check results after the any-of change:
+  - `home_retest`: matches `arknights/home` only.
+  - `home_run`: matches `arknights/home` only.
+  - `mission_result`: matches no generated page.
+  - `terminal_stage_map`: matches `arknights/terminal` only.
+
+### Current blocker
+
+- No blocker for this implementation slice.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks positive destination-page frames for `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`, `mission`, `operator`, and the actual QuickSwitch dropdown overlay.
+
+### Next step
+
+1. Commit and push the Runtime any-of implementation and planning/checkpoint/report update.
+2. Commit and push the Arknights generated operator page update.
+3. Continue the broader goal only after new positive retained frames/resources are available or the task's M6 evidence gate is explicitly narrowed.
+
 ## 2026-07-03 AK MAA data fidelity M6 retained-frame calibration continuation
 
 ### Current status

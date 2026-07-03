@@ -15,7 +15,7 @@ remote `origin/main` heads before local calibration changes:
 
 | Repository | Path | Base commit |
 | --- | --- | --- |
-| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `c8a110a3b285f519934307a1897a13564ad245b4` |
+| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `7834241c34db258d1ef7f18ce9c1a4165e381f59` |
 | AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
 | BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
 
@@ -26,7 +26,7 @@ converter and passed page-pack structural validation:
 
 | Repository | Result |
 | --- | --- |
-| Arknights CN | `resource convert` wrote 10 bundles, 15 targets, 11 pages, 13 edges, 7 page operations, 25 primitives; `detect-page --check-pages` passed. |
+| Arknights CN | `resource convert` wrote 10 bundles, 16 targets, 11 pages, 13 edges, 7 page operations, 25 primitives; `detect-page --check-pages` passed. |
 | AzurLane JP | `resource convert` wrote 41 bundles, 81 targets, 41 pages, 43 edges, 17 page operations, 89 primitives; `detect-page --check-pages` passed. |
 | BlueArchive JP | `resource convert` wrote 20 bundles, 22 targets, 20 pages, 19 edges, 23 page operations, 53 primitives; `detect-page --check-pages` passed. |
 
@@ -64,6 +64,13 @@ All non-terminal pages also forbid `page/terminal_stage_map`, preventing the
 retained terminal stage map from satisfying unrelated QuickSwitch-derived page
 anchors.
 
+The 2026-07-04 continuation also fixes the `arknights/operator` page definition
+semantics. Its two operator anchors are now emitted as one `any_of` page group
+instead of two simultaneously required targets, so a real operator frame can
+match either the expanded-role or collapsed-role visual state. This removes a
+structural false negative in the generated page pack; it does not by itself
+prove positive retained-frame threshold distribution for the operator page.
+
 ## Threshold samples
 
 | Target | Frame | Score | Threshold | Passed |
@@ -99,10 +106,10 @@ the terminal-stage guard was added.
 
 The local retained-frame corpus does not contain positive captures for the
 destination pages `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`,
-`mission`, `operator`, or the actual QuickSwitch dropdown overlay. Their
-current rules now fail safely on the available non-target frames, but positive
-threshold distribution for those destination pages is not proven by the current
-corpus.
+`mission`, `operator`, or the actual QuickSwitch dropdown overlay. The operator
+page now has correct `any_of` variant semantics, and the current rules fail
+safely on the available non-target frames, but positive threshold distribution
+for those destination pages is not proven by the current corpus.
 
 The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
 closed until destination-page positive retained frames are added or a later

@@ -1003,11 +1003,13 @@ fn format_rgb(value: [u8; 3]) -> String {
 
 fn format_page_evaluation(evaluation: &PageEvaluation) -> String {
     let mut output = format!(
-        "page_id={}\nmatched={}\nrequired_passed={}\nrequired_total={}\noptional_passed={}\noptional_total={}\nforbidden_passed={}\nforbidden_total={}\nmessage={}\n",
+        "page_id={}\nmatched={}\nrequired_passed={}\nrequired_total={}\nany_of_passed={}\nany_of_total={}\noptional_passed={}\noptional_total={}\nforbidden_passed={}\nforbidden_total={}\nmessage={}\n",
         evaluation.page_id,
         evaluation.matched,
         evaluation.required_passed,
         evaluation.required_total,
+        evaluation.any_of_passed,
+        evaluation.any_of_total,
         evaluation.optional_passed,
         evaluation.optional_total,
         evaluation.forbidden_passed,
@@ -1031,6 +1033,7 @@ fn format_page_evaluation(evaluation: &PageEvaluation) -> String {
 fn format_page_role(role: PageTargetRole) -> &'static str {
     match role {
         PageTargetRole::Required => "required",
+        PageTargetRole::AnyOf => "any_of",
         PageTargetRole::Optional => "optional",
         PageTargetRole::Forbidden => "forbidden",
     }

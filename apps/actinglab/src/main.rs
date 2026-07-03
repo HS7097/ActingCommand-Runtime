@@ -24457,6 +24457,8 @@ fn page_eval_json(evaluation: &actingcommand_page_detector::PageEvaluation) -> V
         "page": evaluation.page_id,
         "matched": evaluation.matched,
         "message": evaluation.message,
+        "any_of_passed": evaluation.any_of_passed,
+        "any_of_total": evaluation.any_of_total,
         "targets": evaluation
             .target_results
             .iter()

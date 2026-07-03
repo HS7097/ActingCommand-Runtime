@@ -60,6 +60,8 @@ pub struct PageDefinition {
     pub id: String,
     pub required: Vec<String>,
     #[serde(default)]
+    pub any_of: Vec<Vec<String>>,
+    #[serde(default)]
     pub optional: Vec<String>,
     #[serde(default)]
     pub forbidden: Vec<String>,
@@ -77,6 +79,8 @@ pub struct PageEvaluation {
     pub matched: bool,
     pub required_passed: usize,
     pub required_total: usize,
+    pub any_of_passed: usize,
+    pub any_of_total: usize,
     pub optional_passed: usize,
     pub optional_total: usize,
     pub forbidden_passed: usize,
@@ -96,6 +100,7 @@ pub struct PageTargetEvaluation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageTargetRole {
     Required,
+    AnyOf,
     Optional,
     Forbidden,
 }
@@ -181,18 +186,28 @@ impl PageDetector {
     ) -> PageDetectorResult<PageEvaluation> {
         let required_results =
             evaluate_targets(evaluator, scene, &page.required, PageTargetRole::Required)?;
+        let any_of_results = evaluate_any_of_groups(evaluator, scene, &page.any_of)?;
         let optional_results =
             evaluate_targets(evaluator, scene, &page.optional, PageTargetRole::Optional)?;
         let forbidden_results =
             evaluate_targets(evaluator, scene, &page.forbidden, PageTargetRole::Forbidden)?;
 
         let required_passed = count_passed(&required_results);
+        let any_of_passed = count_passed_groups(&any_of_results);
         let optional_passed = count_passed(&optional_results);
         let forbidden_passed = count_passed(&forbidden_results);
-        let matched = required_passed == page.required.len() && forbidden_passed == 0;
-        let message = page_message(matched, &required_results, &forbidden_results);
+        let matched = required_passed == page.required.len()
+            && any_of_passed == page.any_of.len()
+            && forbidden_passed == 0;
+        let message = page_message(
+            matched,
+            &required_results,
+            &any_of_results,
+            &forbidden_results,
+        );
 
         let mut target_results = required_results;
+        target_results.extend(any_of_results.iter().flatten().cloned());
         target_results.extend(optional_results);
         target_results.extend(forbidden_results);
 
@@ -201,6 +216,8 @@ impl PageDetector {
             matched,
             required_passed,
             required_total: page.required.len(),
+            any_of_passed,
+            any_of_total: page.any_of.len(),
             optional_passed,
             optional_total: page.optional.len(),
             forbidden_passed,
@@ -241,9 +258,9 @@ fn validate_page_set(page_set: &PageSet) -> PageDetectorResult<()> {
 }
 
 fn validate_page_definition(page: &PageDefinition) -> PageDetectorResult<()> {
-    if page.required.is_empty() {
+    if page.required.is_empty() && page.any_of.is_empty() {
         return Err(PageDetectorError::fatal(format!(
-            "page '{}' required targets must not be empty",
+            "page '{}' must have required targets or any_of groups",
             page.id
         )));
     }
@@ -281,6 +298,39 @@ fn validate_page_definition(page: &PageDefinition) -> PageDetectorResult<()> {
             }
         }
     }
+    for (group_index, group) in page.any_of.iter().enumerate() {
+        if group.is_empty() {
+            return Err(PageDetectorError::fatal(format!(
+                "page '{}' any_of[{group_index}] must not be empty",
+                page.id
+            )));
+        }
+        for target_id in group {
+            if target_id.is_empty() {
+                return Err(PageDetectorError::fatal(format!(
+                    "page '{}' target id is empty",
+                    page.id
+                )));
+            }
+            match seen.insert(target_id, PageTargetRole::AnyOf) {
+                None => {}
+                Some(PageTargetRole::AnyOf) => {
+                    return Err(PageDetectorError::fatal(format!(
+                        "page '{}' target '{}' is duplicated",
+                        page.id, target_id
+                    )));
+                }
+                Some(previous) => {
+                    return Err(PageDetectorError::fatal(format!(
+                        "page '{}' target '{}' appears in both {} and any_of",
+                        page.id,
+                        target_id,
+                        role_name(previous)
+                    )));
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -288,6 +338,7 @@ fn validate_page_definition(page: &PageDefinition) -> PageDetectorResult<()> {
 fn page_target_ids(page: &PageDefinition) -> impl Iterator<Item = &str> {
     page.required
         .iter()
+        .chain(page.any_of.iter().flatten())
         .chain(page.optional.iter())
         .chain(page.forbidden.iter())
         .map(String::as_str)
@@ -315,13 +366,32 @@ fn evaluate_targets(
         .collect()
 }
 
+fn evaluate_any_of_groups(
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    groups: &[Vec<String>],
+) -> PageDetectorResult<Vec<Vec<PageTargetEvaluation>>> {
+    groups
+        .iter()
+        .map(|group| evaluate_targets(evaluator, scene, group, PageTargetRole::AnyOf))
+        .collect()
+}
+
 fn count_passed(results: &[PageTargetEvaluation]) -> usize {
     results.iter().filter(|result| result.passed).count()
+}
+
+fn count_passed_groups(groups: &[Vec<PageTargetEvaluation>]) -> usize {
+    groups
+        .iter()
+        .filter(|group| group.iter().any(|result| result.passed))
+        .count()
 }
 
 fn page_message(
     matched: bool,
     required_results: &[PageTargetEvaluation],
+    any_of_results: &[Vec<PageTargetEvaluation>],
     forbidden_results: &[PageTargetEvaluation],
 ) -> String {
     if matched {
@@ -333,12 +403,24 @@ fn page_message(
     if let Some(result) = forbidden_results.iter().find(|result| result.passed) {
         return format!("forbidden target passed: {}", result.target_id);
     }
+    if let Some(group) = any_of_results
+        .iter()
+        .find(|group| !group.iter().any(|result| result.passed))
+    {
+        let targets = group
+            .iter()
+            .map(|result| result.target_id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("any_of group failed: {targets}");
+    }
     "page not matched".to_string()
 }
 
 fn role_name(role: PageTargetRole) -> &'static str {
     match role {
         PageTargetRole::Required => "required",
+        PageTargetRole::AnyOf => "any_of",
         PageTargetRole::Optional => "optional",
         PageTargetRole::Forbidden => "forbidden",
     }
@@ -428,6 +510,7 @@ mod tests {
             pages: vec![PageDefinition {
                 id: String::new(),
                 required: vec!["fixture/home_anchor".to_string()],
+                any_of: Vec::new(),
                 optional: Vec::new(),
                 forbidden: Vec::new(),
             }],
@@ -455,6 +538,7 @@ mod tests {
             pages: vec![PageDefinition {
                 id: "fixture/home_page".to_string(),
                 required: Vec::new(),
+                any_of: Vec::new(),
                 optional: Vec::new(),
                 forbidden: Vec::new(),
             }],
@@ -466,6 +550,111 @@ mod tests {
     }
 
     #[test]
+    fn any_of_group_can_satisfy_page_without_required_targets() {
+        let fixture = Fixture::new();
+        let detector = PageDetector::new(PageSet {
+            pages: vec![PageDefinition {
+                id: "fixture/menu_page".to_string(),
+                required: Vec::new(),
+                any_of: vec![vec![
+                    "fixture/home_anchor".to_string(),
+                    "fixture/settings_anchor".to_string(),
+                ]],
+                optional: Vec::new(),
+                forbidden: vec!["fixture/forbidden_popup".to_string()],
+            }],
+            ..base_page_set()
+        })
+        .expect("detector");
+
+        let evaluation = detector
+            .evaluate_page(
+                &fixture.evaluator,
+                &scene_colors(false, true, false),
+                "fixture/menu_page",
+            )
+            .expect("evaluate any_of page");
+
+        assert!(evaluation.matched);
+        assert_eq!(evaluation.required_total, 0);
+        assert_eq!(evaluation.any_of_passed, 1);
+        assert_eq!(evaluation.any_of_total, 1);
+        assert!(evaluation.target_results.iter().any(|result| {
+            result.role == PageTargetRole::AnyOf
+                && result.target_id == "fixture/settings_anchor"
+                && result.passed
+        }));
+    }
+
+    #[test]
+    fn any_of_group_failed_does_not_match() {
+        let fixture = Fixture::new();
+        let detector = PageDetector::new(PageSet {
+            pages: vec![PageDefinition {
+                id: "fixture/menu_page".to_string(),
+                required: Vec::new(),
+                any_of: vec![vec![
+                    "fixture/home_anchor".to_string(),
+                    "fixture/settings_anchor".to_string(),
+                ]],
+                optional: Vec::new(),
+                forbidden: Vec::new(),
+            }],
+            ..base_page_set()
+        })
+        .expect("detector");
+
+        let evaluation = detector
+            .evaluate_page(
+                &fixture.evaluator,
+                &scene_colors(false, false, false),
+                "fixture/menu_page",
+            )
+            .expect("evaluate any_of page");
+
+        assert!(!evaluation.matched);
+        assert_eq!(evaluation.any_of_passed, 0);
+        assert_eq!(
+            evaluation.message,
+            "any_of group failed: fixture/home_anchor, fixture/settings_anchor"
+        );
+    }
+
+    #[test]
+    fn any_of_empty_group_is_fatal() {
+        let err = PageDetector::new(PageSet {
+            pages: vec![PageDefinition {
+                id: "fixture/menu_page".to_string(),
+                required: Vec::new(),
+                any_of: vec![Vec::new()],
+                optional: Vec::new(),
+                forbidden: Vec::new(),
+            }],
+            ..base_page_set()
+        })
+        .expect_err("empty any_of group");
+
+        assert_fatal_contains(err, "any_of[0]");
+    }
+
+    #[test]
+    fn any_of_conflict_with_required_is_fatal() {
+        let err = PageDetector::new(PageSet {
+            pages: vec![PageDefinition {
+                id: "fixture/menu_page".to_string(),
+                required: vec!["fixture/home_anchor".to_string()],
+                any_of: vec![vec!["fixture/home_anchor".to_string()]],
+                optional: Vec::new(),
+                forbidden: Vec::new(),
+            }],
+            ..base_page_set()
+        })
+        .expect_err("any_of conflict");
+
+        assert_fatal_contains(err, "appears in both required and any_of");
+    }
+
+    #[test]
     fn duplicate_target_in_same_role_is_fatal() {
         let err = PageDetector::new(PageSet {
             pages: vec![PageDefinition {
@@ -474,6 +663,7 @@ mod tests {
                     "fixture/home_anchor".to_string(),
                     "fixture/home_anchor".to_string(),
                 ],
+                any_of: Vec::new(),
                 optional: Vec::new(),
                 forbidden: Vec::new(),
             }],
@@ -490,6 +680,7 @@ mod tests {
             pages: vec![PageDefinition {
                 id: "fixture/home_page".to_string(),
                 required: vec!["fixture/home_anchor".to_string()],
+                any_of: Vec::new(),
                 optional: Vec::new(),
                 forbidden: vec!["fixture/home_anchor".to_string()],
             }],
@@ -590,6 +781,7 @@ mod tests {
             pages: vec![PageDefinition {
                 id: "fixture/home_page".to_string(),
                 required: vec!["fixture/missing".to_string()],
+                any_of: Vec::new(),
                 optional: Vec::new(),
                 forbidden: Vec::new(),
             }],
@@ -617,6 +809,11 @@ mod tests {
     #[test]
     fn click_only_forbidden_is_fatal() {
         assert_click_only_role_is_fatal(PageTargetRole::Forbidden);
+    }
+
+    #[test]
+    fn click_only_any_of_is_fatal() {
+        assert_click_only_role_is_fatal(PageTargetRole::AnyOf);
     }
 
     #[test]
@@ -666,6 +863,7 @@ mod tests {
                 PageDefinition {
                     id: "fixture/unrequested_page".to_string(),
                     required: vec!["fixture/too_large_template".to_string()],
+                    any_of: Vec::new(),
                     optional: Vec::new(),
                     forbidden: Vec::new(),
                 },
@@ -706,12 +904,14 @@ mod tests {
         let mut page = PageDefinition {
             id: "fixture/click_page".to_string(),
             required: vec!["fixture/home_anchor".to_string()],
+            any_of: Vec::new(),
             optional: Vec::new(),
             forbidden: Vec::new(),
         };
 
         match role {
             PageTargetRole::Required => page.required = vec!["fixture/click_only".to_string()],
+            PageTargetRole::AnyOf => page.any_of = vec![vec!["fixture/click_only".to_string()]],
             PageTargetRole::Optional => page.optional = vec!["fixture/click_only".to_string()],
             PageTargetRole::Forbidden => page.forbidden = vec!["fixture/click_only".to_string()],
         }
@@ -783,6 +983,7 @@ mod tests {
         PageDefinition {
             id: "fixture/home_page".to_string(),
             required: vec!["fixture/home_anchor".to_string()],
+            any_of: Vec::new(),
             optional: vec!["fixture/settings_anchor".to_string()],
             forbidden: vec!["fixture/forbidden_popup".to_string()],
         }
@@ -792,6 +993,7 @@ mod tests {
         PageDefinition {
             id: "fixture/settings_page".to_string(),
             required: vec!["fixture/settings_anchor".to_string()],
+            any_of: Vec::new(),
             optional: Vec::new(),
             forbidden: vec!["fixture/forbidden_popup".to_string()],
         }

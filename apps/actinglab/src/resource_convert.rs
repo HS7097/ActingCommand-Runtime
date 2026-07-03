@@ -484,6 +484,9 @@ impl OperationConverter {
                         append_unique_strings(page, field, values, &bundle.task_json_path())?;
                     }
                 }
+                if let Some(groups) = rule.get("any_of") {
+                    append_any_of_groups(page, groups, &bundle.task_json_path())?;
+                }
             }
         }
         Ok(())
@@ -1143,25 +1146,45 @@ fn add_page(
     if pages.contains_key(&page_id) {
         return;
     }
-    let required = resolve_required(anchor_id, declared_anchor_ids)
+    let requirements = resolve_page_requirements(anchor_id, declared_anchor_ids);
+    let required = requirements
+        .required
         .into_iter()
         .map(Value::String)
         .collect();
-    pages.insert(
-        page_id.clone(),
-        ordered_object([
-            ("id", Value::String(page_id.clone())),
-            ("required", Value::Array(required)),
-            ("optional", Value::Array(Vec::new())),
-            ("forbidden", Value::Array(Vec::new())),
-        ]),
-    );
+    let any_of = requirements
+        .any_of
+        .into_iter()
+        .map(|group| Value::Array(group.into_iter().map(Value::String).collect()))
+        .collect::<Vec<_>>();
+    let mut page = ordered_map([
+        ("id", Value::String(page_id.clone())),
+        ("required", Value::Array(required)),
+        ("optional", Value::Array(Vec::new())),
+        ("forbidden", Value::Array(Vec::new())),
+    ]);
+    if !any_of.is_empty() {
+        page.insert("any_of".to_string(), Value::Array(any_of));
+    }
+    pages.insert(page_id.clone(), Value::Object(page));
     order.push(page_id);
 }
 
-fn resolve_required(anchor_id: &str, declared_anchor_ids: &BTreeSet<String>) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PageRequirements {
+    required: Vec<String>,
+    any_of: Vec<Vec<String>>,
+}
+
+fn resolve_page_requirements(
+    anchor_id: &str,
+    declared_anchor_ids: &BTreeSet<String>,
+) -> PageRequirements {
     if declared_anchor_ids.contains(anchor_id) {
-        return vec![anchor_target_id(anchor_id)];
+        return PageRequirements {
+            required: vec![anchor_target_id(anchor_id)],
+            any_of: Vec::new(),
+        };
     }
     let prefix = format!("{anchor_id}_");
     let variants = declared_anchor_ids
@@ -1170,9 +1193,15 @@ fn resolve_required(anchor_id: &str, declared_anchor_ids: &BTreeSet<String>) -> 
         .map(|id| anchor_target_id(id))
         .collect::<Vec<_>>();
     if variants.is_empty() {
-        vec![anchor_target_id(anchor_id)]
+        PageRequirements {
+            required: vec![anchor_target_id(anchor_id)],
+            any_of: Vec::new(),
+        }
     } else {
-        variants
+        PageRequirements {
+            required: Vec::new(),
+            any_of: vec![variants],
+        }
     }
 }
 
@@ -1423,6 +1452,20 @@ fn validate_page_rule_targets(pack: &Value, bundles: &[Bundle]) -> CliOutcome<()
                 }
             }
         }
+        for (page_key, rule) in rules {
+            for group in array_field(rule, "any_of") {
+                for target in group.as_array().into_iter().flatten() {
+                    let target_id = target.as_str().unwrap_or("");
+                    if targets.contains(target_id) {
+                        continue;
+                    }
+                    errors.push(format!(
+                        "{}: page_rules.{page_key}.any_of target '{target_id}' does not exist in pack",
+                        source.display()
+                    ));
+                }
+            }
+        }
     }
     if errors.is_empty() {
         Ok(())
@@ -1614,6 +1657,78 @@ fn append_unique_strings(
     Ok(())
 }
 
+fn append_any_of_groups(page: &mut Value, groups: &Value, source: &Path) -> CliOutcome<()> {
+    let groups = groups.as_array().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: page_rules.any_of must be an array",
+            source.display()
+        ))
+    })?;
+    let Some(page_object) = page.as_object_mut() else {
+        return Err(CliError::package_invalid(format!(
+            "{}: generated page is not an object",
+            source.display()
+        )));
+    };
+    page_object
+        .entry("any_of")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let target_groups = page_object
+        .get_mut("any_of")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: generated page missing any_of array",
+                source.display()
+            ))
+        })?;
+    let mut seen_groups = target_groups
+        .iter()
+        .map(canonical_group_key)
+        .collect::<CliOutcome<BTreeSet<_>>>()?;
+    for group in groups {
+        let group_values = group.as_array().ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: page_rules.any_of entries must be arrays",
+                source.display()
+            ))
+        })?;
+        let mut group_ids = Vec::new();
+        for value in group_values {
+            let Some(id) = value.as_str() else {
+                return Err(CliError::package_invalid(format!(
+                    "{}: page_rules.any_of target entries must be strings",
+                    source.display()
+                )));
+            };
+            group_ids.push(id.to_string());
+        }
+        let key = group_ids.join("\u{1f}");
+        if seen_groups.insert(key) {
+            target_groups.push(Value::Array(
+                group_ids.into_iter().map(Value::String).collect(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_group_key(group: &Value) -> CliOutcome<String> {
+    let values = group
+        .as_array()
+        .ok_or_else(|| CliError::package_invalid("generated page any_of group is not an array"))?;
+    let mut ids = Vec::new();
+    for value in values {
+        let Some(id) = value.as_str() else {
+            return Err(CliError::package_invalid(
+                "generated page any_of target is not a string",
+            ));
+        };
+        ids.push(id.to_string());
+    }
+    Ok(ids.join("\u{1f}"))
+}
+
 fn required_field<'a>(value: &'a Value, key: &str) -> CliOutcome<&'a Value> {
     value
         .get(key)
@@ -1707,16 +1822,65 @@ mod tests {
     }
 
     #[test]
-    fn resolves_page_required_variants() {
+    fn resolves_page_anchor_variants_as_any_of_group() {
         let ids = BTreeSet::from([
             "home".to_string(),
             "operator_0".to_string(),
             "operator_1".to_string(),
         ]);
-        assert_eq!(resolve_required("home", &ids), vec!["page/home"]);
         assert_eq!(
-            resolve_required("operator", &ids),
-            vec!["page/operator_0", "page/operator_1"]
+            resolve_page_requirements("home", &ids),
+            PageRequirements {
+                required: vec!["page/home".to_string()],
+                any_of: Vec::new()
+            }
+        );
+        assert_eq!(
+            resolve_page_requirements("operator", &ids),
+            PageRequirements {
+                required: Vec::new(),
+                any_of: vec![vec![
+                    "page/operator_0".to_string(),
+                    "page/operator_1".to_string()
+                ]]
+            }
+        );
+    }
+
+    #[test]
+    fn build_pages_emits_any_of_for_anchor_variants() {
+        let converter = OperationConverter {
+            root: PathBuf::from("."),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "operator-check".to_string(),
+                dir: PathBuf::from("operations/operator-check"),
+                data: json!({
+                    "schema_version": "0.5",
+                    "task_id": "operator-check",
+                    "anchors": [
+                        {"id":"operator_0","template":"assets/OPERATOR_0.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}},
+                        {"id":"operator_1","template":"assets/OPERATOR_1.png","region":{"mode":"rect","rect":{"x":5,"y":6,"width":7,"height":8}}}
+                    ],
+                    "entry_page": "operator",
+                    "target_page": "operator",
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let pages = converter.build_pages().unwrap();
+        let operator = pages.pointer("/pages/0").unwrap();
+        assert_eq!(operator.pointer("/required"), Some(&json!([])));
+        assert_eq!(
+            operator.pointer("/any_of"),
+            Some(&json!([["page/operator_0", "page/operator_1"]]))
         );
     }
 

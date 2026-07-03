@@ -1298,12 +1298,14 @@ mod tests {
                     PageDefinition {
                         id: "fixture/home_page".to_string(),
                         required: vec!["fixture/home_anchor".to_string()],
+                        any_of: Vec::new(),
                         optional: Vec::new(),
                         forbidden: Vec::new(),
                     },
                     PageDefinition {
                         id: "fixture/other_page".to_string(),
                         required: vec!["fixture/other_anchor".to_string()],
+                        any_of: Vec::new(),
                         optional: Vec::new(),
                         forbidden: Vec::new(),
                     },

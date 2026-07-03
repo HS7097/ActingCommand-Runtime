@@ -908,9 +908,10 @@ mod tests {
             .iter()
             .find(|page| page["id"] == "arknights/operator")
             .unwrap();
+        assert_eq!(operator["required"], json!([]));
         assert_eq!(
-            operator["required"],
-            json!(["page/operator_0", "page/operator_1"])
+            operator["any_of"],
+            json!([["page/operator_0", "page/operator_1"]])
         );
     }
 
