@@ -11,6 +11,9 @@
 - Operations that cannot derive a guard fail during conversion unless they explicitly set `unguarded_trusted_coordinate`.
 - Converter outputs now include `converter_schema_version: "0.4"` and validate converted guard page/target/type references across pack/pages/primitives after generation.
 - R1-R5 are now implemented locally and have passed the task's public local validation commands.
+- Implementation commit: `426b20a` (`actinglab: synthesize converted operation guards`).
+- Remote CI run `28656273607`: passed on `main` for commit `426b20a`.
+- Planned rollback/provenance tag: `checkpoint/20260703-selfheal-acceptance-repair`.
 
 ### Files changed
 
@@ -30,6 +33,8 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
 - `git diff --check`
+- `git push origin main`
+- `gh run watch 28656273607 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -42,15 +47,17 @@
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
+- Remote CI `28656273607`: passed. The `rust` job completed Format, Clippy, and Test successfully in 3m47s.
 
 ### Current blocker
 
-- No known implementation blocker.
+- No known implementation blocker. The non-blocking P-series items from the task file remain follow-up work unless a later task pulls them in.
 
 ### Next step
 
-1. Commit and push the R4/final acceptance repair.
-2. Watch remote CI and record the final result if available.
+1. Push this CI-result checkpoint update.
+2. Create and push the rollback/provenance checkpoint tag.
+3. Await follow-up resource-lane re-conversion and any P-series task selection.
 
 ## 2026-07-03 Lab self-heal acceptance repair R1-R3
 

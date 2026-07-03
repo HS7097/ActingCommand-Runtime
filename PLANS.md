@@ -18,7 +18,7 @@ Blocking repair status:
 - R3 C3 escalation ladder and reference resolvability: implemented locally. Recovery actions preserve resource order, failed/not-arrived actions advance to the next escalation action, and named flows/control points/external sources must resolve during plan construction without game-specific branching.
 - R4 stored operation package guard migration: implemented locally. `resource convert` now synthesizes guard metadata from operation-level `verify_template` data when the matching `verify_templates` entry provides a rectangular region, preserves explicit trusted unguarded opt-in, fails loudly when guard data cannot be derived, and validates converted guard page/target/type references across pack/pages/primitives.
 
-The full C0.c -> C3 self-heal acceptance repair has passed local public validation and is ready for remote CI verification.
+The full C0.c -> C3 self-heal acceptance repair has passed local public validation and remote CI verification. R1-R5 are closed for this acceptance repair; the non-blocking P-series items remain follow-up work unless a later task pulls them in.
 
 ## Current implementation line
 
