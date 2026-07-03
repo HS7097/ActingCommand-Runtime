@@ -22,7 +22,7 @@ Delivery order:
 2. C0.b ROI stability gate: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`.
 3. C0.a resource drift stop-loss: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`.
 4. C1 trigger classification and priority routing: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c1.md`.
-5. C2 live recovery loop wiring plus H1 loop detection fix: pending.
+5. C2 live recovery loop wiring plus H1 loop detection fix: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c2.md`.
 6. C3 login/wake resource wiring: pending.
 
 Current C0.c behavior:
@@ -61,7 +61,20 @@ Current C1 behavior:
 - Recovery routes are trigger-specific: stale/hang to capture backend recovery, standby to wake, modal to dismissal, off-route to maintenance navigation, session-expired to startup login, drift to stop-loss recalibration, and unstable page to action-gate failure.
 - `monitor --once` includes canonical trigger metadata for current monitor diagnoses without changing the existing status strings.
 
-These slices do not add C2 live recovery loop wiring, C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, FeatureMatch relocation, automatic resource rewrites, or game logic.
+Current C2/H1 behavior:
+
+- Resource repositories were refreshed before resource-dependent recovery wiring, and their local paths and commit hashes are recorded in `CHECKPOINT.md`.
+- `monitor --recover --use-recovery-resource` resolves `ours/recovery/<game>.<server>.recovery.json` from the selected resource root.
+- `monitor --recover --recovery-resource <path>` uses an explicit resource path and fails loudly if the file is missing or invalid.
+- The monitor loop selects recovery rules by the C1 canonical trigger and executes them through `recovery_exec`.
+- Daemon monitor policy recovery can run the same resource recovery graph when lease holder and lease id match.
+- Recovery actions are represented as Session Layer signal actions; direct device execution is not allowed.
+- Restart-class actions in recovery resources are skipped and recorded instead of executed.
+- Resource drift remains a stop-loss condition, and unstable page remains an action gate; neither is sent into a recovery graph.
+- Recovery output records journal metadata, graph status, visited nodes, selected rule id, actions, skipped restart actions, and the Session Layer/no-bypass boundary.
+- H1 is fixed: recovery graph loop detection is checked before max-attempt exhaustion can mask a repeated node.
+
+These slices do not add C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, FeatureMatch relocation, automatic resource rewrites, or game logic.
 
 ## Current P6.5-A punchlist repair
 

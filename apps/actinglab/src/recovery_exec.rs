@@ -142,6 +142,18 @@ pub fn execute_recovery_graph(
     let mut node_visits: BTreeMap<String, u32> = BTreeMap::new();
 
     loop {
+        let node = nodes.get(current).ok_or_else(|| {
+            RecoveryExecError::fatal(format!("recovery node '{current}' is missing"))
+        })?;
+        let previous_visits = *node_visits.get(current).unwrap_or(&0);
+        if previous_visits.saturating_add(1) > graph.max_node_visits {
+            return Ok(RecoveryExecutionReport {
+                status: RecoveryStatus::LoopDetected,
+                visited_nodes,
+                attempts,
+                terminal_reason: Some(format!("recovery loop detected at node '{current}'")),
+            });
+        }
         if attempts >= graph.max_attempts {
             return Ok(RecoveryExecutionReport {
                 status: RecoveryStatus::MaxAttempts,
@@ -153,19 +165,8 @@ pub fn execute_recovery_graph(
                 )),
             });
         }
-        let node = nodes.get(current).ok_or_else(|| {
-            RecoveryExecError::fatal(format!("recovery node '{current}' is missing"))
-        })?;
         let visits = node_visits.entry(current.to_string()).or_insert(0);
         *visits += 1;
-        if *visits > graph.max_node_visits {
-            return Ok(RecoveryExecutionReport {
-                status: RecoveryStatus::LoopDetected,
-                visited_nodes,
-                attempts,
-                terminal_reason: Some(format!("recovery loop detected at node '{current}'")),
-            });
-        }
         attempts += 1;
         visited_nodes.push(current.to_string());
 
@@ -490,6 +491,28 @@ mod tests {
 
         assert_eq!(report.status, RecoveryStatus::LoopDetected);
         assert_eq!(report.visited_nodes, ["loop", "loop"]);
+    }
+
+    #[test]
+    fn recovery_reports_loop_before_max_attempts_when_next_node_repeats() {
+        let mut graph = graph_with_nodes(vec![RecoveryNode {
+            id: "loop".to_string(),
+            detect: None,
+            action_escalation: Vec::new(),
+            next: Some("loop".to_string()),
+            on_error: None,
+            save_on_error: false,
+            reco_timeout: None,
+        }]);
+        graph.max_attempts = 1;
+        graph.max_node_visits = 1;
+        let mut runtime = FakeRuntime::default();
+
+        let report = execute_recovery_graph(&graph, &mut runtime).expect("loop should win");
+
+        assert_eq!(report.status, RecoveryStatus::LoopDetected);
+        assert_eq!(report.attempts, 1);
+        assert_eq!(report.visited_nodes, ["loop"]);
     }
 
     fn graph_with_nodes(nodes: Vec<RecoveryNode>) -> RecoveryGraph {
