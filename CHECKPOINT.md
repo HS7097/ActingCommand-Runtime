@@ -11,6 +11,8 @@
 - Updated Runtime resource conversion so generated pages with anchor variants such as AK `operator_0` and `operator_1` emit `required: []` plus `any_of: [[...]]` rather than requiring impossible simultaneous visual states.
 - Kept AzurLane and BlueArchive generated resources unchanged after re-conversion; Arknights generated pages changed only for the operator page.
 - Updated the AK M6 acceptance report and this checkpoint. The broader task remains active because positive retained frames for several destination pages are still missing.
+- Runtime implementation commit: `952bdbc` (`Add any-of page semantics for AK variants`).
+- Arknights resource commit: `e31e27c` (`resources: use any-of for AK operator page variants`).
 
 ### Resource repositories refreshed
 
