@@ -39,6 +39,7 @@ The current local retained-frame corpus found for AK page calibration contains:
 | `home_retest` | `arknights/home` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-retest-current.png` |
 | `home_run` | `arknights/home` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs-retest\lab1y-20260625_051921_950\output\screenshots\20260625_051922_653.png` |
 | `mission_result` | no generated page should match | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
+| `terminal_stage_map` | `arknights/terminal` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
 
 ## Calibration decision
 
@@ -51,12 +52,17 @@ The calibration pass adds two explicit page-discrimination controls:
 
 - A retained-frame negative target, `page/negative_mission_result`, cropped from
   the mission-result screen and used only as a forbidden target.
+- A retained-frame terminal-stage target, `page/terminal_stage_map`, cropped
+  from the retained terminal CE map frame and required by `arknights/terminal`.
 - Source-level `page_rules` support in Runtime conversion, so resource bundles
   can carry page forbidden-target rules without hand-editing generated pages.
 
 AK page rules now forbid `page/negative_mission_result` on every generated page.
 All non-home generated pages also forbid `page/home`, preventing home-screen
 navigation buttons from being misread as successful arrival on destination pages.
+All non-terminal pages also forbid `page/terminal_stage_map`, preventing the
+retained terminal stage map from satisfying unrelated QuickSwitch-derived page
+anchors.
 
 ## Threshold samples
 
@@ -68,6 +74,10 @@ navigation buttons from being misread as successful arrival on destination pages
 | `page/negative_mission_result` | `home_retest` | 0.664962 | 0.920000 | false |
 | `page/negative_mission_result` | `home_run` | 0.661303 | 0.920000 | false |
 | `page/negative_mission_result` | `mission_result` | 1.000000 | 0.920000 | true |
+| `page/terminal_stage_map` | `home_retest` | 0.721208 | 0.920000 | false |
+| `page/terminal_stage_map` | `home_run` | 0.712677 | 0.920000 | false |
+| `page/terminal_stage_map` | `mission_result` | 0.628819 | 0.920000 | false |
+| `page/terminal_stage_map` | `terminal_stage_map` | 1.000000 | 0.920000 | true |
 
 ## Page-discriminativeness result
 
@@ -78,21 +88,23 @@ After conversion, retained-frame page detection produced:
 | `home_retest` | `arknights/home` |
 | `home_run` | `arknights/home` |
 | `mission_result` | none |
+| `terminal_stage_map` | `arknights/terminal` |
 
-This proves the current retained-frame corpus no longer has the prior
-home-screen and mission-result false positives.
+An additional scan across the retained AK screenshot output directories used in
+this pass found 81 home matches and one terminal match; no scanned retained
+frame produced multiple generated page matches after the terminal-stage guard
+was added.
 
 ## Remaining evidence gap
 
 The local retained-frame corpus does not contain positive captures for the
 destination pages `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`,
-`mission`, `operator`, `terminal`, or the actual QuickSwitch dropdown overlay.
-Their current rules now fail safely on the available non-target frames, but
-positive threshold distribution for those destination pages is not proven by
-the current corpus.
+`mission`, `operator`, or the actual QuickSwitch dropdown overlay. Their
+current rules now fail safely on the available non-target frames, but positive
+threshold distribution for those destination pages is not proven by the current
+corpus.
 
 The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
 closed until destination-page positive retained frames are added or a later
 accepted task narrows the M6 evidence requirement to the currently retained
 home/mission-result corpus.
-
