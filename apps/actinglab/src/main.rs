@@ -8005,7 +8005,40 @@ fn run_monitor_recovery_resource(
         .or_else(|| flags.optional("--expect"))
         .filter(|value| value != "true")
         .unwrap_or_else(|| "home".to_string());
-    let mut runtime = SessionLayerRecoveryRuntime::new(global, flags, trigger, &target_page);
+    let startup_login = if plan.requires_startup_login || trigger == SelfHealTrigger::SessionExpired
+    {
+        let config = read_user_config()?;
+        let max_rounds = parse_optional_usize(flags, "--startup-max-rounds", 25)?;
+        let interval = parse_optional_duration_ms(flags, "--startup-interval-ms", 2_000)?;
+        load_monitor_startup_login_plan_json(
+            global,
+            &config,
+            flags,
+            target_page.clone(),
+            max_rounds,
+            interval,
+        )?
+    } else {
+        None
+    };
+    if trigger == SelfHealTrigger::SessionExpired
+        && !plan.requires_startup_login
+        && startup_login.is_none()
+    {
+        return Err(CliError::safety_blocked(
+            "startup_login_resource_missing",
+            "session_expired recovery requires a startup_login recovery flow or STARTUP-LOGIN.md",
+            &["recovery_resource", "startup_login_resource"],
+        ));
+    }
+    let mut runtime = SessionLayerRecoveryRuntime::new(
+        global,
+        flags,
+        trigger,
+        &target_page,
+        plan.actions_by_signal.clone(),
+        startup_login.clone(),
+    );
     let report =
         recovery_exec::execute_recovery_graph(&plan.graph, &mut runtime).map_err(|err| {
             CliError::safety_blocked(
@@ -8032,6 +8065,7 @@ fn run_monitor_recovery_resource(
         "terminal_reason": report.terminal_reason,
         "actions": runtime.actions,
         "skipped_restart_actions": plan.skipped_restart_actions,
+        "startup_login": startup_login,
         "session_layer_only": true,
         "direct_device_allowed": false,
         "journal": {
@@ -8053,6 +8087,17 @@ struct RecoveryResourcePlan {
     rule_id: String,
     graph: recovery_exec::RecoveryGraph,
     skipped_restart_actions: Vec<String>,
+    actions_by_signal: BTreeMap<String, RecoveryResourceActionPlan>,
+    requires_startup_login: bool,
+}
+
+#[derive(Clone)]
+struct RecoveryResourceActionPlan {
+    step: String,
+    reference: Option<String>,
+    args: Value,
+    control_point: Option<SemanticPoint>,
+    flow: Option<Value>,
 }
 
 fn recovery_resource_plan(
@@ -8106,7 +8151,7 @@ fn recovery_resource_plan(
                 &["recovery_resource", "self_heal_trigger"],
             )
         })?;
-    recovery_resource_rule_plan(rule)
+    recovery_resource_rule_plan(&resource, rule, trigger)
 }
 
 fn recovery_resource_rule_matches_trigger(rule: &Value, trigger: SelfHealTrigger) -> bool {
@@ -8148,7 +8193,11 @@ fn recovery_resource_trigger_terms(trigger: SelfHealTrigger) -> &'static [&'stat
     }
 }
 
-fn recovery_resource_rule_plan(rule: &Value) -> CliOutcome<RecoveryResourcePlan> {
+fn recovery_resource_rule_plan(
+    resource: &Value,
+    rule: &Value,
+    trigger: SelfHealTrigger,
+) -> CliOutcome<RecoveryResourcePlan> {
     let rule_id = rule
         .get("id")
         .and_then(Value::as_str)
@@ -8179,7 +8228,13 @@ fn recovery_resource_rule_plan(rule: &Value) -> CliOutcome<RecoveryResourcePlan>
         })?;
     let mut graph_actions = Vec::new();
     let mut skipped_restart_actions = Vec::new();
-    for action in actions {
+    let mut actions_by_signal = BTreeMap::new();
+    let mut requires_startup_login = false;
+    let mut indexed_actions = actions.iter().enumerate().collect::<Vec<_>>();
+    if trigger == SelfHealTrigger::SessionExpired {
+        indexed_actions.sort_by_key(|(_, action)| !recovery_resource_startup_login_flow(action));
+    }
+    for (index, action) in indexed_actions {
         let step = action
             .get("step")
             .and_then(Value::as_str)
@@ -8197,9 +8252,42 @@ fn recovery_resource_rule_plan(rule: &Value) -> CliOutcome<RecoveryResourcePlan>
             skipped_restart_actions.push(step.to_string());
             continue;
         }
+        let reference = action
+            .get("ref")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+        let args = action.get("args").cloned().unwrap_or_else(|| json!({}));
+        let control_point = recovery_resource_action_point(resource, &args, reference.as_deref())?;
+        let flow = if step == "run_recovery_flow" {
+            let flow_name = reference.as_deref().ok_or_else(|| {
+                CliError::safety_blocked(
+                    "recovery_rule_invalid",
+                    format!("recovery rule '{rule_id}' run_recovery_flow action is missing ref"),
+                    &["recovery_resource"],
+                )
+            })?;
+            if flow_name == "startup_login" {
+                requires_startup_login = true;
+            }
+            Some(recovery_resource_flow(resource, flow_name)?.clone())
+        } else {
+            None
+        };
+        let signal_name = format!("{rule_id}:{index}:{step}");
         graph_actions.push(recovery_exec::RecoveryAction::Signal {
-            name: step.to_string(),
+            name: signal_name.clone(),
         });
+        actions_by_signal.insert(
+            signal_name,
+            RecoveryResourceActionPlan {
+                step: step.to_string(),
+                reference,
+                args,
+                control_point,
+                flow,
+            },
+        );
     }
     if graph_actions.is_empty() {
         return Err(CliError::safety_blocked(
@@ -8227,7 +8315,112 @@ fn recovery_resource_rule_plan(rule: &Value) -> CliOutcome<RecoveryResourcePlan>
         rule_id,
         graph,
         skipped_restart_actions,
+        actions_by_signal,
+        requires_startup_login,
     })
+}
+
+fn load_monitor_startup_login_plan_json(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+    target_page: String,
+    max_rounds: usize,
+    interval: Duration,
+) -> CliOutcome<Option<Value>> {
+    let explicit_file = flags.optional_path("--startup-login-file").is_some();
+    if explicit_file || game_requires_startup_login_file(global.game.as_deref()) {
+        return load_startup_login_plan(global, config, flags, target_page, max_rounds, interval)
+            .map(|plan| Some(startup_login_plan_json(&plan)));
+    }
+    let Some(root) = effective_resource_root(global, config) else {
+        return Ok(None);
+    };
+    if !root.join("STARTUP-LOGIN.md").exists() {
+        return Ok(None);
+    }
+    load_startup_login_plan(global, config, flags, target_page, max_rounds, interval)
+        .map(|plan| Some(startup_login_plan_json(&plan)))
+}
+
+fn game_requires_startup_login_file(game: Option<&str>) -> bool {
+    game.map(|value| value.to_ascii_lowercase())
+        .as_deref()
+        .is_some_and(|value| matches!(value, "ak" | "ark" | "arknights" | "maa"))
+}
+
+fn recovery_resource_startup_login_flow(action: &Value) -> bool {
+    action.get("step").and_then(Value::as_str) == Some("run_recovery_flow")
+        && action.get("ref").and_then(Value::as_str) == Some("startup_login")
+}
+
+fn recovery_resource_action_point(
+    resource: &Value,
+    args: &Value,
+    reference: Option<&str>,
+) -> CliOutcome<Option<SemanticPoint>> {
+    if let Some(point) = args.get("point") {
+        return recovery_resource_point(point).map(Some);
+    }
+    let Some(reference) = reference else {
+        return Ok(None);
+    };
+    resource
+        .pointer(&format!("/control_point_refs/{reference}"))
+        .map(recovery_resource_point)
+        .transpose()
+}
+
+fn recovery_resource_point(value: &Value) -> CliOutcome<SemanticPoint> {
+    let Some(values) = value.as_array() else {
+        return Err(CliError::safety_blocked(
+            "recovery_resource_invalid",
+            "recovery control point must be an array [x, y]",
+            &["recovery_resource"],
+        ));
+    };
+    if values.len() != 2 {
+        return Err(CliError::safety_blocked(
+            "recovery_resource_invalid",
+            "recovery control point must contain exactly two coordinates",
+            &["recovery_resource"],
+        ));
+    }
+    let x = recovery_resource_i32(&values[0], "x")?;
+    let y = recovery_resource_i32(&values[1], "y")?;
+    if x < 0 || y < 0 {
+        return Err(CliError::safety_blocked(
+            "recovery_resource_invalid",
+            "recovery control point coordinates must be non-negative",
+            &["recovery_resource"],
+        ));
+    }
+    Ok(SemanticPoint { x, y })
+}
+
+fn recovery_resource_i32(value: &Value, label: &str) -> CliOutcome<i32> {
+    value
+        .as_i64()
+        .and_then(|number| i32::try_from(number).ok())
+        .ok_or_else(|| {
+            CliError::safety_blocked(
+                "recovery_resource_invalid",
+                format!("recovery control point {label} must be a 32-bit integer"),
+                &["recovery_resource"],
+            )
+        })
+}
+
+fn recovery_resource_flow<'a>(resource: &'a Value, name: &str) -> CliOutcome<&'a Value> {
+    resource
+        .pointer(&format!("/recovery_flows/{name}"))
+        .ok_or_else(|| {
+            CliError::safety_blocked(
+                "recovery_resource_invalid",
+                format!("recovery resource is missing recovery_flows.{name}"),
+                &["recovery_resource"],
+            )
+        })
 }
 
 fn recovery_resource_restart_step(step: &str) -> bool {
@@ -8241,6 +8434,8 @@ struct SessionLayerRecoveryRuntime {
     trigger: SelfHealTrigger,
     target_page: String,
     dry_run: bool,
+    actions_by_signal: BTreeMap<String, RecoveryResourceActionPlan>,
+    startup_login: Option<Value>,
     actions: Vec<Value>,
 }
 
@@ -8250,11 +8445,15 @@ impl SessionLayerRecoveryRuntime {
         _flags: &FlagArgs,
         trigger: SelfHealTrigger,
         target_page: &str,
+        actions_by_signal: BTreeMap<String, RecoveryResourceActionPlan>,
+        startup_login: Option<Value>,
     ) -> Self {
         Self {
             trigger,
             target_page: target_page.to_string(),
             dry_run: global.dry_run,
+            actions_by_signal,
+            startup_login,
             actions: Vec::new(),
         }
     }
@@ -8278,15 +8477,45 @@ impl recovery_exec::RecoveryRuntime for SessionLayerRecoveryRuntime {
                 "monitor resource recovery only accepts Session Layer signal actions",
             ));
         };
-        self.actions.push(json!({
-            "step": name,
+        let resource_action = self.actions_by_signal.get(name);
+        let step = resource_action
+            .map(|action| action.step.as_str())
+            .unwrap_or(name.as_str());
+        let mut event = json!({
+            "step": step,
             "trigger": self.trigger.as_str(),
             "via": "session_layer",
-            "command": session_layer_command_for_recovery_step(name, &self.target_page),
+            "command": session_layer_command_for_recovery_step(
+                step,
+                &self.target_page,
+                resource_action,
+            ),
             "dry_run": self.dry_run,
             "direct_device_allowed": false,
             "executed_directly": false
-        }));
+        });
+        if let Some(action) = resource_action {
+            if let Some(reference) = &action.reference {
+                event["ref"] = json!(reference);
+            }
+            if !action.args.is_null() {
+                event["args"] = action.args.clone();
+            }
+            if let Some(point) = action.control_point {
+                event["control_point"] = point_json(point);
+            }
+            if let Some(flow) = &action.flow {
+                event["flow"] = flow.clone();
+            }
+        }
+        if step == "run_recovery_flow"
+            && resource_action.and_then(|action| action.reference.as_deref())
+                == Some("startup_login")
+            && let Some(startup_login) = &self.startup_login
+        {
+            event["startup_login"] = startup_login.clone();
+        }
+        self.actions.push(event);
         Ok(recovery_exec::RecoverySignal::ActionSucceeded)
     }
 
@@ -8321,10 +8550,21 @@ impl recovery_exec::RecoveryRuntime for SessionLayerRecoveryRuntime {
     }
 }
 
-fn session_layer_command_for_recovery_step(step: &str, target_page: &str) -> String {
+fn session_layer_command_for_recovery_step(
+    step: &str,
+    target_page: &str,
+    action: Option<&RecoveryResourceActionPlan>,
+) -> String {
     match step {
         "swap_capture_backend" | "adb_reconnect" | "wait_then_recheck" => {
             "session request recover --stale-capture --diagnose".to_string()
+        }
+        "run_recovery_flow"
+            if action.and_then(|action| action.reference.as_deref()) == Some("startup_login") =>
+        {
+            format!(
+                "session request recover --startup-login --to {target_page} --capture --lease-holder <holder>"
+            )
         }
         "tap_control_point" | "run_return_home" | "run_recovery_flow" | "handle_popup_confirm" => {
             format!("session request recover --to {target_page} --capture --lease-holder <holder>")
@@ -51986,6 +52226,188 @@ mod tests {
     }
 
     #[test]
+    fn monitor_resource_session_expired_loads_startup_login_resource() {
+        let temp = semantic_resource_root(false);
+        let recovery = temp.path().join("session-expired.recovery.json");
+        fs::write(&recovery, startup_login_recovery_resource_json()).unwrap();
+        write_startup_login_resource(temp.path());
+        let flags = FlagArgs::parse(&["--to".to_string(), "home".to_string()]).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            dry_run: true,
+            json: true,
+            ..Default::default()
+        };
+        let diagnosis = json!({
+            "trigger": {"canonical_kind": "session_expired"}
+        });
+
+        let result = run_monitor_recovery_resource(&global, &flags, &diagnosis, &recovery).unwrap();
+
+        assert_eq!(
+            result.get("rule_id").and_then(Value::as_str),
+            Some("rec.session_expired")
+        );
+        let expected_source = temp.path().join("STARTUP-LOGIN.md").display().to_string();
+        assert_eq!(
+            result
+                .pointer("/startup_login/source")
+                .and_then(Value::as_str),
+            Some(expected_source.as_str())
+        );
+        assert!(
+            result
+                .pointer("/actions/0/command")
+                .and_then(Value::as_str)
+                .unwrap()
+                .contains("--startup-login")
+        );
+        assert_eq!(
+            result
+                .pointer("/actions/0/startup_login/actions_per_round/0/name")
+                .and_then(Value::as_str),
+            Some("close_popup")
+        );
+    }
+
+    #[test]
+    fn monitor_resource_session_expired_missing_startup_login_is_fatal() {
+        let temp = semantic_resource_root(false);
+        let recovery = temp.path().join("session-expired.recovery.json");
+        fs::write(&recovery, startup_login_recovery_resource_json()).unwrap();
+        let flags = FlagArgs::parse(&["--to".to_string(), "home".to_string()]).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            dry_run: true,
+            json: true,
+            ..Default::default()
+        };
+        let diagnosis = json!({
+            "trigger": {"canonical_kind": "session_expired"}
+        });
+
+        let err = run_monitor_recovery_resource(&global, &flags, &diagnosis, &recovery)
+            .expect_err("missing STARTUP-LOGIN.md must fail loudly");
+
+        assert_eq!(err.code, "startup_login_resource_missing");
+    }
+
+    #[test]
+    fn monitor_resource_session_expired_can_use_recovery_flow_without_startup_file() {
+        let temp = semantic_resource_root(false);
+        let recovery = temp.path().join("session-expired.recovery.json");
+        fs::write(&recovery, startup_login_recovery_resource_json()).unwrap();
+        let flags = FlagArgs::parse(&["--to".to_string(), "home".to_string()]).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("azur".to_string()),
+            dry_run: true,
+            json: true,
+            ..Default::default()
+        };
+        let diagnosis = json!({
+            "trigger": {"canonical_kind": "session_expired"}
+        });
+
+        let result = run_monitor_recovery_resource(&global, &flags, &diagnosis, &recovery).unwrap();
+
+        assert!(result.pointer("/startup_login").is_some_and(Value::is_null));
+        assert_eq!(
+            result.pointer("/actions/0/step").and_then(Value::as_str),
+            Some("run_recovery_flow")
+        );
+        assert_eq!(
+            result.pointer("/actions/0/ref").and_then(Value::as_str),
+            Some("startup_login")
+        );
+        assert_eq!(
+            result
+                .pointer("/actions/0/flow/kind")
+                .and_then(Value::as_str),
+            Some("loop_until_anchor")
+        );
+    }
+
+    #[test]
+    fn monitor_resource_standby_preserves_wake_control_point() {
+        let temp = semantic_resource_root(false);
+        let recovery = temp.path().join("standby-wake.recovery.json");
+        fs::write(&recovery, standby_wake_recovery_resource_json()).unwrap();
+        let flags = FlagArgs::parse(&["--to".to_string(), "home".to_string()]).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ba".to_string()),
+            dry_run: true,
+            json: true,
+            ..Default::default()
+        };
+        let diagnosis = json!({
+            "trigger": {"canonical_kind": "standby"}
+        });
+
+        let result = run_monitor_recovery_resource(&global, &flags, &diagnosis, &recovery).unwrap();
+
+        assert_eq!(
+            result.get("rule_id").and_then(Value::as_str),
+            Some("rec.standby_wake")
+        );
+        assert_eq!(
+            result
+                .pointer("/actions/0/control_point/x")
+                .and_then(Value::as_i64),
+            Some(300)
+        );
+        assert_eq!(
+            result
+                .pointer("/actions/0/control_point/y")
+                .and_then(Value::as_i64),
+            Some(2)
+        );
+        assert_eq!(
+            result.pointer("/actions/0/ref").and_then(Value::as_str),
+            Some("wake")
+        );
+        assert_eq!(
+            result
+                .pointer("/actions/0/direct_device_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn monitor_resource_standby_allows_wake_flow_without_startup_file() {
+        let temp = semantic_resource_root(false);
+        let recovery = temp.path().join("standby-wake-flow.recovery.json");
+        fs::write(&recovery, standby_wake_with_flow_recovery_resource_json()).unwrap();
+        let flags = FlagArgs::parse(&["--to".to_string(), "home".to_string()]).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(temp.path().to_path_buf()),
+            game: Some("ba".to_string()),
+            dry_run: true,
+            json: true,
+            ..Default::default()
+        };
+        let diagnosis = json!({
+            "trigger": {"canonical_kind": "standby"}
+        });
+
+        let result = run_monitor_recovery_resource(&global, &flags, &diagnosis, &recovery).unwrap();
+
+        assert!(result.pointer("/startup_login").is_some_and(Value::is_null));
+        assert_eq!(
+            result.pointer("/actions/0/step").and_then(Value::as_str),
+            Some("tap_control_point")
+        );
+        assert_eq!(
+            result.pointer("/actions/0/ref").and_then(Value::as_str),
+            Some("wake")
+        );
+    }
+
+    #[test]
     fn monitor_loop_recover_without_capture_fails_loud_for_real_execution() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("standby.png");
@@ -52027,6 +52449,88 @@ mod tests {
                 "action_escalation": [
                     {"step": "tap_control_point", "class": "light"},
                     {"step": "restart_app", "class": "restart"}
+                ],
+                "max_attempts": 2
+            }]
+        }"#
+    }
+
+    fn startup_login_recovery_resource_json() -> &'static str {
+        r#"{
+            "schema_version": "0.3",
+            "kind": "recovery",
+            "control_point_refs": {
+                "modal_close": [1205, 67],
+                "center": [640, 360]
+            },
+            "recovery_flows": {
+                "startup_login": {
+                    "kind": "loop_until_anchor",
+                    "until": "home",
+                    "max_iters": 25,
+                    "steps": [
+                        {"step": "tap_control_point", "ref": "modal_close"},
+                        {"step": "tap_control_point", "ref": "center"}
+                    ]
+                }
+            },
+            "rules": [{
+                "id": "rec.session_expired",
+                "trigger": {"on": "page_detect", "match": ["offline_confirm_present"]},
+                "detect": {"kind": "anchor_present", "ref": "offline_confirm"},
+                "action_escalation": [
+                    {"step": "tap_control_point", "ref": "modal_close", "class": "light"},
+                    {"step": "run_recovery_flow", "ref": "startup_login", "class": "light"}
+                ],
+                "max_attempts": 2
+            }]
+        }"#
+    }
+
+    fn standby_wake_recovery_resource_json() -> &'static str {
+        r#"{
+            "schema_version": "0.3",
+            "kind": "recovery",
+            "control_point_refs": {
+                "wake": [300, 2]
+            },
+            "rules": [{
+                "id": "rec.standby_wake",
+                "trigger": {"on": "watchdog", "match": ["standby", "screen_inactive_no_anchor"]},
+                "detect": {"kind": "page_unknown"},
+                "action_escalation": [
+                    {"step": "tap_control_point", "ref": "wake", "class": "light"}
+                ],
+                "max_attempts": 2
+            }]
+        }"#
+    }
+
+    fn standby_wake_with_flow_recovery_resource_json() -> &'static str {
+        r#"{
+            "schema_version": "0.3",
+            "kind": "recovery",
+            "control_point_refs": {
+                "wake": [300, 2],
+                "center": [640, 360]
+            },
+            "recovery_flows": {
+                "startup_login": {
+                    "kind": "loop_until_anchor",
+                    "until": "home",
+                    "max_iters": 25,
+                    "steps": [
+                        {"step": "tap_control_point", "ref": "center"}
+                    ]
+                }
+            },
+            "rules": [{
+                "id": "rec.standby_wake",
+                "trigger": {"on": "watchdog", "match": ["standby", "screen_inactive_no_anchor"]},
+                "detect": {"kind": "page_unknown"},
+                "action_escalation": [
+                    {"step": "tap_control_point", "ref": "wake", "class": "light"},
+                    {"step": "run_recovery_flow", "ref": "startup_login", "class": "light"}
                 ],
                 "max_attempts": 2
             }]

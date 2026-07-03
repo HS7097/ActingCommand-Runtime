@@ -23,7 +23,7 @@ Delivery order:
 3. C0.a resource drift stop-loss: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`.
 4. C1 trigger classification and priority routing: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c1.md`.
 5. C2 live recovery loop wiring plus H1 loop detection fix: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c2.md`.
-6. C3 login/wake resource wiring: pending.
+6. C3 login/wake resource wiring: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c3.md`.
 
 Current C0.c behavior:
 
@@ -74,7 +74,18 @@ Current C2/H1 behavior:
 - Recovery output records journal metadata, graph status, visited nodes, selected rule id, actions, skipped restart actions, and the Session Layer/no-bypass boundary.
 - H1 is fixed: recovery graph loop detection is checked before max-attempt exhaustion can mask a repeated node.
 
-These slices do not add C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, FeatureMatch relocation, automatic resource rewrites, or game logic.
+Current C3 behavior:
+
+- Resource repositories are refreshed before login/wake recovery resources are read, and their paths and commit hashes are recorded in `CHECKPOINT.md`.
+- Monitor recovery preserves recovery action metadata from `ours/recovery/<game>.<server>.recovery.json`.
+- `run_recovery_flow` actions resolve named `recovery_flows` entries and fail loudly when a referenced flow is missing.
+- `session_expired` prioritizes the `startup_login` recovery flow before other light actions so the login loop is the first Session Layer signal action.
+- Arknights monitor recovery loads `STARTUP-LOGIN.md` for the startup-login resource loop and fails loudly when that required file is missing.
+- AzurLane and BlueArchive recovery resources can use embedded `recovery_flows.startup_login` without requiring an external `STARTUP-LOGIN.md`.
+- BlueArchive standby wake preserves wake control-point metadata, including the `(300, 2)` wake/dead-zone resource.
+- Recovery output preserves `ref`, `args`, `control_point`, `flow`, and optional `startup_login` metadata while keeping `via=session_layer`, `direct_device_allowed=false`, and `executed_directly=false`.
+
+These slices do not add OCR, UI, SQLite, scheduler behavior, FeatureMatch relocation, automatic resource rewrites, live emulator recovery execution, or game logic.
 
 ## Current P6.5-A punchlist repair
 
