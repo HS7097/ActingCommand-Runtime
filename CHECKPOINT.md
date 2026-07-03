@@ -13,7 +13,7 @@
 - R1-R5 are now implemented locally and have passed the task's public local validation commands.
 - Implementation commit: `426b20a` (`actinglab: synthesize converted operation guards`).
 - Remote CI run `28656273607`: passed on `main` for commit `426b20a`.
-- Planned rollback/provenance tag: `checkpoint/20260703-selfheal-acceptance-repair`.
+- Rollback/provenance tag target: `checkpoint/20260703-selfheal-acceptance-repair`.
 
 ### Files changed
 
