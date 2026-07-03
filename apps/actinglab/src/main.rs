@@ -1900,13 +1900,28 @@ fn session_self_heal_policy_payload(
         ],
         "trigger_policy": {
             "supported_triggers": [
-                "capture_stale_suspected",
-                "capture_backend_unavailable",
+                "stale_frame",
+                "hang",
+                "resource_drift",
+                "session_expired",
                 "standby",
-                "unexpected_page",
                 "modal_popup",
-                "startup_login_required",
-                "session_expired"
+                "off_route_page",
+                "unstable_page"
+            ],
+            "legacy_trigger_aliases": [
+                {"alias": "capture_stale_suspected", "canonical": "stale_frame"},
+                {"alias": "capture_backend_unavailable", "canonical": "stale_frame"},
+                {"alias": "startup_login_required", "canonical": "session_expired"},
+                {"alias": "unexpected_page", "canonical": "off_route_page"}
+            ],
+            "priority_order": [
+                ["stale_frame", "hang"],
+                ["resource_drift"],
+                ["session_expired", "standby"],
+                ["modal_popup"],
+                ["off_route_page"],
+                ["unstable_page"]
             ],
             "stale_adb_screencap_alone_is_not_game_freeze": true,
             "must_diagnose_before_restart": true,
@@ -1987,11 +2002,15 @@ fn session_self_heal_plan_payload(
         .optional("--to")
         .filter(|value| value != "true")
         .unwrap_or_else(|| "home".to_string());
-    let trigger = flags
-        .optional("--trigger")
-        .filter(|value| value != "true")
-        .unwrap_or_else(|| "observe_required".to_string());
-    validate_self_heal_plan_trigger(&trigger)?;
+    let trigger_candidates = collect_self_heal_trigger_candidates(flags)?;
+    let trigger_kind = select_self_heal_trigger(
+        trigger_candidates
+            .iter()
+            .map(|candidate| candidate.raw.as_str()),
+    )?;
+    let trigger = selected_self_heal_trigger_raw(&trigger_candidates, trigger_kind)?;
+    let trigger_provided =
+        flags.optional("--trigger").is_some() || flags.optional("--triggers").is_some();
 
     let readiness = session_readiness_payload(global, flags, state_dir, config, command_name)?;
     let queue = session_queue_payload(state_dir)?;
@@ -2051,7 +2070,13 @@ fn session_self_heal_plan_payload(
         },
         "trigger": {
             "kind": trigger,
-            "provided": flags.optional("--trigger").is_some()
+            "canonical_kind": trigger_kind.as_str(),
+            "priority": trigger_kind.priority(),
+            "provided": trigger_provided,
+            "candidates": trigger_candidates
+                .iter()
+                .map(|candidate| self_heal_trigger_json(&candidate.raw, candidate.kind))
+                .collect::<Vec<_>>()
         },
         "flow": [
             {
@@ -2101,27 +2126,134 @@ fn session_self_heal_plan_payload(
     }))
 }
 
-fn validate_self_heal_plan_trigger(trigger: &str) -> CliOutcome<()> {
-    match trigger {
-        "observe_required"
-        | "capture_stale_suspected"
-        | "capture_backend_unavailable"
-        | "standby"
-        | "unexpected_page"
-        | "modal_popup"
-        | "startup_login_required"
-        | "session_expired"
-        | "resource_drift"
-        | "unstable_page" => Ok(()),
-        other => Err(CliError::usage(format!(
-            "unsupported self-heal trigger: {other}"
-        ))),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelfHealTrigger {
+    ObserveRequired,
+    StaleFrame,
+    Hang,
+    ResourceDrift,
+    SessionExpired,
+    Standby,
+    ModalPopup,
+    OffRoutePage,
+    UnstablePage,
+}
+
+impl SelfHealTrigger {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "observe_required" => Some(Self::ObserveRequired),
+            "stale_frame" | "capture_stale_suspected" | "capture_backend_unavailable" => {
+                Some(Self::StaleFrame)
+            }
+            "hang" => Some(Self::Hang),
+            "resource_drift" => Some(Self::ResourceDrift),
+            "session_expired" | "startup_login_required" => Some(Self::SessionExpired),
+            "standby" => Some(Self::Standby),
+            "modal_popup" => Some(Self::ModalPopup),
+            "off_route_page" | "unexpected_page" => Some(Self::OffRoutePage),
+            "unstable_page" => Some(Self::UnstablePage),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ObserveRequired => "observe_required",
+            Self::StaleFrame => "stale_frame",
+            Self::Hang => "hang",
+            Self::ResourceDrift => "resource_drift",
+            Self::SessionExpired => "session_expired",
+            Self::Standby => "standby",
+            Self::ModalPopup => "modal_popup",
+            Self::OffRoutePage => "off_route_page",
+            Self::UnstablePage => "unstable_page",
+        }
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            Self::StaleFrame | Self::Hang => 1,
+            Self::ResourceDrift => 2,
+            Self::SessionExpired | Self::Standby => 3,
+            Self::ModalPopup => 4,
+            Self::OffRoutePage => 5,
+            Self::UnstablePage => 6,
+            Self::ObserveRequired => 99,
+        }
     }
 }
 
+struct SelfHealTriggerCandidate {
+    raw: String,
+    kind: SelfHealTrigger,
+}
+
+fn parse_self_heal_trigger(trigger: &str) -> CliOutcome<SelfHealTrigger> {
+    SelfHealTrigger::parse(trigger)
+        .ok_or_else(|| CliError::usage(format!("unsupported self-heal trigger: {trigger}")))
+}
+
+fn select_self_heal_trigger<'a>(
+    triggers: impl IntoIterator<Item = &'a str>,
+) -> CliOutcome<SelfHealTrigger> {
+    let mut selected = None::<SelfHealTrigger>;
+    for trigger in triggers {
+        let candidate = parse_self_heal_trigger(trigger)?;
+        let should_replace =
+            selected.is_none_or(|current| candidate.priority() < current.priority());
+        if should_replace {
+            selected = Some(candidate);
+        }
+    }
+    selected.ok_or_else(|| CliError::usage("at least one self-heal trigger is required"))
+}
+
+fn collect_self_heal_trigger_candidates(
+    flags: &FlagArgs,
+) -> CliOutcome<Vec<SelfHealTriggerCandidate>> {
+    let mut raw_triggers = flags
+        .values("--trigger")
+        .into_iter()
+        .filter(|value| value != "true")
+        .collect::<Vec<_>>();
+    for value in flags.values("--triggers") {
+        if value != "true" {
+            raw_triggers.extend(split_csv(&value));
+        }
+    }
+    if raw_triggers.is_empty() {
+        raw_triggers.push("observe_required".to_string());
+    }
+
+    raw_triggers
+        .into_iter()
+        .map(|raw| parse_self_heal_trigger(&raw).map(|kind| SelfHealTriggerCandidate { raw, kind }))
+        .collect()
+}
+
+fn selected_self_heal_trigger_raw(
+    candidates: &[SelfHealTriggerCandidate],
+    selected: SelfHealTrigger,
+) -> CliOutcome<String> {
+    candidates
+        .iter()
+        .find(|candidate| candidate.kind == selected)
+        .map(|candidate| candidate.raw.clone())
+        .ok_or_else(|| CliError::usage("selected self-heal trigger is missing from candidates"))
+}
+
+fn self_heal_trigger_json(raw: &str, trigger: SelfHealTrigger) -> Value {
+    json!({
+        "kind": raw,
+        "canonical_kind": trigger.as_str(),
+        "priority": trigger.priority()
+    })
+}
+
 fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
-    match trigger {
-        "capture_stale_suspected" | "capture_backend_unavailable" => json!({
+    match SelfHealTrigger::parse(trigger).unwrap_or(SelfHealTrigger::ObserveRequired) {
+        SelfHealTrigger::StaleFrame | SelfHealTrigger::Hang => json!({
             "kind": "capture_backend_recovery",
             "recommended_command": "session recover --stale-capture",
             "execute_command": "session request recover --stale-capture --diagnose",
@@ -2130,7 +2262,7 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "heavy_recovery_allowed": false,
             "next": "verify fresh capture with a lighter backend before any app restart"
         }),
-        "standby" => json!({
+        SelfHealTrigger::Standby => json!({
             "kind": "standby_wake",
             "recommended_plan_command": format!("session recover --to {target_page} --dry-run --scene <frame>"),
             "execute_command": format!("session request recover --to {target_page} --capture --lease-holder <holder>"),
@@ -2138,7 +2270,7 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "executes_control": true,
             "maintenance_only": true
         }),
-        "unexpected_page" | "modal_popup" | "session_expired" => json!({
+        SelfHealTrigger::OffRoutePage => json!({
             "kind": "maintenance_navigation",
             "recommended_plan_command": format!("session recover --to {target_page} --dry-run --scene <frame>"),
             "execute_command": format!("session request recover --to {target_page} --capture --lease-holder <holder>"),
@@ -2147,7 +2279,16 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "maintenance_only": true,
             "game_progress_actions_allowed": false
         }),
-        "startup_login_required" => json!({
+        SelfHealTrigger::ModalPopup => json!({
+            "kind": "modal_dismissal",
+            "recommended_plan_command": format!("session recover --to {target_page} --dry-run --scene <frame>"),
+            "execute_command": format!("session request recover --to {target_page} --capture --lease-holder <holder>"),
+            "requires_matching_lease": true,
+            "executes_control": true,
+            "maintenance_only": true,
+            "game_progress_actions_allowed": false
+        }),
+        SelfHealTrigger::SessionExpired => json!({
             "kind": "startup_login_loop",
             "recommended_plan_command": format!("session recover --startup-login --to {target_page} --dry-run --scene <frame> --resource-root <resource-root>"),
             "execute_command": format!("session request recover --startup-login --to {target_page} --capture --lease-holder <holder>"),
@@ -2156,7 +2297,7 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "resource_required": "STARTUP-LOGIN.md",
             "maintenance_only": true
         }),
-        "resource_drift" => json!({
+        SelfHealTrigger::ResourceDrift => json!({
             "kind": "resource_drift_stop_loss",
             "requires_matching_lease": false,
             "executes_control": false,
@@ -2166,7 +2307,7 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "resource_status": "needs_recalibration",
             "next": "mark the mismatched resource for recalibration; do not retry or restart the app"
         }),
-        "unstable_page" => json!({
+        SelfHealTrigger::UnstablePage => json!({
             "kind": "action_gate_failure",
             "requires_matching_lease": false,
             "executes_control": false,
@@ -2175,7 +2316,7 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "maintenance_only": true,
             "next": "wait for a fresh stable ROI or surface the failure to the caller"
         }),
-        _ => json!({
+        SelfHealTrigger::ObserveRequired => json!({
             "kind": "observe_first",
             "recommended_command": "monitor --once",
             "requires_matching_lease": false,
@@ -2186,8 +2327,8 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
 }
 
 fn session_self_heal_plan_escalation(trigger: &str) -> Value {
-    match trigger {
-        "capture_stale_suspected" | "capture_backend_unavailable" => json!({
+    match SelfHealTrigger::parse(trigger).unwrap_or(SelfHealTrigger::ObserveRequired) {
+        SelfHealTrigger::StaleFrame | SelfHealTrigger::Hang => json!({
             "category": "transient_capture_path",
             "current_step": "lightweight_capture_backend_recovery",
             "repeat_limit_before_escalation": 2,
@@ -2199,18 +2340,20 @@ fn session_self_heal_plan_escalation(trigger: &str) -> Value {
             "must_log_repeated_transient_failures": true,
             "does_not_execute_heavy_recovery": true
         }),
-        "standby" | "unexpected_page" | "modal_popup" | "session_expired" => json!({
-            "category": "maintenance_control_path",
-            "current_step": "lease_gated_maintenance_recovery",
-            "repeat_limit_before_escalation": 2,
-            "next_if_repeated": "operator_review_or_heavy_recovery_review",
-            "heavy_recovery_candidate": "app_restart",
-            "heavy_recovery_requires_matching_lease": true,
-            "operator_live_validation_required": true,
-            "must_log_repeated_transient_failures": true,
-            "does_not_execute_heavy_recovery": true
-        }),
-        "startup_login_required" => json!({
+        SelfHealTrigger::Standby | SelfHealTrigger::OffRoutePage | SelfHealTrigger::ModalPopup => {
+            json!({
+                "category": "maintenance_control_path",
+                "current_step": "lease_gated_maintenance_recovery",
+                "repeat_limit_before_escalation": 2,
+                "next_if_repeated": "operator_review_or_heavy_recovery_review",
+                "heavy_recovery_candidate": "app_restart",
+                "heavy_recovery_requires_matching_lease": true,
+                "operator_live_validation_required": true,
+                "must_log_repeated_transient_failures": true,
+                "does_not_execute_heavy_recovery": true
+            })
+        }
+        SelfHealTrigger::SessionExpired => json!({
             "category": "startup_login_path",
             "current_step": "bounded_startup_login_loop",
             "repeat_limit_before_escalation": 1,
@@ -2222,7 +2365,7 @@ fn session_self_heal_plan_escalation(trigger: &str) -> Value {
             "must_log_repeated_transient_failures": true,
             "does_not_execute_heavy_recovery": true
         }),
-        "resource_drift" => json!({
+        SelfHealTrigger::ResourceDrift => json!({
             "category": "resource_recalibration_required",
             "current_step": "stop_loss_manual_recalibration",
             "repeat_limit_before_escalation": 0,
@@ -2235,7 +2378,7 @@ fn session_self_heal_plan_escalation(trigger: &str) -> Value {
             "stop_loss": true,
             "restart_allowed": false
         }),
-        "unstable_page" => json!({
+        SelfHealTrigger::UnstablePage => json!({
             "category": "action_gate_failure",
             "current_step": "wait_for_roi_stability",
             "repeat_limit_before_escalation": 0,
@@ -2246,7 +2389,7 @@ fn session_self_heal_plan_escalation(trigger: &str) -> Value {
             "must_log_repeated_transient_failures": true,
             "does_not_execute_heavy_recovery": true
         }),
-        _ => json!({
+        SelfHealTrigger::ObserveRequired => json!({
             "category": "observation_required",
             "current_step": "observe_and_diagnose",
             "repeat_limit_before_escalation": 0,
@@ -2267,14 +2410,15 @@ fn session_self_heal_plan_blockers(
     lease_gate: &Value,
 ) -> Vec<Value> {
     let mut blockers = Vec::new();
-    if trigger == "observe_required" {
+    let trigger_kind = SelfHealTrigger::parse(trigger).unwrap_or(SelfHealTrigger::ObserveRequired);
+    if trigger_kind == SelfHealTrigger::ObserveRequired {
         blockers.push(json!({
             "kind": "self_heal_trigger",
             "code": "self_heal_trigger_required",
             "message": "Run observation and diagnosis before selecting a recovery trigger."
         }));
     }
-    if trigger == "resource_drift" {
+    if trigger_kind == SelfHealTrigger::ResourceDrift {
         blockers.push(json!({
             "kind": "resource",
             "code": "resource_recalibration_required",
@@ -2304,12 +2448,11 @@ fn session_self_heal_plan_blockers(
         }));
     }
     if matches!(
-        trigger,
-        "standby"
-            | "unexpected_page"
-            | "modal_popup"
-            | "startup_login_required"
-            | "session_expired"
+        trigger_kind,
+        SelfHealTrigger::Standby
+            | SelfHealTrigger::OffRoutePage
+            | SelfHealTrigger::ModalPopup
+            | SelfHealTrigger::SessionExpired
     ) && !lease_gate
         .get("ok")
         .and_then(Value::as_bool)
@@ -2422,6 +2565,8 @@ struct SessionSelfHealPlanNextActionInputs<'a> {
 }
 
 fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInputs<'_>) -> Value {
+    let trigger_kind =
+        SelfHealTrigger::parse(input.trigger).unwrap_or(SelfHealTrigger::ObserveRequired);
     let readiness_ready = input
         .readiness
         .get("ready")
@@ -2445,7 +2590,7 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
     let mut ordered = Vec::new();
     let mut priority = 1;
 
-    if input.trigger == "observe_required" {
+    if trigger_kind == SelfHealTrigger::ObserveRequired {
         ordered.push(session_connect_plan_next_action(
             priority,
             "observe_and_select_trigger",
@@ -2456,7 +2601,7 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
         priority += 1;
     }
 
-    if input.trigger == "resource_drift" {
+    if trigger_kind == SelfHealTrigger::ResourceDrift {
         ordered.push(session_connect_plan_next_action(
             priority,
             "mark_resource_for_recalibration",
@@ -2468,8 +2613,8 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
     }
 
     if matches!(
-        input.trigger,
-        "capture_stale_suspected" | "capture_backend_unavailable"
+        trigger_kind,
+        SelfHealTrigger::StaleFrame | SelfHealTrigger::Hang
     ) {
         ordered.push(session_connect_plan_next_action(
             priority,
@@ -2563,6 +2708,8 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
         "ordered": ordered,
         "recovery": {
             "trigger": input.trigger,
+            "canonical_trigger": trigger_kind.as_str(),
+            "priority": trigger_kind.priority(),
             "target_page": input.target_page,
             "kind": input.recovery.pointer("/kind").cloned().unwrap_or(Value::Null),
             "requires_matching_lease": lease_required,
@@ -2616,23 +2763,28 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
 }
 
 fn session_self_heal_plan_submit_plan_command(trigger: &str, target_page: &str) -> String {
-    match trigger {
-        "capture_stale_suspected" | "capture_backend_unavailable" => {
+    match SelfHealTrigger::parse(trigger).unwrap_or(SelfHealTrigger::ObserveRequired) {
+        SelfHealTrigger::StaleFrame | SelfHealTrigger::Hang => {
             "session submit-plan session recover --stale-capture".to_string()
         }
-        "resource_drift" => {
+        SelfHealTrigger::ResourceDrift => {
             "manual resource recalibration required; no recovery command is safe".to_string()
         }
-        "unstable_page" => {
+        SelfHealTrigger::UnstablePage => {
             "wait for stable ROI or rerun with a fresh capture; no recovery command is submitted"
                 .to_string()
         }
-        "startup_login_required" => format!(
+        SelfHealTrigger::SessionExpired => format!(
             "session submit-plan session request recover --startup-login --to {target_page} --capture --lease-holder <holder>"
         ),
-        _ => format!(
-            "session submit-plan session request recover --to {target_page} --capture --lease-holder <holder>"
-        ),
+        SelfHealTrigger::Standby | SelfHealTrigger::ModalPopup | SelfHealTrigger::OffRoutePage => {
+            format!(
+                "session submit-plan session request recover --to {target_page} --capture --lease-holder <holder>"
+            )
+        }
+        SelfHealTrigger::ObserveRequired => {
+            "run monitor --once before submitting recovery".to_string()
+        }
     }
 }
 
@@ -7823,6 +7975,7 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
         return Ok(json!({
             "status": diagnosis.status(),
             "mode": "monitor_once",
+            "trigger": monitor_diagnosis_trigger_json(&diagnosis),
             "click_allowed": false,
             "expected_page": expected_page,
             "current_page": Value::Null,
@@ -7851,6 +8004,7 @@ fn run_monitor_once(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
     Ok(json!({
         "status": diagnosis.status(),
         "mode": "monitor_once",
+        "trigger": monitor_diagnosis_trigger_json(&diagnosis),
         "click_allowed": false,
         "expected_page": expected_page,
         "current_page": page_detection_json(&outcome),
@@ -7882,6 +8036,22 @@ impl MonitorDiagnosis {
             Self::UnexpectedPage => "unexpected_page",
             Self::CaptureStaleSuspected => "capture_stale_suspected",
             Self::CaptureUnavailable => "capture_unavailable",
+        }
+    }
+}
+
+fn monitor_diagnosis_trigger_json(diagnosis: &MonitorDiagnosis) -> Value {
+    match diagnosis {
+        MonitorDiagnosis::Healthy => Value::Null,
+        MonitorDiagnosis::Standby => self_heal_trigger_json("standby", SelfHealTrigger::Standby),
+        MonitorDiagnosis::UnexpectedPage => {
+            self_heal_trigger_json("unexpected_page", SelfHealTrigger::OffRoutePage)
+        }
+        MonitorDiagnosis::CaptureStaleSuspected => {
+            self_heal_trigger_json("capture_stale_suspected", SelfHealTrigger::StaleFrame)
+        }
+        MonitorDiagnosis::CaptureUnavailable => {
+            self_heal_trigger_json("capture_backend_unavailable", SelfHealTrigger::StaleFrame)
         }
     }
 }
@@ -29875,6 +30045,147 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn self_heal_trigger_priority_routes_evidence_before_navigation() {
+        let selected =
+            select_self_heal_trigger(["off_route_page", "stale_frame"]).expect("trigger");
+
+        assert_eq!(selected, SelfHealTrigger::StaleFrame);
+        assert_eq!(selected.priority(), 1);
+    }
+
+    #[test]
+    fn self_heal_trigger_priority_routes_drift_before_unstable() {
+        let selected =
+            select_self_heal_trigger(["unstable_page", "resource_drift"]).expect("trigger");
+
+        assert_eq!(selected, SelfHealTrigger::ResourceDrift);
+        assert_eq!(selected.priority(), 2);
+    }
+
+    #[test]
+    fn session_self_heal_plan_prioritizes_concurrent_triggers() {
+        let _guard = env_lock();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "self-heal-plan",
+                "--local",
+                "--triggers",
+                "unstable_page,resource_drift",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/trigger/kind").and_then(Value::as_str),
+            Some("resource_drift")
+        );
+        assert_eq!(
+            data.pointer("/trigger/canonical_kind")
+                .and_then(Value::as_str),
+            Some("resource_drift")
+        );
+        assert_eq!(
+            data.pointer("/trigger/priority").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            data.pointer("/recovery/kind").and_then(Value::as_str),
+            Some("resource_drift_stop_loss")
+        );
+        assert_eq!(
+            data.pointer("/trigger/candidates")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn self_heal_trigger_aliases_normalize_to_canonical_triggers() {
+        assert_eq!(
+            parse_self_heal_trigger("capture_stale_suspected").unwrap(),
+            SelfHealTrigger::StaleFrame
+        );
+        assert_eq!(
+            parse_self_heal_trigger("unexpected_page").unwrap(),
+            SelfHealTrigger::OffRoutePage
+        );
+        assert_eq!(
+            parse_self_heal_trigger("startup_login_required").unwrap(),
+            SelfHealTrigger::SessionExpired
+        );
+    }
+
+    #[test]
+    fn self_heal_recovery_routes_canonical_triggers() {
+        assert_eq!(
+            session_self_heal_plan_recovery("stale_frame", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("hang", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("capture_backend_recovery")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("standby", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("standby_wake")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("session_expired", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("startup_login_loop")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("modal_popup", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("modal_dismissal")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("off_route_page", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("maintenance_navigation")
+        );
+        assert_eq!(
+            session_self_heal_plan_recovery("unstable_page", "home")
+                .get("kind")
+                .and_then(Value::as_str),
+            Some("action_gate_failure")
+        );
+    }
+
+    #[test]
+    fn monitor_diagnosis_reports_canonical_trigger_metadata() {
+        let stale = monitor_diagnosis_trigger_json(&MonitorDiagnosis::CaptureStaleSuspected);
+        assert_eq!(
+            stale.get("canonical_kind").and_then(Value::as_str),
+            Some("stale_frame")
+        );
+        let off_route = monitor_diagnosis_trigger_json(&MonitorDiagnosis::UnexpectedPage);
+        assert_eq!(
+            off_route.get("canonical_kind").and_then(Value::as_str),
+            Some("off_route_page")
+        );
+        assert!(monitor_diagnosis_trigger_json(&MonitorDiagnosis::Healthy).is_null());
     }
 
     #[test]
