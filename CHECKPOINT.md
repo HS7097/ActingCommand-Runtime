@@ -52,7 +52,7 @@
 - `actingcommand-device-test.exe recognize` for `page/home` and `page/negative_mission_result` against retained AK frames.
 - `actingcommand-device-test.exe detect-page --all --scene` against retained AK frames.
 - `actinglab.exe recognize` for `page/terminal_stage_map` against retained AK frames.
-- `actinglab.exe detect-page --all --scene` against retained AK frame directories from the available Lab acceptance and lab-package runs.
+- `actinglab.exe detect-page --all --scene` against all 17 retained AK `output\screenshots` directories under the current Runtime `target` tree.
 - `cargo test -p actingcommand-actinglab resource_convert::tests::build_primitives_`
 - `cargo test -p actingcommand-actinglab resource_convert::tests::validate_page_rule_targets_rejects_missing_targets`
 - `cargo test -p actingcommand-actinglab resource_convert::tests::build_pages_`
@@ -78,7 +78,7 @@
   - `mission_result`: matches no generated page.
   - `terminal_stage_map`: matches `arknights/terminal` only.
 - Retained AK screenshot directory scan results after terminal calibration:
-  - 81 frames matched `arknights/home`.
+  - 90 frames matched `arknights/home`.
   - 1 frame matched `arknights/terminal`.
   - no scanned retained frame produced multiple generated page matches.
 - Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
