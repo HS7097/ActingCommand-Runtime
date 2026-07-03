@@ -7,6 +7,7 @@
 - Implemented the fifth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
 - Slice completed locally: C2 live recovery loop wiring plus H1 loop detection fix.
 - Implementation commit: `1aaf204` (`actinglab: wire monitor recovery resources`).
+- GitHub Actions CI run `28649333523`: passed.
 - `monitor --recover --use-recovery-resource` now resolves `ours/recovery/<game>.<server>.recovery.json` from the selected resource root.
 - `monitor --recover --recovery-resource <path>` now uses an explicit recovery resource path and fails loudly when it is missing or invalid.
 - Monitor recovery selects recovery rules by the C1 canonical self-heal trigger and executes them through `recovery_exec`.
@@ -56,6 +57,9 @@
 - `cargo test --workspace`
 - `git diff --check`
 - `git commit -m "actinglab: wire monitor recovery resources"`
+- `git commit -m "docs: record lab self-heal c2 checkpoint"`
+- `git push origin main`
+- `gh run watch 28649333523 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -72,6 +76,7 @@
 - `cargo clippy --workspace -- -D warnings`: passed.
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
+- GitHub Actions CI run `28649333523`: passed.
 
 ### Current blocker
 
