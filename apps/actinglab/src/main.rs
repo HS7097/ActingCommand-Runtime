@@ -2110,7 +2110,9 @@ fn validate_self_heal_plan_trigger(trigger: &str) -> CliOutcome<()> {
         | "unexpected_page"
         | "modal_popup"
         | "startup_login_required"
-        | "session_expired" => Ok(()),
+        | "session_expired"
+        | "resource_drift"
+        | "unstable_page" => Ok(()),
         other => Err(CliError::usage(format!(
             "unsupported self-heal trigger: {other}"
         ))),
@@ -2153,6 +2155,25 @@ fn session_self_heal_plan_recovery(trigger: &str, target_page: &str) -> Value {
             "executes_control": true,
             "resource_required": "STARTUP-LOGIN.md",
             "maintenance_only": true
+        }),
+        "resource_drift" => json!({
+            "kind": "resource_drift_stop_loss",
+            "requires_matching_lease": false,
+            "executes_control": false,
+            "heavy_recovery_allowed": false,
+            "restart_allowed": false,
+            "maintenance_only": true,
+            "resource_status": "needs_recalibration",
+            "next": "mark the mismatched resource for recalibration; do not retry or restart the app"
+        }),
+        "unstable_page" => json!({
+            "kind": "action_gate_failure",
+            "requires_matching_lease": false,
+            "executes_control": false,
+            "heavy_recovery_allowed": false,
+            "restart_allowed": false,
+            "maintenance_only": true,
+            "next": "wait for a fresh stable ROI or surface the failure to the caller"
         }),
         _ => json!({
             "kind": "observe_first",
@@ -2201,6 +2222,30 @@ fn session_self_heal_plan_escalation(trigger: &str) -> Value {
             "must_log_repeated_transient_failures": true,
             "does_not_execute_heavy_recovery": true
         }),
+        "resource_drift" => json!({
+            "category": "resource_recalibration_required",
+            "current_step": "stop_loss_manual_recalibration",
+            "repeat_limit_before_escalation": 0,
+            "next_if_repeated": "operator_resource_update",
+            "heavy_recovery_candidate": null,
+            "heavy_recovery_requires_matching_lease": false,
+            "operator_live_validation_required": true,
+            "must_log_repeated_transient_failures": false,
+            "does_not_execute_heavy_recovery": true,
+            "stop_loss": true,
+            "restart_allowed": false
+        }),
+        "unstable_page" => json!({
+            "category": "action_gate_failure",
+            "current_step": "wait_for_roi_stability",
+            "repeat_limit_before_escalation": 0,
+            "next_if_repeated": "operator_review_or_fresh_capture",
+            "heavy_recovery_candidate": null,
+            "heavy_recovery_requires_matching_lease": false,
+            "operator_live_validation_required": true,
+            "must_log_repeated_transient_failures": true,
+            "does_not_execute_heavy_recovery": true
+        }),
         _ => json!({
             "category": "observation_required",
             "current_step": "observe_and_diagnose",
@@ -2227,6 +2272,13 @@ fn session_self_heal_plan_blockers(
             "kind": "self_heal_trigger",
             "code": "self_heal_trigger_required",
             "message": "Run observation and diagnosis before selecting a recovery trigger."
+        }));
+    }
+    if trigger == "resource_drift" {
+        blockers.push(json!({
+            "kind": "resource",
+            "code": "resource_recalibration_required",
+            "message": "Confirmed resource drift is a stop-loss condition; mark the resource for recalibration instead of retrying recovery."
         }));
     }
     if !readiness
@@ -2404,6 +2456,17 @@ fn session_self_heal_plan_next_actions(input: SessionSelfHealPlanNextActionInput
         priority += 1;
     }
 
+    if input.trigger == "resource_drift" {
+        ordered.push(session_connect_plan_next_action(
+            priority,
+            "mark_resource_for_recalibration",
+            "Confirmed resource drift is not recoverable by retry or app restart; update the mismatched resource before resuming.",
+            "session record amend <resource> --from-drift-diagnostics",
+            true,
+        ));
+        priority += 1;
+    }
+
     if matches!(
         input.trigger,
         "capture_stale_suspected" | "capture_backend_unavailable"
@@ -2556,6 +2619,13 @@ fn session_self_heal_plan_submit_plan_command(trigger: &str, target_page: &str) 
     match trigger {
         "capture_stale_suspected" | "capture_backend_unavailable" => {
             "session submit-plan session recover --stale-capture".to_string()
+        }
+        "resource_drift" => {
+            "manual resource recalibration required; no recovery command is safe".to_string()
+        }
+        "unstable_page" => {
+            "wait for stable ROI or rerun with a fresh capture; no recovery command is submitted"
+                .to_string()
         }
         "startup_login_required" => format!(
             "session submit-plan session request recover --startup-login --to {target_page} --capture --lease-holder <holder>"
@@ -29732,6 +29802,78 @@ mod tests {
                     blocker.get("kind").and_then(Value::as_str) == Some("lease")
                         && blocker.get("code").and_then(Value::as_str) == Some("lab_lease_required")
                 })
+        );
+    }
+
+    #[test]
+    fn session_self_heal_plan_resource_drift_is_stop_loss() {
+        let _guard = env_lock();
+        unsafe {
+            env::remove_var(REQUIRE_SESSION_DAEMON_ENV);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "self-heal-plan",
+                "--local",
+                "--trigger",
+                "resource_drift",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/recovery/kind").and_then(Value::as_str),
+            Some("resource_drift_stop_loss")
+        );
+        assert_eq!(
+            data.pointer("/recovery/executes_control")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/recovery/restart_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            data.pointer("/escalation/category").and_then(Value::as_str),
+            Some("resource_recalibration_required")
+        );
+        assert!(
+            data.pointer("/escalation/heavy_recovery_candidate")
+                .is_some_and(Value::is_null)
+        );
+        assert_eq!(
+            data.pointer("/execution_gate/safe_to_execute_maintenance")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            data.pointer("/blockers")
+                .and_then(Value::as_array)
+                .expect("blockers")
+                .iter()
+                .any(|blocker| {
+                    blocker.get("code").and_then(Value::as_str)
+                        == Some("resource_recalibration_required")
+                })
+        );
+        let actions = data
+            .pointer("/next_actions/ordered")
+            .and_then(Value::as_array)
+            .expect("next actions");
+        assert!(actions.iter().any(|item| {
+            item.get("action").and_then(Value::as_str) == Some("mark_resource_for_recalibration")
+        }));
+        assert_eq!(
+            data.pointer("/next_actions/recovery/does_not_execute_heavy_recovery")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

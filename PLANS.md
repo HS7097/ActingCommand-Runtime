@@ -20,7 +20,7 @@ Delivery order:
 
 1. C0.c guarded coordinate action: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`.
 2. C0.b ROI stability gate: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`.
-3. C0.a resource drift stop-loss: pending.
+3. C0.a resource drift stop-loss: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`.
 4. C1 trigger classification and priority routing: pending.
 5. C2 live recovery loop wiring plus H1 loop detection fix: pending.
 6. C3 login/wake resource wiring: pending.
@@ -42,7 +42,17 @@ Current C0.b behavior:
 - Page changes during the stability wait refuse execution as `page_guard_mismatch`.
 - The gate reuses existing recognition target evaluation and does not add a whole-frame freeze detector.
 
-These slices do not add resource drift classification, trigger routing, live recovery loop wiring, login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, or game logic.
+Current C0.a behavior:
+
+- When the C0.c page guard passes but the guarded target mismatches, ActingLab runs a bounded resource drift probe before opening the touch backend or sending MaaTouch input.
+- The probe reuses the guarded target in its expected rect across follow-up frames.
+- A target that recovers to a passing evaluation returns to the normal C0.b ROI stability gate.
+- A stable target mismatch is classified as `resource_drift` and fails loudly with recalibration diagnostics.
+- Drift diagnostics include the target id, expected rect, measured target result, observed frame count, operation provenance, and provenance version when available.
+- Moving mismatches remain `unstable_page`; page changes remain `page_guard_mismatch`.
+- `session self-heal-plan --trigger resource_drift` is a stop-loss plan: no retry, no app restart, no heavy recovery candidate, and a resource recalibration blocker.
+
+These slices do not add C1 priority routing, C2 live recovery loop wiring, C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, FeatureMatch relocation, automatic resource rewrites, or game logic.
 
 ## Current P6.5-A punchlist repair
 

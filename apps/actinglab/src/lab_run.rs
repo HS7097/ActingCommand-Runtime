@@ -42,6 +42,7 @@ const DEFAULT_MAX_STEPS: usize = 50;
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
 const DEFAULT_ROI_STABLE_FRAMES: u32 = 2;
 const DEFAULT_ROI_STABILITY_TIMEOUT_MS: u64 = 1_500;
+const DEFAULT_RESOURCE_DRIFT_FRAMES: u32 = 2;
 const ROI_TEMPLATE_SCORE_EPSILON: f32 = 0.01;
 const ROI_TEMPLATE_POSITION_EPSILON: i32 = 1;
 const ROI_COLOR_DISTANCE_EPSILON: f32 = 2.0;
@@ -425,6 +426,67 @@ fn execute_lab_run(
                 )?;
                 None
             }
+            PreExecutionGuardOutcome::TargetMismatch {
+                current_page,
+                target,
+                diagnostics,
+            } => {
+                ctx.event(
+                    "pre_execution_guard_failed",
+                    json!({"step_id": operation.id, "reason": "target_guard_mismatch", "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                )?;
+                match confirm_resource_drift(
+                    ctx,
+                    capture.as_mut(),
+                    ResourceDriftRequest {
+                        resources: &state.resources,
+                        operation: &operation,
+                        game: &state.control.game,
+                        initial_page: current_page,
+                        initial_target: target,
+                        candidate_pages: actionable_page_candidates.as_deref(),
+                    },
+                )? {
+                    ResourceDriftOutcome::Recovered {
+                        current_page,
+                        target,
+                    } => {
+                        ctx.event(
+                            "pre_execution_guard_passed",
+                            json!({"step_id": operation.id, "page": current_page.as_deref(), "target": target_evaluation_json(&target), "after": "target_guard_mismatch_recovered"}),
+                        )?;
+                        Some((current_page, target))
+                    }
+                    ResourceDriftOutcome::Failed {
+                        reason,
+                        current_page,
+                        diagnostics,
+                    } => {
+                        if reason == "resource_drift" {
+                            ctx.event(
+                                "resource_drift_detected",
+                                json!({"step_id": operation.id, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                            )?;
+                        } else {
+                            ctx.event(
+                                "pre_execution_guard_failed",
+                                json!({"step_id": operation.id, "reason": reason, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                            )?;
+                        }
+                        ctx.event(
+                            "step_failed",
+                            json!({"step_id": operation.id, "reason": reason}),
+                        )?;
+                        state.current_page = current_page.clone();
+                        state.failed_step_id = Some(operation.id.clone());
+                        return Err(CliError::device(format!(
+                            "pre-execution guard failed for operation '{}': {reason}; current_page={}",
+                            operation.id,
+                            current_page.unwrap_or_else(|| "unknown".to_string())
+                        )));
+                    }
+                }
+            }
             PreExecutionGuardOutcome::Failed {
                 reason,
                 current_page,
@@ -734,6 +796,11 @@ enum PreExecutionGuardOutcome {
         target: TargetEvaluation,
     },
     TrustedUnguarded,
+    TargetMismatch {
+        current_page: Option<String>,
+        target: TargetEvaluation,
+        diagnostics: Value,
+    },
     Failed {
         reason: &'static str,
         current_page: Option<String>,
@@ -796,9 +863,9 @@ fn evaluate_pre_execution_guard(
         .evaluate_target(&scene.scene, &guard.target_id)
         .map_err(|err| CliError::device(err.to_string()))?;
     if !target.passed {
-        return Ok(PreExecutionGuardOutcome::Failed {
-            reason: "target_guard_mismatch",
+        return Ok(PreExecutionGuardOutcome::TargetMismatch {
             current_page,
+            target: target.clone(),
             diagnostics: json!({
                 "guard": guard.to_json(),
                 "target": target_evaluation_json(&target)
@@ -909,6 +976,175 @@ fn wait_for_roi_stability(
     })
 }
 
+#[derive(Debug, PartialEq)]
+enum ResourceDriftOutcome {
+    Recovered {
+        current_page: Option<String>,
+        target: TargetEvaluation,
+    },
+    Failed {
+        reason: &'static str,
+        current_page: Option<String>,
+        diagnostics: Value,
+    },
+}
+
+struct ResourceDriftRequest<'a> {
+    resources: &'a LabResources,
+    operation: &'a Operation,
+    game: &'a str,
+    initial_page: Option<String>,
+    initial_target: TargetEvaluation,
+    candidate_pages: Option<&'a [String]>,
+}
+
+fn confirm_resource_drift(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    request: ResourceDriftRequest<'_>,
+) -> CliOutcome<ResourceDriftOutcome> {
+    let guard = request.operation.guard.as_ref().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "operation '{}' resource drift probe missing guard metadata",
+            request.operation.id
+        ))
+    })?;
+    let mut gate = ResourceDriftGate::new(
+        DEFAULT_RESOURCE_DRIFT_FRAMES,
+        request.initial_target.clone(),
+    )?;
+    ctx.event(
+        "resource_drift_probe_started",
+        json!({
+            "step_id": request.operation.id,
+            "required_mismatch_frames": DEFAULT_RESOURCE_DRIFT_FRAMES,
+            "timeout_ms": DEFAULT_ROI_STABILITY_TIMEOUT_MS,
+            "guard": guard.to_json(),
+            "initial_page": request.initial_page.as_deref(),
+            "initial_target": target_evaluation_json(&request.initial_target)
+        }),
+    )?;
+
+    let started = Instant::now();
+    while started.elapsed() <= Duration::from_millis(DEFAULT_ROI_STABILITY_TIMEOUT_MS) {
+        ctx.wait_for_next_capture_start();
+        let scene = ctx.capture_scene_with_pages(
+            capture,
+            &request.resources.evaluator,
+            &request.resources.detector,
+            &format!("resource_drift_{}", request.operation.id),
+            request.candidate_pages,
+        )?;
+        let current_page = scene.matched_anchor(request.game);
+        if !matched_page_matches_anchor(request.game, scene.matched_page.as_deref(), &guard.page_id)
+        {
+            return Ok(ResourceDriftOutcome::Failed {
+                reason: "page_guard_mismatch",
+                current_page,
+                diagnostics: json!({
+                    "expected_page": guard.page_id,
+                    "matched_page": scene.matched_page,
+                    "operation_from": request.operation.from
+                }),
+            });
+        }
+        let target = request
+            .resources
+            .evaluator
+            .evaluate_target(&scene.scene, &guard.target_id)
+            .map_err(|err| CliError::device(err.to_string()))?;
+        match gate.observe(target.clone()) {
+            ResourceDriftObservation::Recovered => {
+                return Ok(ResourceDriftOutcome::Recovered {
+                    current_page,
+                    target,
+                });
+            }
+            ResourceDriftObservation::Drift => {
+                return Ok(ResourceDriftOutcome::Failed {
+                    reason: "resource_drift",
+                    current_page,
+                    diagnostics: resource_drift_diagnostics(
+                        request.operation,
+                        guard,
+                        &target,
+                        gate.observed_frames,
+                    ),
+                });
+            }
+            ResourceDriftObservation::Waiting => {}
+        }
+    }
+
+    Ok(ResourceDriftOutcome::Failed {
+        reason: "unstable_page",
+        current_page: request.initial_page,
+        diagnostics: json!({
+            "guard": guard.to_json(),
+            "required_mismatch_frames": DEFAULT_RESOURCE_DRIFT_FRAMES,
+            "observed_frames": gate.observed_frames,
+            "last_target": target_evaluation_json(&gate.last_target),
+            "timeout_ms": DEFAULT_ROI_STABILITY_TIMEOUT_MS
+        }),
+    })
+}
+
+#[derive(Debug, PartialEq)]
+enum ResourceDriftObservation {
+    Recovered,
+    Drift,
+    Waiting,
+}
+
+#[derive(Debug)]
+struct ResourceDriftGate {
+    required_mismatch_frames: u32,
+    stable_mismatch_frames: u32,
+    observed_frames: u32,
+    last_target: TargetEvaluation,
+}
+
+impl ResourceDriftGate {
+    fn new(required_mismatch_frames: u32, initial_mismatch: TargetEvaluation) -> CliOutcome<Self> {
+        if required_mismatch_frames == 0 {
+            return Err(CliError::device(
+                "resource drift probe requires at least one mismatch frame",
+            ));
+        }
+        if initial_mismatch.passed {
+            return Err(CliError::device(
+                "resource drift probe requires an initial target mismatch",
+            ));
+        }
+        Ok(Self {
+            required_mismatch_frames,
+            stable_mismatch_frames: 1,
+            observed_frames: 1,
+            last_target: initial_mismatch,
+        })
+    }
+
+    fn observe(&mut self, target: TargetEvaluation) -> ResourceDriftObservation {
+        self.observed_frames += 1;
+        if target.passed {
+            self.stable_mismatch_frames = 0;
+            self.last_target = target;
+            return ResourceDriftObservation::Recovered;
+        }
+        if target_measurement_stable_with(&self.last_target, &target) {
+            self.stable_mismatch_frames += 1;
+        } else {
+            self.stable_mismatch_frames = 1;
+        }
+        self.last_target = target;
+        if self.stable_mismatch_frames >= self.required_mismatch_frames {
+            ResourceDriftObservation::Drift
+        } else {
+            ResourceDriftObservation::Waiting
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RoiStabilityGate {
     required_stable_frames: u32,
@@ -955,11 +1191,11 @@ impl RoiStabilityGate {
 }
 
 fn target_stable_with(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
-    if previous.id != current.id
-        || previous.kind != current.kind
-        || !previous.passed
-        || !current.passed
-    {
+    previous.passed && current.passed && target_measurement_stable_with(previous, current)
+}
+
+fn target_measurement_stable_with(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
+    if previous.id != current.id || previous.kind != current.kind {
         return false;
     }
     if !template_evaluation_stable(previous, current) {
@@ -994,6 +1230,43 @@ fn color_evaluation_stable(previous: &TargetEvaluation, current: &TargetEvaluati
         (None, None) => true,
         _ => false,
     }
+}
+
+fn resource_drift_diagnostics(
+    operation: &Operation,
+    guard: &OperationGuard,
+    target: &TargetEvaluation,
+    observed_frames: u32,
+) -> Value {
+    json!({
+        "trigger": "resource_drift",
+        "resource_status": "needs_recalibration",
+        "resource_action": "mark_for_recalibration",
+        "target_id": guard.target_id.as_str(),
+        "expected_rect": rect_json(guard.expected_rect),
+        "measured": target_evaluation_json(target),
+        "observed_frames": observed_frames,
+        "required_mismatch_frames": DEFAULT_RESOURCE_DRIFT_FRAMES,
+        "provenance_version": operation_provenance_version(operation),
+        "provenance": operation.provenance.clone().unwrap_or(Value::Null),
+        "guard": guard.to_json()
+    })
+}
+
+fn operation_provenance_version(operation: &Operation) -> Value {
+    operation
+        .provenance
+        .as_ref()
+        .and_then(|provenance| {
+            provenance
+                .get("version")
+                .or_else(|| provenance.get("resource_version"))
+                .or_else(|| provenance.get("pack_version"))
+                .or_else(|| provenance.get("source_commit"))
+                .or_else(|| provenance.get("commit"))
+        })
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn target_evaluation_json(target: &TargetEvaluation) -> Value {
@@ -3511,13 +3784,13 @@ mod tests {
                 .expect("guard evaluation");
 
         match outcome {
-            PreExecutionGuardOutcome::Failed {
-                reason,
+            PreExecutionGuardOutcome::TargetMismatch {
                 current_page,
+                target,
                 diagnostics,
             } => {
-                assert_eq!(reason, "target_guard_mismatch");
                 assert_eq!(current_page, Some("home".to_string()));
+                assert!(!target.passed);
                 assert_eq!(
                     diagnostics
                         .pointer("/target/passed")
@@ -3527,6 +3800,95 @@ mod tests {
             }
             other => panic!("expected target mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resource_drift_gate_detects_stable_target_mismatch() {
+        let initial = color_target_evaluation("target/button", [9, 0, 0], false);
+        let mut gate = ResourceDriftGate::new(2, initial).expect("gate");
+
+        assert_eq!(
+            gate.observe(color_target_evaluation("target/button", [9, 0, 0], false)),
+            ResourceDriftObservation::Drift
+        );
+        assert_eq!(gate.stable_mismatch_frames, 2);
+        assert_eq!(gate.observed_frames, 2);
+    }
+
+    #[test]
+    fn resource_drift_gate_waits_on_moving_target_mismatch() {
+        let initial = color_target_evaluation("target/button", [0, 0, 0], false);
+        let mut gate = ResourceDriftGate::new(2, initial).expect("gate");
+
+        for mean in [[3, 0, 0], [6, 0, 0], [9, 0, 0]] {
+            assert_eq!(
+                gate.observe(color_target_evaluation("target/button", mean, false)),
+                ResourceDriftObservation::Waiting
+            );
+        }
+        assert_eq!(gate.stable_mismatch_frames, 1);
+    }
+
+    #[test]
+    fn resource_drift_gate_recovers_when_target_passes() {
+        let initial = color_target_evaluation("target/button", [0, 0, 0], false);
+        let mut gate = ResourceDriftGate::new(2, initial).expect("gate");
+
+        assert_eq!(
+            gate.observe(color_target_evaluation("target/button", [0, 0, 0], true)),
+            ResourceDriftObservation::Recovered
+        );
+    }
+
+    #[test]
+    fn resource_drift_gate_rejects_initial_passing_target() {
+        let err =
+            ResourceDriftGate::new(2, color_target_evaluation("target/button", [0, 0, 0], true))
+                .expect_err("passing target is not drift");
+
+        assert_eq!(err.code, "device_error");
+        assert!(err.message.contains("initial target mismatch"));
+    }
+
+    #[test]
+    fn resource_drift_diagnostics_include_recalibration_context() {
+        let mut operation = test_operation(None, None);
+        operation.provenance = Some(json!({"version": "pack-20260703"}));
+        let guard = test_color_guard();
+        let target = color_target_evaluation("target/button", [9, 0, 0], false);
+
+        let diagnostics = resource_drift_diagnostics(&operation, &guard, &target, 2);
+
+        assert_eq!(
+            diagnostics.get("trigger").and_then(Value::as_str),
+            Some("resource_drift")
+        );
+        assert_eq!(
+            diagnostics.get("resource_status").and_then(Value::as_str),
+            Some("needs_recalibration")
+        );
+        assert_eq!(
+            diagnostics.get("target_id").and_then(Value::as_str),
+            Some("target/button")
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/expected_rect/width")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .pointer("/measured/passed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            diagnostics
+                .get("provenance_version")
+                .and_then(Value::as_str),
+            Some("pack-20260703")
+        );
     }
 
     #[test]

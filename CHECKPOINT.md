@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C0.a resource drift stop-loss
+
+### Current status
+
+- Implemented the third slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed: C0.a resource drift stop-loss.
+- ActingLab now treats an execution-time page match plus stable guarded-target mismatch as `resource_drift`.
+- The drift probe runs before the touch backend is opened or MaaTouch input is sent.
+- A target mismatch that recovers returns to the normal C0.b ROI stability gate.
+- A stable target mismatch fails loudly with recalibration diagnostics.
+- Moving target mismatches stay `unstable_page`; page changes stay `page_guard_mismatch`.
+- `resource_drift` diagnostics include target id, expected rect, measured target result, observed frame count, resource recalibration status, operation provenance, and provenance version when available.
+- `session self-heal-plan --trigger resource_drift` now reports a stop-loss plan with no control execution, no retry/restart path, no heavy recovery candidate, and a resource recalibration blocker.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`.
+- C1, C2/H1, and C3 remain pending.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `gh run list --repo HS7097/ActingCommand-Runtime --limit 5`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Focused `rg` and source reads over ActingLab run and self-heal-plan code.
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo test -p actingcommand-actinglab resource_drift`
+- `cargo test -p actingcommand-actinglab pre_execution_guard`
+- `cargo test -p actingcommand-actinglab roi_stability_gate`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before public validation.
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab resource_drift`: passed.
+- `cargo test -p actingcommand-actinglab pre_execution_guard`: passed.
+- `cargo test -p actingcommand-actinglab roi_stability_gate`: passed.
+- `cargo test -p actingcommand-actinglab`: passed with 501 unit tests and 3 integration tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C0.a.
+- Remaining self-heal chain items are intentionally pending: C1 trigger routing, C2 live recovery loop plus H1, and C3 login/wake wiring.
+
+### Next step
+
+1. Commit and push the C0.a implementation.
+2. Watch GitHub Actions for the C0.a commit.
+3. Continue with C1 as the next independent slice after C0.a is green.
+
 ## 2026-07-03 Lab self-heal chain C0.b ROI stability gate
 
 ### Current status
