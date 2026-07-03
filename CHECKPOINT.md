@@ -6,6 +6,8 @@
 
 - Implemented the second slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
 - Slice completed: C0.b ROI-level pre-action stability gate.
+- Implementation commit: `4dcb2a0` (`actinglab: gate coordinate actions on stable ROI`).
+- GitHub Actions CI run `28645621420`: passed.
 - ActingLab now reuses the C0.c guard target evaluation as the baseline ROI sample.
 - Before opening the touch backend or sending MaaTouch input, ActingLab captures follow-up frames and requires the guard target ROI to be stable for two consecutive samples.
 - Static ROI targets pass on the first follow-up frame.
@@ -58,8 +60,7 @@
 
 ### Next step
 
-1. Commit and push the C0.b slice with planning/checkpoint files.
-2. Continue with C0.a as the next independent slice.
+1. Continue with C0.a as the next independent slice.
 
 ## 2026-07-03 Lab self-heal chain C0.c guarded action
 
