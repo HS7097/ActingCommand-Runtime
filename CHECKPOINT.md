@@ -6,6 +6,8 @@
 
 - Implemented the first slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
 - Slice completed: C0.c decision-execution guard for fixed-coordinate Operation Bundle actions.
+- Implementation commit: `b6535c8` (`actinglab: guard coordinate operation execution`).
+- GitHub Actions CI run `28644595337`: passed.
 - Operation Bundle coordinate actions now require guard metadata by default.
 - Guard metadata requires `page_id`, `target_id`, `expected_rect`, and `verify_template` or `color_probe`.
 - Missing guard metadata fails package validation loudly unless `unguarded_trusted_coordinate: true` is explicitly set.
@@ -67,8 +69,7 @@
 
 ### Next step
 
-1. Commit and push the C0.c slice with planning/checkpoint files.
-2. Continue with C0.b as the next independent slice.
+1. Continue with C0.b as the next independent slice.
 
 ## 2026-07-03 P6.5-A punchlist
 
