@@ -58,6 +58,7 @@
 - `cargo test -p actingcommand-actinglab package_build::tests::build_task_package_validates_and_rewrites_template_paths -- --nocapture`
 - `actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame>` for `home_retest`, `home_run`, `mission_result`, and `terminal_stage_map`.
 - Final public gate run: `cargo fmt --all -- --check`; `cargo build --release`; `cargo clippy --workspace -- -D warnings`; `cargo test --workspace`; `git diff --check`.
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained AK screenshot>` across 93 retained AK screenshots under the current Runtime `target` tree.
 
 ### Test results
 
@@ -79,6 +80,7 @@
   - `home_run`: matches `arknights/home` only.
   - `mission_result`: matches no generated page.
   - `terminal_stage_map`: matches `arknights/terminal` only.
+- Release-build retained AK screenshot scan: 93 frames total; 91 matched `arknights/home`, 1 matched `arknights/terminal`, 1 matched no page, and 0 produced multiple page matches.
 
 ### Current blocker
 

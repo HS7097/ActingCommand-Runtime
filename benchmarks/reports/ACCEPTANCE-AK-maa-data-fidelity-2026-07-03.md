@@ -97,10 +97,10 @@ After conversion, retained-frame page detection produced:
 | `mission_result` | none |
 | `terminal_stage_map` | `arknights/terminal` |
 
-An additional scan across all 17 retained AK `output\screenshots` directories
-under the current Runtime `target` tree found 90 home matches and one terminal
-match; no scanned retained frame produced multiple generated page matches after
-the terminal-stage guard was added.
+An additional release-build scan across 93 retained AK screenshots under the
+current Runtime `target` tree found 91 home matches, one terminal match, and
+one standby/no-match frame; no scanned retained frame produced multiple
+generated page matches after the terminal-stage and any-of updates.
 
 ## Remaining evidence gap
 
