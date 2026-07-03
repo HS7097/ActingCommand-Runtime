@@ -22,10 +22,12 @@ Codex validation status:
 
 - Public local gates passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
 - Real AK MAA task-family compile smoke passed against `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` at commit `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`, compiling 3252 raw tasks into 4284 tasks.
+- M6 structural re-conversion is now unblocked for the three current resource repositories. `resource convert` writes validated schema `0.5` outputs for Arknights CN, AzurLane JP, and BlueArchive JP, and `detect-page --check-pages` passes for all three generated page packs.
+- Runtime guard synthesis now supports three reviewed sources: explicit `verify_templates`, source-page anchors, and operation-level verify templates with click-derived expected rects. `page_id: "any"` guards remain target-checked and are used only for generic recovery controls.
 
 Remaining chain gates before the broader CLI entry condition:
 
-- M6 offline calibration and resource-lane re-conversion remain pending outside this Codex source slice.
+- M6 threshold calibration/reporting remains pending outside this structural conversion slice. The generated packs validate structurally, but the task file's offline threshold-distribution calibration report is not yet proven complete.
 - M5 overlay layering remains intentionally non-blocking for CLI entry.
 - M3 Phase B/C masked NCC and RGB/HSV count engines remain future work; Phase A fail-loud handling prevents silent misuse until they are implemented.
 

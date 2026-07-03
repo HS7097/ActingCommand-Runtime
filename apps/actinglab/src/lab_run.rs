@@ -751,7 +751,8 @@ fn canonical_page_anchor(game: &str, page_id: &str) -> String {
 }
 
 fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &str) -> bool {
-    observed_or_anchor == expected_anchor
+    expected_anchor == "any"
+        || observed_or_anchor == expected_anchor
         || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
         || observed_or_anchor == format!("{game}/{expected_anchor}")
 }
@@ -3948,6 +3949,34 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn pre_execution_guard_allows_any_page_guard_when_target_matches() {
+        let mut operation = test_operation(None, None);
+        operation.from = "any".to_string();
+        operation.unguarded_trusted_coordinate = false;
+        let mut guard = test_color_guard();
+        guard.page_id = "any".to_string();
+        operation.guard = Some(guard);
+        let guard = operation.guard.as_ref().expect("guard");
+        let evaluator = one_pixel_color_evaluator([0, 0, 0]);
+        let scene = captured_rgb_scene(Some("arknights/terminal"), [0, 0, 0]);
+
+        let outcome =
+            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+                .expect("guard evaluation");
+
+        match outcome {
+            PreExecutionGuardOutcome::Passed {
+                current_page,
+                target,
+            } => {
+                assert_eq!(current_page, Some("terminal".to_string()));
+                assert!(target.passed);
+            }
+            other => panic!("expected guard pass, got {other:?}"),
+        }
     }
 
     #[test]

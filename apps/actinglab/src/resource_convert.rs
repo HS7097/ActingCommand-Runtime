@@ -731,30 +731,43 @@ impl OperationConverter {
             return Ok(Value::Null);
         }
         let operation_id = required_string(operation, "id")?;
-        let verify_template = operation
+        if let Some(verify_template) = operation
             .get("verify_template")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                CliError::package_invalid(format!(
-                    "operation '{operation_id}' cannot synthesize guard without verify_template; add guard or set unguarded_trusted_coordinate"
-                ))
-            })?;
-        if operation.get("to").and_then(Value::as_str).is_none() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' cannot synthesize guard without a string to page"
-            )));
+        {
+            if let Some(verify) =
+                array_field(&bundle.data, "verify_templates")
+                    .iter()
+                    .find(|entry| {
+                        entry.get("template").and_then(Value::as_str) == Some(verify_template)
+                    })
+            {
+                return self.operation_guard_from_verify_template(
+                    operation,
+                    verify,
+                    verify_template,
+                );
+            }
+            if let Some(anchor) = array_field(&bundle.data, "anchors").iter().find(|entry| {
+                entry.get("template").and_then(Value::as_str) == Some(verify_template)
+            }) {
+                return self.operation_guard_from_anchor(operation, anchor, verify_template);
+            }
+            return self.operation_guard_from_operation_verify_template(operation, verify_template);
         }
-        let verify = array_field(&bundle.data, "verify_templates")
-            .iter()
-            .find(|entry| entry.get("template").and_then(Value::as_str) == Some(verify_template))
-            .ok_or_else(|| {
-                CliError::package_invalid(format!(
-                    "operation '{operation_id}' verify_template '{verify_template}' has no matching verify_templates entry with a region"
-                ))
-            })?;
+        self.operation_guard_from_source_anchor(bundle, operation, &operation_id)
+    }
+
+    fn operation_guard_from_verify_template(
+        &self,
+        operation: &Value,
+        verify: &Value,
+        verify_template: &str,
+    ) -> CliOutcome<Value> {
         let target_id = required_string(verify, "id")?;
-        let expected_rect = region_to_guard_rect(required_field(verify, "region")?)?;
+        let expected_rect =
+            region_to_guard_rect(required_field(verify, "region")?, &self.coordinate_space)?;
         Ok(ordered_object([
             (
                 "page_id",
@@ -767,6 +780,73 @@ impl OperationConverter {
                 Value::String(verify_template.to_string()),
             ),
         ]))
+    }
+
+    fn operation_guard_from_anchor(
+        &self,
+        operation: &Value,
+        anchor: &Value,
+        verify_template: &str,
+    ) -> CliOutcome<Value> {
+        let target_id = anchor_target_id(&required_string(anchor, "id")?);
+        let expected_rect =
+            region_to_guard_rect(required_field(anchor, "region")?, &self.coordinate_space)?;
+        Ok(ordered_object([
+            (
+                "page_id",
+                page_or_any(&self.game, &required_string(operation, "from")?),
+            ),
+            ("target_id", Value::String(target_id)),
+            ("expected_rect", expected_rect),
+            (
+                "verify_template",
+                Value::String(verify_template.to_string()),
+            ),
+        ]))
+    }
+
+    fn operation_guard_from_operation_verify_template(
+        &self,
+        operation: &Value,
+        verify_template: &str,
+    ) -> CliOutcome<Value> {
+        Ok(ordered_object([
+            (
+                "page_id",
+                page_or_any(&self.game, &required_string(operation, "from")?),
+            ),
+            (
+                "target_id",
+                Value::String(template_target_id(verify_template)),
+            ),
+            (
+                "expected_rect",
+                click_to_guard_rect(required_field(operation, "click")?)?,
+            ),
+            (
+                "verify_template",
+                Value::String(verify_template.to_string()),
+            ),
+        ]))
+    }
+
+    fn operation_guard_from_source_anchor(
+        &self,
+        bundle: &Bundle,
+        operation: &Value,
+        operation_id: &str,
+    ) -> CliOutcome<Value> {
+        let from = required_string(operation, "from")?;
+        let anchor = array_field(&bundle.data, "anchors")
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(from.as_str()))
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "operation '{operation_id}' cannot synthesize guard without verify_template or a matching source anchor; add guard or set unguarded_trusted_coordinate"
+                ))
+            })?;
+        let template = required_string(anchor, "template")?;
+        self.operation_guard_from_anchor(operation, anchor, &template)
     }
 
     fn declared_anchor_ids(&self) -> BTreeSet<String> {
@@ -1111,7 +1191,7 @@ fn region_to_pack(region: &Value) -> CliOutcome<Value> {
     }
 }
 
-fn region_to_guard_rect(region: &Value) -> CliOutcome<Value> {
+fn region_to_guard_rect(region: &Value, coordinate_space: &Value) -> CliOutcome<Value> {
     match region.get("mode").and_then(Value::as_str) {
         Some("rect") => {
             let rect = required_field(region, "rect")?;
@@ -1122,9 +1202,15 @@ fn region_to_guard_rect(region: &Value) -> CliOutcome<Value> {
                 ("height", required_field(rect, "height")?.clone()),
             ]))
         }
-        Some("full_frame") => Err(CliError::package_invalid(
-            "cannot synthesize guard expected_rect from full_frame verify_template region",
-        )),
+        Some("full_frame") => Ok(ordered_object([
+            ("x", Value::Number(0.into())),
+            ("y", Value::Number(0.into())),
+            ("width", required_field(coordinate_space, "width")?.clone()),
+            (
+                "height",
+                required_field(coordinate_space, "height")?.clone(),
+            ),
+        ])),
         other => Err(CliError::package_invalid(format!(
             "unknown guard region mode: {other:?}"
         ))),
@@ -1189,6 +1275,35 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
         ])),
         other => Err(CliError::package_invalid(format!(
             "unknown click kind: {other:?}"
+        ))),
+    }
+}
+
+fn click_to_guard_rect(click: &Value) -> CliOutcome<Value> {
+    match click.get("kind").and_then(Value::as_str) {
+        Some("point") | Some("long_press") | Some("long_tap") => Ok(ordered_object([
+            ("x", required_field(click, "x")?.clone()),
+            ("y", required_field(click, "y")?.clone()),
+            ("width", Value::Number(1.into())),
+            ("height", Value::Number(1.into())),
+        ])),
+        Some("rect") | Some("specific_rect") => Ok(ordered_object([
+            ("x", required_field(click, "x")?.clone()),
+            ("y", required_field(click, "y")?.clone()),
+            ("width", required_field(click, "width")?.clone()),
+            ("height", required_field(click, "height")?.clone()),
+        ])),
+        Some("drag") => {
+            let rect = required_field(click, "from")?;
+            Ok(ordered_object([
+                ("x", required_field(rect, "x")?.clone()),
+                ("y", required_field(rect, "y")?.clone()),
+                ("width", required_field(rect, "width")?.clone()),
+                ("height", required_field(rect, "height")?.clone()),
+            ]))
+        }
+        other => Err(CliError::package_invalid(format!(
+            "cannot synthesize guard expected_rect from click kind: {other:?}"
         ))),
     }
 }
@@ -1672,7 +1787,178 @@ mod tests {
     }
 
     #[test]
-    fn build_primitives_rejects_unmatched_verify_template_without_trusted_opt_in() {
+    fn build_primitives_synthesizes_guard_from_source_anchor_without_operation_verify_template() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/open-terminal");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "open-terminal".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "open-terminal",
+                    "anchors": [{
+                        "id": "home",
+                        "template": "assets/HOME.png",
+                        "region": {"mode":"rect","rect":{"x":200,"y":300,"width":40,"height":50}},
+                        "threshold": 0.8
+                    }],
+                    "operations": [{
+                        "id": "home_to_terminal",
+                        "purpose": "go terminal",
+                        "from": "home",
+                        "to": "terminal",
+                        "click": {"kind":"rect","x":100,"y":110,"width":20,"height":25},
+                        "verify_template": null
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert_eq!(
+            primitive.pointer("/guard/page_id").and_then(Value::as_str),
+            Some("arknights/home")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/target_id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            primitive.pointer("/guard/expected_rect"),
+            Some(&json!({"x":200,"y":300,"width":40,"height":50}))
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/verify_template")
+                .and_then(Value::as_str),
+            Some("assets/HOME.png")
+        );
+    }
+
+    #[test]
+    fn build_primitives_synthesizes_any_page_guard_from_matching_anchor_template() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/return-home");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/HOME_BUTTON.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "azurlane".to_string(),
+            server: "jp".to_string(),
+            locale: "ja-JP".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "return-home".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "return-home",
+                    "anchors": [{
+                        "id": "home",
+                        "template": "assets/HOME_BUTTON.png",
+                        "region": {"mode":"rect","rect":{"x":1100,"y":20,"width":60,"height":40}},
+                        "threshold": 0.9
+                    }],
+                    "operations": [{
+                        "id": "goto_home",
+                        "purpose": "return home",
+                        "from": "any",
+                        "to": "home",
+                        "click": {"kind":"rect","x":1100,"y":20,"width":60,"height":40},
+                        "verify_template": "assets/HOME_BUTTON.png"
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert_eq!(
+            primitive.pointer("/guard/page_id").and_then(Value::as_str),
+            Some("any")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/target_id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
+    }
+
+    #[test]
+    fn build_primitives_synthesizes_guard_from_operation_verify_template_click_rect() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/return-home");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/HOME_ICON.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "bluearchive".to_string(),
+            server: "jp".to_string(),
+            locale: "ja-JP".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "return-home".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "return-home",
+                    "anchors": [],
+                    "operations": [{
+                        "id": "tap_home",
+                        "purpose": "tap home",
+                        "from": "any",
+                        "to": "home",
+                        "click": {"kind":"point","x":1236,"y":25},
+                        "verify_template": "assets/HOME_ICON.png"
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert_eq!(
+            primitive.pointer("/guard/page_id").and_then(Value::as_str),
+            Some("any")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/target_id")
+                .and_then(Value::as_str),
+            Some("template/home_icon")
+        );
+        assert_eq!(
+            primitive.pointer("/guard/expected_rect"),
+            Some(&json!({"x":1236,"y":25,"width":1,"height":1}))
+        );
+    }
+
+    #[test]
+    fn build_primitives_rejects_unmatched_verify_template_without_rect_guard_source() {
         let root = tempfile::tempdir().unwrap();
         let task_dir = root.path().join("operations/daily-check");
         fs::create_dir_all(task_dir.join("assets")).unwrap();
@@ -1697,7 +1983,7 @@ mod tests {
                         "purpose": "go target",
                         "from": "home",
                         "to": "target",
-                        "click": {"kind":"rect","x":100,"y":110,"width":20,"height":25},
+                        "click": {"kind":"offset","target_id":"target/button","offset":{"x":1,"y":2,"width":3,"height":4}},
                         "verify_template": "assets/VERIFY_READY.png"
                     }]
                 }),
@@ -1709,7 +1995,10 @@ mod tests {
             .build_all()
             .expect_err("guard synthesis should fail");
 
-        assert!(err.message.contains("no matching verify_templates entry"));
+        assert!(
+            err.message
+                .contains("cannot synthesize guard expected_rect from click kind")
+        );
     }
 
     #[test]

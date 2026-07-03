@@ -1,5 +1,86 @@
 # CHECKPOINT.md
 
+## 2026-07-03 AK MAA data fidelity structural M6 continuation
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the Codex M1-M4/M7 source slice.
+- Refreshed all three resource repositories before reading or converting resource data.
+- Extended Runtime guard synthesis so existing operation bundles can satisfy C0.c without weakening severe-error behavior:
+  - explicit `verify_templates` still produce target guards;
+  - source-page anchors can guard ordinary page-bound operations;
+  - operation-level verify templates without `verify_templates` entries can guard against their generated template target using the operation click rect;
+  - full-frame guard regions resolve to the configured coordinate-space rect instead of failing structurally;
+  - `page_id: "any"` guards skip only the page-id comparison and still require the guard target to match.
+- Added explicit trusted-coordinate opt-in only for existing generic recovery controls that intentionally start from `from: "any"` without a page target.
+- Re-ran actual `resource convert` for Arknights CN, AzurLane JP, and BlueArchive JP, producing schema `0.5` generated outputs in each resource repository.
+- `detect-page --check-pages` passed for all three generated resource packs.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2ab7ccddd63054ee16d3441ff71683a3feae1a6a` before local resource conversion changes.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4` before local resource conversion changes.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `7cf3bae27d473d29efde1f5605f106b28a2df9fb` before local resource conversion changes.
+
+### Files changed
+
+- Runtime:
+  - `apps/actinglab/src/lab_run.rs`
+  - `apps/actinglab/src/resource_convert.rs`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/return_home/task.json`
+  - generated `ours/recognition`, `ours/navigation`, and `ours/operations` outputs
+- AzurLane resource repo:
+  - `ours/operations/return_home/task.json`
+  - generated `ours/recognition`, `ours/navigation`, and `ours/operations` outputs
+- BlueArchive resource repo:
+  - `ours/operations/return_home/task.json`
+  - generated `ours/recognition`, `ours/navigation`, and `ours/operations` outputs
+
+### Commands run
+
+- `git fetch origin --prune --tags` and `git pull --ff-only` in all three resource repositories.
+- `cargo test -p actingcommand-actinglab resource_convert::tests::build_primitives_`
+- `cargo test -p actingcommand-actinglab pre_execution_guard_`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp --locale ja-JP`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane --game azurlane --server jp detect-page --check-pages`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive --game bluearchive --server jp detect-page --check-pages`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check` in Runtime and all three resource repositories
+
+### Test results
+
+- Focused Runtime guard synthesis tests passed.
+- Focused Runtime pre-execution guard tests passed.
+- Arknights CN `resource convert`: written, 10 bundles, 14 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- AzurLane JP `resource convert`: written, 41 bundles, 81 targets, 41 pages, 43 edges, 17 page operations, 89 primitives.
+- BlueArchive JP `resource convert`: written, 20 bundles, 22 targets, 20 pages, 19 edges, 23 page operations, 53 primitives.
+- `detect-page --check-pages`: passed for Arknights CN, AzurLane JP, and BlueArchive JP.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+- Resource repository whitespace validation passed with `git diff --check` in Arknights, AzurLane, and BlueArchive.
+
+### Current blocker
+
+- The structural M6 resource re-conversion gate is now passing locally.
+- The broader task still lacks the task-file M6 offline calibration report: page-anchor discriminativeness checks, retained-frame threshold distribution calibration, and drift-baseline acceptance evidence are not yet proven complete in this Codex run.
+
+### Next step
+
+1. Commit and push the Runtime slice.
+2. Commit and push the three resource repository conversion slices.
+3. Continue or hand off the remaining M6 threshold calibration/report work before marking `TASK-AK-maa-data-fidelity.md` complete.
+
 ## 2026-07-03 AK MAA data fidelity Codex slice
 
 ### Current status
