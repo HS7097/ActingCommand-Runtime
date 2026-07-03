@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C0.c guarded action
+
+### Current status
+
+- Implemented the first slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed: C0.c decision-execution guard for fixed-coordinate Operation Bundle actions.
+- Operation Bundle coordinate actions now require guard metadata by default.
+- Guard metadata requires `page_id`, `target_id`, `expected_rect`, and `verify_template` or `color_probe`.
+- Missing guard metadata fails package validation loudly unless `unguarded_trusted_coordinate: true` is explicitly set.
+- ActingLab now captures and evaluates a fresh pre-execution guard frame before opening the touch backend or sending MaaTouch input.
+- Page mismatch and target mismatch refuse the click and report visible diagnostics before execution.
+- `package build-task` fixtures and `session record build-task` output now include guard metadata that passes the new validation.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`.
+- C0.b, C0.a, C1, C2/H1, and C3 remain pending.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/package_build.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git log --oneline --decorate --max-count=8`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- `rg` and focused file reads over `apps/actinglab/src/lab_run.rs`, `apps/actinglab/src/main.rs`, `apps/actinglab/src/package_build.rs`, and `apps/actinglab/src/resource_convert.rs`.
+- `cargo test -p actingcommand-actinglab pre_execution_guard`
+- `cargo test -p actingcommand-actinglab operation_validate`
+- `cargo test -p actingcommand-actinglab package_build`
+- `cargo test -p actingcommand-actinglab session_record_build_task`
+- `cargo test -p actingcommand-actinglab session_record_promote_writes_repo_ours_and_guards_overwrite`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before public validation.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab pre_execution_guard`: passed.
+- `cargo test -p actingcommand-actinglab operation_validate`: passed.
+- `cargo test -p actingcommand-actinglab package_build`: passed.
+- `cargo test -p actingcommand-actinglab session_record_build_task`: passed.
+- `cargo test -p actingcommand-actinglab session_record_promote_writes_repo_ours_and_guards_overwrite`: passed.
+- `cargo test -p actingcommand-actinglab`: passed with 491 unit tests and 3 integration tests.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C0.c.
+- Remaining self-heal chain items are intentionally pending: C0.b ROI stability, C0.a resource drift, C1 trigger routing, C2 live recovery loop plus H1, and C3 login/wake wiring.
+
+### Next step
+
+1. Commit and push the C0.c slice with planning/checkpoint files.
+2. Continue with C0.b as the next independent slice.
+
 ## 2026-07-03 P6.5-A punchlist
 
 ### Current status

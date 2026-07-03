@@ -18480,19 +18480,21 @@ fn session_record_build_draft(
             destructive,
         } = &step.data
         {
-            let click = session_record_bundle_click(click, &step.step_id)?;
+            let click_value = session_record_bundle_click(click, &step.step_id)?;
             validate_record_build_page_ref("from", from, &anchor_templates, &step.step_id)?;
             if let Some(to) = to {
                 validate_record_build_page_ref("to", to, &anchor_templates, &step.step_id)?;
             }
             let verify_template = to.as_ref().and_then(|to| anchor_templates.get(to)).cloned();
+            let guard = session_record_operation_guard(from, click, &anchor_templates)?;
             operations.push(json!({
                 "id": step.step_id,
                 "purpose": format!("recorded operation from {from}"),
                 "from": from,
                 "to": to,
-                "click": click,
+                "click": click_value,
                 "verify_template": verify_template,
+                "guard": guard,
                 "consumes": [],
                 "produces": [],
                 "destructive": destructive,
@@ -18751,6 +18753,62 @@ fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> Cli
         })),
         SessionRecordClick::Target { target } => Err(CliError::usage(format!(
             "record build-task cannot build operation '{step_id}' with unresolved target click '{target}'"
+        ))),
+    }
+}
+
+fn session_record_operation_guard(
+    from: &str,
+    click: &SessionRecordClick,
+    anchors: &BTreeMap<String, String>,
+) -> CliOutcome<Value> {
+    let (anchor_id, template) = resolve_record_guard_anchor(from, anchors)?;
+    Ok(json!({
+        "page_id": from,
+        "target_id": session_record_anchor_target_id(&anchor_id),
+        "expected_rect": session_record_click_expected_rect(click)?,
+        "verify_template": template
+    }))
+}
+
+fn resolve_record_guard_anchor(
+    page: &str,
+    anchors: &BTreeMap<String, String>,
+) -> CliOutcome<(String, String)> {
+    if page == "any" {
+        return Err(CliError::usage(
+            "record build-task cannot build a guarded coordinate operation from page 'any'",
+        ));
+    }
+    if let Some(template) = anchors.get(page) {
+        return Ok((page.to_string(), template.clone()));
+    }
+    let prefix = format!("{page}_");
+    anchors
+        .iter()
+        .find(|(anchor_id, _)| anchor_id.starts_with(&prefix))
+        .map(|(anchor_id, template)| (anchor_id.clone(), template.clone()))
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "record build-task cannot build guard for page '{page}' without a matching anchor"
+            ))
+        })
+}
+
+fn session_record_anchor_target_id(anchor_id: &str) -> String {
+    format!("page/{anchor_id}")
+}
+
+fn session_record_click_expected_rect(click: &SessionRecordClick) -> CliOutcome<Value> {
+    match click {
+        SessionRecordClick::Coord { x, y } => Ok(json!({
+            "x": x,
+            "y": y,
+            "width": 1,
+            "height": 1
+        })),
+        SessionRecordClick::Target { target } => Err(CliError::usage(format!(
+            "record build-task cannot build a guard for unresolved target click '{target}'"
         ))),
     }
 }
@@ -36013,6 +36071,21 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/bundle/operations/0/click/x")
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/0/guard/page_id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/0/guard/target_id")
+                .and_then(Value::as_str),
+            Some("page/page/home")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/0/guard/expected_rect/x")
                 .and_then(Value::as_i64),
             Some(5)
         );

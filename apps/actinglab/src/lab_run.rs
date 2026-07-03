@@ -16,7 +16,9 @@ use actingcommand_device::{
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
-use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator, load_pack_from_json_str};
+use actingcommand_recognition_pack::{
+    PackRect, RecognitionEvaluator, TargetEvaluation, load_pack_from_json_str,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -392,6 +394,49 @@ fn execute_lab_run(
             json!({"step_id": operation.id, "page": current_page}),
         )?;
 
+        match pre_execution_guard(
+            ctx,
+            capture.as_mut(),
+            &state.resources,
+            &operation,
+            &state.control.game,
+            actionable_page_candidates.as_deref(),
+        )? {
+            PreExecutionGuardOutcome::Passed { current_page } => {
+                ctx.event(
+                    "pre_execution_guard_passed",
+                    json!({"step_id": operation.id, "page": current_page}),
+                )?;
+            }
+            PreExecutionGuardOutcome::TrustedUnguarded => {
+                ctx.event(
+                    "pre_execution_guard_skipped",
+                    json!({"step_id": operation.id, "reason": "unguarded_trusted_coordinate"}),
+                )?;
+            }
+            PreExecutionGuardOutcome::Failed {
+                reason,
+                current_page,
+                diagnostics,
+            } => {
+                ctx.event(
+                    "pre_execution_guard_failed",
+                    json!({"step_id": operation.id, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
+                )?;
+                ctx.event(
+                    "step_failed",
+                    json!({"step_id": operation.id, "reason": "pre_execution_guard_failed"}),
+                )?;
+                state.current_page = current_page.clone();
+                state.failed_step_id = Some(operation.id.clone());
+                return Err(CliError::device(format!(
+                    "pre-execution guard failed for operation '{}': {reason}; current_page={}",
+                    operation.id,
+                    current_page.unwrap_or_else(|| "unknown".to_string())
+                )));
+            }
+        }
+
         let action = operation.input_action(&state.control.resolution, ctx.run_seed)?;
         let backend = ensure_touch_backend(
             &mut input,
@@ -502,6 +547,8 @@ fn execute_lab_run(
             "produces": operation.produces,
             "verified_live": operation.verified_live,
             "provenance": operation.provenance,
+            "guard": operation.guard.as_ref().map(OperationGuard::to_json),
+            "unguarded_trusted_coordinate": operation.unguarded_trusted_coordinate,
             "result": verification.result_label()
         }));
         ctx.event(
@@ -615,6 +662,108 @@ fn operation_verification_status(
         return OperationVerification::ExecutedUnverified;
     }
     OperationVerification::Failed
+}
+
+#[derive(Debug, PartialEq)]
+enum PreExecutionGuardOutcome {
+    Passed {
+        current_page: Option<String>,
+    },
+    TrustedUnguarded,
+    Failed {
+        reason: &'static str,
+        current_page: Option<String>,
+        diagnostics: Value,
+    },
+}
+
+fn pre_execution_guard(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    resources: &LabResources,
+    operation: &Operation,
+    game: &str,
+    candidate_pages: Option<&[String]>,
+) -> CliOutcome<PreExecutionGuardOutcome> {
+    if operation.unguarded_trusted_coordinate {
+        return Ok(PreExecutionGuardOutcome::TrustedUnguarded);
+    }
+    let guard = operation.guard.as_ref().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "operation '{}' coordinate action missing guard metadata",
+            operation.id
+        ))
+    })?;
+    ctx.event(
+        "pre_execution_guard_started",
+        json!({"step_id": operation.id, "guard": guard.to_json()}),
+    )?;
+    ctx.wait_for_next_capture_start();
+    let scene = ctx.capture_scene_with_pages(
+        capture,
+        &resources.evaluator,
+        &resources.detector,
+        &format!("pre_execution_guard_{}", operation.id),
+        candidate_pages,
+    )?;
+    evaluate_pre_execution_guard(game, operation, guard, &scene, &resources.evaluator)
+}
+
+fn evaluate_pre_execution_guard(
+    game: &str,
+    operation: &Operation,
+    guard: &OperationGuard,
+    scene: &CapturedScene,
+    evaluator: &RecognitionEvaluator,
+) -> CliOutcome<PreExecutionGuardOutcome> {
+    let current_page = scene.matched_anchor(game);
+    if !matched_page_matches_anchor(game, scene.matched_page.as_deref(), &guard.page_id) {
+        return Ok(PreExecutionGuardOutcome::Failed {
+            reason: "page_guard_mismatch",
+            current_page,
+            diagnostics: json!({
+                "expected_page": guard.page_id,
+                "matched_page": scene.matched_page,
+                "operation_from": operation.from
+            }),
+        });
+    }
+    let target = evaluator
+        .evaluate_target(&scene.scene, &guard.target_id)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    if !target.passed {
+        return Ok(PreExecutionGuardOutcome::Failed {
+            reason: "target_guard_mismatch",
+            current_page,
+            diagnostics: json!({
+                "guard": guard.to_json(),
+                "target": target_evaluation_json(&target)
+            }),
+        });
+    }
+    Ok(PreExecutionGuardOutcome::Passed { current_page })
+}
+
+fn target_evaluation_json(target: &TargetEvaluation) -> Value {
+    json!({
+        "id": target.id.as_str(),
+        "kind": format!("{:?}", target.kind),
+        "passed": target.passed,
+        "message": target.message.as_str(),
+        "template": target.template.map(|template| json!({
+            "x": template.x,
+            "y": template.y,
+            "raw_score": template.raw_score,
+            "score": template.score,
+            "threshold": template.threshold
+        })),
+        "color": target.color.map(|color| json!({
+            "distance": color.distance,
+            "max_distance": color.max_distance,
+            "mean": color.mean,
+            "expected": color.expected
+        }))
+    })
 }
 
 fn actionable_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
@@ -1132,6 +1281,20 @@ impl OperationBundle {
                     )));
                 }
             }
+            if let Some(guard_template) = operation
+                .guard
+                .as_ref()
+                .and_then(|guard| guard.verify_template.as_ref())
+            {
+                let path = safe_join(operation_dir, guard_template)?;
+                if !path.is_file() {
+                    return Err(CliError::package_invalid(format!(
+                        "operation '{}' guard references missing verify_template {}",
+                        operation.id,
+                        path.display()
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -1184,6 +1347,10 @@ struct Operation {
     #[serde(default)]
     verify_template: Option<String>,
     #[serde(default)]
+    guard: Option<OperationGuard>,
+    #[serde(default)]
+    unguarded_trusted_coordinate: bool,
+    #[serde(default)]
     consumes: Vec<String>,
     #[serde(default)]
     produces: Vec<String>,
@@ -1202,12 +1369,83 @@ impl Operation {
                 )));
             }
         }
-        self.click.validate(control)
+        self.click.validate(control)?;
+        self.validate_guard(control)
     }
 
     fn input_action(&self, resolution: &Resolution, seed_base: u64) -> CliOutcome<LabInputAction> {
         self.click
             .input_action(resolution, seed_base ^ hash_text(&self.id))
+    }
+
+    fn validate_guard(&self, control: &LabControl) -> CliOutcome<()> {
+        match (&self.guard, self.unguarded_trusted_coordinate) {
+            (Some(_), true) => Err(CliError::package_invalid(format!(
+                "operation '{}' cannot set both guard and unguarded_trusted_coordinate",
+                self.id
+            ))),
+            (None, true) => Ok(()),
+            (None, false) => Err(CliError::package_invalid(format!(
+                "operation '{}' coordinate action missing guard metadata; add guard or set unguarded_trusted_coordinate for reviewed trusted coordinates",
+                self.id
+            ))),
+            (Some(guard), false) => guard.validate(&self.id, &self.from, control),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OperationGuard {
+    page_id: String,
+    target_id: String,
+    expected_rect: PackRect,
+    #[serde(default)]
+    verify_template: Option<String>,
+    #[serde(default)]
+    color_probe: Option<String>,
+}
+
+impl OperationGuard {
+    fn validate(
+        &self,
+        operation_id: &str,
+        operation_from: &str,
+        control: &LabControl,
+    ) -> CliOutcome<()> {
+        if self.page_id.trim().is_empty() {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' guard.page_id must not be empty"
+            )));
+        }
+        if self.target_id.trim().is_empty() {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' guard.target_id must not be empty"
+            )));
+        }
+        if !page_anchor_matches(&control.game, &self.page_id, operation_from) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' guard.page_id '{}' does not match operation from '{}'",
+                self.page_id, operation_from
+            )));
+        }
+        validate_guard_rect(self.expected_rect, &control.resolution)?;
+        let has_verify_target = self.verify_template.is_some() || self.color_probe.is_some();
+        if !has_verify_target {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' guard requires verify_template or color_probe"
+            )));
+        }
+        Ok(())
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "page_id": self.page_id.as_str(),
+            "target_id": self.target_id.as_str(),
+            "expected_rect": rect_json(self.expected_rect),
+            "verify_template": self.verify_template.as_deref(),
+            "color_probe": self.color_probe.as_deref()
+        })
     }
 }
 
@@ -1449,6 +1687,32 @@ fn validate_click_rect(
         return Err(CliError::package_invalid(
             "full-screen click rect is treated as unresolved coordinates",
         ));
+    }
+    Ok(())
+}
+
+fn validate_guard_rect(rect: PackRect, resolution: &Resolution) -> CliOutcome<()> {
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::package_invalid(format!(
+            "guard expected_rect dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    validate_rect_point(rect.x, rect.y, resolution, "guard expected_rect")?;
+    validate_rect_point(
+        rect.x + rect.width - 1,
+        rect.y + rect.height - 1,
+        resolution,
+        "guard expected_rect",
+    )
+}
+
+fn validate_rect_point(x: i32, y: i32, resolution: &Resolution, label: &str) -> CliOutcome<()> {
+    if x < 0 || y < 0 || x >= resolution.width as i32 || y >= resolution.height as i32 {
+        return Err(CliError::package_invalid(format!(
+            "{label} point {x},{y} is outside {}x{}",
+            resolution.width, resolution.height
+        )));
     }
     Ok(())
 }
@@ -2905,6 +3169,110 @@ mod tests {
     }
 
     #[test]
+    fn operation_validate_rejects_missing_coordinate_guard() {
+        let control = test_control();
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+
+        let err = operation
+            .validate(&control)
+            .expect_err("missing guard must fail");
+
+        assert_eq!(err.code, "package_invalid");
+        assert!(err.message.contains("missing guard metadata"));
+    }
+
+    #[test]
+    fn operation_validate_allows_explicit_trusted_unguarded_coordinate() {
+        let control = test_control();
+        let operation = test_operation(None, None);
+
+        operation
+            .validate(&control)
+            .expect("explicit trusted unguarded coordinate allowed");
+    }
+
+    #[test]
+    fn pre_execution_guard_passes_when_page_and_target_match() {
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(test_color_guard());
+        let guard = operation.guard.as_ref().expect("guard");
+        let evaluator = one_pixel_color_evaluator([0, 0, 0]);
+        let scene = captured_rgb_scene(Some("arknights/home"), [0, 0, 0]);
+
+        let outcome =
+            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+                .expect("guard evaluation");
+
+        assert_eq!(
+            outcome,
+            PreExecutionGuardOutcome::Passed {
+                current_page: Some("home".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn pre_execution_guard_rejects_changed_execution_page() {
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(test_color_guard());
+        let guard = operation.guard.as_ref().expect("guard");
+        let evaluator = one_pixel_color_evaluator([0, 0, 0]);
+        let scene = captured_rgb_scene(Some("arknights/terminal"), [0, 0, 0]);
+
+        let outcome =
+            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+                .expect("guard evaluation");
+
+        assert_eq!(
+            outcome,
+            PreExecutionGuardOutcome::Failed {
+                reason: "page_guard_mismatch",
+                current_page: Some("terminal".to_string()),
+                diagnostics: json!({
+                    "expected_page": "home",
+                    "matched_page": "arknights/terminal",
+                    "operation_from": "home"
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn pre_execution_guard_rejects_target_mismatch_on_same_page() {
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(test_color_guard());
+        let guard = operation.guard.as_ref().expect("guard");
+        let evaluator = one_pixel_color_evaluator([255, 255, 255]);
+        let scene = captured_rgb_scene(Some("arknights/home"), [0, 0, 0]);
+
+        let outcome =
+            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+                .expect("guard evaluation");
+
+        match outcome {
+            PreExecutionGuardOutcome::Failed {
+                reason,
+                current_page,
+                diagnostics,
+            } => {
+                assert_eq!(reason, "target_guard_mismatch");
+                assert_eq!(current_page, Some("home".to_string()));
+                assert_eq!(
+                    diagnostics
+                        .pointer("/target/passed")
+                        .and_then(Value::as_bool),
+                    Some(false)
+                );
+            }
+            other => panic!("expected target mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn page_namespace_matches_operation_anchors_without_blind_split() {
         assert_eq!(canonical_page_anchor("arknights", "arknights/home"), "home");
         assert_eq!(
@@ -3162,10 +3530,27 @@ mod tests {
                 duration_ms: None,
             },
             verify_template: verify_template.map(str::to_string),
+            guard: None,
+            unguarded_trusted_coordinate: true,
             consumes: Vec::new(),
             produces: Vec::new(),
             verified_live: None,
             provenance: None,
+        }
+    }
+
+    fn test_color_guard() -> OperationGuard {
+        OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            verify_template: None,
+            color_probe: Some("target/button".to_string()),
         }
     }
 
@@ -3177,6 +3562,37 @@ mod tests {
             width: 1,
             height: 1,
         }
+    }
+
+    fn captured_rgb_scene(page: Option<&str>, rgb: [u8; 3]) -> CapturedScene {
+        CapturedScene {
+            scene: Scene::from_pixels(1, 1, &rgb, ScenePixelFormat::Rgb8).expect("scene"),
+            matched_page: page.map(str::to_string),
+            verify_template_matched: false,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn one_pixel_color_evaluator(expected: [u8; 3]) -> RecognitionEvaluator {
+        let pack = load_pack_from_json_str(&format!(
+            r#"{{
+                "schema_version":"0.3",
+                "game":"arknights",
+                "server":"cn",
+                "coordinate_space":{{"width":1,"height":1}},
+                "defaults":{{"color_max_distance":0.0}},
+                "targets":[{{
+                    "type":"color",
+                    "id":"target/button",
+                    "region":{{"x":0,"y":0,"width":1,"height":1}},
+                    "expected":[{},{},{}]
+                }}]
+            }}"#,
+            expected[0], expected[1], expected[2]
+        ))
+        .expect("pack");
+        RecognitionEvaluator::new(PathBuf::from("."), pack).expect("evaluator")
     }
 
     fn one_pixel_png() -> &'static [u8] {
@@ -3239,6 +3655,7 @@ mod tests {
                                 "to":null,
                                 "click":{"kind":"point","x":1,"y":1},
                                 "verify_template":null,
+                                "unguarded_trusted_coordinate":true,
                                 "consumes":[],
                                 "produces":[]
                             }

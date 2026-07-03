@@ -12,6 +12,30 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current Lab self-heal chain
+
+The `TASK-Lab-selfheal-chain.md` C-line is active as the current Runtime self-heal task chain.
+
+Delivery order:
+
+1. C0.c guarded coordinate action: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`.
+2. C0.b ROI stability gate: pending.
+3. C0.a resource drift stop-loss: pending.
+4. C1 trigger classification and priority routing: pending.
+5. C2 live recovery loop wiring plus H1 loop detection fix: pending.
+6. C3 login/wake resource wiring: pending.
+
+Current C0.c behavior:
+
+- Operation Bundle fixed-coordinate actions require guard metadata by default.
+- Guard metadata records `page_id`, `target_id`, `expected_rect`, and a `verify_template` or `color_probe`.
+- Missing guard metadata fails package validation loudly unless `unguarded_trusted_coordinate: true` is explicitly set.
+- ActingLab captures and evaluates a fresh execution-time guard frame before opening the touch backend or sending MaaTouch input.
+- Page mismatch and target mismatch refuse the click and report the current screen state through run events and failure diagnostics.
+- `session record build-task` emits guard metadata for recorded coordinate operations.
+
+This slice does not add ROI stability gating, resource drift classification, trigger routing, live recovery loop wiring, login/wake execution, OCR, UI, SQLite, scheduler behavior, or game logic.
+
 ## Current P6.5-A punchlist repair
 
 The `FIX-P6.5-A-punchlist-6ca6b0c.md` punchlist is implemented as the final P6.5-A acceptance tail repair.
