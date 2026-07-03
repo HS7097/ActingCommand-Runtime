@@ -6,6 +6,8 @@
 
 - Implemented the third slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
 - Slice completed: C0.a resource drift stop-loss.
+- Implementation commit: `ae54776` (`actinglab: stop on resource drift`).
+- GitHub Actions CI run `28646717632`: passed.
 - ActingLab now treats an execution-time page match plus stable guarded-target mismatch as `resource_drift`.
 - The drift probe runs before the touch backend is opened or MaaTouch input is sent.
 - A target mismatch that recovers returns to the normal C0.b ROI stability gate.
@@ -43,6 +45,9 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
 - `git diff --check`
+- `git commit -m "actinglab: stop on resource drift"`
+- `git push origin main`
+- `gh run watch 28646717632 --repo HS7097/ActingCommand-Runtime --exit-status`
 
 ### Test results
 
@@ -64,9 +69,7 @@
 
 ### Next step
 
-1. Commit and push the C0.a implementation.
-2. Watch GitHub Actions for the C0.a commit.
-3. Continue with C1 as the next independent slice after C0.a is green.
+1. Continue with C1 trigger classification and priority routing as the next independent slice.
 
 ## 2026-07-03 Lab self-heal chain C0.b ROI stability gate
 
