@@ -15,9 +15,12 @@ remote `origin/main` heads before local calibration changes:
 
 | Repository | Path | Base commit |
 | --- | --- | --- |
-| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `7834241c34db258d1ef7f18ce9c1a4165e381f59` |
+| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `e31e27ce34d198d491c2e04fdbde6a65061996a1` |
 | AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
 | BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
+
+The Runtime repository was also fetched before the 2026-07-04 continuation and
+was aligned with `origin/main` at `f2e6989b709a730cdc429343f23e40ecff9f6fe9`.
 
 ## Structural reconversion
 
@@ -40,6 +43,7 @@ The current local retained-frame corpus found for AK page calibration contains:
 | `home_run` | `arknights/home` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs-retest\lab1y-20260625_051921_950\output\screenshots\20260625_051922_653.png` |
 | `mission_result` | no generated page should match | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
 | `terminal_stage_map` | `arknights/terminal` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
+| `operator_positive` | `arknights/operator` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\p2_2_smoke\capture-16416.png` |
 
 ## Calibration decision
 
@@ -68,8 +72,12 @@ The 2026-07-04 continuation also fixes the `arknights/operator` page definition
 semantics. Its two operator anchors are now emitted as one `any_of` page group
 instead of two simultaneously required targets, so a real operator frame can
 match either the expanded-role or collapsed-role visual state. This removes a
-structural false negative in the generated page pack; it does not by itself
-prove positive retained-frame threshold distribution for the operator page.
+structural false negative in the generated page pack.
+
+The same continuation adds `page/operator_0` and `page/operator_1` as forbidden
+targets for non-operator QuickSwitch-derived pages. This lets the retained
+operator frame match `arknights/operator` only instead of being accepted by
+other destination-button pages.
 
 ## Threshold samples
 
@@ -85,6 +93,11 @@ prove positive retained-frame threshold distribution for the operator page.
 | `page/terminal_stage_map` | `home_run` | 0.712677 | 0.920000 | false |
 | `page/terminal_stage_map` | `mission_result` | 0.628819 | 0.920000 | false |
 | `page/terminal_stage_map` | `terminal_stage_map` | 1.000000 | 0.920000 | true |
+| `page/operator_0` | `operator_positive` | 0.926657 | 0.900000 | true |
+| `page/operator_1` | `operator_positive` | 0.752787 | 0.900000 | false |
+| `page/operator_0` | `home_retest` | 0.826827 | 0.900000 | false |
+| `page/operator_0` | `mission_result` | 0.824092 | 0.900000 | false |
+| `page/operator_0` | `terminal_stage_map` | 0.797798 | 0.900000 | false |
 
 ## Page-discriminativeness result
 
@@ -96,20 +109,29 @@ After conversion, retained-frame page detection produced:
 | `home_run` | `arknights/home` |
 | `mission_result` | none |
 | `terminal_stage_map` | `arknights/terminal` |
+| `operator_positive` | `arknights/operator` |
 
 An additional release-build scan across 93 retained AK screenshots under the
 current Runtime `target` tree found 91 home matches, one terminal match, and
 one standby/no-match frame; no scanned retained frame produced multiple
 generated page matches after the terminal-stage and any-of updates.
 
+A broader local 1280x720 inventory scan across 241 Runtime and cooperation
+workspace screenshots found the retained operator frame as a single
+`arknights/operator` match. The same mixed-game stress scan still produced 74
+multi-match results on non-AK AzurLane/BlueArchive frames for several
+QuickSwitch-derived destination pages, so those mixed-corpus results are
+recorded as a remaining false-positive risk rather than accepted AK calibration
+evidence.
+
 ## Remaining evidence gap
 
 The local retained-frame corpus does not contain positive captures for the
 destination pages `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`,
-`mission`, `operator`, or the actual QuickSwitch dropdown overlay. The operator
-page now has correct `any_of` variant semantics, and the current rules fail
-safely on the available non-target frames, but positive threshold distribution
-for those destination pages is not proven by the current corpus.
+`mission`, or the actual QuickSwitch dropdown overlay. The operator page now has
+one positive retained frame and correct `any_of` variant semantics, but a
+single frame is not a threshold distribution. Positive threshold distribution
+for the remaining destination pages is not proven by the current corpus.
 
 The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
 closed until destination-page positive retained frames are added or a later

@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity operator-positive guard calibration
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the AK operator any-of checkpoint.
+- Fetched Runtime and all three resource repositories before this resource-dependent pass; each local head matched `origin/main`.
+- Used the retained AK operator frame at `target\p2_2_smoke\capture-16416.png` as positive evidence for `arknights/operator`.
+- Added `page/operator_0` and `page/operator_1` as forbidden page-rule targets for non-operator QuickSwitch-derived AK pages.
+- Re-converted the Arknights CN resource outputs and re-ran page-pack validation.
+- Arknights resource implementation commit: `ea14e9a` (`resources: forbid operator anchors on non-operator AK pages`).
+- Updated the AK M6 acceptance report and this checkpoint. The broader task remains active because several destination-page positive retained frames are still missing.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`: `f2e6989b709a730cdc429343f23e40ecff9f6fe9`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `e31e27ce34d198d491c2e04fdbde6a65061996a1` before local operator guard changes; `origin/main` matched. Local operator guard changes were committed and pushed as `ea14e9a`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/return_home/task.json`
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `git fetch --prune --tags origin` in Runtime and all three resource repositories.
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame>` for `operator_positive`, `mission_result`, `terminal_stage_map`, and `home_retest`.
+- `target\release\actinglab.exe --json recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame> --target page/operator_0|page/operator_1`.
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <local 1280x720 frame>` across 241 retained/local screenshots.
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --check-pages`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check` in Runtime and Arknights resource repositories.
+
+### Test results
+
+- Retained AK frame spot-check results:
+  - `operator_positive`: matches `arknights/operator` only.
+  - `home_retest`: matches `arknights/home` only.
+  - `mission_result`: matches no generated page.
+  - `terminal_stage_map`: matches `arknights/terminal` only.
+- Operator target threshold samples:
+  - `page/operator_0` on `operator_positive`: score `0.926657`, threshold `0.900000`, passed.
+  - `page/operator_1` on `operator_positive`: score `0.752787`, threshold `0.900000`, failed.
+  - `page/operator_0` on `home_retest`, `mission_result`, and `terminal_stage_map`: failed below threshold.
+- Broad 241-frame mixed local inventory scan after the operator guard update: 163 `arknights/home`, 1 `arknights/operator`, 1 `arknights/terminal`, 2 standby/no-match, and 74 multi-match non-AK stress frames on QuickSwitch-derived pages. The non-AK multi-match cases remain risk evidence, not accepted AK calibration evidence.
+- Arknights CN `resource convert` passed: 10 bundles, 16 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- Arknights CN `detect-page --check-pages` passed.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+- Arknights resource repository whitespace validation passed with `git diff --check`.
+
+### Current blocker
+
+- No blocker for this implementation slice.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks positive destination-page frames for `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`, `mission`, and the actual QuickSwitch dropdown overlay. The single operator positive frame is not a full threshold distribution.
+
+### Next step
+
+1. Commit and push the Runtime report/planning/checkpoint update.
+2. Keep the broader goal active until the remaining destination-positive retained-frame calibration evidence exists or the task is explicitly narrowed.
+
 ## 2026-07-04 AK MAA data fidelity operator any-of continuation
 
 ### Current status
