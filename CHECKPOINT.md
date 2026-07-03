@@ -10,6 +10,8 @@
   - `2377315` (`docs: align p6.5-a a2 closeout evidence`)
   - `17cc77e` (`device: expose MuMu discovery diagnostics`)
   - `2c6485b` (`runtime: harden punchlist tests and ffi bounds`)
+- Checkpoint commit: `62b324b` (`docs: record p6.5-a punchlist checkpoint`).
+- GitHub Actions CI run `28641599691`: passed.
 - P1-P4 are implemented.
 - S1, S2, S3, and S5 are implemented.
 - S4 and S6 are documented as deferred because they require larger provider test seams or no longer have a current trigger path after P2.
@@ -73,12 +75,12 @@
 ### Current blocker
 
 - No current implementation blocker.
-- GitHub CI is still pending until the pushed punchlist commits run.
+- No current CI blocker for the pushed punchlist commits.
 
 ### Next step
 
-1. Commit and push the punchlist documentation update.
-2. Watch GitHub Actions for the pushed punchlist commits.
+1. Await user and external acceptance review.
+2. Address any follow-up findings as separate scoped Runtime tasks.
 
 ## 2026-07-03 P6.5-A acceptance defect fix
 
