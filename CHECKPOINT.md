@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C3 automatic login and wake resources
+
+### Current status
+
+- Implemented the sixth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed locally: C3 automatic login/wake resource wiring.
+- Implementation commit: `2e71a19` (`actinglab: wire login wake recovery resources`).
+- GitHub Actions CI run: pending.
+- Monitor recovery now preserves resource action metadata from `ours/recovery/<game>.<server>.recovery.json`.
+- `run_recovery_flow` actions resolve their named `recovery_flows` entry and fail loudly when a referenced flow is missing.
+- `session_expired` recovery prioritizes `run_recovery_flow: startup_login` so the login resource loop is the first Session Layer signal action.
+- Arknights monitor recovery loads `STARTUP-LOGIN.md` for the startup-login resource loop and fails loudly when that file is required but missing.
+- AzurLane and BlueArchive monitor recovery can use embedded `recovery_flows.startup_login` without requiring an external `STARTUP-LOGIN.md`.
+- BlueArchive standby wake preserves the wake control point metadata, including `(300, 2)`.
+- Recovery output records `ref`, `args`, `control_point`, `flow`, optional `startup_login`, and the Session Layer/no-bypass boundary.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c3.md`.
+- The Lab self-heal chain C0.c, C0.b, C0.a, C1, C2/H1, and C3 slices are implemented locally.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `e778cc7c8576c57bfc8f4df72b0c86efb5f65fb4`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `7cf3bae27d473d29efde1f5605f106b28a2df9fb`.
+- All three local resource worktrees were clean and tracking `origin/main` after refresh.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c3.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- `git fetch --prune origin`
+- `git status --short --branch`
+- `Test-Path -LiteralPath "$env:LOCALAPPDATA\ActingCommand\actinglab\config.json"`
+- Refreshed each resource repository with `git fetch origin --prune --tags` and `git pull --ff-only`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_resource_session_expired`
+- `cargo test -p actingcommand-actinglab monitor_resource_standby`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `%LOCALAPPDATA%\ActingCommand\actinglab\config.json` was absent before public validation.
+- `cargo test -p actingcommand-actinglab monitor_resource_session_expired`: passed.
+- `cargo test -p actingcommand-actinglab monitor_resource_standby`: passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C3.
+- Remote CI is still pending for this local implementation.
+
+### Next step
+
+1. Commit and push the C3 implementation and checkpoint.
+2. Watch GitHub Actions for the pushed Runtime commit.
+
 ## 2026-07-03 Lab self-heal chain C2 live recovery loop and H1 loop detection
 
 ### Current status
