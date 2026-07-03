@@ -40,6 +40,12 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_STEP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_STEPS: usize = 50;
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
+const DEFAULT_ROI_STABLE_FRAMES: u32 = 2;
+const DEFAULT_ROI_STABILITY_TIMEOUT_MS: u64 = 1_500;
+const ROI_TEMPLATE_SCORE_EPSILON: f32 = 0.01;
+const ROI_TEMPLATE_POSITION_EPSILON: i32 = 1;
+const ROI_COLOR_DISTANCE_EPSILON: f32 = 2.0;
+const ROI_COLOR_MEAN_EPSILON: u8 = 2;
 const MAX_LAB_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_LAB_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -394,7 +400,7 @@ fn execute_lab_run(
             json!({"step_id": operation.id, "page": current_page}),
         )?;
 
-        match pre_execution_guard(
+        let stability_baseline = match pre_execution_guard(
             ctx,
             capture.as_mut(),
             &state.resources,
@@ -402,17 +408,22 @@ fn execute_lab_run(
             &state.control.game,
             actionable_page_candidates.as_deref(),
         )? {
-            PreExecutionGuardOutcome::Passed { current_page } => {
+            PreExecutionGuardOutcome::Passed {
+                current_page,
+                target,
+            } => {
                 ctx.event(
                     "pre_execution_guard_passed",
-                    json!({"step_id": operation.id, "page": current_page}),
+                    json!({"step_id": operation.id, "page": current_page, "target": target_evaluation_json(&target)}),
                 )?;
+                Some((current_page, target))
             }
             PreExecutionGuardOutcome::TrustedUnguarded => {
                 ctx.event(
                     "pre_execution_guard_skipped",
                     json!({"step_id": operation.id, "reason": "unguarded_trusted_coordinate"}),
                 )?;
+                None
             }
             PreExecutionGuardOutcome::Failed {
                 reason,
@@ -434,6 +445,58 @@ fn execute_lab_run(
                     operation.id,
                     current_page.unwrap_or_else(|| "unknown".to_string())
                 )));
+            }
+        };
+
+        if let Some((current_page, target)) = stability_baseline {
+            match wait_for_roi_stability(
+                ctx,
+                capture.as_mut(),
+                RoiStabilityRequest {
+                    resources: &state.resources,
+                    operation: &operation,
+                    game: &state.control.game,
+                    baseline_page: current_page,
+                    baseline_target: target,
+                    candidate_pages: actionable_page_candidates.as_deref(),
+                },
+            )? {
+                RoiStabilityOutcome::Passed {
+                    stable_frames,
+                    observed_frames,
+                    target,
+                } => {
+                    ctx.event(
+                        "roi_stability_gate_passed",
+                        json!({
+                            "step_id": operation.id,
+                            "stable_frames": stable_frames,
+                            "observed_frames": observed_frames,
+                            "target": target_evaluation_json(&target)
+                        }),
+                    )?;
+                }
+                RoiStabilityOutcome::Failed {
+                    reason,
+                    current_page,
+                    diagnostics,
+                } => {
+                    ctx.event(
+                        "roi_stability_gate_failed",
+                        json!({"step_id": operation.id, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
+                    )?;
+                    ctx.event(
+                        "step_failed",
+                        json!({"step_id": operation.id, "reason": reason}),
+                    )?;
+                    state.current_page = current_page.clone();
+                    state.failed_step_id = Some(operation.id.clone());
+                    return Err(CliError::device(format!(
+                        "ROI stability gate failed for operation '{}': {reason}; current_page={}",
+                        operation.id,
+                        current_page.unwrap_or_else(|| "unknown".to_string())
+                    )));
+                }
             }
         }
 
@@ -668,6 +731,7 @@ fn operation_verification_status(
 enum PreExecutionGuardOutcome {
     Passed {
         current_page: Option<String>,
+        target: TargetEvaluation,
     },
     TrustedUnguarded,
     Failed {
@@ -741,7 +805,195 @@ fn evaluate_pre_execution_guard(
             }),
         });
     }
-    Ok(PreExecutionGuardOutcome::Passed { current_page })
+    Ok(PreExecutionGuardOutcome::Passed {
+        current_page,
+        target,
+    })
+}
+
+#[derive(Debug, PartialEq)]
+enum RoiStabilityOutcome {
+    Passed {
+        stable_frames: u32,
+        observed_frames: u32,
+        target: TargetEvaluation,
+    },
+    Failed {
+        reason: &'static str,
+        current_page: Option<String>,
+        diagnostics: Value,
+    },
+}
+
+struct RoiStabilityRequest<'a> {
+    resources: &'a LabResources,
+    operation: &'a Operation,
+    game: &'a str,
+    baseline_page: Option<String>,
+    baseline_target: TargetEvaluation,
+    candidate_pages: Option<&'a [String]>,
+}
+
+fn wait_for_roi_stability(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    request: RoiStabilityRequest<'_>,
+) -> CliOutcome<RoiStabilityOutcome> {
+    let guard = request.operation.guard.as_ref().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "operation '{}' ROI stability gate missing guard metadata",
+            request.operation.id
+        ))
+    })?;
+    let mut gate =
+        RoiStabilityGate::new(DEFAULT_ROI_STABLE_FRAMES, request.baseline_target.clone())?;
+    ctx.event(
+        "roi_stability_gate_started",
+        json!({
+            "step_id": request.operation.id,
+            "required_stable_frames": DEFAULT_ROI_STABLE_FRAMES,
+            "timeout_ms": DEFAULT_ROI_STABILITY_TIMEOUT_MS,
+            "guard": guard.to_json(),
+            "baseline_page": request.baseline_page.as_deref(),
+            "baseline_target": target_evaluation_json(&request.baseline_target)
+        }),
+    )?;
+
+    let started = Instant::now();
+    while started.elapsed() <= Duration::from_millis(DEFAULT_ROI_STABILITY_TIMEOUT_MS) {
+        ctx.wait_for_next_capture_start();
+        let scene = ctx.capture_scene_with_pages(
+            capture,
+            &request.resources.evaluator,
+            &request.resources.detector,
+            &format!("roi_stability_{}", request.operation.id),
+            request.candidate_pages,
+        )?;
+        let current_page = scene.matched_anchor(request.game);
+        if !matched_page_matches_anchor(request.game, scene.matched_page.as_deref(), &guard.page_id)
+        {
+            return Ok(RoiStabilityOutcome::Failed {
+                reason: "page_guard_mismatch",
+                current_page,
+                diagnostics: json!({
+                    "expected_page": guard.page_id,
+                    "matched_page": scene.matched_page,
+                    "operation_from": request.operation.from
+                }),
+            });
+        }
+        let target = request
+            .resources
+            .evaluator
+            .evaluate_target(&scene.scene, &guard.target_id)
+            .map_err(|err| CliError::device(err.to_string()))?;
+        if gate.observe(target.clone()) {
+            return Ok(RoiStabilityOutcome::Passed {
+                stable_frames: gate.stable_frames,
+                observed_frames: gate.observed_frames,
+                target,
+            });
+        }
+    }
+
+    Ok(RoiStabilityOutcome::Failed {
+        reason: "unstable_page",
+        current_page: request.baseline_page,
+        diagnostics: json!({
+            "guard": guard.to_json(),
+            "required_stable_frames": DEFAULT_ROI_STABLE_FRAMES,
+            "observed_frames": gate.observed_frames,
+            "last_target": target_evaluation_json(&gate.last_target),
+            "timeout_ms": DEFAULT_ROI_STABILITY_TIMEOUT_MS
+        }),
+    })
+}
+
+#[derive(Debug)]
+struct RoiStabilityGate {
+    required_stable_frames: u32,
+    stable_frames: u32,
+    observed_frames: u32,
+    last_target: TargetEvaluation,
+}
+
+impl RoiStabilityGate {
+    fn new(required_stable_frames: u32, baseline: TargetEvaluation) -> CliOutcome<Self> {
+        if required_stable_frames == 0 {
+            return Err(CliError::device(
+                "ROI stability gate requires at least one stable frame",
+            ));
+        }
+        if !baseline.passed {
+            return Err(CliError::device(
+                "ROI stability baseline target did not pass guard evaluation",
+            ));
+        }
+        Ok(Self {
+            required_stable_frames,
+            stable_frames: 1,
+            observed_frames: 1,
+            last_target: baseline,
+        })
+    }
+
+    fn observe(&mut self, target: TargetEvaluation) -> bool {
+        self.observed_frames += 1;
+        if !target.passed {
+            self.stable_frames = 0;
+            self.last_target = target;
+            return false;
+        }
+        if target_stable_with(&self.last_target, &target) {
+            self.stable_frames += 1;
+        } else {
+            self.stable_frames = 1;
+        }
+        self.last_target = target;
+        self.stable_frames >= self.required_stable_frames
+    }
+}
+
+fn target_stable_with(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
+    if previous.id != current.id
+        || previous.kind != current.kind
+        || !previous.passed
+        || !current.passed
+    {
+        return false;
+    }
+    if !template_evaluation_stable(previous, current) {
+        return false;
+    }
+    color_evaluation_stable(previous, current)
+}
+
+fn template_evaluation_stable(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
+    match (previous.template, current.template) {
+        (Some(previous), Some(current)) => {
+            (previous.x - current.x).abs() <= ROI_TEMPLATE_POSITION_EPSILON
+                && (previous.y - current.y).abs() <= ROI_TEMPLATE_POSITION_EPSILON
+                && (previous.score - current.score).abs() <= ROI_TEMPLATE_SCORE_EPSILON
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn color_evaluation_stable(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
+    match (previous.color, current.color) {
+        (Some(previous), Some(current)) => {
+            let mean_stable = previous
+                .mean
+                .iter()
+                .zip(current.mean.iter())
+                .all(|(previous, current)| previous.abs_diff(*current) <= ROI_COLOR_MEAN_EPSILON);
+            mean_stable
+                && (previous.distance - current.distance).abs() <= ROI_COLOR_DISTANCE_EPSILON
+        }
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn target_evaluation_json(target: &TargetEvaluation) -> Value {
@@ -3205,12 +3457,17 @@ mod tests {
             evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
                 .expect("guard evaluation");
 
-        assert_eq!(
-            outcome,
+        match outcome {
             PreExecutionGuardOutcome::Passed {
-                current_page: Some("home".to_string())
+                current_page,
+                target,
+            } => {
+                assert_eq!(current_page, Some("home".to_string()));
+                assert!(target.passed);
+                assert_eq!(target.id, "target/button");
             }
-        );
+            other => panic!("expected guard pass, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3270,6 +3527,48 @@ mod tests {
             }
             other => panic!("expected target mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn roi_stability_gate_waits_until_roi_becomes_stable() {
+        let baseline = color_target_evaluation("target/button", [0, 0, 0], true);
+        let mut gate = RoiStabilityGate::new(2, baseline).expect("gate");
+
+        assert!(!gate.observe(color_target_evaluation("target/button", [8, 0, 0], true)));
+        assert!(gate.observe(color_target_evaluation("target/button", [8, 0, 0], true)));
+        assert_eq!(gate.stable_frames, 2);
+        assert_eq!(gate.observed_frames, 3);
+    }
+
+    #[test]
+    fn roi_stability_gate_passes_static_roi_on_first_followup_frame() {
+        let baseline = color_target_evaluation("target/button", [0, 0, 0], true);
+        let mut gate = RoiStabilityGate::new(2, baseline).expect("gate");
+
+        assert!(gate.observe(color_target_evaluation("target/button", [0, 0, 0], true)));
+        assert_eq!(gate.observed_frames, 2);
+    }
+
+    #[test]
+    fn roi_stability_gate_rejects_continuously_changing_roi() {
+        let baseline = color_target_evaluation("target/button", [0, 0, 0], true);
+        let mut gate = RoiStabilityGate::new(2, baseline).expect("gate");
+
+        for mean in [[3, 0, 0], [6, 0, 0], [9, 0, 0]] {
+            assert!(!gate.observe(color_target_evaluation("target/button", mean, true)));
+        }
+        assert_eq!(gate.stable_frames, 1);
+    }
+
+    #[test]
+    fn roi_stability_gate_resets_when_target_fails() {
+        let baseline = color_target_evaluation("target/button", [0, 0, 0], true);
+        let mut gate = RoiStabilityGate::new(2, baseline).expect("gate");
+
+        assert!(!gate.observe(color_target_evaluation("target/button", [0, 0, 0], false)));
+        assert!(!gate.observe(color_target_evaluation("target/button", [0, 0, 0], true)));
+        assert!(gate.observe(color_target_evaluation("target/button", [0, 0, 0], true)));
+        assert_eq!(gate.stable_frames, 2);
     }
 
     #[test]
@@ -3593,6 +3892,26 @@ mod tests {
         ))
         .expect("pack");
         RecognitionEvaluator::new(PathBuf::from("."), pack).expect("evaluator")
+    }
+
+    fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvaluation {
+        TargetEvaluation {
+            id: id.to_string(),
+            kind: actingcommand_recognition_pack::TargetKind::Color,
+            passed,
+            template: None,
+            color: Some(actingcommand_recognition_pack::ColorEvaluation {
+                distance: 0.0,
+                max_distance: 20.0,
+                mean,
+                expected: mean,
+            }),
+            message: if passed {
+                "color passed".to_string()
+            } else {
+                "color failed".to_string()
+            },
+        }
     }
 
     fn one_pixel_png() -> &'static [u8] {

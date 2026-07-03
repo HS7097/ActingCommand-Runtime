@@ -19,7 +19,7 @@ The `TASK-Lab-selfheal-chain.md` C-line is active as the current Runtime self-he
 Delivery order:
 
 1. C0.c guarded coordinate action: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`.
-2. C0.b ROI stability gate: pending.
+2. C0.b ROI stability gate: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`.
 3. C0.a resource drift stop-loss: pending.
 4. C1 trigger classification and priority routing: pending.
 5. C2 live recovery loop wiring plus H1 loop detection fix: pending.
@@ -34,7 +34,15 @@ Current C0.c behavior:
 - Page mismatch and target mismatch refuse the click and report the current screen state through run events and failure diagnostics.
 - `session record build-task` emits guard metadata for recorded coordinate operations.
 
-This slice does not add ROI stability gating, resource drift classification, trigger routing, live recovery loop wiring, login/wake execution, OCR, UI, SQLite, scheduler behavior, or game logic.
+Current C0.b behavior:
+
+- ActingLab now runs a ROI-level stability gate after the C0.c guard passes and before opening the touch backend or sending MaaTouch input.
+- The gate reuses the guard target evaluation as its baseline and evaluates the same target across follow-up frames.
+- Static ROI targets pass on the first follow-up frame, changing targets wait until stable, and continuously changing targets fail loudly as `unstable_page`.
+- Page changes during the stability wait refuse execution as `page_guard_mismatch`.
+- The gate reuses existing recognition target evaluation and does not add a whole-frame freeze detector.
+
+These slices do not add resource drift classification, trigger routing, live recovery loop wiring, login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, or game logic.
 
 ## Current P6.5-A punchlist repair
 

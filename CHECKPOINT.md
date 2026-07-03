@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C0.b ROI stability gate
+
+### Current status
+
+- Implemented the second slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed: C0.b ROI-level pre-action stability gate.
+- ActingLab now reuses the C0.c guard target evaluation as the baseline ROI sample.
+- Before opening the touch backend or sending MaaTouch input, ActingLab captures follow-up frames and requires the guard target ROI to be stable for two consecutive samples.
+- Static ROI targets pass on the first follow-up frame.
+- Changing ROI targets wait until stable.
+- Continuously changing ROI targets fail loudly as `unstable_page`.
+- Page changes during the stability wait refuse execution as `page_guard_mismatch`.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`.
+- C0.a, C1, C2/H1, and C3 remain pending.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -3 --oneline --decorate`
+- Focused `rg` and source reads over ActingLab run, recovery, recognition, and page-detector code.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab roi_stability_gate`
+- `cargo test -p actingcommand-actinglab pre_execution_guard`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before public validation.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab roi_stability_gate`: passed.
+- `cargo test -p actingcommand-actinglab pre_execution_guard`: passed.
+- `cargo test -p actingcommand-actinglab`: passed with 495 unit tests and 3 integration tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C0.b.
+- Remaining self-heal chain items are intentionally pending: C0.a resource drift, C1 trigger routing, C2 live recovery loop plus H1, and C3 login/wake wiring.
+
+### Next step
+
+1. Commit and push the C0.b slice with planning/checkpoint files.
+2. Continue with C0.a as the next independent slice.
+
 ## 2026-07-03 Lab self-heal chain C0.c guarded action
 
 ### Current status
