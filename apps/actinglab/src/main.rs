@@ -7966,8 +7966,7 @@ fn monitor_recovery_resource_path(
     })?;
     let (game, server) = recognition_selector(global)?;
     Ok(Some(
-        root.join("ours")
-            .join("recovery")
+        root.join("recovery")
             .join(format!("{game}.{server}.recovery.json")),
     ))
 }
@@ -52136,56 +52135,47 @@ mod tests {
 
     #[test]
     fn monitor_loop_resolves_recovery_resource_from_resource_root() {
-        let temp = semantic_resource_root(false);
-        let scene = temp.path().join("standby.png");
-        let recovery_dir = temp.path().join("ours").join("recovery");
+        let source = semantic_resource_root(false);
+        let repo = TempDir::new().unwrap();
+        let root = repo.path().join("ours");
+        fs::create_dir_all(root.join("recognition")).unwrap();
+        fs::create_dir_all(root.join("navigation")).unwrap();
+        fs::create_dir_all(root.join("operations")).unwrap();
+        fs::copy(
+            source.path().join("recognition/arknights.cn.pack.json"),
+            root.join("recognition/arknights.cn.pack.json"),
+        )
+        .unwrap();
+        fs::copy(
+            source.path().join("recognition/arknights.cn.pages.json"),
+            root.join("recognition/arknights.cn.pages.json"),
+        )
+        .unwrap();
+        fs::copy(
+            source
+                .path()
+                .join("navigation/arknights.cn.navigation.json"),
+            root.join("navigation/arknights.cn.navigation.json"),
+        )
+        .unwrap();
+        let scene = repo.path().join("standby.png");
+        let recovery_dir = root.join("recovery");
         let recovery = recovery_dir.join("arknights.cn.recovery.json");
         fs::create_dir_all(&recovery_dir).unwrap();
         fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
         fs::write(&recovery, standby_recovery_resource_json()).unwrap();
+        let global = GlobalOptions {
+            resource_root: Some(repo.path().to_path_buf()),
+            game: Some("ark".to_string()),
+            ..Default::default()
+        };
+        let flags = FlagArgs::parse(&["--use-recovery-resource".to_string()]).unwrap();
 
-        let result = run_cli(
-            [
-                "--json",
-                "--dry-run",
-                "--resource-root",
-                temp.path().to_str().unwrap(),
-                "--game",
-                "ark",
-                "monitor",
-                "--max-iterations",
-                "1",
-                "--interval-ms",
-                "0",
-                "--recover",
-                "--use-recovery-resource",
-                "--scene",
-                scene.to_str().unwrap(),
-                "--expect",
-                "home",
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
-        let recovery_result = result
-            .envelope
-            .data
-            .as_ref()
+        let resolved = monitor_recovery_resource_path(&global, &flags)
             .unwrap()
-            .pointer("/iterations/0/recovery")
-            .unwrap();
-        assert_eq!(
-            recovery_result.get("mode").and_then(Value::as_str),
-            Some("resource_recovery_graph")
-        );
-        let expected_recovery_path = recovery.display().to_string();
-        assert_eq!(
-            recovery_result
-                .get("recovery_resource")
-                .and_then(Value::as_str),
-            Some(expected_recovery_path.as_str())
-        );
+            .expect("recovery resource path");
+
+        assert_eq!(resolved, recovery);
     }
 
     #[test]

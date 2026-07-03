@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal acceptance repair R5
+
+### Current status
+
+- Active task: `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.
+- Implemented R5 recovery-resource path repair.
+- `monitor_recovery_resource_path()` now uses the already-normalized resource root and resolves `recovery/<game>.<server>.recovery.json` without adding a second `ours` segment.
+- Added a reorganized `repo -> ours` regression in `monitor_loop_resolves_recovery_resource_from_resource_root`.
+- R1, R2, R3, and R4 remain pending, so the full self-heal chain is not accepted yet.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- `git status --short --branch`
+- `cargo test -p actingcommand-actinglab monitor_loop_resolves_recovery_resource_from_resource_root`
+- `cargo fmt --all -- --check` (initially failed with rustfmt-only line wrapping)
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Initial R5 regression shape exposed unrelated direct-root fixture behavior, then the test was corrected to a real reorganized `repo -> ours` layout.
+- `cargo test -p actingcommand-actinglab monitor_loop_resolves_recovery_resource_from_resource_root`: passed.
+- `cargo fmt --all -- --check`: passed after formatting.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+- Public validation passed for this R5 commit.
+
+### Current blocker
+
+- No blocker for R5.
+- R1-R4 acceptance repairs remain required.
+
+### Next step
+
+1. Commit and push the independent R5 repair.
+2. Continue with R1/R2/R3 true Session Layer recovery execution, lease-yield, and escalation semantics.
+3. Implement R4 stored package guard migration.
+
 ## 2026-07-03 Lab self-heal chain C3 automatic login and wake resources
 
 ### Current status

@@ -6,6 +6,20 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab self-heal acceptance repair
+
+The active task is `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.
+
+Blocking repair status:
+
+- R5 recovery-resource path double-`ours`: implemented. `--use-recovery-resource` now resolves from the already-normalized resource root as `recovery/<game>.<server>.recovery.json`, and a reorganized `repo -> ours` regression test covers the path.
+- R1 C2 recovery loop true execution: pending.
+- R2 recovery lease-yield: pending.
+- R3 C3 escalation ladder and reference resolvability: pending.
+- R4 stored operation package guard migration: pending.
+
+Until R1-R4 are implemented and public validation passes, the full C0.c -> C3 self-heal chain remains under acceptance repair.
+
 ## Current implementation line
 
 - Rust workspace is the mainline implementation.
