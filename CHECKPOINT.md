@@ -6,6 +6,7 @@
 
 - Implemented the acceptance repair task from `C:\合作工作区\ActingCommand\FIX-P6.5-A-acceptance-aea10a4.md`.
 - Remote head before this fix was `bb10374`, a README-only update. Runtime source repair remains anchored to the `aea10a4` P6.5-A closeout baseline.
+- Implementation commit: `dd898a7` (`runtime: fix p6.5-a acceptance defects`).
 - Added `benchmarks/reports/2026-07-03-p65a-acceptance-fix.md` with F1-F12 and H1-H4 status.
 - F1-F12 are implemented.
 - H2 is implemented as oversized FFI response hardening.
