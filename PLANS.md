@@ -13,12 +13,12 @@ The active task is `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptan
 Blocking repair status:
 
 - R5 recovery-resource path double-`ours`: implemented. `--use-recovery-resource` now resolves from the already-normalized resource root as `recovery/<game>.<server>.recovery.json`, and a reorganized `repo -> ours` regression test covers the path.
-- R1 C2 recovery loop true execution: pending.
-- R2 recovery lease-yield: pending.
-- R3 C3 escalation ladder and reference resolvability: pending.
+- R1 C2 recovery loop true execution: implemented locally. Non-dry-run monitor resource recovery now executes through an injectable Session Layer throat adapter; dry-run remains plan-only; non-constant detect routes through the injected detector path.
+- R2 recovery lease-yield: implemented locally. Active mismatched leases defer recovery before any page-changing Session Layer action; no active lease or a matching lease allows execution.
+- R3 C3 escalation ladder and reference resolvability: implemented locally. Recovery actions preserve resource order, failed/not-arrived actions advance to the next escalation action, and named flows/control points/external sources must resolve during plan construction without game-specific branching.
 - R4 stored operation package guard migration: pending.
 
-Until R1-R4 are implemented and public validation passes, the full C0.c -> C3 self-heal chain remains under acceptance repair.
+Until R4 is implemented and public validation passes, the full C0.c -> C3 self-heal chain remains under acceptance repair.
 
 ## Current implementation line
 

@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal acceptance repair R1-R3
+
+### Current status
+
+- Active task: `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.
+- Implemented R1 C2 recovery-loop true execution through an injectable `SessionLayerRecoveryThroat`.
+- Non-dry-run monitor resource recovery now calls the throat adapter; dry-run remains plan-only and does not call the throat.
+- `SessionLayerRecoveryRuntime::detect()` no longer returns unconditional matched for non-constant detects; injected detection is used for page/signal/freeze-style checks.
+- Implemented R2 lease-yield for monitor resource recovery: an active mismatched lease defers recovery and sends no page-changing Session Layer action; no active lease allows execution.
+- Implemented R3 action escalation and reference resolvability: recovery resources preserve declared action order, failed/not-arrived actions advance to the next escalation action, and missing named flows/control points/external files fail during plan construction.
+- Removed the game-specific `STARTUP-LOGIN.md` requirement branch from monitor resource recovery; external startup resources are now explicit or resource-declared.
+- R4 stored operation package guard migration remains pending, so the full self-heal acceptance repair is not complete.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab monitor_resource_`
+- `cargo test -p actingcommand-actinglab session_layer_recovery_runtime_detect_uses_injected_throat`
+- `cargo test -p actingcommand-actinglab monitor_loop_recover`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab monitor_resource_`: passed with 12 focused tests.
+- `cargo test -p actingcommand-actinglab session_layer_recovery_runtime_detect_uses_injected_throat`: passed.
+- `cargo test -p actingcommand-actinglab monitor_loop_recover`: passed with 4 focused tests.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed with 525 ActingLab tests in the main binary plus workspace tests.
+- `git diff --check`: passed.
+- Public validation passed for the R1-R3 commit.
+
+### Current blocker
+
+- No blocker for R1-R3.
+- R4 remains required before the full acceptance task can close.
+
+### Next step
+
+1. Commit and push the R1-R3 repair.
+2. Implement R4 stored operation package guard migration.
+
 ## 2026-07-03 Lab self-heal acceptance repair R5
 
 ### Current status
