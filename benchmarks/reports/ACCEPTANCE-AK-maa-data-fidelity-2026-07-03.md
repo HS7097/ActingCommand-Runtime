@@ -4,11 +4,16 @@ Task file: `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`
 
 ## Scope
 
-This report records the Codex-side M6 offline evidence available in the current
-worktrees. It does not include live click sampling; the task file assigns live
-items to a later unified device batch.
+This report records historical Codex-side M6 offline evidence gathered before
+the 2026-07-04 r3/r4 task-file boundary update.
 
-## Source freshness
+After that update, current Codex work on this chain is limited to Runtime logic
+and synthetic/offline program validation. True resource-repository verification,
+M6 calibration, and M8 template/art processing are Claude-owned resource-lane
+work. This report remains useful as prior evidence and attribution context, but
+it is not a current Codex-owned completion gate.
+
+## Historical source freshness
 
 Resource repositories were fetched before this pass and were aligned with their
 remote `origin/main` heads before local calibration changes:
@@ -184,7 +189,7 @@ QuickSwitch-derived destination pages, so those mixed-corpus results are
 recorded as a remaining false-positive risk rather than accepted AK calibration
 evidence.
 
-## Remaining evidence gap
+## Historical remaining evidence gap
 
 The local retained-frame corpus does not contain accepted positive captures for
 the destination pages `recruit`, `gacha`, `infrast`, or `mall`. The QuickSwitch
@@ -193,7 +198,7 @@ positive retained frame, but single-frame evidence is not a full threshold
 distribution. Positive threshold distribution for the remaining destination
 pages is not proven by the current corpus.
 
-The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
-closed until destination-page positive retained frames are added or a later
-accepted task narrows the M6 evidence requirement to the currently retained
-home/mission-result corpus.
+Under the updated task split, this retained-frame evidence gap is owned by the
+Claude resource lane. A future Codex task should only reopen this report if true
+resource verification identifies a Runtime parser/converter bug that can be
+reproduced with synthetic fixtures.

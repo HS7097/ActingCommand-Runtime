@@ -10,6 +10,13 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 
 The active task is `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.
 
+The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
+
+- Codex owns the Runtime implementation for M1-M4 and M7.
+- Codex tests must use synthetic bundles, synthetic task graphs, and synthetic frames for this chain.
+- Codex must not operate on, validate, sample, or submit true resource-repository data for this chain.
+- Claude owns true resource-repository verification, M6 calibration, M8 template/art processing, and data-vs-parser attribution on true samples.
+
 Codex offline implementation status:
 
 - M1 MAA task graph compiler is implemented as a Runtime-owned data-boundary pass. `resource compile-maa` expands MAA task JSON inheritance, explicit and implicit `@` rebasing, and `#` virtual list references without importing or copying the upstream MAA engine.
@@ -21,15 +28,16 @@ Codex offline implementation status:
 Codex validation status:
 
 - Public local gates passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
-- Real AK MAA task-family compile smoke passed against `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` at commit `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`, compiling 3252 raw tasks into 4284 tasks.
-- M6 structural re-conversion is now unblocked for the three current resource repositories. `resource convert` writes validated schema `0.5` outputs for Arknights CN, AzurLane JP, and BlueArchive JP, and `detect-page --check-pages` passes for all three generated page packs.
+- Historical pre-r3 true-resource smoke evidence remains recorded in `CHECKPOINT.md` and `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`, but it is no longer treated as a current Codex-owned completion gate.
 - Runtime guard synthesis now supports three reviewed sources: explicit `verify_templates`, source-page anchors, and operation-level verify templates with click-derived expected rects. `page_id: "any"` guards remain target-checked and are used only for generic recovery controls.
-- M6 retained-frame false-positive calibration is partially closed for the available AK corpus. Runtime `resource convert` now supports source `page_rules`, and the AK resource pack adds retained mission-result, sign-in-modal, announcement-modal, QuickSwitch-dropdown, terminal-stage, depot, friends, mission, and operator discrimination targets plus page rules so current home frames match only `arknights/home`, retained modal/result frames match no generated page, the retained QuickSwitch dropdown matches only `arknights/quickswitch_dropdown`, and the retained depot, friends, mission, terminal, and operator frames each match their intended page only.
+- Runtime `resource convert` supports source `page_rules`, and the historical AK retained-frame repair evidence remains useful for attribution, but further true retained-frame calibration now belongs to the Claude resource lane.
 - Page detection now supports `any_of` page groups. Runtime conversion emits mutually exclusive anchor variants such as AK `operator_0` / `operator_1` as one `any_of` group instead of requiring both visual states simultaneously, and generated page validation/check-pages accepts that schema without weakening forbidden-target gates.
 
 Remaining chain gates before the broader CLI entry condition:
 
-- M6 threshold calibration/reporting remains incomplete for several destination-page positives. The available AK retained corpus proves the home, modal/result negative, QuickSwitch-dropdown, depot, friends, mission, terminal-stage, and single-frame operator repairs, and the operator page no longer has mutually exclusive required anchors, but the corpus still does not contain accepted positive retained frames for `recruit`, `gacha`, `infrast`, or `mall`. The single-frame QuickSwitch/depot/friends/mission/operator evidence is useful, but it is not a full threshold distribution.
+- Claude-owned stage-two true-resource verification, M6 calibration, and M8 first-batch template/art processing remain the broader CLI-entry blockers.
+- If true-resource verification finds source data correct but Runtime output wrong, that becomes a new Codex parser/Runtime fix task with synthetic regression coverage.
+- If true-resource verification finds source data stale, weak, or wrong, that remains a resource-lane data repair.
 - M5 overlay layering remains intentionally non-blocking for CLI entry.
 - M3 Phase B/C masked NCC and RGB/HSV count engines remain future work; Phase A fail-loud handling prevents silent misuse until they are implemented.
 

@@ -1,5 +1,61 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity r3/r4 boundary realignment
+
+### Current status
+
+- Re-read `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after its r3/r4 update.
+- Recorded the current split in Runtime planning: Codex owns Runtime logic and synthetic/offline program validation for M1-M4 and M7; Claude owns true resource-repository verification, M6 calibration, M8 template/art processing, and true-data attribution.
+- Marked the older AK retained-frame M6 acceptance report as historical Codex evidence instead of a current Codex-owned completion gate.
+- Did not modify Runtime source code, resource repositories, game logic, UI, SQLite, OCR/OpenCV, capture/input behavior, scheduler behavior, or upstream assets.
+
+### Repository freshness
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`: `4721665c4d7a136ab228499005395e4bca9f46c6`; `origin/main` matched before this documentation change.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `b0b0d7657323f0b18595574d75d72e7b7ef5b97a`; `origin/main` matched. No resource content was read or modified for this boundary-alignment slice.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched. No resource content was read or modified for this boundary-alignment slice.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched. No resource content was read or modified for this boundary-alignment slice.
+
+### Files changed
+
+- `PLANS.md`
+- `CHECKPOINT.md`
+- `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+
+### Commands run
+
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md -Raw`
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `rg -n "ActingCommand-Resources-Arknights|ActingCommand resource-mirroring|Azur workspace operating preferences" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `rg -n "AK MAA data fidelity|M6|M8|Codex|Claude|resource repos|resource repositories|real AK|Remaining chain gates|Next steps" PLANS.md CHECKPOINT.md benchmarks\reports\ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for this boundary-alignment slice.
+- The broader `TASK-AK-maa-data-fidelity.md` CLI gate is still not proven complete because Claude-owned true-resource validation, M6 calibration, and M8 first-batch template/art processing remain outside this Codex slice.
+
+### Next step
+
+1. Commit and push the Runtime documentation/checkpoint update.
+2. Stop after this completed slice per the updated user instruction.
+
 ## 2026-07-04 AK MAA data fidelity QuickSwitch dropdown retained-frame calibration
 
 ### Current status
