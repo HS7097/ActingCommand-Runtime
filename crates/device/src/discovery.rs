@@ -36,18 +36,12 @@ pub struct DeviceDiscoveryReport {
     pub diagnostics: Vec<DeviceDiscoveryDiagnostic>,
 }
 
-pub fn discover_devices() -> DeviceResult<Vec<DiscoveredDevice>> {
+pub fn discover_devices() -> DeviceResult<DeviceDiscoveryReport> {
     let processes = system_processes()?;
     Ok(discover_mumu_devices_from_processes(&processes))
 }
 
 pub fn discover_mumu_devices_from_processes(
-    processes: &[DeviceDiscoveryProcess],
-) -> Vec<DiscoveredDevice> {
-    discover_mumu_devices_from_processes_with_diagnostics(processes).devices
-}
-
-pub fn discover_mumu_devices_from_processes_with_diagnostics(
     processes: &[DeviceDiscoveryProcess],
 ) -> DeviceDiscoveryReport {
     let mut diagnostics = Vec::new();
@@ -104,7 +98,10 @@ fn mumu_instance_id(process: &DeviceDiscoveryProcess) -> Result<u16, String> {
     let command_line = process.command_line.as_deref().unwrap_or_default();
     match parse_dash_v_instance(command_line) {
         Ok(Some(instance_id)) => Ok(instance_id),
-        Ok(None) => Ok(parse_mumu_player_comment_instance(command_line).unwrap_or(0)),
+        Ok(None) => parse_mumu_player_comment_instance(command_line).ok_or_else(|| {
+            "MuMu process has no recoverable instance id (no -v, no MuMuPlayer- comment)"
+                .to_string()
+        }),
         Err(err) => parse_mumu_player_comment_instance(command_line).ok_or(err),
     }
 }
@@ -293,7 +290,8 @@ mod tests {
             &format!("{} -v 2", executable.display()),
         )];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
+        let devices = report.devices;
 
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].serial, "127.0.0.1:16448");
@@ -306,8 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn discovery_defaults_mumu_device_without_v_to_instance_zero() {
-        let root = temp_mumu_root("defaults-zero");
+    fn discovery_skips_mumu_device_without_recoverable_instance_id() {
+        let root = temp_mumu_root("no-recoverable-instance");
         let executable = root
             .join("nx_device")
             .join("12.0")
@@ -320,10 +318,40 @@ mod tests {
             &executable.display().to_string(),
         )];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
 
-        assert_eq!(devices[0].serial, "127.0.0.1:16384");
-        assert_eq!(devices[0].emulator, "mumu:0");
+        assert!(report.devices.is_empty());
+        assert_eq!(report.diagnostics.len(), 1);
+        assert_eq!(report.diagnostics[0].process_id, 7);
+        assert!(
+            report.diagnostics[0]
+                .message
+                .contains("no recoverable instance id")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_accepts_explicit_dash_v_zero() {
+        let root = temp_mumu_root("explicit-zero");
+        let executable = root
+            .join("nx_device")
+            .join("12.0")
+            .join("shell")
+            .join("MuMuNxDevice.exe");
+        fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
+        let processes = vec![mumu_process(
+            8,
+            &executable,
+            &format!("{} -v 0", executable.display()),
+        )];
+
+        let report = discover_mumu_devices_from_processes(&processes);
+
+        assert_eq!(report.devices.len(), 1);
+        assert_eq!(report.devices[0].serial, "127.0.0.1:16384");
+        assert_eq!(report.devices[0].emulator, "mumu:0");
+        assert!(report.diagnostics.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -336,7 +364,9 @@ mod tests {
             command_line: Some("adb version".to_string()),
         }];
 
-        assert!(discover_mumu_devices_from_processes(&processes).is_empty());
+        let report = discover_mumu_devices_from_processes(&processes);
+        assert!(report.devices.is_empty());
+        assert!(report.diagnostics.is_empty());
     }
 
     #[test]
@@ -353,7 +383,8 @@ mod tests {
             mumu_process(2, &executable, &format!("{} -v 1", executable.display())),
         ];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
+        let devices = report.devices;
 
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].serial, "127.0.0.1:16416");
@@ -377,7 +408,8 @@ mod tests {
             &format!("{} -v 3", executable.display()),
         )];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
+        let devices = report.devices;
 
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].serial, "127.0.0.1:16480");
@@ -404,7 +436,8 @@ mod tests {
             &format!("{} -v 4", executable.display()),
         )];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
+        let devices = report.devices;
 
         assert_eq!(devices.len(), 1);
         assert_eq!(Path::new(&devices[0].adb_path), sibling_adb);
@@ -429,7 +462,8 @@ mod tests {
             ),
         ];
 
-        let devices = discover_mumu_devices_from_processes(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
+        let devices = report.devices;
 
         assert_eq!(devices.len(), 2);
         assert!(
@@ -459,7 +493,7 @@ mod tests {
             mumu_process(2, &executable, &format!("{} -v abc", executable.display())),
         ];
 
-        let report = discover_mumu_devices_from_processes_with_diagnostics(&processes);
+        let report = discover_mumu_devices_from_processes(&processes);
 
         assert_eq!(report.devices.len(), 1);
         assert_eq!(report.devices[0].serial, "127.0.0.1:16384");
