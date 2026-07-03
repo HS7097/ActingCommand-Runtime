@@ -7,6 +7,8 @@
 - Implemented the acceptance repair task from `C:\合作工作区\ActingCommand\FIX-P6.5-A-acceptance-aea10a4.md`.
 - Remote head before this fix was `bb10374`, a README-only update. Runtime source repair remains anchored to the `aea10a4` P6.5-A closeout baseline.
 - Implementation commit: `dd898a7` (`runtime: fix p6.5-a acceptance defects`).
+- Checkpoint commit: `23be923` (`docs: record p6.5-a acceptance checkpoint`).
+- GitHub Actions CI run `28639247649`: passed.
 - Added `benchmarks/reports/2026-07-03-p65a-acceptance-fix.md` with F1-F12 and H1-H4 status.
 - F1-F12 are implemented.
 - H2 is implemented as oversized FFI response hardening.
@@ -74,16 +76,17 @@
 - `cargo clippy --workspace -- -D warnings`: passed after replacing the manual base64 length modulus check with `is_multiple_of`.
 - `cargo test --workspace`: passed.
 - `git diff --check`: passed.
+- GitHub Actions CI run `28639247649`: passed.
 
 ### Current blocker
 
 - No current implementation blocker.
-- GitHub CI is still pending until the pushed commit runs.
+- No current CI blocker for the pushed acceptance fix.
 
 ### Next step
 
-1. Commit and push the acceptance fix with planning/checkpoint updates.
-2. Watch GitHub Actions for the pushed commit.
+1. Await user and external acceptance review.
+2. Address any follow-up findings as separate scoped Runtime tasks.
 
 ## 2026-07-02 P6.5-A MaaFramework fusion chain closeout
 
