@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-03 Lab self-heal chain C1 trigger classification and priority routing
+
+### Current status
+
+- Implemented the fourth slice of `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Slice completed locally: C1 trigger classification and deterministic priority routing.
+- Implementation commit: `a9d33e9` (`actinglab: route self-heal triggers by priority`).
+- GitHub Actions CI: pending remote push/observation.
+- `session self-heal-policy` now reports the canonical trigger set and priority order.
+- `session self-heal-plan` now normalizes legacy aliases to canonical triggers while preserving raw trigger values for compatibility.
+- Repeated `--trigger` values and comma-separated `--triggers` values are supported for concurrent trigger injection.
+- Concurrent triggers route deterministically by the task priority order: stale/hang, confirmed drift, session/standby, modal, off-route, unstable.
+- Trigger-specific recovery routes are implemented for stale/hang, resource drift, session expired, standby, modal popup, off-route page, and unstable page.
+- `monitor --once` now includes canonical trigger metadata for its current diagnoses without changing existing status strings.
+- Added `benchmarks/reports/2026-07-03-lab-selfheal-c1.md`.
+- C2/H1 and C3 remain pending.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `benchmarks/reports/2026-07-03-lab-selfheal-c1.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -5 --oneline --decorate`
+- Read `C:\合作工作区\ActingCommand\TASK-Lab-selfheal-chain.md`.
+- Read Runtime-local `PLANS.md` and `CHECKPOINT.md`.
+- Focused `rg` and source reads over ActingLab self-heal plan and monitor code.
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before public validation.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab self_heal_trigger`
+- `cargo test -p actingcommand-actinglab session_self_heal_plan`
+- `cargo test -p actingcommand-actinglab monitor_diagnosis`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `git commit -m "actinglab: route self-heal triggers by priority"`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab self_heal_trigger`: passed.
+- `cargo test -p actingcommand-actinglab session_self_heal_plan`: passed.
+- `cargo test -p actingcommand-actinglab monitor_diagnosis`: passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`: passed.
+- `cargo test -p actingcommand-actinglab`: passed with 507 unit tests and 3 integration tests.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No implementation blocker for C1.
+- Remaining self-heal chain items are intentionally pending: C2 live recovery loop plus H1, and C3 login/wake wiring.
+
+### Next step
+
+1. Push C1 implementation and checkpoint updates to GitHub.
+2. Observe the GitHub Actions result.
+3. Continue with C2 live recovery loop wiring plus H1 loop detection as the next independent slice.
+
 ## 2026-07-03 Lab self-heal chain C0.a resource drift stop-loss
 
 ### Current status

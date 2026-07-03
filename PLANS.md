@@ -21,7 +21,7 @@ Delivery order:
 1. C0.c guarded coordinate action: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0c.md`.
 2. C0.b ROI stability gate: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0b.md`.
 3. C0.a resource drift stop-loss: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c0a.md`.
-4. C1 trigger classification and priority routing: pending.
+4. C1 trigger classification and priority routing: implemented in `benchmarks/reports/2026-07-03-lab-selfheal-c1.md`.
 5. C2 live recovery loop wiring plus H1 loop detection fix: pending.
 6. C3 login/wake resource wiring: pending.
 
@@ -52,7 +52,16 @@ Current C0.a behavior:
 - Moving mismatches remain `unstable_page`; page changes remain `page_guard_mismatch`.
 - `session self-heal-plan --trigger resource_drift` is a stop-loss plan: no retry, no app restart, no heavy recovery candidate, and a resource recalibration blocker.
 
-These slices do not add C1 priority routing, C2 live recovery loop wiring, C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, FeatureMatch relocation, automatic resource rewrites, or game logic.
+Current C1 behavior:
+
+- `session self-heal-policy` now reports the canonical trigger set: `stale_frame`, `hang`, `resource_drift`, `session_expired`, `standby`, `modal_popup`, `off_route_page`, and `unstable_page`.
+- Legacy monitor trigger names remain accepted and are mapped to canonical triggers for compatibility.
+- `session self-heal-plan` accepts repeated `--trigger` values and comma-separated `--triggers` values, then selects the deterministic highest-priority trigger.
+- Trigger priority is evidence-first: stale/hang before confirmed drift, then session/standby, modal, off-route, and unstable-page action gates.
+- Recovery routes are trigger-specific: stale/hang to capture backend recovery, standby to wake, modal to dismissal, off-route to maintenance navigation, session-expired to startup login, drift to stop-loss recalibration, and unstable page to action-gate failure.
+- `monitor --once` includes canonical trigger metadata for current monitor diagnoses without changing the existing status strings.
+
+These slices do not add C2 live recovery loop wiring, C3 login/wake execution, OCR, UI, SQLite, scheduler behavior, resource repository reads, FeatureMatch relocation, automatic resource rewrites, or game logic.
 
 ## Current P6.5-A punchlist repair
 
