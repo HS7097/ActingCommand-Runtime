@@ -7,6 +7,7 @@
 //! and the provider loads a reviewed `onnxruntime.dll` from the artifact
 //! manifest instead of bundling or implicitly discovering one.
 
+use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
     NnClassificationResult, NnLabel, OnnxRuntimeInvokeRequest, VisionBackendKind, VisionFfiError,
     VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
@@ -14,14 +15,13 @@ use actingcommand_vision_ffi::{
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::slice;
-use std::sync::{Arc, OnceLock};
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 
 const MODULE: &str = "onnxruntime-json-provider";
-static ORT_RUNTIME_LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 
 /// Classifies a frame through an ONNXRuntime model using the ActingCommand JSON ABI.
 ///
@@ -106,7 +106,10 @@ fn classify_json(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    terminate_after(Arc::clone(&run_options), envelope.request.timeout_ms);
+    let _watchdog = InferenceWatchdog::start(
+        Arc::clone(&run_options),
+        Duration::from_millis(envelope.request.timeout_ms),
+    );
     let outputs = session
         .run_with_options(ort::inputs![input], &*run_options)
         .map_err(|err| format!("ONNXRuntime inference failed: {err}"))?;
@@ -121,34 +124,7 @@ fn classify_json(
 }
 
 fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
-    if let Some(existing) = ORT_RUNTIME_LIBRARY.get() {
-        if existing == runtime_library {
-            return Ok(());
-        }
-        return Err(format!(
-            "ONNXRuntime is already initialized from {}; refusing second runtime library {}",
-            existing.display(),
-            runtime_library.display()
-        ));
-    }
-
-    let committed = ort::init_from(runtime_library)
-        .map_err(|err| {
-            format!(
-                "failed to load ONNXRuntime library {}: {err}",
-                runtime_library.display()
-            )
-        })?
-        .commit();
-    if !committed {
-        return Err(
-            "ONNXRuntime environment was already configured before this provider initialized"
-                .to_string(),
-        );
-    }
-    ORT_RUNTIME_LIBRARY
-        .set(runtime_library.to_path_buf())
-        .map_err(|_| "failed to record ONNXRuntime runtime library path".to_string())
+    ORT_RUNTIME.ensure(runtime_library)
 }
 
 fn read_request(
@@ -301,13 +277,6 @@ fn labels_from_scores(labels: &[String], scores: &[f32]) -> Result<NnClassificat
         labels,
         backend: VisionBackendKind::OnnxRuntime,
     })
-}
-
-fn terminate_after(run_options: Arc<RunOptions>, timeout_ms: u64) {
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(timeout_ms));
-        let _ = run_options.terminate();
-    });
 }
 
 fn write_response<T: Serialize>(

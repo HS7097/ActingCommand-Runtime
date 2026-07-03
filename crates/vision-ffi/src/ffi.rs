@@ -14,6 +14,7 @@ use std::sync::Arc;
 const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
 const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
 const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
+const MAX_FFI_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 
 pub type VisionFfiInvokeJson = unsafe extern "C" fn(
     request_ptr: *const u8,
@@ -227,6 +228,13 @@ pub fn validate_onnxruntime_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiRe
     Ok(())
 }
 
+pub fn validate_runtime_library_loadable(
+    module: &'static str,
+    path: impl AsRef<OsStr>,
+) -> VisionFfiResult<()> {
+    load_library(module, path).map(|_| ())
+}
+
 impl NnEngine for OnnxRuntimeBackend {
     fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
         request.validate()?;
@@ -353,6 +361,18 @@ fn take_owned_buffer(
             "FFI backend returned a buffer capacity smaller than its length",
         ));
     }
+    if buffer.len > MAX_FFI_RESPONSE_BYTES {
+        unsafe {
+            free_buffer(buffer);
+        }
+        return Err(VisionFfiError::fatal(
+            module,
+            format!(
+                "FFI backend returned an oversized response buffer: {} bytes exceeds {}",
+                buffer.len, MAX_FFI_RESPONSE_BYTES
+            ),
+        ));
+    }
 
     // SAFETY: the FFI provider returned a non-null pointer and length; this
     // copies the bytes before returning ownership to the paired free function.
@@ -363,4 +383,25 @@ fn take_owned_buffer(
         free_buffer(buffer);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn take_owned_buffer_rejects_oversized_response_before_copy() {
+        let buffer = VisionFfiOwnedBuffer {
+            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: MAX_FFI_RESPONSE_BYTES + 1,
+            capacity: MAX_FFI_RESPONSE_BYTES + 1,
+        };
+
+        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+            .expect_err("oversized buffer must be rejected");
+
+        assert!(err.message().contains("oversized response buffer"));
+    }
+
+    unsafe extern "C" fn fake_free_buffer(_buffer: VisionFfiOwnedBuffer) {}
 }

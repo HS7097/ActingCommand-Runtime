@@ -4750,7 +4750,6 @@ struct CaptureFreshnessDecision {
     status: CaptureFreshProbeStatus,
     ok: bool,
     stale_suspected: bool,
-    switch_backend: bool,
     reason: &'static str,
 }
 
@@ -4877,7 +4876,6 @@ fn capture_fresh_probe_report(
             "expectation": capture_freshness_expectation_label(expectation),
             "reason": decision.reason,
             "stale_suspected": decision.stale_suspected,
-            "switch_backend": decision.switch_backend,
             "delay_ms": fresh_delay.as_millis()
         }));
         if decision.ok {
@@ -4927,7 +4925,6 @@ fn classify_capture_freshness(
             status: CaptureFreshProbeStatus::Fresh,
             ok: true,
             stale_suspected: false,
-            switch_backend: false,
             reason: "frame_changed",
         };
     }
@@ -4937,14 +4934,12 @@ fn classify_capture_freshness(
             status: CaptureFreshProbeStatus::StaticUnchanged,
             ok: true,
             stale_suspected: false,
-            switch_backend: false,
             reason: "static_page_unchanged",
         },
         CaptureFreshnessExpectation::ExpectedChange => CaptureFreshnessDecision {
             status: CaptureFreshProbeStatus::StaleSuspected,
             ok: false,
             stale_suspected: true,
-            switch_backend: true,
             reason: "expected_change_not_observed",
         },
     }
@@ -48732,11 +48727,10 @@ mod tests {
         assert_eq!(decision.status, CaptureFreshProbeStatus::StaticUnchanged);
         assert!(decision.ok);
         assert!(!decision.stale_suspected);
-        assert!(!decision.switch_backend);
     }
 
     #[test]
-    fn capture_switches_backend_after_expected_change_stall() {
+    fn capture_expected_change_stall_marks_stale_without_runtime_switch() {
         let decision = classify_capture_freshness(
             "same-frame",
             "same-frame",
@@ -48746,7 +48740,6 @@ mod tests {
         assert_eq!(decision.status, CaptureFreshProbeStatus::StaleSuspected);
         assert!(!decision.ok);
         assert!(decision.stale_suspected);
-        assert!(decision.switch_backend);
     }
 
     #[test]

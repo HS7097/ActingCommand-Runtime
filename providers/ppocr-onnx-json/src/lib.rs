@@ -5,6 +5,9 @@
 //! This provider intentionally stays behind the ActingCommand provider boundary.
 //! It does not copy MAA C++ code and does not bundle OCR models or runtime DLLs.
 
+use actingcommand_onnx_provider_support::{
+    InferenceWatchdog, OrtRuntimeInitializer, OrtSessionCache,
+};
 use actingcommand_vision_ffi::{
     FastDeployPpocrInvokeRequest, OcrInferenceResult, OcrTextBlock, VisionBackendKind,
     VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat, VisionRect,
@@ -15,7 +18,6 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::slice;
 use std::sync::{Arc, OnceLock};
-use std::thread;
 use std::time::Duration;
 
 const DEFAULT_REC_HEIGHT: usize = 48;
@@ -28,7 +30,9 @@ const DETECTION_MIN_AREA: usize = 4;
 const DETECTION_BOX_PADDING: i32 = 16;
 const MAX_DETECTED_TEXT_BOXES: usize = 64;
 
-static ORT_RUNTIME_LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
+static RECOGNIZER_SESSIONS: OnceLock<OrtSessionCache> = OnceLock::new();
+static DETECTOR_SESSIONS: OnceLock<OrtSessionCache> = OnceLock::new();
 
 /// Reads text from a single OCR region through a PPOCR recognizer model.
 ///
@@ -88,38 +92,27 @@ fn read_text_json(
     let runtime_library = select_onnxruntime_library(&envelope.artifacts.runtime_library_paths)?;
     ensure_ort_runtime(runtime_library)?;
     let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
-
-    let mut recognizer_session = Session::builder()
-        .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-        .with_intra_threads(1)
-        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-        .commit_from_file(&envelope.artifacts.recognizer_model_path)
-        .map_err(|err| {
-            format!(
-                "failed to load PPOCR recognizer model {}: {err}",
-                envelope.artifacts.recognizer_model_path.display()
-            )
-        })?;
+    let recognizer_session = recognizer_sessions()
+        .get_or_load(&envelope.artifacts.recognizer_model_path, load_ort_session)?;
 
     if is_full_frame_region(&envelope.request.frame, envelope.request.region) {
-        let mut detector_session = Session::builder()
-            .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-            .with_intra_threads(1)
-            .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-            .commit_from_file(&envelope.artifacts.detector_model_path)
-            .map_err(|err| {
-                format!(
-                    "failed to load PPOCR detector model {}: {err}",
-                    envelope.artifacts.detector_model_path.display()
-                )
-            })?;
-        let detected = detect_text_regions(
-            &mut detector_session,
-            &envelope.request.frame,
-            envelope.request.region,
-            envelope.request.timeout_ms,
-        )?;
+        let detector_session = detector_sessions()
+            .get_or_load(&envelope.artifacts.detector_model_path, load_ort_session)?;
+        let detected = {
+            let mut detector_session = detector_session
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            detect_text_regions(
+                &mut detector_session,
+                &envelope.request.frame,
+                envelope.request.region,
+                envelope.request.timeout_ms,
+            )?
+        };
         let mut blocks = Vec::new();
+        let mut recognizer_session = recognizer_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
                 &mut recognizer_session,
@@ -150,6 +143,9 @@ fn read_text_json(
             warnings: Vec::new(),
         })
     } else {
+        let mut recognizer_session = recognizer_session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let decoded = recognize_region(
             &mut recognizer_session,
             &dictionary,
@@ -209,40 +205,31 @@ fn select_onnxruntime_library(paths: &[PathBuf]) -> Result<&Path, String> {
                 .map(|name| name.to_ascii_lowercase().contains("onnxruntime"))
                 .unwrap_or(false)
         })
-        .or_else(|| paths.first())
         .map(PathBuf::as_path)
-        .ok_or_else(|| "runtime_library_paths must include an ONNXRuntime DLL path".to_string())
+        .ok_or_else(|| {
+            "runtime_library_paths did not include an ONNXRuntime library; configure an explicit onnxruntime DLL path".to_string()
+        })
 }
 
 fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
-    if let Some(existing) = ORT_RUNTIME_LIBRARY.get() {
-        if existing == runtime_library {
-            return Ok(());
-        }
-        return Err(format!(
-            "ONNXRuntime is already initialized from {}; refusing second runtime library {}",
-            existing.display(),
-            runtime_library.display()
-        ));
-    }
+    ORT_RUNTIME.ensure(runtime_library)
+}
 
-    let committed = ort::init_from(runtime_library)
-        .map_err(|err| {
-            format!(
-                "failed to load ONNXRuntime library {}: {err}",
-                runtime_library.display()
-            )
-        })?
-        .commit();
-    if !committed {
-        return Err(
-            "ONNXRuntime environment was already configured before this provider initialized"
-                .to_string(),
-        );
-    }
-    ORT_RUNTIME_LIBRARY
-        .set(runtime_library.to_path_buf())
-        .map_err(|_| "failed to record ONNXRuntime runtime library path".to_string())
+fn recognizer_sessions() -> &'static OrtSessionCache {
+    RECOGNIZER_SESSIONS.get_or_init(OrtSessionCache::new)
+}
+
+fn detector_sessions() -> &'static OrtSessionCache {
+    DETECTOR_SESSIONS.get_or_init(OrtSessionCache::new)
+}
+
+fn load_ort_session(path: &Path) -> Result<Session, String> {
+    Session::builder()
+        .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
+        .with_intra_threads(1)
+        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
+        .commit_from_file(path)
+        .map_err(|err| format!("failed to load PPOCR ONNX model {}: {err}", path.display()))
 }
 
 fn load_dictionary(path: &Path) -> Result<Vec<String>, String> {
@@ -269,7 +256,8 @@ fn recognize_region(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    terminate_after(Arc::clone(&run_options), timeout_ms);
+    let _watchdog =
+        InferenceWatchdog::start(Arc::clone(&run_options), Duration::from_millis(timeout_ms));
     let outputs = session
         .run_with_options(ort::inputs![input], &*run_options)
         .map_err(|err| format!("PPOCR recognizer inference failed: {err}"))?;
@@ -301,7 +289,8 @@ fn detect_text_regions(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    terminate_after(Arc::clone(&run_options), timeout_ms);
+    let _watchdog =
+        InferenceWatchdog::start(Arc::clone(&run_options), Duration::from_millis(timeout_ms));
     let outputs = session
         .run_with_options(ort::inputs![input], &*run_options)
         .map_err(|err| format!("PPOCR detector inference failed: {err}"))?;
@@ -977,13 +966,6 @@ fn argmax_with_softmax_confidence(row: &[f32]) -> Result<(usize, f32), String> {
     Ok((best_index, (best_value - max_value).exp() / exp_sum))
 }
 
-fn terminate_after(run_options: Arc<RunOptions>, timeout_ms: u64) {
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(timeout_ms));
-        let _ = run_options.terminate();
-    });
-}
-
 fn provider_error(err: impl std::fmt::Display) -> String {
     format!("{err}")
 }
@@ -1041,6 +1023,19 @@ mod tests {
             select_onnxruntime_library(&paths).expect("path"),
             Path::new("onnxruntime_maa.dll")
         );
+    }
+
+    #[test]
+    fn rejects_runtime_library_list_without_onnxruntime_name() {
+        let paths = vec![
+            PathBuf::from("fastdeploy_ppocr_maa.dll"),
+            PathBuf::from("helper.dll"),
+        ];
+
+        let err =
+            select_onnxruntime_library(&paths).expect_err("missing onnxruntime path rejected");
+
+        assert!(err.contains("did not include an ONNXRuntime library"));
     }
 
     #[test]

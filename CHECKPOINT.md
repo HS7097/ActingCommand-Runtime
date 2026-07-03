@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-07-03 P6.5-A acceptance defect fix
+
+### Current status
+
+- Implemented the acceptance repair task from `C:\合作工作区\ActingCommand\FIX-P6.5-A-acceptance-aea10a4.md`.
+- Remote head before this fix was `bb10374`, a README-only update. Runtime source repair remains anchored to the `aea10a4` P6.5-A closeout baseline.
+- Added `benchmarks/reports/2026-07-03-p65a-acceptance-fix.md` with F1-F12 and H1-H4 status.
+- F1-F12 are implemented.
+- H2 is implemented as oversized FFI response hardening.
+- H1, H3, and H4 are documented as deferred hardening follow-ups.
+- No upstream source, upstream binaries, OCR models, resource repository data, UI, SQLite, scheduler behavior, device live operation, or game logic was added.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/onnx-provider-support/Cargo.toml`
+- `crates/onnx-provider-support/src/lib.rs`
+- `crates/device/src/discovery.rs`
+- `crates/vision-ffi/src/ffi.rs`
+- `crates/vision-ffi/src/lib.rs`
+- `providers/onnxruntime-json/Cargo.toml`
+- `providers/onnxruntime-json/src/lib.rs`
+- `providers/ppocr-onnx-json/Cargo.toml`
+- `providers/ppocr-onnx-json/src/lib.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/project_interface.rs`
+- `apps/vision-provider-check/src/main.rs`
+- `benchmarks/reports/2026-07-03-p65a-acceptance-fix.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- Read `C:\合作工作区\ActingCommand\FIX-P6.5-A-acceptance-aea10a4.md`.
+- Read Runtime-local `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`.
+- Checked `%LOCALAPPDATA%\ActingCommand\actinglab\config.json`; it was not present before final validation.
+- Targeted pre-validation: `cargo test -p actingcommand-device -p actingcommand-actinglab -p actingcommand-vision-ffi -p actingcommand-vision-provider-check -p actingcommand-onnx-provider-support -p actingcommand-ppocr-onnx-json-provider -p actingcommand-onnxruntime-json-provider`.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Targeted pre-validation passed for device discovery, ActingLab, vision FFI, provider-check, ONNX provider support, PPOCR ONNX provider, and ONNXRuntime JSON provider tests.
+- `discovery_falls_back_to_existing_nx_main_adb_when_sibling_missing`: passed.
+- `discovery_prefers_existing_sibling_adb`: passed.
+- `discovery_recovers_mumu_player_instance_from_non_final_segment`: passed.
+- `discovery_skips_invalid_dash_v_without_aliasing_to_zero`: passed.
+- `watchdog_reports_early_cancel_before_timeout`: passed.
+- `ort_runtime_initializer_is_idempotent_under_concurrency`: passed.
+- `session_cache_loads_same_path_once`: passed.
+- `rejects_runtime_library_list_without_onnxruntime_name`: passed.
+- `vision_frame_serializes_pixels_as_base64_not_number_array`: passed.
+- `base64_pixel_payload_stays_near_raw_frame_size`: passed.
+- `project_interface_rejects_misspelled_default_key`: passed.
+- `project_interface_rejects_null_default`: passed.
+- `project_interface_rejects_bad_preset_operation_reference_at_load_time`: passed.
+- `project_interface_rejects_bad_preset_recognition_reference_at_load_time`: passed.
+- `export_audit_missing_expected_symbol_fails_run_gate`: passed.
+- `artifact_lock_verify_reports_mismatch`: passed.
+- `pe_export_parser_rejects_too_small_optional_header`: passed.
+- `pe_export_parser_rejects_overflowing_rva_range`: passed.
+- `pe_export_parser_rejects_truncated_name_table`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo build --release`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed after replacing the manual base64 length modulus check with `is_multiple_of`.
+- `cargo test --workspace`: passed.
+- `git diff --check`: passed.
+
+### Current blocker
+
+- No current implementation blocker.
+- GitHub CI is still pending until the pushed commit runs.
+
+### Next step
+
+1. Commit and push the acceptance fix with planning/checkpoint updates.
+2. Watch GitHub Actions for the pushed commit.
+
 ## 2026-07-02 P6.5-A MaaFramework fusion chain closeout
 
 ### Current status
@@ -34,7 +118,7 @@
 ### Test results
 
 - P0 evidence: `fallback_skipped_on_serious_input_error`, `fallback_on_transient_backend_failure`, `fallback_records_full_context`, `fixed_priority_fails_loud_when_all_backends_fail`.
-- A2 evidence: `capture_autotune_caches_probe`, `capture_static_page_same_hash_does_not_switch`, `capture_switches_backend_after_expected_change_stall`.
+- A2 evidence: `capture_autotune_caches_probe`, `capture_static_page_same_hash_does_not_switch`, `capture_expected_change_stall_marks_stale_without_runtime_switch`.
 - A1.1 evidence: `minitouch_in_priority_chain`, `minitouch_transient_failure_degrades`.
 - A3 evidence: `discovery_lists_running_mumu_serials`.
 - B evidence: `recovery_follows_on_error_edge`, `recovery_wait_freezes_waits_until_stable`, `recovery_stops_at_max_attempts`.
@@ -1523,7 +1607,7 @@
 - `cargo test -p actingcommand-device capture_autotune_caches_probe`
 - `cargo test -p actingcommand-device capture_autotune_cache_expires_after_ttl`
 - `cargo test -p actingcommand-actinglab capture_static_page_same_hash_does_not_switch`
-- `cargo test -p actingcommand-actinglab capture_switches_backend_after_expected_change_stall`
+- `cargo test -p actingcommand-actinglab capture_expected_change_stall_marks_stale_without_runtime_switch`
 - `cargo test -p actingcommand-actinglab fresh_auto_probe_prefers_fast_backends_before_adb`
 - `cargo test -p actingcommand-device`
 - `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
@@ -1540,7 +1624,7 @@
 - `capture_autotune_caches_probe`: passed.
 - `capture_autotune_cache_expires_after_ttl`: passed.
 - `capture_static_page_same_hash_does_not_switch`: passed.
-- `capture_switches_backend_after_expected_change_stall`: passed.
+- `capture_expected_change_stall_marks_stale_without_runtime_switch`: passed.
 - `fresh_auto_probe_prefers_fast_backends_before_adb`: passed.
 - `cargo test -p actingcommand-device`: passed, 45 tests.
 - `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`: passed.

@@ -102,6 +102,7 @@ pub struct VisionFrame {
     pub width: u32,
     pub height: u32,
     pub pixel_format: VisionPixelFormat,
+    #[serde(with = "base64_pixels")]
     pub pixels: Vec<u8>,
 }
 
@@ -366,6 +367,94 @@ fn validate_frame_pixels(
         ));
     }
     Ok(())
+}
+
+mod base64_pixels {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn serialize<S>(pixels: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&encode(pixels))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        decode(&encoded).map_err(D::Error::custom)
+    }
+
+    fn encode(bytes: &[u8]) -> String {
+        let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = chunk.get(1).copied().unwrap_or(0);
+            let b2 = chunk.get(2).copied().unwrap_or(0);
+            output.push(TABLE[(b0 >> 2) as usize] as char);
+            output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+            } else {
+                output.push('=');
+            }
+            if chunk.len() > 2 {
+                output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+            } else {
+                output.push('=');
+            }
+        }
+        output
+    }
+
+    fn decode(encoded: &str) -> Result<Vec<u8>, String> {
+        if !encoded.len().is_multiple_of(4) {
+            return Err("base64 pixel payload length must be a multiple of 4".to_string());
+        }
+        let bytes = encoded.as_bytes();
+        let mut output = Vec::with_capacity(encoded.len() / 4 * 3);
+        for quartet in bytes.chunks(4) {
+            let v0 = decode_value(quartet[0])?;
+            let v1 = decode_value(quartet[1])?;
+            let pad2 = quartet[2] == b'=';
+            let pad3 = quartet[3] == b'=';
+            let v2 = if pad2 { 0 } else { decode_value(quartet[2])? };
+            let v3 = if pad3 { 0 } else { decode_value(quartet[3])? };
+            if pad2 && !pad3 {
+                return Err("base64 pixel payload has invalid padding".to_string());
+            }
+            output.push((v0 << 2) | (v1 >> 4));
+            if !pad2 {
+                output.push(((v1 & 0b0000_1111) << 4) | (v2 >> 2));
+            }
+            if !pad3 {
+                output.push(((v2 & 0b0000_0011) << 6) | v3);
+            }
+        }
+        Ok(output)
+    }
+
+    fn decode_value(byte: u8) -> Result<u8, String> {
+        match byte {
+            b'A'..=b'Z' => Ok(byte - b'A'),
+            b'a'..=b'z' => Ok(byte - b'a' + 26),
+            b'0'..=b'9' => Ok(byte - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(format!(
+                "base64 pixel payload contains invalid byte 0x{byte:02x}"
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn encoded_len(bytes: &[u8]) -> usize {
+        encode(bytes).len()
+    }
 }
 
 fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> VisionFfiResult<()> {
@@ -666,6 +755,27 @@ mod tests {
 
         assert_eq!(result.backend, VisionBackendKind::OnnxRuntime);
         assert_eq!(result.labels[0].label, "home");
+    }
+
+    #[test]
+    fn vision_frame_serializes_pixels_as_base64_not_number_array() {
+        let frame =
+            VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, (0_u8..12).collect()).expect("frame");
+
+        let json = serde_json::to_string(&frame).expect("serialize");
+        let decoded: VisionFrame = serde_json::from_str(&json).expect("deserialize");
+
+        assert!(json.contains(r#""pixels":"AAECAwQFBgcICQoL""#));
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn base64_pixel_payload_stays_near_raw_frame_size() {
+        let pixels = vec![7_u8; 1920 * 1080 * 3];
+
+        let encoded_len = base64_pixels::encoded_len(&pixels);
+
+        assert!(encoded_len <= pixels.len() * 3 / 2);
     }
 
     fn test_frame() -> VisionFrame {

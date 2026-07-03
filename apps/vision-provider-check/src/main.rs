@@ -5,9 +5,10 @@ use actingcommand_vision_ffi::{
     OcrInferenceRequest, OnnxRuntimeArtifacts, OnnxRuntimeBackend, VisionFfiError, VisionFfiResult,
     VisionFrame, VisionPixelFormat, VisionProviderArtifactManifest, VisionRect,
     validate_fastdeploy_ppocr_provider_abi, validate_onnxruntime_provider_abi,
+    validate_runtime_library_loadable,
 };
 use image::ImageFormat;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, File};
@@ -35,6 +36,7 @@ enum CheckMode {
     },
     ArtifactLock {
         out: Option<PathBuf>,
+        expected: Option<PathBuf>,
     },
     AbiCheck,
     ExportAudit {
@@ -106,19 +108,19 @@ struct FrameReport {
     pixel_format: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ArtifactLockReport {
     ok: bool,
     schema_version: String,
-    backend: &'static str,
+    backend: String,
     total_size_bytes: u64,
     artifacts: Vec<ArtifactLockEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ArtifactLockEntry {
-    backend: &'static str,
-    role: &'static str,
+    backend: String,
+    role: String,
     path: String,
     size_bytes: u64,
     sha256: String,
@@ -163,15 +165,26 @@ where
     I: IntoIterator<Item = String>,
 {
     let options = parse_args(args)?;
+    let mut gate_failure = None;
     let json = match &options.mode {
         CheckMode::Manifest => serde_json::to_string_pretty(&build_report(&options)?),
         CheckMode::OcrSmoke { .. } => serde_json::to_string_pretty(&run_ocr_smoke(&options)?),
         CheckMode::NnSmoke { .. } => serde_json::to_string_pretty(&run_nn_smoke(&options)?),
         CheckMode::ArtifactLock { .. } => {
-            serde_json::to_string_pretty(&run_artifact_lock(&options)?)
+            let report = run_artifact_lock(&options)?;
+            if !report.ok {
+                gate_failure = Some("artifact lock verification failed");
+            }
+            serde_json::to_string_pretty(&report)
         }
         CheckMode::AbiCheck => serde_json::to_string_pretty(&run_abi_check(&options)?),
-        CheckMode::ExportAudit { .. } => serde_json::to_string_pretty(&run_export_audit(&options)?),
+        CheckMode::ExportAudit { .. } => {
+            let report = run_export_audit(&options)?;
+            if !report.ok {
+                gate_failure = Some("export audit failed");
+            }
+            serde_json::to_string_pretty(&report)
+        }
     }
     .map_err(|err| {
         VisionFfiError::fatal(
@@ -180,6 +193,9 @@ where
         )
     })?;
     println!("{json}");
+    if let Some(message) = gate_failure {
+        return Err(VisionFfiError::fatal("vision-provider-check", message));
+    }
     Ok(())
 }
 
@@ -200,6 +216,7 @@ where
     let mut export_expectation = ExportExpectation::None;
     let mut backend_set = false;
     let mut lock_out = None;
+    let mut lock_expected = None;
     let mut args = args.into_iter();
 
     while let Some(arg) = args.next() {
@@ -264,6 +281,7 @@ where
                 nn_model_id = Some(value);
             }
             "--artifact-lock" => artifact_lock = true,
+            "--lock-verify" => artifact_lock = true,
             "--abi-check" => abi_check = true,
             "--export-audit" => {
                 let value = args.next().ok_or_else(|| {
@@ -292,6 +310,16 @@ where
                 })?;
                 artifact_lock = true;
                 lock_out = Some(PathBuf::from(value));
+            }
+            "--expected" => {
+                let value = args.next().ok_or_else(|| {
+                    VisionFfiError::fatal(
+                        "vision-provider-check",
+                        "--expected requires a pinned artifact lock JSON path",
+                    )
+                })?;
+                artifact_lock = true;
+                lock_expected = Some(PathBuf::from(value));
             }
             "--help" | "-h" => {
                 return Err(VisionFfiError::fatal("vision-provider-check", usage()));
@@ -331,10 +359,12 @@ where
             "--export-audit cannot be used with --artifact-lock, --abi-check, --ocr-frame, or --nn-frame",
         ));
     }
-    if export_audit.is_some() && (backend_set || require_existing || lock_out.is_some()) {
+    if export_audit.is_some()
+        && (backend_set || require_existing || lock_out.is_some() || lock_expected.is_some())
+    {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
-            "--export-audit cannot be used with --backend, --require-existing, or --lock-out",
+            "--export-audit cannot be used with --backend, --require-existing, --lock-out, or --expected",
         ));
     }
     if export_audit.is_none() && export_expectation != ExportExpectation::None {
@@ -374,7 +404,10 @@ where
             expectation: export_expectation,
         },
         (None, true, false, None, None) => CheckMode::AbiCheck,
-        (None, false, true, None, None) => CheckMode::ArtifactLock { out: lock_out },
+        (None, false, true, None, None) => CheckMode::ArtifactLock {
+            out: lock_out,
+            expected: lock_expected,
+        },
         (None, false, false, Some(frame), None) => CheckMode::OcrSmoke {
             frame,
             region: ocr_region,
@@ -561,7 +594,7 @@ fn run_nn_smoke(
 }
 
 fn run_artifact_lock(options: &CheckOptions) -> VisionFfiResult<ArtifactLockReport> {
-    let CheckMode::ArtifactLock { out } = &options.mode else {
+    let CheckMode::ArtifactLock { out, expected } = &options.mode else {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
             "artifact lock was called without --artifact-lock",
@@ -585,17 +618,59 @@ fn run_artifact_lock(options: &CheckOptions) -> VisionFfiResult<ArtifactLockRepo
     }
 
     let total_size_bytes = artifacts.iter().map(|entry| entry.size_bytes).sum();
-    let report = ArtifactLockReport {
+    let mut report = ArtifactLockReport {
         ok: true,
         schema_version: manifest.schema_version,
-        backend: options.backend.as_str(),
+        backend: options.backend.as_str().to_string(),
         total_size_bytes,
         artifacts,
     };
+    if let Some(expected_path) = expected {
+        let diffs = artifact_lock_diffs(&report, expected_path)?;
+        report.ok = diffs.is_empty();
+    }
     if let Some(path) = out {
         write_json_file(path, &report)?;
     }
     Ok(report)
+}
+
+fn artifact_lock_diffs(
+    current: &ArtifactLockReport,
+    expected_path: &Path,
+) -> VisionFfiResult<Vec<String>> {
+    let expected_text = fs::read_to_string(expected_path).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to read expected artifact lock {}: {err}",
+                expected_path.display()
+            ),
+        )
+    })?;
+    let expected: ArtifactLockReport = serde_json::from_str(&expected_text).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!(
+                "failed to parse expected artifact lock {}: {err}",
+                expected_path.display()
+            ),
+        )
+    })?;
+    let mut diffs = Vec::new();
+    if current.schema_version != expected.schema_version {
+        diffs.push("schema_version differs".to_string());
+    }
+    if current.backend != expected.backend {
+        diffs.push("backend differs".to_string());
+    }
+    if current.total_size_bytes != expected.total_size_bytes {
+        diffs.push("total_size_bytes differs".to_string());
+    }
+    if current.artifacts != expected.artifacts {
+        diffs.push("artifact entries differ".to_string());
+    }
+    Ok(diffs)
 }
 
 fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
@@ -615,6 +690,9 @@ fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
         let artifacts = manifest.require_fastdeploy_ppocr()?;
         artifacts.validate_existing_files()?;
         validate_fastdeploy_ppocr_provider_abi(&artifacts.provider_library_path)?;
+        for runtime_library in &artifacts.runtime_library_paths {
+            validate_runtime_library_loadable("fastdeploy-ppocr-runtime", runtime_library)?;
+        }
         backends.push(ProviderAbiReport {
             id: "fastdeploy_ppocr",
             provider_library_path: path_string(&artifacts.provider_library_path),
@@ -632,6 +710,9 @@ fn run_abi_check(options: &CheckOptions) -> VisionFfiResult<AbiCheckReport> {
         let artifacts = manifest.require_onnxruntime()?;
         artifacts.validate_existing_files()?;
         validate_onnxruntime_provider_abi(&artifacts.provider_library_path)?;
+        if let Some(runtime_library) = &artifacts.runtime_library_path {
+            validate_runtime_library_loadable("onnxruntime-runtime", runtime_library)?;
+        }
         backends.push(ProviderAbiReport {
             id: "onnxruntime",
             provider_library_path: path_string(&artifacts.provider_library_path),
@@ -710,7 +791,12 @@ fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
             "PE export audit input is not an MZ executable",
         ));
     }
-    let pe_offset = read_u32(bytes, 0x3c)? as usize;
+    let pe_offset = usize::try_from(read_u32(bytes, 0x3c)?).map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE header offset cannot fit usize: {err}"),
+        )
+    })?;
     require_range(bytes, pe_offset, 24, "PE header")?;
     if &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
         return Err(VisionFfiError::fatal(
@@ -718,10 +804,16 @@ fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
             "PE export audit input is missing PE signature",
         ));
     }
-    let coff_offset = pe_offset + 4;
-    let section_count = read_u16(bytes, coff_offset + 2)? as usize;
-    let optional_header_size = read_u16(bytes, coff_offset + 16)? as usize;
-    let optional_offset = coff_offset + 20;
+    let coff_offset = checked_add(pe_offset, 4, "COFF header offset")?;
+    let section_count = usize::from(read_u16(
+        bytes,
+        checked_add(coff_offset, 2, "section count offset")?,
+    )?);
+    let optional_header_size = usize::from(read_u16(
+        bytes,
+        checked_add(coff_offset, 16, "optional header size offset")?,
+    )?);
+    let optional_offset = checked_add(coff_offset, 20, "optional header offset")?;
     require_range(
         bytes,
         optional_offset,
@@ -730,8 +822,8 @@ fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
     )?;
     let magic = read_u16(bytes, optional_offset)?;
     let data_directory_offset = match magic {
-        0x10b => optional_offset + 96,
-        0x20b => optional_offset + 112,
+        0x10b => checked_add(optional_offset, 96, "PE32 data directory offset")?,
+        0x20b => checked_add(optional_offset, 112, "PE32+ data directory offset")?,
         _ => {
             return Err(VisionFfiError::fatal(
                 "vision-provider-check",
@@ -740,24 +832,49 @@ fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
         }
     };
     require_range(bytes, data_directory_offset, 8, "PE export data directory")?;
+    require_subrange(
+        optional_offset,
+        optional_header_size,
+        data_directory_offset,
+        8,
+        "PE export data directory",
+    )?;
     let export_rva = read_u32(bytes, data_directory_offset)?;
     if export_rva == 0 {
         return Ok(Vec::new());
     }
-    let section_table_offset = optional_offset + optional_header_size;
+    let section_table_offset = checked_add(
+        optional_offset,
+        optional_header_size,
+        "PE section table offset",
+    )?;
+    let section_table_len = checked_mul(section_count, 40, "PE section table length")?;
     require_range(
         bytes,
         section_table_offset,
-        section_count.saturating_mul(40),
+        section_table_len,
         "PE section table",
     )?;
     let mut sections = Vec::with_capacity(section_count);
     for index in 0..section_count {
-        let section_offset = section_table_offset + index * 40;
-        let virtual_size = read_u32(bytes, section_offset + 8)?;
-        let virtual_address = read_u32(bytes, section_offset + 12)?;
-        let raw_size = read_u32(bytes, section_offset + 16)?;
-        let raw_pointer = read_u32(bytes, section_offset + 20)?;
+        let section_offset = checked_add(
+            section_table_offset,
+            checked_mul(index, 40, "PE section offset")?,
+            "PE section offset",
+        )?;
+        let virtual_size = read_u32(
+            bytes,
+            checked_add(section_offset, 8, "section virtual size")?,
+        )?;
+        let virtual_address = read_u32(
+            bytes,
+            checked_add(section_offset, 12, "section virtual address")?,
+        )?;
+        let raw_size = read_u32(bytes, checked_add(section_offset, 16, "section raw size")?)?;
+        let raw_pointer = read_u32(
+            bytes,
+            checked_add(section_offset, 20, "section raw pointer")?,
+        )?;
         sections.push(PeSection {
             virtual_address,
             size: virtual_size.max(raw_size),
@@ -767,22 +884,37 @@ fn parse_pe_exports(bytes: &[u8]) -> VisionFfiResult<Vec<String>> {
 
     let export_offset = rva_to_offset(export_rva, &sections)?;
     require_range(bytes, export_offset, 40, "PE export directory")?;
-    let name_count = read_u32(bytes, export_offset + 24)? as usize;
-    let names_rva = read_u32(bytes, export_offset + 32)?;
+    let name_count = usize::try_from(read_u32(
+        bytes,
+        checked_add(export_offset, 24, "PE export name count offset")?,
+    )?)
+    .map_err(|err| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export name count cannot fit usize: {err}"),
+        )
+    })?;
+    let names_rva = read_u32(
+        bytes,
+        checked_add(export_offset, 32, "PE export names RVA offset")?,
+    )?;
     if name_count == 0 {
         return Ok(Vec::new());
     }
     let names_offset = rva_to_offset(names_rva, &sections)?;
-    require_range(
-        bytes,
-        names_offset,
-        name_count.saturating_mul(4),
-        "PE export name table",
-    )?;
+    let names_len = checked_mul(name_count, 4, "PE export name table length")?;
+    require_range(bytes, names_offset, names_len, "PE export name table")?;
 
     let mut exports = Vec::with_capacity(name_count);
     for index in 0..name_count {
-        let name_rva = read_u32(bytes, names_offset + index * 4)?;
+        let name_rva = read_u32(
+            bytes,
+            checked_add(
+                names_offset,
+                checked_mul(index, 4, "PE export name RVA offset")?,
+                "PE export name RVA offset",
+            )?,
+        )?;
         let name_offset = rva_to_offset(name_rva, &sections)?;
         exports.push(read_c_string(bytes, name_offset)?);
     }
@@ -799,9 +931,29 @@ struct PeSection {
 
 fn rva_to_offset(rva: u32, sections: &[PeSection]) -> VisionFfiResult<usize> {
     for section in sections {
-        let section_end = section.virtual_address.saturating_add(section.size);
+        let section_end = section
+            .virtual_address
+            .checked_add(section.size)
+            .ok_or_else(|| {
+                VisionFfiError::fatal(
+                    "vision-provider-check",
+                    "PE section virtual address range overflows u32",
+                )
+            })?;
         if rva >= section.virtual_address && rva < section_end {
-            return Ok((section.raw_pointer + (rva - section.virtual_address)) as usize);
+            let delta = rva - section.virtual_address;
+            let offset = section.raw_pointer.checked_add(delta).ok_or_else(|| {
+                VisionFfiError::fatal(
+                    "vision-provider-check",
+                    "PE section raw offset overflows u32",
+                )
+            })?;
+            return usize::try_from(offset).map_err(|err| {
+                VisionFfiError::fatal(
+                    "vision-provider-check",
+                    format!("PE section raw offset cannot fit usize: {err}"),
+                )
+            });
         }
     }
     Err(VisionFfiError::fatal(
@@ -861,6 +1013,42 @@ fn require_range(bytes: &[u8], offset: usize, len: usize, label: &str) -> Vision
         ));
     }
     Ok(())
+}
+
+fn require_subrange(
+    parent_offset: usize,
+    parent_len: usize,
+    offset: usize,
+    len: usize,
+    label: &str,
+) -> VisionFfiResult<()> {
+    let parent_end = checked_add(parent_offset, parent_len, "PE declared parent range")?;
+    let end = checked_add(offset, len, label)?;
+    if offset < parent_offset || end > parent_end {
+        return Err(VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("{label} exceeds the declared PE optional header size"),
+        ));
+    }
+    Ok(())
+}
+
+fn checked_add(left: usize, right: usize, label: &str) -> VisionFfiResult<usize> {
+    left.checked_add(right).ok_or_else(|| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export audit offset overflow while computing {label}"),
+        )
+    })
+}
+
+fn checked_mul(left: usize, right: usize, label: &str) -> VisionFfiResult<usize> {
+    left.checked_mul(right).ok_or_else(|| {
+        VisionFfiError::fatal(
+            "vision-provider-check",
+            format!("PE export audit size overflow while computing {label}"),
+        )
+    })
 }
 
 fn collect_fastdeploy_artifacts(
@@ -964,8 +1152,8 @@ fn lock_entry(
     }
 
     Ok(ArtifactLockEntry {
-        backend,
-        role,
+        backend: backend.to_string(),
+        role: role.to_string(),
         path: path_string(path),
         size_bytes: metadata.len(),
         sha256: hex_sha256(&hasher.finalize()),
@@ -1082,7 +1270,7 @@ impl BackendSelection {
 }
 
 fn usage() -> &'static str {
-    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] | --abi-check]\n       actingcommand-vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]"
+    "Usage: actingcommand-vision-provider-check --manifest <path> [--backend all|fastdeploy_ppocr|onnxruntime] [--require-existing] [--ocr-frame <png> [--ocr-region x,y,width,height] | --nn-frame <png> [--nn-model-id <id>] | --artifact-lock [--lock-out <json>] [--expected <lock.json>] | --abi-check]\n       actingcommand-vision-provider-check --export-audit <dll> [--expect none|fastdeploy_ppocr_provider|onnxruntime_provider]"
 }
 
 #[cfg(test)]
@@ -1198,7 +1386,28 @@ mod tests {
         assert_eq!(
             options.mode,
             CheckMode::ArtifactLock {
-                out: Some(PathBuf::from("lock.json"))
+                out: Some(PathBuf::from("lock.json")),
+                expected: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_artifact_lock_verify_with_expected_path() {
+        let options = parse_args([
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--artifact-lock".to_string(),
+            "--expected".to_string(),
+            "expected-lock.json".to_string(),
+        ])
+        .expect("parse");
+
+        assert_eq!(
+            options.mode,
+            CheckMode::ArtifactLock {
+                out: None,
+                expected: Some(PathBuf::from("expected-lock.json")),
             }
         );
     }
@@ -1493,7 +1702,10 @@ mod tests {
             manifest,
             backend: BackendSelection::OnnxRuntime,
             require_existing: false,
-            mode: CheckMode::ArtifactLock { out: None },
+            mode: CheckMode::ArtifactLock {
+                out: None,
+                expected: None,
+            },
         })
         .expect("artifact lock");
 
@@ -1549,14 +1761,17 @@ mod tests {
             manifest,
             backend: BackendSelection::FastDeployPpocr,
             require_existing: false,
-            mode: CheckMode::ArtifactLock { out: None },
+            mode: CheckMode::ArtifactLock {
+                out: None,
+                expected: None,
+            },
         })
         .expect("artifact lock");
 
         let roles: Vec<_> = report
             .artifacts
             .iter()
-            .map(|artifact| artifact.role)
+            .map(|artifact| artifact.role.as_str())
             .collect();
         assert_eq!(
             roles,
@@ -1611,6 +1826,7 @@ mod tests {
             require_existing: false,
             mode: CheckMode::ArtifactLock {
                 out: Some(out.clone()),
+                expected: None,
             },
         })
         .expect("artifact lock");
@@ -1618,6 +1834,87 @@ mod tests {
         let written = fs::read_to_string(&out).expect("lock report");
         assert!(written.contains("\"total_size_bytes\": 5"));
         assert!(written.contains("\"sha256\""));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn artifact_lock_verify_reports_mismatch() {
+        let root = temp_fixture_dir("artifact-lock-verify");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        write_artifact(&artifacts.join("provider.dll"), b"nn");
+        write_artifact(&artifacts.join("runtime.dll"), b"rt");
+        write_artifact(&artifacts.join("model.onnx"), b"x");
+        let manifest = root.join("manifest.json");
+        let expected = root.join("expected.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": null,
+                    "onnxruntime": {{
+                        "provider_library_path": "{}",
+                        "runtime_library_path": "{}",
+                        "model_path": "{}",
+                        "labels": ["home"],
+                        "labels_path": null,
+                        "execution_provider": "cpu",
+                        "default_timeout_ms": 1000
+                    }}
+                }}"#,
+                json_path(&artifacts.join("provider.dll")),
+                json_path(&artifacts.join("runtime.dll")),
+                json_path(&artifacts.join("model.onnx")),
+            ),
+        )
+        .expect("manifest");
+        fs::write(
+            &expected,
+            r#"{
+                "ok": true,
+                "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                "backend": "onnxruntime",
+                "total_size_bytes": 999,
+                "artifacts": []
+            }"#,
+        )
+        .expect("expected");
+
+        let report = run_artifact_lock(&CheckOptions {
+            manifest,
+            backend: BackendSelection::OnnxRuntime,
+            require_existing: false,
+            mode: CheckMode::ArtifactLock {
+                out: None,
+                expected: Some(expected),
+            },
+        })
+        .expect("artifact lock report");
+
+        assert!(!report.ok);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn export_audit_missing_expected_symbol_fails_run_gate() {
+        let root = temp_fixture_dir("export-audit-run-gate");
+        let library = root.join("runtime.dll");
+        fs::write(
+            &library,
+            synthetic_pe_with_exports(&["ac_vision_free_buffer"]),
+        )
+        .expect("synthetic PE");
+
+        let err = run([
+            "--export-audit".to_string(),
+            library.display().to_string(),
+            "--expect".to_string(),
+            "fastdeploy_ppocr_provider".to_string(),
+        ])
+        .expect_err("missing expected export must fail the process gate");
+
+        assert!(err.message().contains("export audit failed"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1700,6 +1997,43 @@ mod tests {
                 "ac_vision_free_buffer".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn pe_export_parser_rejects_too_small_optional_header() {
+        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        write_u16(&mut bytes, 0x84 + 16, 64);
+
+        let err = parse_pe_exports(&bytes).expect_err("small optional header rejected");
+
+        assert!(err.message().contains("optional header size"));
+    }
+
+    #[test]
+    fn pe_export_parser_rejects_overflowing_rva_range() {
+        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        let optional = 0x84 + 20;
+        let data_directory = optional + 112;
+        let section = optional + 240;
+        write_u32(&mut bytes, data_directory, 0xffff_fff0);
+        write_u32(&mut bytes, section + 8, 0x100);
+        write_u32(&mut bytes, section + 12, 0xffff_fff0);
+        write_u32(&mut bytes, section + 16, 0x100);
+        write_u32(&mut bytes, section + 20, 0x200);
+
+        let err = parse_pe_exports(&bytes).expect_err("overflowing RVA rejected");
+
+        assert!(err.message().contains("overflows"));
+    }
+
+    #[test]
+    fn pe_export_parser_rejects_truncated_name_table() {
+        let mut bytes = synthetic_pe_with_exports(&["ac_vision_free_buffer"]);
+        bytes.truncate(0x241);
+
+        let err = parse_pe_exports(&bytes).expect_err("truncated PE rejected");
+
+        assert!(err.message().contains("input ended"));
     }
 
     #[test]

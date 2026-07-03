@@ -12,6 +12,25 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 - Python runtime is legacy/mock only and lives outside this repository.
 - Go runtime/core is historical reference and benchmark material only and lives outside this repository.
 
+## Current P6.5-A acceptance defect fix
+
+The `FIX-P6.5-A-acceptance-aea10a4.md` acceptance repair is implemented as a focused Runtime hardening pass on top of the README-only remote head `bb10374`.
+
+Scope:
+
+- `benchmarks/reports/2026-07-03-p65a-acceptance-fix.md` records F1-F12 and H1-H4 status.
+- MuMu discovery now falls back only to existing adb candidates and no longer aliases invalid instance ids to `0`.
+- `apps/vision-provider-check` now treats failed export-audit and artifact-lock checks as process-gate failures, supports expected artifact-lock diffing, validates configured runtime libraries during ABI checks, and uses checked PE export parsing.
+- ONNXRuntime provider lifecycle support is shared through `crates/onnx-provider-support`, including idempotent runtime initialization, cancelable inference watchdogs, and mutex-protected session caching.
+- `providers/onnxruntime-json` and `providers/ppocr-onnx-json` now use cancelable watchdogs instead of detached timeout sleepers.
+- PPOCR ONNX sessions are cached behind mutexes and ONNXRuntime DLL selection fails loudly when no onnxruntime-named path is configured.
+- `VisionFrame.pixels` now serializes JSON payloads as base64 instead of JSON byte arrays.
+- `ProjectInterface` now rejects unknown fields, null option defaults, and invalid preset references at load time.
+- A2 is recorded as startup/request-level capture probing plus visible stale-frame diagnostics only; persistent runtime backend switching is deferred and the unused `switch_backend` decision field is removed.
+- H2 FFI oversized-response hardening is included. H1, H3, and H4 remain documented follow-ups.
+
+This acceptance fix does not add upstream source, upstream binaries, OCR models, resource repository data, UI, SQLite, scheduler behavior, device live operation, or game logic.
+
 ## Current P6.5-A MaaFramework fusion chain closeout
 
 The `TASK-P6.5-A-maa-fusion-chain.md` Runtime source-level gate is closed as of 2026-07-02.
@@ -181,7 +200,7 @@ Scope:
 - `auto-fastest` probes or uses cached probe results across the same bounded backend set and selects the lowest elapsed successful backend.
 - `CaptureBackendName` reserves ADB-side `adb_screencap_encode` and `adb_screencap_raw_gzip` names for the ADB encode/raw-gzip lane; these modes are not active capture implementations in this unit.
 - Capture freshness classification is context-aware: static unchanged frames are not treated as stale unless the caller explicitly expects a change.
-- Expected-change freshness checks still classify unchanged consecutive frames as stale and request a backend switch/recovery path.
+- Expected-change freshness checks still classify unchanged consecutive frames as stale and report visible diagnostics. Startup/request-level fresh probing is supported; persistent runtime backend switching is deferred.
 - Capture diagnose preserves `--require-fresh` through session request routing.
 
 A2 is complete and remains limited to capture autotune/freshness plumbing. It does not add Minitouch, recovery execution, OCR, NN, replay, ProjectInterface, UI, SQLite, resources, game logic, upstream source copying, or new external binaries.

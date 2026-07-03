@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectInterface {
     pub schema_version: String,
     pub project_id: String,
@@ -26,6 +27,7 @@ pub struct ProjectInterface {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectOption {
     #[serde(default)]
     pub default: Value,
@@ -34,6 +36,7 @@ pub struct ProjectOption {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectPreset {
     #[serde(default)]
     pub options: BTreeMap<String, Value>,
@@ -44,6 +47,7 @@ pub struct ProjectPreset {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OperationSpec {
     pub task_path: String,
     #[serde(default)]
@@ -51,6 +55,7 @@ pub struct OperationSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecognitionSpec {
     #[serde(default)]
     pub pack_path: Option<String>,
@@ -185,6 +190,43 @@ fn validate_interface(interface: &ProjectInterface) -> ProjectInterfaceResult<()
             return Err(ProjectInterfaceError::fatal(format!(
                 "project interface recognition '{id}' must declare pack_path or page_set_path"
             )));
+        }
+    }
+    for (id, option) in &interface.options {
+        if id.trim().is_empty() {
+            return Err(ProjectInterfaceError::fatal(
+                "project interface option id must not be empty",
+            ));
+        }
+        if option.default.is_null() {
+            return Err(ProjectInterfaceError::fatal(format!(
+                "project interface option '{id}' default must not be null"
+            )));
+        }
+        validate_option_value(interface, id, &option.default)?;
+    }
+    for (id, preset) in &interface.presets {
+        if id.trim().is_empty() {
+            return Err(ProjectInterfaceError::fatal(
+                "project interface preset id must not be empty",
+            ));
+        }
+        if let Some(operation_id) = &preset.operation
+            && !interface.operations.contains_key(operation_id)
+        {
+            return Err(ProjectInterfaceError::fatal(format!(
+                "project interface preset '{id}' references missing operation '{operation_id}'"
+            )));
+        }
+        for recognition_id in &preset.recognition {
+            if !interface.recognition.contains_key(recognition_id) {
+                return Err(ProjectInterfaceError::fatal(format!(
+                    "project interface preset '{id}' references missing recognition '{recognition_id}'"
+                )));
+            }
+        }
+        for (option_id, value) in &preset.options {
+            validate_option_value(interface, option_id, value)?;
         }
     }
     Ok(())
@@ -356,6 +398,99 @@ mod tests {
             assemble_runnable_config(&interface, &selection).expect_err("missing operation fails");
 
         assert!(error.to_string().contains("operation 'missing' is missing"));
+    }
+
+    #[test]
+    fn project_interface_rejects_misspelled_default_key() {
+        let json = r#"{
+            "schema_version": "actinglab.project_interface.v0.1",
+            "project_id": "ak",
+            "options": {
+                "server": {
+                    "defualt": "cn",
+                    "allowed": ["cn", "jp"]
+                }
+            },
+            "operations": {
+                "daily": { "task_path": "operations/daily/task.json" }
+            }
+        }"#;
+
+        let error = serde_json::from_str::<ProjectInterface>(json)
+            .expect_err("misspelled option key must be rejected");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn project_interface_rejects_null_default() {
+        let mut interface = sample_interface();
+        interface
+            .options
+            .get_mut("server")
+            .expect("server option")
+            .default = Value::Null;
+
+        let error = assemble_runnable_config(
+            &interface,
+            &ProjectSelection {
+                operation: Some("daily".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("null default must be rejected");
+
+        assert!(error.to_string().contains("default must not be null"));
+    }
+
+    #[test]
+    fn project_interface_rejects_bad_preset_operation_reference_at_load_time() {
+        let mut interface = sample_interface();
+        interface
+            .presets
+            .get_mut("daily")
+            .expect("daily preset")
+            .operation = Some("missing".to_string());
+
+        let error = assemble_runnable_config(
+            &interface,
+            &ProjectSelection {
+                operation: Some("daily".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("bad preset operation must be rejected during interface validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("preset 'daily' references missing operation 'missing'")
+        );
+    }
+
+    #[test]
+    fn project_interface_rejects_bad_preset_recognition_reference_at_load_time() {
+        let mut interface = sample_interface();
+        interface
+            .presets
+            .get_mut("daily")
+            .expect("daily preset")
+            .recognition = vec!["missing".to_string()];
+
+        let error = assemble_runnable_config(
+            &interface,
+            &ProjectSelection {
+                operation: Some("daily".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("bad preset recognition must be rejected during interface validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("preset 'daily' references missing recognition 'missing'")
+        );
     }
 
     fn sample_interface() -> ProjectInterface {

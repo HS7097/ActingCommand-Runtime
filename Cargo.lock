@@ -66,9 +66,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-onnx-provider-support"
+version = "0.1.0"
+dependencies = [
+ "ort",
+]
+
+[[package]]
 name = "actingcommand-onnxruntime-json-provider"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-onnx-provider-support",
  "actingcommand-vision-ffi",
  "ort",
  "serde",
@@ -89,6 +97,7 @@ dependencies = [
 name = "actingcommand-ppocr-onnx-json-provider"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-onnx-provider-support",
  "actingcommand-vision-ffi",
  "ort",
  "serde",
