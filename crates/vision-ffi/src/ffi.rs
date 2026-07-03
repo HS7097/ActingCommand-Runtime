@@ -362,6 +362,9 @@ fn take_owned_buffer(
         ));
     }
     if buffer.len > MAX_FFI_RESPONSE_BYTES {
+        // SAFETY: this sane maximum is accident hardening for malformed
+        // provider lengths. A malicious provider is still inside the FFI trust
+        // boundary once its dynamic library is loaded.
         unsafe {
             free_buffer(buffer);
         }
@@ -401,6 +404,23 @@ mod tests {
             .expect_err("oversized buffer must be rejected");
 
         assert!(err.message().contains("oversized response buffer"));
+    }
+
+    #[test]
+    fn runtime_library_loadability_rejects_corrupt_file() {
+        let path = std::env::temp_dir().join(format!(
+            "actingcommand-corrupt-runtime-{}-{}.dll",
+            std::process::id(),
+            "loadability"
+        ));
+        std::fs::write(&path, b"not a dynamic library").expect("corrupt dll fixture");
+
+        let err = validate_runtime_library_loadable("test-runtime", &path)
+            .expect_err("corrupt runtime library rejected");
+
+        assert_eq!(err.module(), "test-runtime");
+        assert!(err.message().contains("failed to load FFI library"));
+        let _ = std::fs::remove_file(path);
     }
 
     unsafe extern "C" fn fake_free_buffer(_buffer: VisionFfiOwnedBuffer) {}

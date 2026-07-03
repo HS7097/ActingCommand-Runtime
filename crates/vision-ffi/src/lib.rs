@@ -770,6 +770,43 @@ mod tests {
     }
 
     #[test]
+    fn vision_frame_rejects_invalid_base64_pixel_payloads() {
+        let cases = [
+            (
+                "length-not-multiple-of-four",
+                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AAA"}"#,
+                "multiple of 4",
+            ),
+            (
+                "invalid-byte",
+                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AA?="}"#,
+                "invalid byte",
+            ),
+            (
+                "invalid-padding",
+                r#"{"width":1,"height":1,"pixel_format":"gray8","pixels":"AA=A"}"#,
+                "invalid padding",
+            ),
+        ];
+
+        for (name, json, expected) in cases {
+            let err: serde_json::Error = serde_json::from_str::<VisionFrame>(json).expect_err(name);
+            assert!(err.to_string().contains(expected), "{name} produced {err}");
+        }
+    }
+
+    #[test]
+    fn vision_frame_round_trips_base64_padding_payload() {
+        let frame = VisionFrame::new(1, 1, VisionPixelFormat::Gray8, vec![42]).expect("frame");
+
+        let json = serde_json::to_string(&frame).expect("serialize");
+        let decoded: VisionFrame = serde_json::from_str(&json).expect("deserialize");
+
+        assert!(json.contains(r#""pixels":"Kg==""#));
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
     fn base64_pixel_payload_stays_near_raw_frame_size() {
         let pixels = vec![7_u8; 1920 * 1080 * 3];
 

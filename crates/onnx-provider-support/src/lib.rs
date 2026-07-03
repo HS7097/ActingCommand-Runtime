@@ -293,4 +293,28 @@ mod tests {
             .expect("early cancel");
         assert_eq!(target.0.load(Ordering::SeqCst), 0);
     }
+
+    #[test]
+    fn watchdog_terminates_after_timeout_without_cancel() {
+        struct FakeTerminator(AtomicUsize);
+
+        impl InferenceTerminator for FakeTerminator {
+            fn terminate_inference(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let target = Arc::new(FakeTerminator(AtomicUsize::new(0)));
+        let watchdog = InferenceWatchdog::start(Arc::clone(&target), Duration::from_millis(5));
+
+        for _ in 0..20 {
+            if target.0.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(target.0.load(Ordering::SeqCst), 1);
+        watchdog.cancel();
+    }
 }

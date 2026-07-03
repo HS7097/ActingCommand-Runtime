@@ -1897,6 +1897,84 @@ mod tests {
     }
 
     #[test]
+    fn artifact_lock_expected_mismatch_fails_run_gate() {
+        let root = temp_fixture_dir("artifact-lock-run-gate");
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts).expect("artifact dir");
+        let provider = artifacts.join("provider.dll");
+        let runtime = artifacts.join("runtime.dll");
+        let model = artifacts.join("model.onnx");
+        write_artifact(&provider, b"nn");
+        write_artifact(&runtime, b"rt");
+        write_artifact(&model, b"x");
+        let manifest = root.join("manifest.json");
+        let expected = root.join("expected.json");
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{
+                    "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+                    "fastdeploy_ppocr": null,
+                    "onnxruntime": {{
+                        "provider_library_path": "{}",
+                        "runtime_library_path": "{}",
+                        "model_path": "{}",
+                        "labels": ["home"],
+                        "labels_path": null,
+                        "execution_provider": "cpu",
+                        "default_timeout_ms": 1000
+                    }}
+                }}"#,
+                json_path(&provider),
+                json_path(&runtime),
+                json_path(&model),
+            ),
+        )
+        .expect("manifest");
+        let report = run_artifact_lock(&CheckOptions {
+            manifest: manifest.clone(),
+            backend: BackendSelection::OnnxRuntime,
+            require_existing: false,
+            mode: CheckMode::ArtifactLock {
+                out: None,
+                expected: None,
+            },
+        })
+        .expect("artifact lock report");
+        fs::write(
+            &expected,
+            serde_json::to_string_pretty(&report).expect("expected report"),
+        )
+        .expect("expected lock");
+
+        run([
+            "--manifest".to_string(),
+            manifest.display().to_string(),
+            "--backend".to_string(),
+            "onnxruntime".to_string(),
+            "--artifact-lock".to_string(),
+            "--expected".to_string(),
+            expected.display().to_string(),
+        ])
+        .expect("matching lock accepted");
+        write_artifact(&model, b"changed");
+
+        let err = run([
+            "--manifest".to_string(),
+            manifest.display().to_string(),
+            "--backend".to_string(),
+            "onnxruntime".to_string(),
+            "--artifact-lock".to_string(),
+            "--expected".to_string(),
+            expected.display().to_string(),
+        ])
+        .expect_err("mismatched lock must fail the process gate");
+
+        assert!(err.message().contains("artifact lock verification failed"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn export_audit_missing_expected_symbol_fails_run_gate() {
         let root = temp_fixture_dir("export-audit-run-gate");
         let library = root.join("runtime.dll");
