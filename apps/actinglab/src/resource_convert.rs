@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const GENERATED_BY: &str = "actinglab resource convert";
-const CONVERTER_SCHEMA_VERSION: &str = "0.4";
+const CONVERTER_SCHEMA_VERSION: &str = "0.5";
+const OUTPUT_SCHEMA_VERSION: &str = "0.5";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 
 pub(super) fn run_resource_convert(
@@ -218,9 +219,12 @@ impl OperationConverter {
     fn validate_bundles(&self) -> CliOutcome<()> {
         let mut errors = Vec::new();
         for bundle in &self.bundles {
-            if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.3") {
+            if !matches!(
+                bundle.data.get("schema_version").and_then(Value::as_str),
+                Some("0.3" | "0.4" | "0.5")
+            ) {
                 errors.push(format!(
-                    "{}: schema_version != 0.3",
+                    "{}: unsupported schema_version, expected 0.3, 0.4, or 0.5",
                     bundle.task_json_path().display()
                 ));
             }
@@ -315,6 +319,7 @@ impl OperationConverter {
                 let target_id = anchor_target_id(&anchor_id);
                 let template = required_string(anchor, "template")?;
                 let target = pack_target(
+                    anchor,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(&template))?,
                     region_to_pack(required_field(anchor, "region")?)?,
@@ -342,6 +347,7 @@ impl OperationConverter {
                 let target_id = required_string(verify_template, "id")?;
                 let template = required_string(verify_template, "template")?;
                 let target = pack_target(
+                    verify_template,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(&template))?,
                     region_to_pack(required_field(verify_template, "region")?)?,
@@ -365,6 +371,7 @@ impl OperationConverter {
                 };
                 let target_id = template_target_id(template);
                 let target = pack_target(
+                    operation,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(template))?,
                     Value::String(FULL_FRAME_SENTINEL.to_string()),
@@ -377,7 +384,10 @@ impl OperationConverter {
         }
         propagate_color_checks(&mut targets, &order);
         Ok(ordered_object([
-            ("schema_version", Value::String("0.3".to_string())),
+            (
+                "schema_version",
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+            ),
             (
                 "converter_schema_version",
                 Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
@@ -432,7 +442,10 @@ impl OperationConverter {
             }
         }
         Ok(ordered_object([
-            ("schema_version", Value::String("0.3".to_string())),
+            (
+                "schema_version",
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+            ),
             (
                 "converter_schema_version",
                 Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
@@ -491,7 +504,10 @@ impl OperationConverter {
         }
         let page_operations = self.build_page_operations()?;
         Ok(ordered_object([
-            ("schema_version", Value::String("0.3".to_string())),
+            (
+                "schema_version",
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+            ),
             (
                 "converter_schema_version",
                 Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
@@ -613,7 +629,10 @@ impl OperationConverter {
             ]));
         }
         Ok(ordered_object([
-            ("schema_version", Value::String("0.3".to_string())),
+            (
+                "schema_version",
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+            ),
             (
                 "converter_schema_version",
                 Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
@@ -684,7 +703,10 @@ impl OperationConverter {
             }
         }
         Ok(ordered_object([
-            ("schema_version", Value::String("0.3".to_string())),
+            (
+                "schema_version",
+                Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+            ),
             (
                 "converter_schema_version",
                 Value::String(CONVERTER_SCHEMA_VERSION.to_string()),
@@ -809,7 +831,15 @@ fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>
     };
     match click.get("kind").and_then(Value::as_str) {
         Some("point") => require_click_keys(path, operation, click, &["x", "y"], errors, "click"),
-        Some("rect") => require_click_keys(
+        Some("long_press") | Some("long_tap") => require_click_keys(
+            path,
+            operation,
+            click,
+            &["x", "y", "duration_ms"],
+            errors,
+            "click",
+        ),
+        Some("rect") | Some("specific_rect") => require_click_keys(
             path,
             operation,
             click,
@@ -817,6 +847,25 @@ fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>
             errors,
             "click",
         ),
+        Some("offset") => {
+            require_click_keys(path, operation, click, &["offset"], errors, "click");
+            let Some(offset) = click.get("offset").and_then(Value::as_object) else {
+                errors.push(format!(
+                    "{}: op {:?} click.offset must be a rect object",
+                    path.display(),
+                    operation.get("id").and_then(Value::as_str)
+                ));
+                return;
+            };
+            require_click_keys(
+                path,
+                operation,
+                offset,
+                &["x", "y", "width", "height"],
+                errors,
+                "click.offset",
+            );
+        }
         Some("drag") => {
             require_click_keys(
                 path,
@@ -873,6 +922,7 @@ fn require_click_keys(
 }
 
 fn pack_target(
+    source: &Value,
     id: &str,
     template_path: &str,
     region: Value,
@@ -889,6 +939,11 @@ fn pack_target(
     ]);
     if let Some(click) = click {
         target.insert("click".to_string(), click);
+    }
+    for key in ["method", "mask", "rect_move"] {
+        if let Some(value) = source.get(key) {
+            target.insert(key.to_string(), value.clone());
+        }
     }
     if let Some(color_check) = color_check {
         target.insert("color_check".to_string(), color_check);
@@ -1105,12 +1160,26 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
                 )),
             ),
         ])),
-        Some("rect") => Ok(ordered_object([
+        Some("long_press") | Some("long_tap") => Ok(ordered_object([
+            ("kind", Value::String("long_press".to_string())),
+            ("x", required_field(click, "x")?.clone()),
+            ("y", required_field(click, "y")?.clone()),
+            ("duration_ms", required_field(click, "duration_ms")?.clone()),
+        ])),
+        Some("rect") | Some("specific_rect") => Ok(ordered_object([
             ("kind", Value::String("rect".to_string())),
             ("x", required_field(click, "x")?.clone()),
             ("y", required_field(click, "y")?.clone()),
             ("width", required_field(click, "width")?.clone()),
             ("height", required_field(click, "height")?.clone()),
+        ])),
+        Some("offset") => Ok(ordered_object([
+            ("kind", Value::String("offset".to_string())),
+            (
+                "target_id",
+                click.get("target_id").cloned().unwrap_or(Value::Null),
+            ),
+            ("offset", required_field(click, "offset")?.clone()),
         ])),
         Some("drag") => Ok(ordered_object([
             ("kind", Value::String("drag".to_string())),
@@ -1396,6 +1465,15 @@ mod tests {
             click_to_navigation(&json!({"kind":"drag","from":{"x":1,"y":2,"width":3,"height":4},"to":{"x":5,"y":6,"width":7,"height":8},"duration_ms":900})).unwrap(),
             json!({"kind":"drag","from":{"x":1,"y":2,"width":3,"height":4},"to":{"x":5,"y":6,"width":7,"height":8},"duration_ms":900})
         );
+        assert_eq!(
+            click_to_navigation(&json!({"kind":"offset","target_id":"page/home","offset":{"x":1,"y":2,"width":3,"height":4}})).unwrap(),
+            json!({"kind":"offset","target_id":"page/home","offset":{"x":1,"y":2,"width":3,"height":4}})
+        );
+        assert_eq!(
+            click_to_navigation(&json!({"kind":"long_press","x":12,"y":34,"duration_ms":700}))
+                .unwrap(),
+            json!({"kind":"long_press","x":12,"y":34,"duration_ms":700})
+        );
     }
 
     #[test]
@@ -1589,7 +1667,7 @@ mod tests {
                 .primitives
                 .get("converter_schema_version")
                 .and_then(Value::as_str),
-            Some("0.4")
+            Some(CONVERTER_SCHEMA_VERSION)
         );
     }
 

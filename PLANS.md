@@ -6,6 +6,29 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current AK MAA data fidelity chain
+
+The active task is `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.
+
+Codex offline implementation status:
+
+- M1 MAA task graph compiler is implemented as a Runtime-owned data-boundary pass. `resource compile-maa` expands MAA task JSON inheritance, explicit and implicit `@` rebasing, and `#` virtual list references without importing or copying the upstream MAA engine.
+- M2 schema `0.5` support is implemented across resource conversion, operation bundle loading, recognition pack loading, page detection loading, and session-record build output while keeping `0.3` and `0.4` compatibility where the existing readers require it.
+- M3 Phase A is implemented. Recognition packs can load `method` and `mask` metadata, count unsupported targets, and fail loudly when unsupported `rgb_count`, `hsv_count`, or mask semantics are evaluated instead of silently treating them as NCC.
+- M4 offset and `specific_rect` click safety is implemented. Offset clicks require guard metadata and use the guard hit rect plus the offset rect; `specific_rect` remains subject to the existing guarded-coordinate requirement unless an explicit reviewed trusted-coordinate opt-in is present.
+- M7 offline record closeout is implemented for schema `0.5`: session recording can build point, drag/swipe, and long-press operations; generated bundles include top-level provenance; and the record-build golden path verifies record -> convert -> package validation plus a recorded navigation edge.
+
+Codex validation status:
+
+- Public local gates passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+- Real AK MAA task-family compile smoke passed against `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` at commit `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`, compiling 3252 raw tasks into 4284 tasks.
+
+Remaining chain gates before the broader CLI entry condition:
+
+- M6 offline calibration and resource-lane re-conversion remain pending outside this Codex source slice.
+- M5 overlay layering remains intentionally non-blocking for CLI entry.
+- M3 Phase B/C masked NCC and RGB/HSV count engines remain future work; Phase A fail-loud handling prevents silent misuse until they are implemented.
+
 ## Current Lab self-heal acceptance repair
 
 The active task is `C:\合作工作区\ActingCommand\FIX-selfheal-chain-acceptance-87c1e4a.md`.

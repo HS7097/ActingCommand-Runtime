@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-03 AK MAA data fidelity Codex slice
+
+### Current status
+
+- Active task: `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.
+- Implemented the Codex offline source slice for the AK MAA data-fidelity chain.
+- M1: added the Runtime-owned MAA task graph compiler and `resource compile-maa`, covering `baseTask`, explicit and implicit `@` rebasing, and `#` virtual references in task list fields. Unresolved references and base-task cycles fail loudly.
+- M2: upgraded generated resource schema output to `0.5`, accepted `0.5` in operation/pack/page readers, and carried `method`, `mask`, and `rect_move` metadata through pack conversion.
+- M3 Phase A: recognition pack loading now preserves unsupported recognition semantics and evaluating `rgb_count`, `hsv_count`, or masked template targets fails loudly instead of silently falling back to NCC.
+- M4: offset clicks now require guard metadata and compute the actual click rect from guard expected rect plus offset; `specific_rect` remains guarded unless explicitly marked trusted.
+- M7: session-record build output now emits schema `0.5`, top-level provenance, drag/swipe and long-press operations, and an offline record -> convert -> package validation golden path with navigation-edge assertion.
+- Public validation passed locally for this Codex source slice.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2ab7ccddd63054ee16d3441ff71683a3feae1a6a`.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `crates/page-detector/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
+- `git fetch origin --prune` in Runtime.
+- `git fetch origin --prune --tags` and `git pull --ff-only` in `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph`
+- `cargo test -p actingcommand-actinglab session_record`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo test -p actingcommand-page-detector`
+- `cargo test -p actingcommand-actinglab offset_click_uses_guard_rect_and_offset_for_actual_point`
+- `cargo test -p actingcommand-actinglab converts_region_and_click_shapes`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark resource compile-maa --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task Home`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab maa_task_graph`: passed with 10 focused tests.
+- `cargo test -p actingcommand-actinglab session_record`: passed with 47 focused tests.
+- `cargo test -p actingcommand-recognition-pack`: passed.
+- `cargo test -p actingcommand-page-detector`: passed.
+- `cargo test -p actingcommand-actinglab offset_click_uses_guard_rect_and_offset_for_actual_point`: passed.
+- `cargo test -p actingcommand-actinglab converts_region_and_click_shapes`: passed.
+- `resource compile-maa` against the refreshed AK resource repo passed: 76 source files, 3252 raw tasks, 4284 compiled tasks, 861 base-task derivations, 705 explicit `@` tasks, 1969 implicit `@` tasks, and 1887 virtual references.
+- `resource convert --dry-run` against the current AK resource repo fails loudly because existing resource data still has unguarded operations such as `home_open_quickswitch` without `verify_template`, guard metadata, or reviewed trusted-coordinate opt-in. This is recorded as a resource-lane blocker rather than a silent pass.
+- Public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
+### Current blocker
+
+- No Codex source-slice blocker remains for M1-M4 plus M7.
+- The broader chain is not fully closed until M6 offline calibration and resource-lane re-conversion update the resource data to satisfy the guarded-coordinate/resource-fidelity requirements.
+- M5 overlay layering and M3 Phase B/C remain non-blocking follow-up work according to the task file.
+
+### Next step
+
+1. Commit and push this Runtime Codex source slice.
+2. Wait for the M6/resource-lane calibration and re-conversion result before marking the full `TASK-AK-maa-data-fidelity.md` chain as complete.
+
 ## 2026-07-03 Lab self-heal acceptance repair R4
 
 ### Current status

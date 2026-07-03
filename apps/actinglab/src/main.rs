@@ -31,6 +31,7 @@ use zip::{ZipArchive, ZipWriter};
 
 mod frame_store;
 mod lab_run;
+mod maa_task_graph;
 mod package_build;
 pub mod project_interface;
 pub mod recovery_exec;
@@ -912,8 +913,23 @@ struct SessionRecordRect {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SessionRecordClick {
-    Coord { x: i32, y: i32 },
-    Target { target: String },
+    Coord {
+        x: i32,
+        y: i32,
+    },
+    Target {
+        target: String,
+    },
+    Swipe {
+        from: SessionRecordRect,
+        to: SessionRecordRect,
+        duration_ms: u64,
+    },
+    LongPress {
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19706,8 +19722,14 @@ fn session_record_build_draft(
             &record.task_id,
         )?;
     }
+    let recorded_at_unix_ms = record
+        .steps
+        .iter()
+        .map(|step| step.created_at_unix_ms)
+        .min()
+        .unwrap_or(record.started_at_unix_ms);
     let bundle = json!({
-        "schema_version": "0.3",
+        "schema_version": "0.5",
         "task_id": record.task_id,
         "game": game,
         "server_scope": [server],
@@ -19732,6 +19754,12 @@ fn session_record_build_draft(
         "operations": operations,
         "provenance": {
             "source": "session_record",
+            "game": game,
+            "server": server,
+            "resolution": {"width": width, "height": height},
+            "recorded_at_unix_ms": recorded_at_unix_ms,
+            "runtime_version": RUNTIME_VERSION,
+            "client_version": flags.optional("--client-version").filter(|value| value != "true"),
             "record_id": record.record_id,
             "record_status": record.status,
             "instance": record.instance,
@@ -19906,6 +19934,22 @@ fn session_record_bundle_click(click: &SessionRecordClick, step_id: &str) -> Cli
             "x": x,
             "y": y
         })),
+        SessionRecordClick::Swipe {
+            from,
+            to,
+            duration_ms,
+        } => Ok(json!({
+            "kind": "drag",
+            "from": from,
+            "to": to,
+            "duration_ms": duration_ms
+        })),
+        SessionRecordClick::LongPress { x, y, duration_ms } => Ok(json!({
+            "kind": "long_press",
+            "x": x,
+            "y": y,
+            "duration_ms": duration_ms
+        })),
         SessionRecordClick::Target { target } => Err(CliError::usage(format!(
             "record build-task cannot build operation '{step_id}' with unresolved target click '{target}'"
         ))),
@@ -19962,6 +20006,13 @@ fn session_record_click_expected_rect(click: &SessionRecordClick) -> CliOutcome<
             "width": 1,
             "height": 1
         })),
+        SessionRecordClick::Swipe { from, .. } => Ok(json!(from)),
+        SessionRecordClick::LongPress { x, y, .. } => Ok(json!({
+            "x": x,
+            "y": y,
+            "width": 1,
+            "height": 1
+        })),
         SessionRecordClick::Target { target } => Err(CliError::usage(format!(
             "record build-task cannot build a guard for unresolved target click '{target}'"
         ))),
@@ -19983,24 +20034,57 @@ fn validate_record_build_operation_clicks(
                 "record build-task operation '{operation_id}' is missing click object"
             )));
         };
-        if click.get("kind").and_then(Value::as_str) != Some("point") {
-            continue;
+        match click.get("kind").and_then(Value::as_str) {
+            Some("point") | Some("long_press") => {
+                let x = click.get("x").and_then(Value::as_i64).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "record build-task operation '{operation_id}' click.x is missing or not an integer"
+                    ))
+                })?;
+                let y = click.get("y").and_then(Value::as_i64).ok_or_else(|| {
+                    CliError::usage(format!(
+                        "record build-task operation '{operation_id}' click.y is missing or not an integer"
+                    ))
+                })?;
+                validate_record_build_point(operation_id, x, y, width, height)?;
+            }
+            Some("drag") => {
+                for key in ["from", "to"] {
+                    let rect = click.get(key).and_then(Value::as_object).ok_or_else(|| {
+                        CliError::usage(format!(
+                            "record build-task operation '{operation_id}' drag.{key} is missing"
+                        ))
+                    })?;
+                    let x = rect.get("x").and_then(Value::as_i64).ok_or_else(|| {
+                        CliError::usage(format!(
+                            "record build-task operation '{operation_id}' drag.{key}.x is missing"
+                        ))
+                    })?;
+                    let y = rect.get("y").and_then(Value::as_i64).ok_or_else(|| {
+                        CliError::usage(format!(
+                            "record build-task operation '{operation_id}' drag.{key}.y is missing"
+                        ))
+                    })?;
+                    validate_record_build_point(operation_id, x, y, width, height)?;
+                }
+            }
+            _ => {}
         }
-        let x = click.get("x").and_then(Value::as_i64).ok_or_else(|| {
-            CliError::usage(format!(
-                "record build-task operation '{operation_id}' click.x is missing or not an integer"
-            ))
-        })?;
-        let y = click.get("y").and_then(Value::as_i64).ok_or_else(|| {
-            CliError::usage(format!(
-                "record build-task operation '{operation_id}' click.y is missing or not an integer"
-            ))
-        })?;
-        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
-            return Err(CliError::usage(format!(
-                "record build-task operation '{operation_id}' click point {x},{y} is outside coordinate_space {width}x{height}"
-            )));
-        }
+    }
+    Ok(())
+}
+
+fn validate_record_build_point(
+    operation_id: &str,
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+) -> CliOutcome<()> {
+    if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
+        return Err(CliError::usage(format!(
+            "record build-task operation '{operation_id}' click point {x},{y} is outside coordinate_space {width}x{height}"
+        )));
     }
     Ok(())
 }
@@ -20253,11 +20337,14 @@ fn new_session_record_color_probe_step(
 
 fn new_session_record_operation_step(flags: &FlagArgs) -> CliOutcome<SessionRecordStepData> {
     let from = required_non_empty_flag(flags, "--from")?;
-    let to = required_non_empty_flag(flags, "--to")?;
+    let to = flags
+        .optional("--to")
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| "null".to_string());
     Ok(SessionRecordStepData::Operation {
         from,
         to: if to == "null" { None } else { Some(to) },
-        click: parse_session_record_click(&flags.required("--click")?)?,
+        click: parse_session_record_operation_click(flags)?,
         destructive: flags.bool("--destructive"),
     })
 }
@@ -21031,6 +21118,58 @@ fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f6
     Ok(Some(parsed))
 }
 
+fn parse_session_record_operation_click(flags: &FlagArgs) -> CliOutcome<SessionRecordClick> {
+    let gesture_flags = [
+        flags.optional("--click").is_some(),
+        flags
+            .optional("--swipe")
+            .or_else(|| flags.optional("--drag"))
+            .is_some(),
+        flags
+            .optional("--long-press")
+            .or_else(|| flags.optional("--long-tap"))
+            .is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if gesture_flags != 1 {
+        return Err(CliError::usage(
+            "record operation requires exactly one of --click, --swipe/--drag, or --long-press/--long-tap",
+        ));
+    }
+    if let Some(click) = flags.optional("--click").filter(|value| value != "true") {
+        return parse_session_record_click(&click);
+    }
+    if let Some(swipe) = flags
+        .optional("--swipe")
+        .or_else(|| flags.optional("--drag"))
+        .filter(|value| value != "true")
+    {
+        let (from, to) = parse_session_record_swipe_rects(&swipe)?;
+        return Ok(SessionRecordClick::Swipe {
+            from,
+            to,
+            duration_ms: parse_record_duration_ms(flags, 500)?,
+        });
+    }
+    if let Some(long_press) = flags
+        .optional("--long-press")
+        .or_else(|| flags.optional("--long-tap"))
+        .filter(|value| value != "true")
+    {
+        let (x, y) = parse_point_pair(&long_press)?;
+        return Ok(SessionRecordClick::LongPress {
+            x,
+            y,
+            duration_ms: parse_record_duration_ms(flags, 700)?,
+        });
+    }
+    Err(CliError::usage(
+        "record operation action parser reached an impossible state",
+    ))
+}
+
 fn parse_session_record_click(value: &str) -> CliOutcome<SessionRecordClick> {
     if value.trim().is_empty() {
         return Err(CliError::usage("--click must not be empty"));
@@ -21042,6 +21181,65 @@ fn parse_session_record_click(value: &str) -> CliOutcome<SessionRecordClick> {
     Ok(SessionRecordClick::Target {
         target: value.to_string(),
     })
+}
+
+fn parse_session_record_swipe_rects(
+    value: &str,
+) -> CliOutcome<(SessionRecordRect, SessionRecordRect)> {
+    let (from, to) = value
+        .split_once("->")
+        .ok_or_else(|| CliError::usage("--swipe must be formatted as x,y,w,h->x,y,w,h"))?;
+    Ok((
+        parse_session_record_rect(from, "--swipe from")?,
+        parse_session_record_rect(to, "--swipe to")?,
+    ))
+}
+
+fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionRecordRect> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return Err(CliError::usage(format!(
+            "{label} must be formatted as x,y,width,height: {value}"
+        )));
+    }
+    let parse = |index: usize, name: &str| {
+        parts[index].parse::<i32>().map_err(|err| {
+            CliError::usage(format!(
+                "failed to parse {label} {name} '{}': {err}",
+                parts[index]
+            ))
+        })
+    };
+    let rect = SessionRecordRect {
+        x: parse(0, "x")?,
+        y: parse(1, "y")?,
+        width: parse(2, "width")?,
+        height: parse(3, "height")?,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(format!(
+            "{label} dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    Ok(rect)
+}
+
+fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> CliOutcome<u64> {
+    let duration_ms = flags
+        .optional("--duration-ms")
+        .filter(|value| value != "true")
+        .map(|value| {
+            value.parse::<u64>().map_err(|err| {
+                CliError::usage(format!("failed to parse --duration-ms '{value}': {err}"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(default_ms);
+    if duration_ms == 0 {
+        return Err(CliError::usage("--duration-ms must be positive"));
+    }
+    Ok(duration_ms)
 }
 
 fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
@@ -21667,6 +21865,7 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
             Ok(validation)
         }
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
+        "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
         "import-alas" | "drift-alas" => {
             let alas_root = flags.required_path("--alas-root")?;
             Ok(json!({
@@ -37289,6 +37488,54 @@ mod tests {
             ],
             true,
         );
+        let swipe = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "mail-swipe-home",
+                "--from",
+                "page/mail",
+                "--to",
+                "page/home",
+                "--swipe",
+                "3,4,2,2->7,8,2,2",
+                "--duration-ms",
+                "650",
+            ],
+            true,
+        );
+        let long_press = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-long-press",
+                "--from",
+                "page/home",
+                "--long-press",
+                "6,7",
+                "--duration-ms",
+                "900",
+            ],
+            true,
+        );
         let build = run_cli(
             [
                 "--json",
@@ -37305,6 +37552,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--client-version",
+                "record-test-client",
             ],
             true,
         );
@@ -37332,6 +37581,18 @@ mod tests {
             serde_json::to_string_pretty(&operation.envelope).unwrap()
         );
         assert_eq!(
+            swipe.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&swipe.envelope).unwrap()
+        );
+        assert_eq!(
+            long_press.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&long_press.envelope).unwrap()
+        );
+        assert_eq!(
             build.exit_code(),
             0,
             "{}",
@@ -37348,11 +37609,11 @@ mod tests {
             data.get("verify_template_count").and_then(Value::as_u64),
             Some(1)
         );
-        assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(data.get("operation_count").and_then(Value::as_u64), Some(3));
         assert_eq!(
             data.pointer("/bundle/schema_version")
                 .and_then(Value::as_str),
-            Some("0.3")
+            Some("0.5")
         );
         assert_eq!(
             data.pointer("/bundle/task_id").and_then(Value::as_str),
@@ -37371,6 +37632,26 @@ mod tests {
             data.pointer("/bundle/coordinate_space/width")
                 .and_then(Value::as_u64),
             Some(12)
+        );
+        assert_eq!(
+            data.pointer("/bundle/provenance/game")
+                .and_then(Value::as_str),
+            Some("arknights")
+        );
+        assert_eq!(
+            data.pointer("/bundle/provenance/server")
+                .and_then(Value::as_str),
+            Some("cn")
+        );
+        assert_eq!(
+            data.pointer("/bundle/provenance/resolution/height")
+                .and_then(Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(
+            data.pointer("/bundle/provenance/client_version")
+                .and_then(Value::as_str),
+            Some("record-test-client")
         );
         assert_eq!(
             data.pointer("/bundle/anchors/0/template")
@@ -37457,6 +37738,41 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(5)
         );
+        assert_eq!(
+            data.pointer("/bundle/operations/1/click/kind")
+                .and_then(Value::as_str),
+            Some("drag")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/1/click/from/x")
+                .and_then(Value::as_i64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/1/click/to/y")
+                .and_then(Value::as_i64),
+            Some(8)
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/1/click/duration_ms")
+                .and_then(Value::as_u64),
+            Some(650)
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/1/guard/expected_rect/x")
+                .and_then(Value::as_i64),
+            Some(3)
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/2/click/kind")
+                .and_then(Value::as_str),
+            Some("long_press")
+        );
+        assert_eq!(
+            data.pointer("/bundle/operations/2/click/duration_ms")
+                .and_then(Value::as_u64),
+            Some(900)
+        );
         assert!(out.join("operations/resources.json").is_file());
         assert!(out.join("operations/daily-check/task.json").is_file());
         assert!(
@@ -37480,6 +37796,18 @@ mod tests {
         assert_eq!(
             written.pointer("/operations/0/id").and_then(Value::as_str),
             Some("home-to-mail")
+        );
+        assert_eq!(
+            written
+                .pointer("/operations/1/click/kind")
+                .and_then(Value::as_str),
+            Some("drag")
+        );
+        assert_eq!(
+            written
+                .pointer("/operations/2/click/kind")
+                .and_then(Value::as_str),
+            Some("long_press")
         );
         assert_eq!(
             written
@@ -37529,6 +37857,38 @@ mod tests {
         assert_eq!(
             packaged_data.get("task_id").and_then(Value::as_str),
             Some("daily-check")
+        );
+        let converted = run_cli(
+            [
+                "--json",
+                "resource",
+                "convert",
+                "--repo",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(
+            converted.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&converted.envelope).unwrap()
+        );
+        let navigation: Value = serde_json::from_str(
+            &fs::read_to_string(out.join("navigation/arknights.cn.navigation.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            navigation
+                .pointer("/navigation/1/id")
+                .and_then(Value::as_str),
+            Some("mail-swipe-home")
+        );
+        assert_eq!(
+            navigation
+                .pointer("/navigation/1/click/kind")
+                .and_then(Value::as_str),
+            Some("drag")
         );
     }
 

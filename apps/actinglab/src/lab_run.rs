@@ -612,6 +612,25 @@ fn execute_lab_run(
                 ctx.action_durations_ms
                     .push(action_started.elapsed().as_millis() as u64);
             }
+            LabInputAction::LongTap { point, duration_ms } => {
+                let action_started = Instant::now();
+                ctx.event(
+                    "long_tap_started",
+                    json!({"step_id": operation.id, "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                )?;
+                if let Err(err) = backend.long_tap(point.x, point.y, *duration_ms) {
+                    return close_backend_after_error(
+                        &mut input,
+                        CliError::device(err.to_string()),
+                    );
+                }
+                ctx.event(
+                    "long_tap_finished",
+                    json!({"step_id": operation.id, "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
+            }
         }
 
         ctx.event(
@@ -667,6 +686,7 @@ fn execute_lab_run(
             "after_anchor": after.matched_anchor(&state.control.game),
             "click_count": if matches!(action, LabInputAction::Tap(_)) { 1 } else { 0 },
             "drag_count": if matches!(action, LabInputAction::Drag { .. }) { 1 } else { 0 },
+            "long_tap_count": if matches!(action, LabInputAction::LongTap { .. }) { 1 } else { 0 },
             "actual_input": action.to_json(),
             "consumes": operation.consumes,
             "produces": operation.produces,
@@ -1727,9 +1747,9 @@ struct OperationBundle {
 
 impl OperationBundle {
     fn validate(&self, control: &LabControl, operation_dir: &Path) -> CliOutcome<()> {
-        if self.schema_version != "0.3" {
+        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5") {
             return Err(CliError::package_invalid(format!(
-                "unsupported operation schema_version '{}', expected 0.3",
+                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5",
                 self.schema_version
             )));
         }
@@ -1895,12 +1915,31 @@ impl Operation {
             }
         }
         self.click.validate(control)?;
+        if self.click.kind == "offset" {
+            let guard = self.guard.as_ref().ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "operation '{}' offset click requires guard metadata",
+                    self.id
+                ))
+            })?;
+            if let Some(target_id) = self.click.target_id.as_deref()
+                && target_id != guard.target_id
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{}' offset click target_id '{}' does not match guard target_id '{}'",
+                    self.id, target_id, guard.target_id
+                )));
+            }
+        }
         self.validate_guard(control)
     }
 
     fn input_action(&self, resolution: &Resolution, seed_base: u64) -> CliOutcome<LabInputAction> {
-        self.click
-            .input_action(resolution, seed_base ^ hash_text(&self.id))
+        self.click.input_action(
+            resolution,
+            seed_base ^ hash_text(&self.id),
+            self.guard.as_ref(),
+        )
     }
 
     fn validate_guard(&self, control: &LabControl) -> CliOutcome<()> {
@@ -1991,12 +2030,16 @@ struct OperationClick {
     to_rect: Option<PackRect>,
     #[serde(default)]
     duration_ms: Option<u64>,
+    #[serde(default)]
+    offset: Option<PackRect>,
+    #[serde(default)]
+    target_id: Option<String>,
 }
 
 impl OperationClick {
     fn validate(&self, control: &LabControl) -> CliOutcome<()> {
         match self.kind.as_str() {
-            "rect" => {
+            "rect" | "specific_rect" => {
                 let rect = self.required_rect()?;
                 validate_click_rect(
                     rect,
@@ -2017,6 +2060,38 @@ impl OperationClick {
                     &control.resolution,
                     control.allow_placeholder_coords.unwrap_or(false),
                 )
+            }
+            "long_press" | "long_tap" => {
+                let x = self
+                    .x
+                    .ok_or_else(|| CliError::package_invalid("long_press click missing x"))?;
+                let y = self
+                    .y
+                    .ok_or_else(|| CliError::package_invalid("long_press click missing y"))?;
+                validate_click_point(
+                    x,
+                    y,
+                    &control.resolution,
+                    control.allow_placeholder_coords.unwrap_or(false),
+                )?;
+                if self.duration_ms.unwrap_or(0) == 0 {
+                    return Err(CliError::package_invalid(
+                        "long_press duration_ms must be positive",
+                    ));
+                }
+                Ok(())
+            }
+            "offset" => {
+                let offset = self
+                    .offset
+                    .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
+                if offset.width <= 0 || offset.height <= 0 {
+                    return Err(CliError::package_invalid(format!(
+                        "offset click dimensions must be positive: {}x{}",
+                        offset.width, offset.height
+                    )));
+                }
+                Ok(())
             }
             "drag" => {
                 let from = self
@@ -2048,9 +2123,14 @@ impl OperationClick {
         }
     }
 
-    fn input_action(&self, resolution: &Resolution, seed: u64) -> CliOutcome<LabInputAction> {
+    fn input_action(
+        &self,
+        resolution: &Resolution,
+        seed: u64,
+        guard: Option<&OperationGuard>,
+    ) -> CliOutcome<LabInputAction> {
         match self.kind.as_str() {
-            "rect" => Ok(LabInputAction::Tap(actual_click_point(
+            "rect" | "specific_rect" => Ok(LabInputAction::Tap(actual_click_point(
                 self.required_rect()?,
                 seed,
             ))),
@@ -2074,6 +2154,46 @@ impl OperationClick {
                     x,
                     y,
                 }))
+            }
+            "long_press" | "long_tap" => {
+                let x = self
+                    .x
+                    .ok_or_else(|| CliError::package_invalid("long_press click missing x"))?;
+                let y = self
+                    .y
+                    .ok_or_else(|| CliError::package_invalid("long_press click missing y"))?;
+                validate_click_point(x, y, resolution, false)?;
+                Ok(LabInputAction::LongTap {
+                    point: ActualClickPoint {
+                        seed,
+                        algorithm: "explicit_point_v1",
+                        rect: PackRect {
+                            x,
+                            y,
+                            width: 1,
+                            height: 1,
+                        },
+                        x,
+                        y,
+                    },
+                    duration_ms: self.duration_ms.unwrap_or(600),
+                })
+            }
+            "offset" => {
+                let guard = guard.ok_or_else(|| {
+                    CliError::package_invalid("offset click requires guard metadata")
+                })?;
+                let offset = self
+                    .offset
+                    .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
+                let rect = PackRect {
+                    x: guard.expected_rect.x + offset.x,
+                    y: guard.expected_rect.y + offset.y,
+                    width: offset.width,
+                    height: offset.height,
+                };
+                validate_click_rect(rect, resolution, false)?;
+                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
             }
             "drag" => {
                 let from = self
@@ -2115,6 +2235,10 @@ impl OperationClick {
 #[derive(Debug, Clone, Copy)]
 enum LabInputAction {
     Tap(ActualClickPoint),
+    LongTap {
+        point: ActualClickPoint,
+        duration_ms: u64,
+    },
     Drag {
         from: ActualClickPoint,
         to: ActualClickPoint,
@@ -2134,6 +2258,9 @@ impl LabInputAction {
                 duration_ms,
             } => {
                 json!({"kind": "drag", "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms})
+            }
+            LabInputAction::LongTap { point, duration_ms } => {
+                json!({"kind": "long_tap", "actual_click_point": point.to_json(), "duration_ms": duration_ms})
             }
         }
     }
@@ -3687,6 +3814,8 @@ mod tests {
             from_rect: None,
             to_rect: None,
             duration_ms: None,
+            offset: None,
+            target_id: None,
         };
 
         let err = click.validate(&control).expect_err("fullscreen rejected");
@@ -3715,6 +3844,57 @@ mod tests {
         operation
             .validate(&control)
             .expect("explicit trusted unguarded coordinate allowed");
+    }
+
+    #[test]
+    fn offset_click_uses_guard_rect_and_offset_for_actual_point() {
+        let control = test_control();
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: None,
+            color_probe: Some("target/button".to_string()),
+        });
+        operation.click = OperationClick {
+            kind: "offset".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: Some(PackRect {
+                x: 3,
+                y: 4,
+                width: 5,
+                height: 6,
+            }),
+            target_id: Some("target/button".to_string()),
+        };
+
+        operation.validate(&control).expect("offset valid");
+        let action = operation
+            .input_action(&control.resolution, 0)
+            .expect("input action");
+
+        match action {
+            LabInputAction::Tap(point) => {
+                assert_eq!(point.rect.x, 103);
+                assert_eq!(point.rect.y, 204);
+                assert_eq!(point.rect.width, 5);
+                assert_eq!(point.rect.height, 6);
+            }
+            _ => panic!("expected tap"),
+        }
     }
 
     #[test]
@@ -4189,6 +4369,8 @@ mod tests {
                 from_rect: None,
                 to_rect: None,
                 duration_ms: None,
+                offset: None,
+                target_id: None,
             },
             verify_template: verify_template.map(str::to_string),
             guard: None,

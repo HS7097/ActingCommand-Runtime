@@ -121,6 +121,22 @@ impl Default for RecognitionDefaults {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecognitionMethod {
+    #[default]
+    Ncc,
+    RgbCount,
+    HsvCount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RecognitionMask {
+    Range { lower: u8, upper: u8 },
+    Bitmap { path: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecognitionMatchMetric {
@@ -152,6 +168,10 @@ pub struct TemplateTarget {
     pub region: PackRegion,
     #[serde(default)]
     pub threshold: Option<f32>,
+    #[serde(default)]
+    pub method: RecognitionMethod,
+    pub mask: Option<RecognitionMask>,
+    pub rect_move: Option<PackRect>,
     pub color_check: Option<ColorCheck>,
     pub click: Option<PackRect>,
 }
@@ -254,7 +274,15 @@ impl RecognitionEvaluator {
         let target = self.target(target_id)?;
 
         match target {
-            RecognitionTarget::Template(target) => self.evaluate_template(scene, target),
+            RecognitionTarget::Template(target) => {
+                if let Some(reason) = unsupported_template_reason(target) {
+                    return Err(RecognitionPackError::fatal(format!(
+                        "template target '{}' uses unsupported recognition semantics: {reason}",
+                        target.id
+                    )));
+                }
+                self.evaluate_template(scene, target)
+            }
             RecognitionTarget::Color(target) => self.evaluate_color(scene, target),
             RecognitionTarget::ClickOnly(target) => Err(RecognitionPackError::fatal(format!(
                 "click-only target '{}' cannot be evaluated",
@@ -293,6 +321,19 @@ impl RecognitionEvaluator {
 
     pub fn default_match_metric(&self) -> MatchMetric {
         self.pack.defaults.match_metric.as_match_metric()
+    }
+
+    pub fn unsupported_target_count(&self) -> usize {
+        self.pack
+            .targets
+            .iter()
+            .filter(|target| match target {
+                RecognitionTarget::Template(target) => {
+                    unsupported_template_reason(target).is_some()
+                }
+                RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => false,
+            })
+            .count()
     }
 
     fn evaluate_template(
@@ -424,9 +465,9 @@ impl RecognitionTarget {
 }
 
 fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<String>) {
-    if pack.schema_version != "0.1" && pack.schema_version != "0.3" {
+    if !matches!(pack.schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5") {
         errors.push(format!(
-            "unsupported schema_version '{}', expected '0.1' or '0.3'",
+            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5'",
             pack.schema_version
         ));
     }
@@ -453,6 +494,12 @@ fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<Stri
                 }
                 if let Some(click) = target.click {
                     validate_rect_shape(click, &format!("target[{index}].click"), errors);
+                }
+                if let Some(rect_move) = target.rect_move {
+                    validate_rect_shape(rect_move, &format!("target[{index}].rect_move"), errors);
+                }
+                if let Some(RecognitionMask::Bitmap { path }) = &target.mask {
+                    validate_template_path(path, &format!("target[{index}].mask"), errors);
                 }
                 if let Some(check) = target.color_check {
                     validate_rect_shape(
@@ -592,6 +639,21 @@ fn primitive_error(target_id: &str, err: recognition::RecognitionError) -> Recog
     ))
 }
 
+fn unsupported_template_reason(target: &TemplateTarget) -> Option<String> {
+    let mut reasons = Vec::new();
+    if target.method != RecognitionMethod::Ncc {
+        reasons.push(format!("method={:?}", target.method));
+    }
+    if target.mask.is_some() {
+        reasons.push("mask".to_string());
+    }
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join(", "))
+    }
+}
+
 fn template_message(template_ok: bool, color_ok: bool) -> String {
     match (template_ok, color_ok) {
         (true, true) => "template passed".to_string(),
@@ -671,6 +733,37 @@ mod tests {
             evaluator.default_match_metric(),
             MatchMetric::CorrelationCoefficientNormalized
         );
+    }
+
+    #[test]
+    fn schema_0_5_pack_loads_method_mask_and_fails_loud_when_used() {
+        let fixture = TemplateFixture::new();
+        let pack = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.5",
+                "targets": [
+                    {
+                        "type": "template",
+                        "id": "template",
+                        "template_path": "templates/button.png",
+                        "region": {"x": 12, "y": 10, "width": 28, "height": 24},
+                        "method": "rgb_count",
+                        "mask": {"type": "range", "lower": 1, "upper": 255},
+                        "rect_move": {"x": 0, "y": 10, "width": 5, "height": 2}
+                    }
+                ]
+            }"#,
+        )
+        .expect("pack parsed");
+        let evaluator =
+            RecognitionEvaluator::new(fixture.dir.path.clone(), pack).expect("schema 0.5 accepted");
+
+        assert_eq!(evaluator.unsupported_target_count(), 1);
+        let err = evaluator
+            .evaluate_target(&fixture.blank_scene(), "template")
+            .expect_err("unsupported target fails loud");
+
+        assert_fatal_contains(err, "unsupported recognition semantics");
     }
 
     #[test]
@@ -1045,6 +1138,9 @@ mod tests {
                     template_path: "templates/button.png".to_string(),
                     region: PackRegion::Rect(rect(12, 10, 28, 24)),
                     threshold: None,
+                    method: RecognitionMethod::Ncc,
+                    mask: None,
+                    rect_move: None,
                     color_check: None,
                     click: Some(rect(5, 6, 7, 8)),
                 }),
@@ -1106,6 +1202,9 @@ mod tests {
                     template_path: "".to_string(),
                     region: PackRegion::Rect(rect(-1, 0, 0, 4)),
                     threshold: None,
+                    method: RecognitionMethod::Ncc,
+                    mask: None,
+                    rect_move: None,
                     color_check: None,
                     click: None,
                 }),
@@ -1253,6 +1352,9 @@ mod tests {
                     template_path: "templates/button.png".to_string(),
                     region,
                     threshold: target_threshold,
+                    method: RecognitionMethod::Ncc,
+                    mask: None,
+                    rect_move: None,
                     color_check: None,
                     click: None,
                 })],
@@ -1268,6 +1370,9 @@ mod tests {
                     template_path: "templates/button.png".to_string(),
                     region: PackRegion::Rect(rect(12, 10, 28, 24)),
                     threshold: None,
+                    method: RecognitionMethod::Ncc,
+                    mask: None,
+                    rect_move: None,
                     color_check: Some(ColorCheck {
                         region: rect(0, 0, 8, 8),
                         expected,

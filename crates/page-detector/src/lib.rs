@@ -212,9 +212,12 @@ impl PageDetector {
 }
 
 fn validate_page_set(page_set: &PageSet) -> PageDetectorResult<()> {
-    if page_set.schema_version != "0.1" && page_set.schema_version != "0.3" {
+    if !matches!(
+        page_set.schema_version.as_str(),
+        "0.1" | "0.3" | "0.4" | "0.5"
+    ) {
         return Err(PageDetectorError::fatal(format!(
-            "unsupported schema_version '{}', expected '0.1' or '0.3'",
+            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5'",
             page_set.schema_version
         )));
     }
@@ -650,6 +653,9 @@ mod tests {
                 template_path: "too-large.png".to_string(),
                 region: PackRegion::Keyword("full_frame".to_string()),
                 threshold: Some(0.9),
+                method: actingcommand_recognition_pack::RecognitionMethod::Ncc,
+                mask: None,
+                rect_move: None,
                 color_check: None,
                 click: None,
             }));
