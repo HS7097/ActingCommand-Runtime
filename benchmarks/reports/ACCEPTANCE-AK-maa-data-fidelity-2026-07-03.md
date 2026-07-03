@@ -15,12 +15,12 @@ remote `origin/main` heads before local calibration changes:
 
 | Repository | Path | Base commit |
 | --- | --- | --- |
-| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `e31e27ce34d198d491c2e04fdbde6a65061996a1` |
+| Arknights | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights` | `ea14e9a4ca4393ed05c1f44b0cb56b109331c008` |
 | AzurLane | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane` | `ea5246ac13985f19ba774863a59539f7d6f4b443` |
 | BlueArchive | `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive` | `dae51cf1227445ffffd76acd71ba8a22af88b3bf` |
 
 The Runtime repository was also fetched before the 2026-07-04 continuation and
-was aligned with `origin/main` at `f2e6989b709a730cdc429343f23e40ecff9f6fe9`.
+was aligned with `origin/main` at `93476cd62764886e73fa984b5df86108b92bd4b3`.
 
 ## Structural reconversion
 
@@ -44,6 +44,9 @@ The current local retained-frame corpus found for AK page calibration contains:
 | `mission_result` | no generated page should match | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\ak16416-current.png` |
 | `terminal_stage_map` | `arknights/terminal` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\actinglab-labpkg\runs\lab1y-20260625_050455_365\output\screenshots\20260625_050456_022.png` |
 | `operator_positive` | `arknights/operator` | `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\p2_2_smoke\capture-16416.png` |
+| `depot_positive` | `arknights/depot` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_depot.png` |
+| `friends_positive` | `arknights/friends` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_friends.png` |
+| `mission_positive` | `arknights/mission` | `C:\Users\Alice\AppData\Local\Temp\claude\C--Users-Alice--Cloude-Code\4b6f507f-47bd-4051-9315-5e8cf04f9b4a\scratchpad\akpg_mission.png` |
 
 ## Calibration decision
 
@@ -79,13 +82,24 @@ targets for non-operator QuickSwitch-derived pages. This lets the retained
 operator frame match `arknights/operator` only instead of being accepted by
 other destination-button pages.
 
+The follow-up calibration pass adds retained-frame positive evidence for
+`arknights/depot`, `arknights/friends`, and `arknights/mission`. It raises the
+shared home anchor threshold from `0.80` to `0.85` so the depot frame no longer
+trips `page/home`, raises `page/mission` from `0.85` to `0.92` so the depot and
+terminal frames no longer trip `page/mission`, and forbids the retained
+`page/depot`, `page/friends`, and `page/mission` anchors on non-owner pages.
+
 ## Threshold samples
 
 | Target | Frame | Score | Threshold | Passed |
 | --- | --- | ---: | ---: | --- |
-| `page/home` | `home_retest` | 1.000000 | 0.800000 | true |
-| `page/home` | `home_run` | 0.999832 | 0.800000 | true |
-| `page/home` | `mission_result` | 0.798440 | 0.800000 | false |
+| `page/home` | `home_retest` | 1.000000 | 0.850000 | true |
+| `page/home` | `home_run` | 0.999832 | 0.850000 | true |
+| `page/home` | `mission_result` | 0.798440 | 0.850000 | false |
+| `page/home` | `home` | 0.999999 | 0.850000 | true |
+| `page/home` | `depot_positive` | 0.805745 | 0.850000 | false |
+| `page/home` | `friends_positive` | 0.794509 | 0.850000 | false |
+| `page/home` | `mission_positive` | 0.787997 | 0.850000 | false |
 | `page/negative_mission_result` | `home_retest` | 0.664962 | 0.920000 | false |
 | `page/negative_mission_result` | `home_run` | 0.661303 | 0.920000 | false |
 | `page/negative_mission_result` | `mission_result` | 1.000000 | 0.920000 | true |
@@ -98,6 +112,19 @@ other destination-button pages.
 | `page/operator_0` | `home_retest` | 0.826827 | 0.900000 | false |
 | `page/operator_0` | `mission_result` | 0.824092 | 0.900000 | false |
 | `page/operator_0` | `terminal_stage_map` | 0.797798 | 0.900000 | false |
+| `page/depot` | `depot_positive` | 0.999884 | 0.920000 | true |
+| `page/depot` | `home` | 0.843894 | 0.920000 | false |
+| `page/depot` | `friends_positive` | 0.705160 | 0.920000 | false |
+| `page/depot` | `mission_positive` | 0.891082 | 0.920000 | false |
+| `page/depot` | `terminal_stage_map` | 0.895703 | 0.920000 | false |
+| `page/friends` | `friends_positive` | 0.999370 | 0.850000 | true |
+| `page/friends` | `home` | 0.735043 | 0.850000 | false |
+| `page/friends` | `depot_positive` | 0.751854 | 0.850000 | false |
+| `page/friends` | `mission_positive` | 0.594007 | 0.850000 | false |
+| `page/mission` | `mission_positive` | 0.999949 | 0.920000 | true |
+| `page/mission` | `home` | 0.766288 | 0.920000 | false |
+| `page/mission` | `depot_positive` | 0.870751 | 0.920000 | false |
+| `page/mission` | `terminal_stage_map` | 0.881791 | 0.920000 | false |
 
 ## Page-discriminativeness result
 
@@ -110,6 +137,9 @@ After conversion, retained-frame page detection produced:
 | `mission_result` | none |
 | `terminal_stage_map` | `arknights/terminal` |
 | `operator_positive` | `arknights/operator` |
+| `depot_positive` | `arknights/depot` |
+| `friends_positive` | `arknights/friends` |
+| `mission_positive` | `arknights/mission` |
 
 An additional release-build scan across 93 retained AK screenshots under the
 current Runtime `target` tree found 91 home matches, one terminal match, and
@@ -127,11 +157,11 @@ evidence.
 ## Remaining evidence gap
 
 The local retained-frame corpus does not contain positive captures for the
-destination pages `recruit`, `depot`, `friends`, `gacha`, `infrast`, `mall`,
-`mission`, or the actual QuickSwitch dropdown overlay. The operator page now has
-one positive retained frame and correct `any_of` variant semantics, but a
-single frame is not a threshold distribution. Positive threshold distribution
-for the remaining destination pages is not proven by the current corpus.
+destination pages `recruit`, `gacha`, `infrast`, `mall`, or the actual
+QuickSwitch dropdown overlay. The depot, friends, mission, and operator pages
+now each have one positive retained frame, but a single frame is not a full
+threshold distribution. Positive threshold distribution for the remaining
+destination pages is not proven by the current corpus.
 
 The broader `TASK-AK-maa-data-fidelity.md` CLI gate should not be marked fully
 closed until destination-page positive retained frames are added or a later

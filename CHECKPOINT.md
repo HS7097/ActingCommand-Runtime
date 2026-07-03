@@ -1,5 +1,100 @@
 # CHECKPOINT.md
 
+## 2026-07-04 AK MAA data fidelity depot/friends/mission retained-frame calibration
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md` after the operator-positive guard calibration checkpoint.
+- Fetched Runtime and all three resource repositories before this resource-dependent pass; each local head matched `origin/main`.
+- Found additional retained AK page frames in the local temp scratchpad:
+  - `akpg_depot.png`
+  - `akpg_friends.png`
+  - `akpg_mission.png`
+- Raised the shared AK `page/home` threshold from `0.80` to `0.85` after the depot frame showed a `page/home` false positive at `0.805745`.
+- Raised `page/mission` threshold from `0.85` to `0.92` after depot and terminal frames showed `page/mission` false positives at `0.870751` and `0.881791`.
+- Added `page/depot`, `page/friends`, and `page/mission` as forbidden targets on non-owner AK pages.
+- Re-converted the Arknights CN resource outputs and re-ran page-pack validation.
+- Committed and pushed the Arknights resource calibration as `7ad8688` (`resources: calibrate AK depot friends mission pages`).
+- Updated the AK M6 acceptance report and this checkpoint. Runtime public validation passed for this slice. The broader task remains active because several destination-page positive retained frames are still missing.
+
+### Resource repositories refreshed
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Runtime`: `93476cd62764886e73fa984b5df86108b92bd4b3`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `ea14e9a4ca4393ed05c1f44b0cb56b109331c008` before local retained-frame calibration changes; `origin/main` matched.
+- Arknights calibration result: `7ad868848047361a0b2fa20946c11322a15fe2d7` pushed to `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `ea5246ac13985f19ba774863a59539f7d6f4b443`; `origin/main` matched.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `dae51cf1227445ffffd76acd71ba8a22af88b3bf`; `origin/main` matched.
+
+### Files changed
+
+- Runtime:
+  - `benchmarks/reports/ACCEPTANCE-AK-maa-data-fidelity-2026-07-03.md`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resource repo:
+  - `ours/operations/do_recruit/task.json`
+  - `ours/operations/open_depot/task.json`
+  - `ours/operations/open_friends/task.json`
+  - `ours/operations/open_gacha/task.json`
+  - `ours/operations/open_infrast/task.json`
+  - `ours/operations/open_mall/task.json`
+  - `ours/operations/open_mission/task.json`
+  - `ours/operations/open_operator/task.json`
+  - `ours/operations/open_terminal/task.json`
+  - `ours/operations/return_home/task.json`
+  - `ours/recognition/arknights.cn.pack.json`
+  - `ours/recognition/arknights.cn.pages.json`
+
+### Commands run
+
+- `git fetch --prune --tags origin` and `git pull --ff-only origin main` in Runtime and all three resource repositories.
+- Local 1280x720 PNG inventory scan under Desktop, Downloads, Pictures, and Temp.
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <local 1280x720 frame>` across 320 extra retained/local screenshots.
+- `target\release\actinglab.exe --json recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame> --target page/home|page/depot|page/friends|page/mission`.
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --locale zh-CN`
+- `target\release\actinglab.exe --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --scene <retained frame>` for home, depot, friends, mission, operator, terminal, and mission-result frames.
+- `cargo run -q -p actingcommand-actinglab -- --json detect-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game ark --server cn --check-pages`
+- `git diff --check` in the Arknights resource repository.
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check` in the Runtime repository.
+- `git commit -m "resources: calibrate AK depot friends mission pages"` and `git push origin main` in the Arknights resource repository.
+
+### Test results
+
+- Retained AK frame spot-check results:
+  - `home`: matches `arknights/home` only.
+  - `depot`: matches `arknights/depot` only.
+  - `friends`: matches `arknights/friends` only.
+  - `mission`: matches `arknights/mission` only.
+  - `operator`: matches `arknights/operator` only.
+  - `terminal`: matches `arknights/terminal` only.
+  - `mission_result`: matches no generated page.
+- Calibrated target threshold samples:
+  - `page/home` on `home`: score `0.999999`, threshold `0.850000`, passed.
+  - `page/home` on `depot`: score `0.805745`, threshold `0.850000`, failed.
+  - `page/depot` on `depot`: score `0.999884`, threshold `0.920000`, passed.
+  - `page/mission` on `depot`: score `0.870751`, threshold `0.920000`, failed.
+  - `page/friends` on `friends`: score `0.999370`, threshold `0.850000`, passed.
+  - `page/mission` on `mission`: score `0.999949`, threshold `0.920000`, passed.
+  - `page/mission` on `terminal`: score `0.881791`, threshold `0.920000`, failed.
+- Arknights CN `resource convert` passed: 10 bundles, 16 targets, 11 pages, 13 edges, 7 page operations, 25 primitives.
+- Arknights CN `detect-page --check-pages` passed.
+- Arknights resource repository whitespace validation passed with `git diff --check`.
+- Runtime public validation passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
+### Current blocker
+
+- No blocker for this implementation slice.
+- The full `TASK-AK-maa-data-fidelity.md` gate is still not proven complete because the local retained corpus lacks positive destination-page frames for `recruit`, `gacha`, `infrast`, `mall`, and the actual QuickSwitch dropdown overlay. The single-frame depot/friends/mission/operator positives are not full threshold distributions.
+
+### Next step
+
+1. Commit and push the Runtime report/planning/checkpoint update.
+2. Keep the broader goal active until the remaining destination-positive retained-frame calibration evidence exists or the task is explicitly narrowed.
+
 ## 2026-07-04 AK MAA data fidelity operator-positive guard calibration
 
 ### Current status
