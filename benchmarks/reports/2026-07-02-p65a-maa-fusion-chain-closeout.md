@@ -11,7 +11,7 @@ The task was implemented as clean-room Rust behavior/protocol work plus FFI-boun
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | P0 touch fallback classification | Complete | `fallback_skipped_on_serious_input_error`, `fallback_on_transient_backend_failure`, `fallback_records_full_context`, `fixed_priority_fails_loud_when_all_backends_fail`; `crates/device/src/touch.rs`; `crates/device/src/error.rs` |
-| A2 capture autotune/freshness | Complete | `capture_autotune_caches_probe`, `capture_static_page_same_hash_does_not_switch`, `capture_switches_backend_after_expected_change_stall`; `crates/device/src/capture.rs`; `apps/actinglab/src/main.rs` |
+| A2 capture autotune/freshness | Complete for startup/request-level probe; runtime-persistent backend switching deferred | `capture_autotune_caches_probe`, `capture_static_page_same_hash_does_not_switch`, `capture_expected_change_stall_marks_stale_without_runtime_switch`; `crates/device/src/capture.rs`; `apps/actinglab/src/main.rs` |
 | A1.1 minitouch | Complete | `minitouch_in_priority_chain`, `minitouch_transient_failure_degrades`; `crates/device/src/touch.rs`; `NOTICE.md` minitouch entry |
 | A3 device discovery | Complete | `discovery_lists_running_mumu_serials`; `crates/device/src/discovery.rs` |
 | B declarative recovery executor | Complete | `recovery_follows_on_error_edge`, `recovery_wait_freezes_waits_until_stable`, `recovery_stops_at_max_attempts`; `apps/actinglab/src/recovery_exec.rs` |
