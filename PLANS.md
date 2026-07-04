@@ -14,6 +14,16 @@ The active repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-
 
 The active round-two repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-round2-e376c8b.md`.
 
+The active round-three repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-round3-8a03613.md`.
+
+Round-three repair status:
+
+- P1 task-name `@` component safety is implemented. Materialization now rejects task names with more than 64 `@`-composition components before recursive split/materialize paths can overflow the process stack. Synthetic tests cover 5000 components, 63/64 allowed, and 65 rejected.
+- P2 coordinate derivation is unified for absolute coordinate actions. `rect`, `specific_rect`, `point`, `long_press`, and both ends of `drag` now derive from the live matched template guard delta; `offset` keeps the existing matched-rect-plus-offset relative behavior. Color-probe guards cannot drive coordinate translation, and explicit trusted unguarded coordinates remain the only no-guard path.
+- P3 closeout is implemented: `should_default_template` has line-anchored protocol comments, Return/Return2 has an implicit-algorithm golden, `replaceFull` is stripped as an OCR-specific field, the `template` field ownership comment includes the FeatureMatch path, and CLI help documents the shared `recognize --target` output shape.
+- No true resource repository, real sample, or live device validation is used for this round-three repair.
+- Round-three public gates passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
 Round-two repair status:
 
 - R1 plain `baseTask` template semantics are restored to the MAA protocol value: a template-matching derived task without its own `template` now defaults to `<child task>.png` even when the base task declares a template. The previous B2a inheritance behavior is removed, and Return/Return2-style synthetic coverage is added.

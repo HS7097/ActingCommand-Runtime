@@ -1,5 +1,60 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity round-three repair P1-P3
+
+### Current status
+
+- Started `C:\合作工作区\ActingCommand\FIX-fidelity-round3-8a03613.md` from clean `origin/main` at `8a03613`.
+- Implemented P1: MAA task materialization now rejects task names with more than 64 `@`-composition components before recursive split/materialize paths can overflow the stack.
+- Implemented P2: absolute coordinate actions now use a unified guard-delta derivation helper. `rect`, `specific_rect`, `point`, `long_press`, and `drag` follow the live matched template guard; `drag.to` is translated by the same delta as `drag.from`; `offset` keeps the prior relative matched-rect behavior.
+- Implemented P3: added depth-boundary tests, protocol comments for child-template defaults, implicit-algorithm Return/Return2 coverage, `replaceFull` algorithm-specific filtering, FeatureMatch template ownership notes, and a CLI help compatibility note for `recognize --target`.
+- No true resource repository, real sample, or live device validation was used.
+- Public five-command gate passed for the completed P1-P3 repair.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin; git pull --ff-only origin main; git status --short --branch; git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture`
+- `cargo test -p actingcommand-actinglab guarded_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab build_primitives_rejects -- --nocapture`
+- `cargo test -p actingcommand-actinglab operation_validate_rejects_color_guard_for_absolute_coordinate -- --nocapture`
+- `cargo test -p actingcommand-actinglab help_documents_recognize_target_shared_output_shape -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `maa_task_graph::tests` passed: 32 tests, including the 5000-component non-crash regression and 63/64/65 component boundaries.
+- Guarded coordinate, trusted unguarded coordinate, conversion guard rejection, color-guard rejection, and help-note targeted tests passed.
+- `cargo test -p actingcommand-actinglab` passed: 601 unit tests plus 3 integration tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker.
+
+### Next step
+
+1. Commit and push the completed round-three repair.
+
 ## 2026-07-04 fidelity round-two repair R1-R5
 
 ### Current status

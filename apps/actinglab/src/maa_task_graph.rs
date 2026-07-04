@@ -23,24 +23,25 @@ const LIST_FIELDS: [&str; 5] = [
 // Exact cycle detection cannot catch @-composition names that grow every step.
 const MAX_MAA_EXPANSION_DEPTH: usize = 64;
 
-const ALGORITHM_SPECIFIC_FIELDS: [&str; 17] = [
-    "template",       // AsstTypes.h MatchTaskInfo::templ_names.
+const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
+    "template", // AsstTypes.h MatchTaskInfo::templ_names / FeatureMatchTaskInfo::templ_names; TaskData.cpp:830 consumes the same key.
     "templThreshold", // AsstTypes.h MatchTaskInfo::templ_thresholds.
-    "maskRange",      // AsstTypes.h MatchTaskInfo::mask_ranges.
-    "colorScales",    // AsstTypes.h MatchTaskInfo::color_scales.
+    "maskRange", // AsstTypes.h MatchTaskInfo::mask_ranges.
+    "colorScales", // AsstTypes.h MatchTaskInfo::color_scales.
     "colorWithClose", // AsstTypes.h MatchTaskInfo::color_close.
-    "pureColor",      // AsstTypes.h MatchTaskInfo::pure_color.
-    "method",         // AsstTypes.h MatchTaskInfo::methods.
-    "text",           // AsstTypes.h OcrTaskInfo::text.
-    "ocrReplace",     // AsstTypes.h OcrTaskInfo::replace_map.
-    "fullMatch",      // AsstTypes.h OcrTaskInfo::full_match.
-    "isAscii",        // AsstTypes.h OcrTaskInfo::is_ascii.
-    "withoutDet",     // AsstTypes.h OcrTaskInfo::without_det.
-    "useRaw",         // AsstTypes.h OcrTaskInfo::use_raw.
-    "binThreshold",   // AsstTypes.h OcrTaskInfo::bin_threshold.
-    "count",          // AsstTypes.h FeatureMatchTaskInfo::count.
-    "ratio",          // AsstTypes.h FeatureMatchTaskInfo::ratio.
-    "detector",       // AsstTypes.h FeatureMatchTaskInfo::detector.
+    "pureColor", // AsstTypes.h MatchTaskInfo::pure_color.
+    "method",   // AsstTypes.h MatchTaskInfo::methods.
+    "text",     // AsstTypes.h OcrTaskInfo::text.
+    "ocrReplace", // AsstTypes.h OcrTaskInfo::replace_map.
+    "fullMatch", // AsstTypes.h OcrTaskInfo::full_match.
+    "replaceFull", // AsstTypes.h OcrTaskInfo::replace_full.
+    "isAscii",  // AsstTypes.h OcrTaskInfo::is_ascii.
+    "withoutDet", // AsstTypes.h OcrTaskInfo::without_det.
+    "useRaw",   // AsstTypes.h OcrTaskInfo::use_raw.
+    "binThreshold", // AsstTypes.h OcrTaskInfo::bin_threshold.
+    "count",    // AsstTypes.h FeatureMatchTaskInfo::count.
+    "ratio",    // AsstTypes.h FeatureMatchTaskInfo::ratio.
+    "detector", // AsstTypes.h FeatureMatchTaskInfo::detector.
 ];
 
 #[derive(Debug, Clone)]
@@ -317,8 +318,15 @@ impl MaaTaskCompiler {
     }
 
     fn materialize_task(&mut self, task_id: &str, stack: &mut Vec<String>) -> CliOutcome<Value> {
+        validate_at_component_limit(task_id)?;
         if let Some(task) = self.materialized.get(task_id) {
             return Ok(task.clone());
+        }
+        if stack.len() >= MAX_MAA_EXPANSION_DEPTH {
+            let chain = expansion_chain_tail(stack, task_id);
+            return Err(CliError::package_invalid(format!(
+                "MAA materialization depth exceeded, possible @-composition chain: {chain}"
+            )));
         }
         if stack.iter().any(|item| item == task_id) {
             stack.push(task_id.to_string());
@@ -359,6 +367,8 @@ impl MaaTaskCompiler {
                 filter_algorithm_specific_inheritance(&mut base, &raw.data);
                 merge_object(&mut base, &raw.data);
                 base.remove("baseTask");
+                // MAA task-schema.md lines 217 and 232-233: a derived
+                // template-matching task defaults template to its own task name.
                 let should_default_template = (is_explicit_at || base_task.is_some())
                     && !raw.data.contains_key("template")
                     && looks_like_template_task(&base);
@@ -405,8 +415,14 @@ impl MaaTaskCompiler {
             for target in
                 task_list_expressions(task.get(field).unwrap_or(&Value::Null)).unwrap_or_default()
             {
-                if !self.can_materialize(&target, &mut Vec::new()) {
-                    errors.push(format!("{field} references unresolved task '{target}'"));
+                if target == "Stop" {
+                    continue;
+                }
+                if let Err(err) = self.materialize_task(&target, &mut Vec::new()) {
+                    errors.push(format!(
+                        "{field} references unresolved task '{target}': {}",
+                        err.message
+                    ));
                 }
             }
         }
@@ -420,11 +436,10 @@ impl MaaTaskCompiler {
         }
     }
 
-    fn can_materialize(&mut self, task_id: &str, stack: &mut Vec<String>) -> bool {
-        task_id == "Stop" || self.materialize_task(task_id, stack).is_ok()
-    }
-
     fn split_materializable_at_task<'a>(&self, task_id: &'a str) -> Option<(&'a str, &'a str)> {
+        if at_component_count(task_id) > MAX_MAA_EXPANSION_DEPTH {
+            return None;
+        }
         for (index, _) in task_id.match_indices('@') {
             let prefix = &task_id[..index];
             let base = &task_id[index + 1..];
@@ -439,6 +454,9 @@ impl MaaTaskCompiler {
     }
 
     fn can_be_template_base(&self, task_id: &str, seen: &mut HashSet<String>) -> bool {
+        if at_component_count(task_id) > MAX_MAA_EXPANSION_DEPTH {
+            return false;
+        }
         if self.raw.contains_key(task_id) {
             return true;
         }
@@ -737,6 +755,30 @@ fn expansion_chain_tail(stack: &[String], next_task: &str) -> String {
     let mut chain = stack[start..].to_vec();
     chain.push(next_task.to_string());
     chain.join(" -> ")
+}
+
+fn validate_at_component_limit(task_id: &str) -> CliOutcome<()> {
+    let components = at_component_count(task_id);
+    if components <= MAX_MAA_EXPANSION_DEPTH {
+        return Ok(());
+    }
+    Err(CliError::package_invalid(format!(
+        "MAA task name @-composition components exceed 64: components={components}, task='{}'",
+        truncated_task_name(task_id)
+    )))
+}
+
+fn at_component_count(task_id: &str) -> usize {
+    task_id.matches('@').count() + 1
+}
+
+fn truncated_task_name(task_id: &str) -> String {
+    const LIMIT: usize = 160;
+    if task_id.chars().count() <= LIMIT {
+        return task_id.to_string();
+    }
+    let prefix: String = task_id.chars().take(LIMIT).collect();
+    format!("{prefix}...")
 }
 
 fn rebase_task_list_defaults(mut base: Map<String, Value>, prefix: &str) -> Map<String, Value> {
@@ -1170,6 +1212,31 @@ mod tests {
     }
 
     #[test]
+    fn base_task_return_example_uses_child_template_default_with_implicit_algorithm() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Return": {
+                "action": "ClickSelf",
+                "next": ["Stop"]
+            },
+            "Return2": {
+                "baseTask": "Return"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Return2").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Return2.png")
+        );
+        assert_eq!(
+            task.pointer("/action").and_then(Value::as_str),
+            Some("ClickSelf")
+        );
+        assert_eq!(task.get("next").unwrap(), &json!(["Stop"]));
+    }
+
+    #[test]
     fn base_task_chain_without_template_uses_child_default() {
         let graph = compile_maa_task_graph_from_value(json!({
             "Base": {
@@ -1303,6 +1370,48 @@ mod tests {
     }
 
     #[test]
+    fn at_task_name_components_5000_fails_without_stack_overflow() {
+        let task_name = at_chain_name(5000);
+        let err = compile_maa_task_graph_from_value(json!({
+            "Base": {"algorithm": "MatchTemplate"},
+            "Driver": {"next": [task_name]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("@-composition components exceed 64"));
+    }
+
+    #[test]
+    fn at_task_name_components_63_and_64_are_allowed() {
+        for components in [63, 64] {
+            let task_name = at_chain_name(components);
+            let graph = compile_maa_task_graph_from_value(json!({
+                "Base": {"algorithm": "MatchTemplate"},
+                "Driver": {"next": [task_name.clone()]}
+            }))
+            .unwrap();
+
+            assert!(
+                graph.task(&task_name).is_some(),
+                "components={components} should materialize"
+            );
+        }
+    }
+
+    #[test]
+    fn at_task_name_components_65_is_rejected() {
+        let task_name = at_chain_name(65);
+        let err = compile_maa_task_graph_from_value(json!({
+            "Base": {"algorithm": "MatchTemplate"},
+            "Driver": {"next": [task_name]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("@-composition components exceed 64"));
+        assert!(err.message.contains("components=65"));
+    }
+
+    #[test]
     fn virtual_three_node_cycle_fails_loudly_with_chain() {
         let err = compile_maa_task_graph_from_value(json!({
             "A": {"next": ["B#next"]},
@@ -1388,6 +1497,31 @@ mod tests {
     }
 
     #[test]
+    fn algorithm_change_drops_replace_full_ocr_field() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "OcrDetect",
+                "replaceFull": true,
+                "text": ["Start"],
+                "next": ["Stop"]
+            },
+            "Child": {
+                "baseTask": "Base",
+                "algorithm": "MatchTemplate"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert!(task.get("replaceFull").is_none());
+        assert!(task.get("text").is_none());
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Child.png")
+        );
+    }
+
+    #[test]
     fn unresolved_reference_fails_loudly() {
         let err = compile_maa_task_graph_from_value(json!({
             "A": {"next": ["Missing"]}
@@ -1395,5 +1529,13 @@ mod tests {
         .unwrap_err();
 
         assert!(err.message.contains("unresolved references"));
+    }
+
+    fn at_chain_name(components: usize) -> String {
+        let mut parts = (1..components)
+            .map(|index| format!("P{index}"))
+            .collect::<Vec<_>>();
+        parts.push("Base".to_string());
+        parts.join("@")
     }
 }

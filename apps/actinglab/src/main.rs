@@ -1362,6 +1362,9 @@ fn help_data() -> Value {
                 "--maa-tasks <dir>"
             ]
         },
+        "compatibility_notes": {
+            "recognize --target": "target output includes width, height, matched_rect, and the shared evaluation object"
+        },
         "commands": command_capabilities()
     })
 }
@@ -52240,6 +52243,19 @@ mod tests {
                 .iter()
                 .any(|option| option.as_str() == Some("--maa-tasks <dir>"))
         );
+    }
+
+    #[test]
+    fn help_documents_recognize_target_shared_output_shape() {
+        let help = help_data();
+        let note = help
+            .pointer("/compatibility_notes/recognize --target")
+            .and_then(Value::as_str)
+            .expect("recognize note");
+
+        assert!(note.contains("width"));
+        assert!(note.contains("height"));
+        assert!(note.contains("matched_rect"));
     }
 
     #[test]

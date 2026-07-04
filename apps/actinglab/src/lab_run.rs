@@ -1966,6 +1966,14 @@ impl Operation {
                     self.id
                 )));
             }
+        } else if self.click.is_absolute_coordinate()
+            && let Some(guard) = &self.guard
+            && guard.verify_template.is_none()
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' coordinate action requires template guard metadata; color-probe guards cannot produce a matched_rect",
+                self.id
+            )));
         }
         if let Some(expect_after) = &self.expect_after {
             expect_after.validate(&self.id)?;
@@ -2228,52 +2236,36 @@ impl OperationClick {
         target: Option<&TargetEvaluation>,
     ) -> CliOutcome<LabInputAction> {
         match self.kind.as_str() {
-            "rect" | "specific_rect" => Ok(LabInputAction::Tap(actual_click_point(
-                self.required_rect()?,
-                seed,
-            ))),
+            "rect" | "specific_rect" => {
+                let rect = derive_absolute_coordinate_rect(
+                    self.kind.as_str(),
+                    self.required_rect()?,
+                    guard,
+                    target,
+                )?;
+                validate_click_rect(rect, resolution, false)?;
+                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
+            }
             "point" => {
-                let x = self
-                    .x
-                    .ok_or_else(|| CliError::package_invalid("point click missing x"))?;
-                let y = self
-                    .y
-                    .ok_or_else(|| CliError::package_invalid("point click missing y"))?;
-                validate_click_point(x, y, resolution, false)?;
-                Ok(LabInputAction::Tap(ActualClickPoint {
-                    seed,
-                    algorithm: "explicit_point_v1",
-                    rect: PackRect {
-                        x,
-                        y,
-                        width: 1,
-                        height: 1,
-                    },
-                    x,
-                    y,
-                }))
+                let rect = derive_absolute_coordinate_rect(
+                    "point",
+                    self.required_point_rect("point")?,
+                    guard,
+                    target,
+                )?;
+                validate_click_rect(rect, resolution, false)?;
+                Ok(LabInputAction::Tap(actual_explicit_point(rect, seed)))
             }
             "long_press" | "long_tap" => {
-                let x = self
-                    .x
-                    .ok_or_else(|| CliError::package_invalid("long_press click missing x"))?;
-                let y = self
-                    .y
-                    .ok_or_else(|| CliError::package_invalid("long_press click missing y"))?;
-                validate_click_point(x, y, resolution, false)?;
+                let rect = derive_absolute_coordinate_rect(
+                    "long_press",
+                    self.required_point_rect("long_press")?,
+                    guard,
+                    target,
+                )?;
+                validate_click_rect(rect, resolution, false)?;
                 Ok(LabInputAction::LongTap {
-                    point: ActualClickPoint {
-                        seed,
-                        algorithm: "explicit_point_v1",
-                        rect: PackRect {
-                            x,
-                            y,
-                            width: 1,
-                            height: 1,
-                        },
-                        x,
-                        y,
-                    },
+                    point: actual_explicit_point(rect, seed),
                     duration_ms: self.duration_ms.unwrap_or(600),
                 })
             }
@@ -2310,10 +2302,10 @@ impl OperationClick {
                 let to = self
                     .to_rect
                     .ok_or_else(|| CliError::package_invalid("drag click missing to rect"))?;
-                let from = match guard {
-                    Some(guard) => guarded_gesture_start_rect(declared_from, guard, target)?,
-                    None => declared_from,
-                };
+                let from = derive_absolute_coordinate_rect("drag", declared_from, guard, target)?;
+                let to = derive_absolute_coordinate_rect("drag", to, guard, target)?;
+                validate_click_rect(from, resolution, false)?;
+                validate_click_rect(to, resolution, false)?;
                 Ok(LabInputAction::Drag {
                     from: actual_click_point(from, seed ^ hash_text("drag.from")),
                     to: actual_click_point(to, seed ^ hash_text("drag.to")),
@@ -2341,6 +2333,26 @@ impl OperationClick {
                 .height
                 .ok_or_else(|| CliError::package_invalid("rect click missing height"))?,
         })
+    }
+
+    fn required_point_rect(&self, kind: &str) -> CliOutcome<PackRect> {
+        Ok(PackRect {
+            x: self
+                .x
+                .ok_or_else(|| CliError::package_invalid(format!("{kind} click missing x")))?,
+            y: self
+                .y
+                .ok_or_else(|| CliError::package_invalid(format!("{kind} click missing y")))?,
+            width: 1,
+            height: 1,
+        })
+    }
+
+    fn is_absolute_coordinate(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "rect" | "specific_rect" | "point" | "long_press" | "long_tap" | "drag"
+        )
     }
 }
 
@@ -2375,25 +2387,52 @@ fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     Ok(rect)
 }
 
-fn guarded_gesture_start_rect(
-    declared_from: PackRect,
-    guard: &OperationGuard,
+fn derive_absolute_coordinate_rect(
+    kind: &str,
+    declared: PackRect,
+    guard: Option<&OperationGuard>,
     target: Option<&TargetEvaluation>,
 ) -> CliOutcome<PackRect> {
+    let Some(guard) = guard else {
+        return Ok(declared);
+    };
+    if guard.verify_template.is_none() {
+        return Err(CliError::package_invalid(format!(
+            "{kind} coordinate action requires template guard metadata"
+        )));
+    }
     let target =
-        target.ok_or_else(|| CliError::package_invalid("guarded gesture requires guard target"))?;
+        target.ok_or_else(|| CliError::package_invalid(format!("{kind} requires guard target")))?;
     if target.id != guard.target_id {
         return Err(CliError::package_invalid(format!(
-            "guarded gesture matched target '{}' does not match guard target_id '{}'",
+            "{kind} matched target '{}' does not match guard target_id '{}'",
             target.id, guard.target_id
         )));
     }
     let matched_rect = matched_template_rect(target)?;
+    let dx = matched_rect
+        .x
+        .checked_sub(guard.expected_rect.x)
+        .ok_or_else(|| CliError::package_invalid(format!("{kind} x delta overflow")))?;
+    let dy = matched_rect
+        .y
+        .checked_sub(guard.expected_rect.y)
+        .ok_or_else(|| CliError::package_invalid(format!("{kind} y delta overflow")))?;
+    translate_rect(kind, declared, dx, dy)
+}
+
+fn translate_rect(kind: &str, rect: PackRect, dx: i32, dy: i32) -> CliOutcome<PackRect> {
     Ok(PackRect {
-        x: matched_rect.x + (declared_from.x - guard.expected_rect.x),
-        y: matched_rect.y + (declared_from.y - guard.expected_rect.y),
-        width: declared_from.width,
-        height: declared_from.height,
+        x: rect
+            .x
+            .checked_add(dx)
+            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated x overflow")))?,
+        y: rect
+            .y
+            .checked_add(dy)
+            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated y overflow")))?,
+        width: rect.width,
+        height: rect.height,
     })
 }
 
@@ -2465,6 +2504,16 @@ fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
         rect,
         x: rect.x + x_offset as i32,
         y: rect.y + y_offset as i32,
+    }
+}
+
+fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
+    ActualClickPoint {
+        seed,
+        algorithm: "explicit_point_v1",
+        rect,
+        x: rect.x,
+        y: rect.y,
     }
 }
 
@@ -4266,12 +4315,20 @@ mod tests {
 
         match action {
             LabInputAction::Drag {
-                from, duration_ms, ..
+                from,
+                to,
+                duration_ms,
             } => {
                 assert_eq!(from.rect.x, 303);
                 assert_eq!(from.rect.y, 404);
                 assert_eq!(from.rect.width, 5);
                 assert_eq!(from.rect.height, 6);
+                assert_eq!(to.rect.x, 1000);
+                assert_eq!(to.rect.y, 500);
+                assert_eq!(to.rect.width, 10);
+                assert_eq!(to.rect.height, 10);
+                assert_eq!(to.rect.x - from.rect.x, 697);
+                assert_eq!(to.rect.y - from.rect.y, 96);
                 assert_eq!(duration_ms, 500);
             }
             _ => panic!("expected drag"),
@@ -4380,6 +4437,271 @@ mod tests {
                 assert_eq!(from.rect.height, 30);
             }
             _ => panic!("expected drag"),
+        }
+    }
+
+    #[test]
+    fn guarded_rect_zero_delta_matches_declared_rect() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "rect".to_string(),
+            x: Some(110),
+            y: Some(210),
+            width: Some(12),
+            height: Some(14),
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: None,
+            target_id: None,
+        };
+
+        operation.validate(&control).expect("guarded rect valid");
+        let action = operation
+            .input_action(
+                &control.resolution,
+                77,
+                Some(&template_target_evaluation(
+                    "target/button",
+                    PackRect {
+                        x: 100,
+                        y: 200,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect("input action");
+
+        match action {
+            LabInputAction::Tap(point) => {
+                let expected = actual_click_point(
+                    PackRect {
+                        x: 110,
+                        y: 210,
+                        width: 12,
+                        height: 14,
+                    },
+                    77 ^ hash_text("open_terminal"),
+                );
+                assert_eq!(point.rect.x, expected.rect.x);
+                assert_eq!(point.rect.y, expected.rect.y);
+                assert_eq!(point.x, expected.x);
+                assert_eq!(point.y, expected.y);
+            }
+            _ => panic!("expected tap"),
+        }
+    }
+
+    #[test]
+    fn guarded_rect_point_and_long_press_follow_matched_delta() {
+        let control = test_control();
+        for kind in ["rect", "specific_rect", "point", "long_press"] {
+            let mut operation = test_operation(Some("terminal"), None);
+            operation.unguarded_trusted_coordinate = false;
+            operation.guard = Some(OperationGuard {
+                page_id: "home".to_string(),
+                target_id: "target/button".to_string(),
+                expected_rect: PackRect {
+                    x: 100,
+                    y: 200,
+                    width: 20,
+                    height: 30,
+                },
+                verify_template: Some("target/button".to_string()),
+                color_probe: None,
+            });
+            operation.click = match kind {
+                "rect" | "specific_rect" => OperationClick {
+                    kind: kind.to_string(),
+                    x: Some(103),
+                    y: Some(204),
+                    width: Some(7),
+                    height: Some(9),
+                    from_rect: None,
+                    to_rect: None,
+                    duration_ms: None,
+                    offset: None,
+                    target_id: None,
+                },
+                "point" => OperationClick {
+                    kind: kind.to_string(),
+                    x: Some(103),
+                    y: Some(204),
+                    width: None,
+                    height: None,
+                    from_rect: None,
+                    to_rect: None,
+                    duration_ms: None,
+                    offset: None,
+                    target_id: None,
+                },
+                "long_press" => OperationClick {
+                    kind: kind.to_string(),
+                    x: Some(103),
+                    y: Some(204),
+                    width: None,
+                    height: None,
+                    from_rect: None,
+                    to_rect: None,
+                    duration_ms: Some(900),
+                    offset: None,
+                    target_id: None,
+                },
+                _ => unreachable!(),
+            };
+
+            operation
+                .validate(&control)
+                .expect("guarded coordinate valid");
+            let action = operation
+                .input_action(
+                    &control.resolution,
+                    0,
+                    Some(&template_target_evaluation(
+                        "target/button",
+                        PackRect {
+                            x: 300,
+                            y: 400,
+                            width: 20,
+                            height: 30,
+                        },
+                    )),
+                )
+                .expect("input action");
+
+            match (kind, action) {
+                ("long_press", LabInputAction::LongTap { point, duration_ms }) => {
+                    assert_eq!(duration_ms, 900);
+                    assert_eq!(point.rect.x, 303);
+                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.width, 1);
+                    assert_eq!(point.rect.height, 1);
+                    assert_eq!(point.x, 303);
+                    assert_eq!(point.y, 404);
+                }
+                ("point", LabInputAction::Tap(point)) => {
+                    assert_eq!(point.rect.x, 303);
+                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.width, 1);
+                    assert_eq!(point.rect.height, 1);
+                    assert_eq!(point.x, 303);
+                    assert_eq!(point.y, 404);
+                }
+                (_, LabInputAction::Tap(point)) => {
+                    assert_eq!(point.rect.x, 303);
+                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.width, 7);
+                    assert_eq!(point.rect.height, 9);
+                }
+                _ => panic!("unexpected action for {kind}"),
+            }
+        }
+    }
+
+    #[test]
+    fn guarded_point_rejects_mismatched_guard_target() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+
+        operation.validate(&control).expect("guarded point valid");
+        let err = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/other",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect_err("target mismatch must fail");
+
+        assert!(err.message.contains("does not match guard target_id"));
+    }
+
+    #[test]
+    fn operation_validate_rejects_color_guard_for_absolute_coordinate() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(test_color_guard());
+
+        let err = operation
+            .validate(&control)
+            .expect_err("color guard cannot translate coordinates");
+
+        assert!(err.message.contains("requires template guard metadata"));
+    }
+
+    #[test]
+    fn trusted_unguarded_point_and_long_press_use_original_coordinate() {
+        let control = test_control();
+        for kind in ["point", "long_press"] {
+            let mut operation = test_operation(Some("terminal"), None);
+            operation.click = OperationClick {
+                kind: kind.to_string(),
+                x: Some(123),
+                y: Some(234),
+                width: None,
+                height: None,
+                from_rect: None,
+                to_rect: None,
+                duration_ms: Some(800),
+                offset: None,
+                target_id: None,
+            };
+
+            operation
+                .validate(&control)
+                .expect("trusted unguarded coordinate valid");
+            let action = operation
+                .input_action(&control.resolution, 0, None)
+                .expect("input action");
+
+            match (kind, action) {
+                ("long_press", LabInputAction::LongTap { point, duration_ms }) => {
+                    assert_eq!(duration_ms, 800);
+                    assert_eq!(point.x, 123);
+                    assert_eq!(point.y, 234);
+                }
+                ("point", LabInputAction::Tap(point)) => {
+                    assert_eq!(point.x, 123);
+                    assert_eq!(point.y, 234);
+                }
+                _ => panic!("unexpected action for {kind}"),
+            }
         }
     }
 
