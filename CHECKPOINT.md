@@ -14,7 +14,7 @@
 - Extended vendor stdout/stderr capture to cover Win32 standard-handle writes in addition to CRT fd writes.
 - Added synthetic true-path coverage for persistent arbitrator state, destructive rejection ledger writes, evidence lookup, unknown+candidates, verbose error projection, live-match drift, and non-dry-run fake-touch execution behind SessionLease plus Lab-2 arbitrator admission.
 - No real samples, resource repositories, live devices, OCR, UI, SQLite, MCP server, game logic, or upstream code copying were used in this repair.
-- Milestone source commit: `ed071bc`.
+- Milestone source commit: `7fbf11f`.
 
 ### Files changed
 
