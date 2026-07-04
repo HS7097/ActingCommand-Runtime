@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S2 L1 logging module core
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S1 commit `5e28f2d`.
+- Re-read the task file and applied the r5 clarification that L1 logging must live in a new independent `actingcommand-ledger` crate, not in `actingcommand-runtime-core`.
+- Added the `actingcommand-ledger` workspace crate for the Lab-2 logging module core.
+- Implemented L1.a id issuing for `req`, `task`, `lease`, `reco`, `action`, and `wf` ids with 64-bit process generation and process-local monotonic counters.
+- Implemented L1.b JSONL ledger session headers and `drive` / `dispatch` / `receipt` records with line-level flush and corrupt-tail tolerant reading.
+- Implemented L1.c light events and debug-gated evidence references with relative paths, byte counts, and `sha256` hashes.
+- Implemented L1.d retention selection for deleting oldest unprotected candidates while preserving protected evidence.
+- Implemented L1.e compact projection, protected core scalar fields, bounded decision-array summaries, `_more` / `_full` pointers, requested-field preservation, error projection defaults, and suspicion helper shapes.
+- No real samples, resource repositories, live devices, OCR, UI, SQLite, scheduler behavior, or game logic were used for this S2 node.
+- Targeted crate tests and crate-local clippy passed.
+- Public five-command gate passed.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/ledger/Cargo.toml`
+- `crates/ledger/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md"`
+- `cargo test -p actingcommand-ledger -- --nocapture`
+- `cargo clippy -p actingcommand-ledger -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-ledger -- --nocapture` passed: 15 tests.
+- `cargo clippy -p actingcommand-ledger -- -D warnings` passed.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S2 implementation.
+
+### Next step
+
+1. Commit and push S2 as an independent Lab-2 node.
+2. Continue with S3 / L2 degraded arbitrator and lease after the pushed S2 checkpoint.
+
 ## 2026-07-05 Lab-2 chain S1 L0 prerequisite repair
 
 ### Current status

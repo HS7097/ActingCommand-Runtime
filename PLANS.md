@@ -20,6 +20,24 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
+- S2 / L1 logging module core.
+
+S2 scope:
+
+- Add the independent `actingcommand-ledger` crate required by the 2026-07-05 r5 task update.
+- Keep ID issuing, ledger JSONL append/read, light events, evidence references, retention selection, compact output projection, and suspicion helpers in this crate instead of `actingcommand-runtime-core`.
+- Keep the node synthetic-only and avoid real samples, resource repositories, live devices, OCR, UI, SQLite, scheduler behavior, or game logic.
+
+S2 status:
+
+- `actingcommand-ledger` exists as an independent workspace crate.
+- L1 id issuing, ledger, light event, evidence, retention-selection, projection, and suspicion-helper tests are implemented.
+- Targeted crate tests and clippy passed locally.
+- Public five-command gate passed locally.
+- Next Lab-2 node is S3 / L2 degraded arbitrator and lease unless the task order is revised.
+
+Completed Lab-2 nodes:
+
 - S1 / L0 prerequisite repair batch.
 
 S1 scope:
@@ -41,7 +59,7 @@ S1 status:
 - L0.a implementation is complete locally and covered by synthetic tests.
 - L0.b implementation is complete locally and covered by synthetic fd-capture tests.
 - Public five-command gate passed locally.
-- Next Lab-2 node is S2 / L1 logging module core unless the task order is revised.
+- S1 was committed and pushed as `5e28f2d`.
 
 ## Current AK MAA data fidelity chain
 

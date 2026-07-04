@@ -66,6 +66,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-ledger"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-onnx-provider-support"
 version = "0.1.0"
 dependencies = [
