@@ -20,7 +20,31 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
-- S6 / L5 self-heal transparency.
+- S8 / L7 chain acceptance.
+
+S7 / L6 MCP projection status:
+
+- Deferred. The task file marks MCP projection as optional and non-blocking.
+- No MCP server or MCP-specific semantics were added in this Runtime pass.
+- The shared Lab-2 command contracts and capability/schema generation now provide the source material a later MCP projection should consume.
+
+S8 scope:
+
+- Add synthetic acceptance checks for Lab-2 CLI safety and machine-readable contracts.
+- Verify compact min projection size, synthetic observe latency, ANSI-free JSON output, actionable error details, one-response `do` observation, and req_id ledger-chain reconstruction.
+- Record which acceptance gates are covered by previous S1-S6 tests instead of duplicating large channel/vendor/ledger-retention fixtures.
+
+S8 status:
+
+- Complete locally.
+- Added Lab-2 chain acceptance tests for min projection size, observe latency, error `req_id/state/hint`, no ANSI output, `do` actual-click/guard/observation in one response, and `lab receipt --req` reconstruction.
+- S1-S6 remain the source for the three-backend channel contract, stdout purity, ledger projection/retention, degraded arbitration, CLI verbs, capability/schema, and recovery transparency gates.
+- Public five-command gate passed locally.
+
+Lab-2 chain status:
+
+- S1-S6 and S8 are implemented in Runtime with synthetic/offline tests.
+- S7 MCP projection remains a documented deferred optional node.
 
 S6 scope:
 
@@ -85,6 +109,7 @@ S4 status:
 
 Completed Lab-2 nodes:
 
+- S8 / L7 chain acceptance.
 - S6 / L5 self-heal transparency.
 - S5 / L4 capabilities and safety.
 - S4 / L3 CLI core verbs.

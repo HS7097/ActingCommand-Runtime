@@ -1,5 +1,52 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S8 L7 chain acceptance
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S6 commit `e3150f7`.
+- Treated S7 / L6 MCP projection as deferred because the task file marks it optional and non-blocking.
+- Added synthetic Lab-2 chain acceptance tests for compact projection size, synthetic observe latency, actionable error details, ANSI-free JSON envelope output, one-response `do` observation, and `lab receipt --req` reconstruction.
+- Acceptance coverage reuses previous S1-S6 node tests for Nemu/DroidCast/adb channel contracts, vendor stdout purity, ledger projection/retention, degraded arbitration, CLI verbs, capability/schema, and recovery transparency.
+- No real samples, resource repositories, live devices, OCR, UI, SQLite, full scheduler, MCP server, game logic, or upstream code copying were used.
+- Public five-command gate passed.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch; git log -1 --oneline`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture` passed: 12 Lab-2 tests.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S8 implementation.
+
+### Next step
+
+1. Commit and push S8 as an independent Lab-2 node.
+2. Stop before S7 MCP projection unless the user explicitly pulls it forward.
+
 ## 2026-07-05 Lab-2 chain S6 L5 self-heal transparency
 
 ### Current status

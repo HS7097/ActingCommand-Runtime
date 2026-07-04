@@ -53153,6 +53153,151 @@ mod tests {
     }
 
     #[test]
+    fn lab2_chain_acceptance_min_projection_and_error_shape_are_actionable() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let home = temp.path().join("home.png");
+        let target = temp.path().join("target.png");
+        fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&target, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let observe_started = Instant::now();
+        let observe = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "observe",
+                "--scene",
+                home.to_str().unwrap(),
+                "--targets",
+                "home_button",
+            ],
+            true,
+        );
+        let observe_elapsed = observe_started.elapsed();
+
+        assert_eq!(observe.exit_code(), 0);
+        let data = observe.envelope.data.as_ref().unwrap();
+        assert!(
+            serde_json::to_string(data).unwrap().len() <= 1024,
+            "min projection data exceeded 1 KiB: {}",
+            serde_json::to_string(data).unwrap().len()
+        );
+        assert!(
+            observe_elapsed < Duration::from_millis(300),
+            "synthetic observe took {observe_elapsed:?}"
+        );
+        assert!(!observe.envelope_json().contains('\u{1b}'));
+
+        let error = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                target.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(error.exit_code(), 3);
+        let details = error
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap();
+        assert!(details.get("req_id").and_then(Value::as_str).is_some());
+        assert!(details.get("state").and_then(Value::as_str).is_some());
+        assert!(details.get("hint").and_then(Value::as_str).is_some());
+        assert!(!error.envelope_json().contains('\u{1b}'));
+    }
+
+    #[test]
+    fn lab2_chain_acceptance_do_receipt_is_one_response_reconstructable() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let run_root = temp.path().join("runs");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let action = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(action.exit_code(), 0);
+        let data = action.envelope.data.as_ref().unwrap();
+        let req_id = data.get("req_id").and_then(Value::as_str).unwrap();
+        assert!(data.get("actual_click").is_some());
+        assert!(data.get("guard_result").is_some());
+        assert!(data.get("observation").is_some());
+        assert_eq!(data.get("executed").and_then(Value::as_bool), Some(false));
+
+        let receipt = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "lab",
+                "receipt",
+                "--req",
+                req_id,
+            ],
+            true,
+        );
+
+        assert_eq!(receipt.exit_code(), 0);
+        let records = receipt
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("records")
+            .and_then(Value::as_array)
+            .unwrap();
+        for expected_kind in ["dispatch", "drive", "receipt"] {
+            assert!(
+                records
+                    .iter()
+                    .any(|item| item.get("kind").and_then(Value::as_str) == Some(expected_kind)),
+                "missing ledger kind {expected_kind}"
+            );
+        }
+    }
+
+    #[test]
     fn session_recover_standby_dry_run_uses_wake_control_point() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("standby.png");
