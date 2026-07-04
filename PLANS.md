@@ -23,7 +23,9 @@ Stage-one repair status:
 - S2 tests are synthetic-only and cover self, two-node, three-node, and nested-expression virtual cycles plus a legal deep virtual chain.
 - S3/B2a plain `baseTask` template inheritance is implemented. Plain `baseTask` derivations now preserve explicit templates inherited from the base chain, synthesize a task-specific fallback only when the whole plain base chain has no template, and keep explicit child templates authoritative.
 - S3 tests are synthetic-only and cover inherited parent templates, all-template-missing fallback defaults, child template override, and the existing `@` derived-template behavior.
-- S4-S8 remain open and must continue in the fixed order from the repair task file.
+- S4/B2b+B4+B5 protocol-check batch is implemented. The MAA task compiler now records local protocol-source comments for `@` list rebasing, explicit/default template naming, bare `#back`, and algorithm-specific inheritance filtering.
+- S4 tests are synthetic-only and cover implicit `@` template inheritance, explicit `@` template rebasing, explicit `@` plus declared `baseTask` priority, bare `#back` skipping, and algorithm-change inheritance filtering.
+- S5-S8 remain open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

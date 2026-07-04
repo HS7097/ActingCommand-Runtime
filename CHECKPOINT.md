@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S4 protocol-check batch
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S3 was pushed as `579bc99be04833da35de3d2f3dc3a60cf0095e9bb`.
+- Implemented S4/B2b+B4+B5 as a protocol-check and golden-test batch.
+- Checked the local MAA public protocol document at `upstream-sources\MaaAssistantArknights\docs\zh-cn\protocol\task-schema.md`.
+- Added protocol-source comments for `@` list-field rebasing, explicit/default template naming, bare `#back` behavior, and algorithm-specific inheritance filtering.
+- Added synthetic-only tests for implicit `@` template inheritance, explicit `@` template rebasing, explicit `@` plus declared `baseTask` priority, bare `#back` skipping, and algorithm-change inheritance filtering.
+- No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -4 --oneline`
+- `rg -n "任务流程协议|流程协议|baseTask|#back|@.*template|template.*@|filter_algorithm|algorithm.*inherit|templThreshold|maskRange|rectMove" -S C:\合作工作区\ActingCommand`
+- `rg -n "任务流程协议|任务协议|Task schema|baseTask|#back|#self|@" C:\Users\Alice\Documents\Azur\upstream-sources\MaaAssistantArknights\docs -S`
+- `Get-Content -LiteralPath C:\Users\Alice\Documents\Azur\upstream-sources\MaaAssistantArknights\docs\zh-cn\protocol\task-schema.md`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture` passed: 22 tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for S4.
+- S5-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in fixed order using synthetic-only validation.
+
+### Next step
+
+1. Commit and push S4.
+2. Continue with S5/B3 offset baseline plus matched-rect contract.
+
 ## 2026-07-04 fidelity stage-one repair S3 baseTask template inheritance
 
 ### Current status

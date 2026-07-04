@@ -20,6 +20,27 @@ const LIST_FIELDS: [&str; 5] = [
     "reduceOtherTimes",
 ];
 
+const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
+    "template",
+    "templThreshold",
+    "maskRange",
+    "colorScales",
+    "colorWithClose",
+    "pureColor",
+    "method",
+    "text",
+    "ocrReplace",
+    "fullMatch",
+    "isAscii",
+    "withoutDet",
+    "useRaw",
+    "binThreshold",
+    "inputText",
+    "count",
+    "ratio",
+    "detector",
+];
+
 #[derive(Debug, Clone)]
 pub(super) struct MaaTaskGraph {
     tasks: BTreeMap<String, Value>,
@@ -457,6 +478,8 @@ impl MaaTaskCompiler {
         match sharp_type {
             "none" => Ok(Vec::new()),
             "self" => Ok(vec![context_task.to_string()]),
+            // MAA task-schema.md, "Virtual tasks": a bare #back has no left
+            // task name and is skipped; non-bare X#back returns X.
             "back" => Ok(left.to_vec()),
             "next" | "sub" | "on_error_next" | "exceeded_next" | "reduce_other_times" => {
                 let field = sharp_field_name(sharp_type);
@@ -725,6 +748,8 @@ fn value_object(value: Value, task_id: &str) -> CliOutcome<Map<String, Value>> {
 }
 
 fn rebase_task_list_defaults(mut base: Map<String, Value>, prefix: &str) -> Map<String, Value> {
+    // MAA task-schema.md, "Template tasks": @ tasks rebase list-field defaults
+    // by prefixing task references, while non-list defaults follow separate rules.
     for field in LIST_FIELDS {
         let Some(value) = base.get(field).cloned() else {
             continue;
@@ -766,26 +791,9 @@ fn filter_algorithm_specific_inheritance(
     if parent_algorithm == child_algorithm {
         return;
     }
-    for key in [
-        "template",
-        "templThreshold",
-        "maskRange",
-        "colorScales",
-        "colorWithClose",
-        "pureColor",
-        "method",
-        "text",
-        "ocrReplace",
-        "fullMatch",
-        "isAscii",
-        "withoutDet",
-        "useRaw",
-        "binThreshold",
-        "inputText",
-        "count",
-        "ratio",
-        "detector",
-    ] {
+    // MAA task-schema.md, "Derived tasks" and "explicit @ tasks": when the
+    // algorithm changes, algorithm-specific parameters must not inherit.
+    for key in ALGORITHM_SPECIFIC_FIELDS {
         inherited.remove(key);
     }
 }
@@ -798,6 +806,8 @@ fn looks_like_template_task(task: &Map<String, Value>) -> bool {
 }
 
 fn default_template_name(task_id: &str) -> String {
+    // MAA task-schema.md, "Derived tasks" and "explicit @ tasks": template
+    // matching tasks default template to "<task name>.png".
     format!("{task_id}.png")
 }
 
@@ -1008,6 +1018,112 @@ mod tests {
             Some("P@Base.png")
         );
         assert_eq!(task.get("next").unwrap(), &json!(["P@N1", "P"]));
+    }
+
+    #[test]
+    fn implicit_at_task_inherits_base_template() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "template": "Base.png",
+                "next": ["N1", "#back"]
+            },
+            "N1": { "next": [] },
+            "P": { "next": [] },
+            "P@N1": { "next": [] },
+            "Driver": { "next": ["P@Base"] }
+        }))
+        .unwrap();
+
+        let task = graph.task("P@Base").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Base.png")
+        );
+        assert_eq!(task.get("next").unwrap(), &json!(["P@N1", "P"]));
+    }
+
+    #[test]
+    fn explicit_at_with_base_task_uses_declared_base_task() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "NameBase": {
+                "algorithm": "MatchTemplate",
+                "template": "NameBase.png",
+                "next": ["NameNext"]
+            },
+            "DeclaredBase": {
+                "algorithm": "MatchTemplate",
+                "template": "DeclaredBase.png",
+                "next": ["DeclaredNext"]
+            },
+            "NameNext": { "next": [] },
+            "DeclaredNext": { "next": [] },
+            "Prefix@NameBase": {
+                "baseTask": "DeclaredBase"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Prefix@NameBase").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Prefix@NameBase.png")
+        );
+        assert_eq!(task.get("next").unwrap(), &json!(["DeclaredNext"]));
+    }
+
+    #[test]
+    fn bare_back_virtual_reference_is_skipped() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "A": {
+                "next": ["#back", "Stop"]
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("A").unwrap();
+        assert_eq!(task.get("next").unwrap(), &json!(["Stop"]));
+    }
+
+    #[test]
+    fn algorithm_change_drops_algorithm_specific_inherited_fields() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "template": "Base.png",
+                "templThreshold": 0.87,
+                "maskRange": [10, 200],
+                "method": "RGBCount",
+                "colorScales": [[0, 0, 0]],
+                "action": "ClickSelf",
+                "roi": [1, 2, 3, 4],
+                "next": ["Stop"]
+            },
+            "Child": {
+                "baseTask": "Base",
+                "algorithm": "OcrDetect",
+                "text": ["OK"]
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert_eq!(
+            task.pointer("/algorithm").and_then(Value::as_str),
+            Some("OcrDetect")
+        );
+        assert_eq!(task.pointer("/text/0").and_then(Value::as_str), Some("OK"));
+        assert!(task.get("template").is_none());
+        assert!(task.get("templThreshold").is_none());
+        assert!(task.get("maskRange").is_none());
+        assert!(task.get("method").is_none());
+        assert!(task.get("colorScales").is_none());
+        assert_eq!(
+            task.pointer("/action").and_then(Value::as_str),
+            Some("ClickSelf")
+        );
+        assert_eq!(task.get("roi").unwrap(), &json!([1, 2, 3, 4]));
+        assert_eq!(task.get("next").unwrap(), &json!(["Stop"]));
     }
 
     #[test]
