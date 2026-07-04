@@ -12,6 +12,18 @@ The active task is `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.m
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md`.
 
+The active round-two repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-round2-e376c8b.md`.
+
+Round-two repair status:
+
+- R1 plain `baseTask` template semantics are restored to the MAA protocol value: a template-matching derived task without its own `template` now defaults to `<child task>.png` even when the base task declares a template. The previous B2a inheritance behavior is removed, and Return/Return2-style synthetic coverage is added.
+- R2 `@` composition growth cycles are bounded by a 64-step expansion depth guard. Exact virtual-cycle detection remains in place, while growing names such as `A@A#next` now fail during conversion instead of recursing without bound.
+- R3 T5 coverage is added for source-anchor guard synthesis, `rect`/`specific_rect` missing-guard rejection, guarded drag start-point derivation from the live matched guard target, guard-target mismatch rejection, and explicit trusted unguarded gesture opt-in.
+- R4 `inputText` is now treated as a TaskInfo field and survives algorithm changes. Algorithm-specific inheritance comments now point to the relevant MAA protocol lines and AsstTypes.h field ownership.
+- R5 synthetic coverage is added for drift target not-found/ambiguous errors, measured `matched_rect` drift amend input without proposed region, action-time offset target mismatch, shared `recognize --target` evaluation JSON shape, and `--maa-tasks` help visibility.
+- No true resource repository, real sample, or live device validation is used for this round-two repair.
+- Round-two public gates passed: `cargo fmt --all -- --check`, `cargo build --release`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, and `git diff --check`.
+
 Stage-one repair status:
 
 - S1/W1 MAA compiler wiring is implemented in the narrowed explicit-input form.

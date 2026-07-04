@@ -20,25 +20,27 @@ const LIST_FIELDS: [&str; 5] = [
     "reduceOtherTimes",
 ];
 
-const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
-    "template",
-    "templThreshold",
-    "maskRange",
-    "colorScales",
-    "colorWithClose",
-    "pureColor",
-    "method",
-    "text",
-    "ocrReplace",
-    "fullMatch",
-    "isAscii",
-    "withoutDet",
-    "useRaw",
-    "binThreshold",
-    "inputText",
-    "count",
-    "ratio",
-    "detector",
+// Exact cycle detection cannot catch @-composition names that grow every step.
+const MAX_MAA_EXPANSION_DEPTH: usize = 64;
+
+const ALGORITHM_SPECIFIC_FIELDS: [&str; 17] = [
+    "template",       // AsstTypes.h MatchTaskInfo::templ_names.
+    "templThreshold", // AsstTypes.h MatchTaskInfo::templ_thresholds.
+    "maskRange",      // AsstTypes.h MatchTaskInfo::mask_ranges.
+    "colorScales",    // AsstTypes.h MatchTaskInfo::color_scales.
+    "colorWithClose", // AsstTypes.h MatchTaskInfo::color_close.
+    "pureColor",      // AsstTypes.h MatchTaskInfo::pure_color.
+    "method",         // AsstTypes.h MatchTaskInfo::methods.
+    "text",           // AsstTypes.h OcrTaskInfo::text.
+    "ocrReplace",     // AsstTypes.h OcrTaskInfo::replace_map.
+    "fullMatch",      // AsstTypes.h OcrTaskInfo::full_match.
+    "isAscii",        // AsstTypes.h OcrTaskInfo::is_ascii.
+    "withoutDet",     // AsstTypes.h OcrTaskInfo::without_det.
+    "useRaw",         // AsstTypes.h OcrTaskInfo::use_raw.
+    "binThreshold",   // AsstTypes.h OcrTaskInfo::bin_threshold.
+    "count",          // AsstTypes.h FeatureMatchTaskInfo::count.
+    "ratio",          // AsstTypes.h FeatureMatchTaskInfo::ratio.
+    "detector",       // AsstTypes.h FeatureMatchTaskInfo::detector.
 ];
 
 #[derive(Debug, Clone)]
@@ -275,6 +277,12 @@ impl MaaTaskCompiler {
         if let Some(task) = self.expanded.get(task_id) {
             return Ok(task.clone());
         }
+        if stack.len() >= MAX_MAA_EXPANSION_DEPTH {
+            let chain = expansion_chain_tail(stack, task_id);
+            return Err(CliError::package_invalid(format!(
+                "MAA expansion depth exceeded, possible @-composition cycle: {chain}"
+            )));
+        }
         if stack.iter().any(|item| item == task_id) {
             let mut chain = stack.clone();
             chain.push(task_id.to_string());
@@ -351,14 +359,9 @@ impl MaaTaskCompiler {
                 filter_algorithm_specific_inheritance(&mut base, &raw.data);
                 merge_object(&mut base, &raw.data);
                 base.remove("baseTask");
-                let should_default_template = if is_explicit_at {
-                    !raw.data.contains_key("template") && looks_like_template_task(&base)
-                } else if base_task.is_some() {
-                    !self.base_task_chain_has_template(&raw, &mut HashSet::new())
-                        && looks_like_template_task(&base)
-                } else {
-                    false
-                };
+                let should_default_template = (is_explicit_at || base_task.is_some())
+                    && !raw.data.contains_key("template")
+                    && looks_like_template_task(&base);
                 if should_default_template {
                     base.insert(
                         "template".to_string(),
@@ -379,24 +382,6 @@ impl MaaTaskCompiler {
         let task = Value::Object(task);
         self.materialized.insert(task_id.to_string(), task.clone());
         Ok(task)
-    }
-
-    fn base_task_chain_has_template(&self, task: &RawMaaTask, seen: &mut HashSet<String>) -> bool {
-        if task.data.contains_key("template") {
-            return true;
-        }
-        if !seen.insert(task.task_id.clone()) {
-            return false;
-        }
-        let Some(base_id) = task.data.get("baseTask").and_then(Value::as_str) else {
-            return false;
-        };
-        if base_id == "#none" {
-            return false;
-        }
-        self.raw
-            .get(base_id)
-            .is_some_and(|base| self.base_task_chain_has_template(base, seen))
     }
 
     fn expand_expression_list(
@@ -478,8 +463,8 @@ impl MaaTaskCompiler {
         match sharp_type {
             "none" => Ok(Vec::new()),
             "self" => Ok(vec![context_task.to_string()]),
-            // MAA task-schema.md, "Virtual tasks": a bare #back has no left
-            // task name and is skipped; non-bare X#back returns X.
+            // MAA task-schema.md lines 245-248: bare #back is skipped;
+            // non-bare X#back returns X.
             "back" => Ok(left.to_vec()),
             "next" | "sub" | "on_error_next" | "exceeded_next" | "reduce_other_times" => {
                 let field = sharp_field_name(sharp_type);
@@ -747,9 +732,16 @@ fn value_object(value: Value, task_id: &str) -> CliOutcome<Map<String, Value>> {
     }
 }
 
+fn expansion_chain_tail(stack: &[String], next_task: &str) -> String {
+    let start = stack.len().saturating_sub(8);
+    let mut chain = stack[start..].to_vec();
+    chain.push(next_task.to_string());
+    chain.join(" -> ")
+}
+
 fn rebase_task_list_defaults(mut base: Map<String, Value>, prefix: &str) -> Map<String, Value> {
-    // MAA task-schema.md, "Template tasks": @ tasks rebase list-field defaults
-    // by prefixing task references, while non-list defaults follow separate rules.
+    // MAA task-schema.md lines 221-234: @ tasks rebase list-field defaults
+    // by prefixing task references; non-list defaults follow separate rules.
     for field in LIST_FIELDS {
         let Some(value) = base.get(field).cloned() else {
             continue;
@@ -791,8 +783,8 @@ fn filter_algorithm_specific_inheritance(
     if parent_algorithm == child_algorithm {
         return;
     }
-    // MAA task-schema.md, "Derived tasks" and "explicit @ tasks": when the
-    // algorithm changes, algorithm-specific parameters must not inherit.
+    // MAA task-schema.md lines 217-218 and 232-234:
+    // when the algorithm changes, only TaskInfo parameters inherit.
     for key in ALGORITHM_SPECIFIC_FIELDS {
         inherited.remove(key);
     }
@@ -806,8 +798,7 @@ fn looks_like_template_task(task: &Map<String, Value>) -> bool {
 }
 
 fn default_template_name(task_id: &str) -> String {
-    // MAA task-schema.md, "Derived tasks" and "explicit @ tasks": template
-    // matching tasks default template to "<task name>.png".
+    // MAA task-schema.md lines 217 and 232-233.
     format!("{task_id}.png")
 }
 
@@ -1127,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn base_task_inherits_parent_template() {
+    fn base_task_uses_child_template_default_even_when_parent_has_template() {
         let graph = compile_maa_task_graph_from_value(json!({
             "Base": {
                 "algorithm": "MatchTemplate",
@@ -1144,12 +1135,38 @@ mod tests {
         let task = graph.task("Child").unwrap();
         assert_eq!(
             task.pointer("/template").and_then(Value::as_str),
-            Some("Base.png")
+            Some("Child.png")
         );
         assert_eq!(
             task.pointer("/threshold").and_then(Value::as_f64),
             Some(0.92)
         );
+    }
+
+    #[test]
+    fn base_task_return_example_uses_child_template_default() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Return": {
+                "algorithm": "MatchTemplate",
+                "action": "ClickSelf",
+                "next": ["Stop"]
+            },
+            "Return2": {
+                "baseTask": "Return"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Return2").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Return2.png")
+        );
+        assert_eq!(
+            task.pointer("/action").and_then(Value::as_str),
+            Some("ClickSelf")
+        );
+        assert_eq!(task.get("next").unwrap(), &json!(["Stop"]));
     }
 
     #[test]
@@ -1263,6 +1280,29 @@ mod tests {
     }
 
     #[test]
+    fn virtual_at_composition_growth_cycle_fails_loudly() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["A@A#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("expansion depth exceeded"));
+        assert!(err.message.contains("possible @-composition cycle"));
+    }
+
+    #[test]
+    fn virtual_cross_at_composition_growth_cycle_fails_loudly() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["B@A#next"]},
+            "B": {"next": ["A@B#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("expansion depth exceeded"));
+        assert!(err.message.contains("possible @-composition cycle"));
+    }
+
+    #[test]
     fn virtual_three_node_cycle_fails_loudly_with_chain() {
         let err = compile_maa_task_graph_from_value(json!({
             "A": {"next": ["B#next"]},
@@ -1302,6 +1342,49 @@ mod tests {
         .unwrap();
 
         assert_eq!(graph.task("A").unwrap().get("next").unwrap(), &json!(["D"]));
+    }
+
+    #[test]
+    fn legal_at_composition_chain_below_depth_limit_expands() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {"next": ["N"]},
+            "N": {"next": []},
+            "P@N": {"next": []},
+            "A": {"next": ["P@Base#next"]},
+            "P": {"next": []}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            graph.task("A").unwrap().get("next").unwrap(),
+            &json!(["P@N"])
+        );
+    }
+
+    #[test]
+    fn algorithm_change_preserves_input_text_task_info_field() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "JustReturn",
+                "inputText": "doctor",
+                "next": ["Stop"]
+            },
+            "Child": {
+                "baseTask": "Base",
+                "algorithm": "MatchTemplate"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert_eq!(
+            task.pointer("/inputText").and_then(Value::as_str),
+            Some("doctor")
+        );
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Child.png")
+        );
     }
 
     #[test]

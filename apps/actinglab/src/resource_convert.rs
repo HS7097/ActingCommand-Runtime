@@ -1046,6 +1046,8 @@ impl OperationConverter {
         operation: &Value,
         operation_id: &str,
     ) -> CliOutcome<Value> {
+        // A source-page anchor can become the C0.c guard only when it has a
+        // template and rect; otherwise coordinate operations must opt in or fail.
         let from = required_string(operation, "from")?;
         let anchor = array_field(&bundle.data, "anchors")
             .iter()
@@ -2810,6 +2812,201 @@ mod tests {
                 .pointer("/guard/target_id")
                 .and_then(Value::as_str),
             Some("page/home")
+        );
+    }
+
+    #[test]
+    fn build_primitives_synthesizes_guard_from_source_anchor_without_verify_template() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/open-menu");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/HOME.png"), b"png").unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "open-menu".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "open-menu",
+                    "anchors": [{
+                        "id": "home",
+                        "template": "assets/HOME.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}}
+                    }],
+                    "operations": [{
+                        "id": "open_menu",
+                        "purpose": "open menu",
+                        "from": "home",
+                        "to": "menu",
+                        "click": {"kind":"specific_rect","x":100,"y":110,"width":20,"height":25}
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert_eq!(
+            primitive.pointer("/guard/page_id").and_then(Value::as_str),
+            Some("arknights/home")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/guard/target_id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            primitive.pointer("/guard/expected_rect"),
+            Some(&json!({"x":10,"y":20,"width":30,"height":40}))
+        );
+    }
+
+    #[test]
+    fn build_primitives_rejects_rect_and_specific_rect_without_guard_source() {
+        for kind in ["rect", "specific_rect"] {
+            let root = tempfile::tempdir().unwrap();
+            let task_dir = root.path().join(format!("operations/open-menu-{kind}"));
+            fs::create_dir_all(&task_dir).unwrap();
+            let converter = OperationConverter {
+                root: root.path().to_path_buf(),
+                game: "arknights".to_string(),
+                server: "cn".to_string(),
+                locale: "zh-CN".to_string(),
+                coordinate_space: json!({"width":1280,"height":720}),
+                defaults: json!({"template_threshold":0.95}),
+                resource_ids: HashSet::new(),
+                bundles: vec![Bundle {
+                    task_id: format!("open-menu-{kind}"),
+                    dir: task_dir,
+                    data: json!({
+                        "schema_version": "0.3",
+                        "task_id": format!("open-menu-{kind}"),
+                        "anchors": [],
+                        "operations": [{
+                            "id": "open_menu",
+                            "purpose": "open menu",
+                            "from": "home",
+                            "to": "menu",
+                            "click": {"kind": kind, "x":100,"y":110,"width":20,"height":25}
+                        }]
+                    }),
+                }],
+                existing_navigation: None,
+                maa_task_overlays: HashMap::new(),
+            };
+
+            let err = converter
+                .build_all()
+                .expect_err("coordinate operation without guard source must fail");
+            assert!(err.message.contains("cannot synthesize guard"));
+            assert!(err.message.contains("unguarded_trusted_coordinate"));
+        }
+    }
+
+    #[test]
+    fn build_primitives_rejects_drag_without_guard_source() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/open-menu-drag");
+        fs::create_dir_all(&task_dir).unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "open-menu-drag".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "open-menu-drag",
+                    "anchors": [],
+                    "operations": [{
+                        "id": "drag_menu",
+                        "purpose": "drag menu",
+                        "from": "home",
+                        "to": "menu",
+                        "click": {
+                            "kind": "drag",
+                            "from": {"x": 100, "y": 110, "width": 20, "height": 25},
+                            "to": {"x": 500, "y": 110, "width": 20, "height": 25},
+                            "duration_ms": 500
+                        }
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
+        };
+
+        let err = converter
+            .build_all()
+            .expect_err("drag without guard source must fail");
+        assert!(err.message.contains("cannot synthesize guard"));
+        assert!(err.message.contains("unguarded_trusted_coordinate"));
+    }
+
+    #[test]
+    fn build_primitives_allows_explicit_trusted_unguarded_drag() {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/open-menu-drag");
+        fs::create_dir_all(&task_dir).unwrap();
+        let converter = OperationConverter {
+            root: root.path().to_path_buf(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.95}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "open-menu-drag".to_string(),
+                dir: task_dir,
+                data: json!({
+                    "schema_version": "0.3",
+                    "task_id": "open-menu-drag",
+                    "anchors": [],
+                    "operations": [{
+                        "id": "drag_menu",
+                        "purpose": "drag menu",
+                        "from": "home",
+                        "to": "menu",
+                        "click": {
+                            "kind": "drag",
+                            "from": {"x": 100, "y": 110, "width": 20, "height": 25},
+                            "to": {"x": 500, "y": 110, "width": 20, "height": 25},
+                            "duration_ms": 500
+                        },
+                        "unguarded_trusted_coordinate": true
+                    }]
+                }),
+            }],
+            existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
+        };
+
+        let outputs = converter.build_all().unwrap();
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+
+        assert!(primitive.get("guard").is_some_and(Value::is_null));
+        assert_eq!(
+            primitive
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

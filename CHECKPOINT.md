@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity round-two repair R1-R5
+
+### Current status
+
+- Started `C:\合作工作区\ActingCommand\FIX-fidelity-round2-e376c8b.md` from clean `origin/main` at `e376c8b`.
+- Implemented R1: plain `baseTask` template defaults now follow the MAA protocol and use the child task name instead of inheriting the base task template.
+- Implemented R2: growing `@` composition virtual cycles now fail loudly through a bounded expansion-depth guard.
+- Implemented R3: source-anchor guard synthesis is documented and covered, missing guard sources for `rect`/`specific_rect`/drag fail loudly, and guarded drag start points derive from the live matched guard target.
+- Implemented R4: `inputText` is no longer stripped on algorithm changes because it belongs to TaskInfo, not an algorithm-specific derived struct.
+- Implemented R5: added drift-amend error/fallback tests, an offset target-mismatch test, shared `recognize --target` evaluation output, and `--maa-tasks` help visibility.
+- Public five-command gate passed for the completed R1-R5 repair.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin; git pull --ff-only origin main; git status --short --branch; git log -1 --oneline --decorate`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture`
+- `cargo test -p actingcommand-actinglab resource_convert::tests -- --nocapture`
+- `cargo test -p actingcommand-actinglab guarded_drag -- --nocapture`
+- `cargo test -p actingcommand-actinglab trusted_unguarded_drag -- --nocapture`
+- `cargo test -p actingcommand-actinglab offset_click -- --nocapture`
+- `cargo test -p actingcommand-actinglab drift_diagnostics -- --nocapture`
+- `cargo test -p actingcommand-actinglab record_drift_target -- --nocapture`
+- `cargo test -p actingcommand-actinglab recognize_target_output_uses_shared_evaluation_shape -- --nocapture`
+- `cargo test -p actingcommand-actinglab help_lists_resource_convert_maa_tasks_option -- --nocapture`
+- `cargo test -p actingcommand-actinglab`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `maa_task_graph::tests` passed: 27 tests.
+- `resource_convert::tests` passed: 25 tests.
+- Guarded-drag, trusted-unguarded-drag, offset-click, drift-diagnostics, record-drift-target, recognize-shape, and help-option targeted tests passed.
+- `cargo test -p actingcommand-actinglab` passed: 589 unit tests plus 3 integration tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker.
+
+### Next step
+
+1. Commit and push the completed round-two repair.
+
 ## 2026-07-04 fidelity stage-one repair S8 drift-to-amend
 
 ### Current status

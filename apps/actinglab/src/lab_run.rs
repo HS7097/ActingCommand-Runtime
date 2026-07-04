@@ -2304,12 +2304,16 @@ impl OperationClick {
                 Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
             }
             "drag" => {
-                let from = self
+                let declared_from = self
                     .from_rect
                     .ok_or_else(|| CliError::package_invalid("drag click missing from rect"))?;
                 let to = self
                     .to_rect
                     .ok_or_else(|| CliError::package_invalid("drag click missing to rect"))?;
+                let from = match guard {
+                    Some(guard) => guarded_gesture_start_rect(declared_from, guard, target)?,
+                    None => declared_from,
+                };
                 Ok(LabInputAction::Drag {
                     from: actual_click_point(from, seed ^ hash_text("drag.from")),
                     to: actual_click_point(to, seed ^ hash_text("drag.to")),
@@ -2343,16 +2347,16 @@ impl OperationClick {
 fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     if target.kind != TargetKind::Template {
         return Err(CliError::package_invalid(format!(
-            "offset click requires template-target matched_rect, got {:?}",
+            "template-target matched_rect required, got {:?}",
             target.kind
         )));
     }
-    let template = target.template.ok_or_else(|| {
-        CliError::package_invalid("offset click template target missing matched_rect")
-    })?;
+    let template = target
+        .template
+        .ok_or_else(|| CliError::package_invalid("template target missing matched_rect"))?;
     if !target.passed {
         return Err(CliError::package_invalid(format!(
-            "offset click target '{}' did not pass guard evaluation",
+            "template target '{}' did not pass guard evaluation",
             target.id
         )));
     }
@@ -2364,11 +2368,33 @@ fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     };
     if rect.width <= 0 || rect.height <= 0 {
         return Err(CliError::package_invalid(format!(
-            "offset click matched_rect dimensions must be positive: {}x{}",
+            "matched_rect dimensions must be positive: {}x{}",
             rect.width, rect.height
         )));
     }
     Ok(rect)
+}
+
+fn guarded_gesture_start_rect(
+    declared_from: PackRect,
+    guard: &OperationGuard,
+    target: Option<&TargetEvaluation>,
+) -> CliOutcome<PackRect> {
+    let target =
+        target.ok_or_else(|| CliError::package_invalid("guarded gesture requires guard target"))?;
+    if target.id != guard.target_id {
+        return Err(CliError::package_invalid(format!(
+            "guarded gesture matched target '{}' does not match guard target_id '{}'",
+            target.id, guard.target_id
+        )));
+    }
+    let matched_rect = matched_template_rect(target)?;
+    Ok(PackRect {
+        x: matched_rect.x + (declared_from.x - guard.expected_rect.x),
+        y: matched_rect.y + (declared_from.y - guard.expected_rect.y),
+        width: declared_from.width,
+        height: declared_from.height,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4123,6 +4149,237 @@ mod tests {
                 assert_eq!(point.rect.height, 6);
             }
             _ => panic!("expected tap"),
+        }
+    }
+
+    #[test]
+    fn offset_click_rejects_mismatched_guard_target_at_action_time() {
+        let control = test_control();
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "offset".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: Some(PackRect {
+                x: 3,
+                y: 4,
+                width: 5,
+                height: 6,
+            }),
+            target_id: Some("target/button".to_string()),
+        };
+
+        operation.validate(&control).expect("offset valid");
+        let err = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/other",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect_err("mismatched target must fail");
+
+        assert!(err.message.contains("does not match guard target_id"));
+    }
+
+    #[test]
+    fn guarded_drag_uses_matched_target_rect_for_start_point() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/thumb".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/thumb".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "drag".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: Some(PackRect {
+                x: 103,
+                y: 204,
+                width: 5,
+                height: 6,
+            }),
+            to_rect: Some(PackRect {
+                x: 800,
+                y: 300,
+                width: 10,
+                height: 10,
+            }),
+            duration_ms: Some(500),
+            offset: None,
+            target_id: None,
+        };
+
+        operation.validate(&control).expect("guarded drag valid");
+        let action = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/thumb",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect("drag input action");
+
+        match action {
+            LabInputAction::Drag {
+                from, duration_ms, ..
+            } => {
+                assert_eq!(from.rect.x, 303);
+                assert_eq!(from.rect.y, 404);
+                assert_eq!(from.rect.width, 5);
+                assert_eq!(from.rect.height, 6);
+                assert_eq!(duration_ms, 500);
+            }
+            _ => panic!("expected drag"),
+        }
+    }
+
+    #[test]
+    fn guarded_drag_rejects_mismatched_guard_target() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/thumb".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/thumb".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "drag".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: Some(PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            }),
+            to_rect: Some(PackRect {
+                x: 800,
+                y: 300,
+                width: 10,
+                height: 10,
+            }),
+            duration_ms: Some(500),
+            offset: None,
+            target_id: None,
+        };
+
+        operation.validate(&control).expect("guarded drag valid");
+        let err = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/other",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect_err("guard target mismatch must fail");
+
+        assert!(err.message.contains("does not match guard target_id"));
+    }
+
+    #[test]
+    fn trusted_unguarded_drag_uses_original_start_rect() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.click = OperationClick {
+            kind: "drag".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: Some(PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            }),
+            to_rect: Some(PackRect {
+                x: 800,
+                y: 300,
+                width: 10,
+                height: 10,
+            }),
+            duration_ms: Some(500),
+            offset: None,
+            target_id: None,
+        };
+
+        operation
+            .validate(&control)
+            .expect("trusted unguarded drag valid");
+        let action = operation
+            .input_action(&control.resolution, 0, None)
+            .expect("drag input action");
+
+        match action {
+            LabInputAction::Drag { from, .. } => {
+                assert_eq!(from.rect.x, 100);
+                assert_eq!(from.rect.y, 200);
+                assert_eq!(from.rect.width, 20);
+                assert_eq!(from.rect.height, 30);
+            }
+            _ => panic!("expected drag"),
         }
     }
 

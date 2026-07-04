@@ -1355,6 +1355,13 @@ fn help_data() -> Value {
             "--quiet",
             "--version"
         ],
+        "command_options": {
+            "resource convert": [
+                "--operations <dir>",
+                "--out <dir>",
+                "--maa-tasks <dir>"
+            ]
+        },
         "commands": command_capabilities()
     })
 }
@@ -5824,29 +5831,15 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let evaluation = evaluator
         .evaluate_target(&scene, &target)
         .map_err(|err| CliError::usage(err.to_string()))?;
-    let template = evaluation.template.map(|template| {
-        json!({
-            "x": template.x,
-            "y": template.y,
-            "score": template.score,
-            "raw_score": template.raw_score,
-            "threshold": template.threshold
-        })
-    });
-    let color = evaluation.color.map(|color| {
-        json!({
-            "distance": color.distance,
-            "max_distance": color.max_distance,
-            "mean": color.mean,
-            "expected": color.expected
-        })
-    });
+    let evaluation_json = target_eval_json(&evaluation);
     Ok(json!({
         "target": target,
         "passed": evaluation.passed,
         "message": evaluation.message,
-        "template": template,
-        "color": color,
+        "matched_rect": evaluation_json.get("matched_rect").cloned(),
+        "template": evaluation_json.get("template").cloned(),
+        "color": evaluation_json.get("color").cloned(),
+        "evaluation": evaluation_json,
         "match_metric": match_metric_name(evaluator.default_match_metric())
     }))
 }
@@ -25596,6 +25589,37 @@ mod tests {
         .expect("test frame png")
     }
 
+    fn drift_test_record(steps: Value) -> SessionRecordContext {
+        serde_json::from_value(json!({
+            "schema_version": "session.record.v0.1",
+            "record_id": "record-1",
+            "task_id": "daily-check",
+            "instance": "ak",
+            "status": "recording",
+            "started_at_unix_ms": 1,
+            "updated_at_unix_ms": 2,
+            "steps": steps
+        }))
+        .expect("drift test record")
+    }
+
+    fn drift_test_anchor_step(step_id: &str, id: &str) -> Value {
+        json!({
+            "schema_version": "session.record_step.v0.1",
+            "step_id": step_id,
+            "created_at_unix_ms": 1,
+            "updated_at_unix_ms": 2,
+            "kind": "anchor",
+            "id": id,
+            "region": {"mode": "rect", "rect": {"x": 1, "y": 2, "width": 3, "height": 4}},
+            "color_check": false,
+            "evaluation": {
+                "status": "deferred",
+                "reason": "synthetic"
+            }
+        })
+    }
+
     fn test_contrast_record_frame_png(width: u32, height: u32) -> Vec<u8> {
         let mut pixels = Vec::new();
         for y in 0..height {
@@ -39931,6 +39955,149 @@ mod tests {
     }
 
     #[test]
+    fn recognize_target_output_uses_shared_evaluation_shape() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let pack_root = temp.path().join("resources");
+        let template_dir = pack_root.join("operations/task/assets");
+        let pack_path = temp.path().join("pack.json");
+        let scene_path = temp.path().join("scene.png");
+        fs::create_dir_all(&template_dir).unwrap();
+        let png = test_record_frame_png(1, 1);
+        fs::write(template_dir.join("HOME.png"), &png).unwrap();
+        fs::write(&scene_path, &png).unwrap();
+        write_json_file(
+            &pack_path,
+            &json!({
+                "schema_version": "0.3",
+                "game": "arknights",
+                "server": "cn",
+                "locale": "zh-CN",
+                "coordinate_space": {"width": 1, "height": 1},
+                "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
+                "targets": [{
+                    "type": "template",
+                    "id": "page/home",
+                    "template_path": "operations/task/assets/HOME.png",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "threshold": 0.9
+                }]
+            }),
+        )
+        .unwrap();
+        set_missing_config_env();
+
+        let result = run_cli(
+            [
+                "--json",
+                "recognize",
+                "--target",
+                "page/home",
+                "--pack",
+                pack_path.to_str().unwrap(),
+                "--pack-root",
+                pack_root.to_str().unwrap(),
+                "--scene",
+                scene_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&result.envelope).unwrap()
+        );
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/matched_rect/width").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/template/height").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/evaluation/matched_rect/width")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/evaluation/template/height")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn drift_diagnostics_uses_measured_matched_rect_without_proposed_region() {
+        let diagnostics = json!({
+            "trigger": "resource_drift",
+            "target_id": "page/home",
+            "measured": {
+                "matched_rect": {"x": 4, "y": 5, "width": 6, "height": 7}
+            }
+        });
+
+        let parsed =
+            parse_session_record_drift_diagnostics(PathBuf::from("drift.json"), &diagnostics)
+                .expect("measured matched_rect is a valid fallback");
+
+        assert_eq!(parsed.region.x, 4);
+        assert_eq!(parsed.region.y, 5);
+        assert_eq!(parsed.region.width, 6);
+        assert_eq!(parsed.region.height, 7);
+        assert_eq!(parsed.changed_fields, vec!["region"]);
+    }
+
+    #[test]
+    fn record_drift_target_not_found_is_safety_blocked() {
+        let record = drift_test_record(json!([drift_test_anchor_step("home-anchor", "page/home")]));
+        let diagnostics = parse_session_record_drift_diagnostics(
+            PathBuf::from("drift.json"),
+            &json!({
+                "trigger": "resource_drift",
+                "target_id": "page/missing",
+                "measured": {
+                    "matched_rect": {"x": 1, "y": 2, "width": 3, "height": 4}
+                }
+            }),
+        )
+        .unwrap();
+
+        let err = find_drift_amend_step(&record, &diagnostics, None)
+            .expect_err("missing drift target must fail");
+
+        assert_eq!(err.code, "record_drift_target_not_found");
+    }
+
+    #[test]
+    fn record_drift_target_ambiguous_is_safety_blocked() {
+        let record = drift_test_record(json!([
+            drift_test_anchor_step("home-anchor", "home"),
+            drift_test_anchor_step("page-home-anchor", "page/home")
+        ]));
+        let diagnostics = parse_session_record_drift_diagnostics(
+            PathBuf::from("drift.json"),
+            &json!({
+                "trigger": "resource_drift",
+                "target_id": "page/home",
+                "measured": {
+                    "matched_rect": {"x": 1, "y": 2, "width": 3, "height": 4}
+                }
+            }),
+        )
+        .unwrap();
+
+        let err = find_drift_amend_step(&record, &diagnostics, None)
+            .expect_err("ambiguous drift target must fail");
+
+        assert_eq!(err.code, "record_drift_target_ambiguous");
+    }
+
+    #[test]
     fn session_record_amend_from_drift_diagnostics_updates_anchor_and_build_task() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -52057,6 +52224,21 @@ mod tests {
                 .any(|option| option
                     .as_str()
                     .is_some_and(|text| text.starts_with("--backend ")))
+        );
+    }
+
+    #[test]
+    fn help_lists_resource_convert_maa_tasks_option() {
+        let help = help_data();
+        let options = help
+            .pointer("/command_options/resource convert")
+            .and_then(Value::as_array)
+            .expect("resource convert options");
+
+        assert!(
+            options
+                .iter()
+                .any(|option| option.as_str() == Some("--maa-tasks <dir>"))
         );
     }
 
