@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+//! DEPRECATED PROTOTYPE: this scheduler gate is not connected to the active
+//! SessionLease path in `apps/actinglab`. Lab-2 L2 uses the session lease model
+//! and the independent arbitrator crate instead of this parallel prototype.
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;

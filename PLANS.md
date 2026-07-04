@@ -20,7 +20,30 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
+- S3 / L2 degraded arbitrator and lease.
+
+S3 scope:
+
+- Add an independent `actingcommand-arbitrator` crate for the degraded single-instance admission state machine.
+- Use the active SessionLease concepts from `apps/actinglab` as the compatibility target while keeping the pure state machine outside `main.rs`.
+- Mark the older `actingcommand-runtime-core::actinglab` scheduler gate as a deprecated parallel prototype, not the Lab-2 L2 start point.
+- Verify and remove dead `actingcommand-runtime-core` / `actingcommand-task-loop` dependency declarations from `actinglab` if they are not actually imported.
+- Keep the node synthetic-only and avoid real samples, resource repositories, live devices, OCR, UI, SQLite, game logic, and full CLI verbs.
+
+S3 status:
+
+- `actingcommand-arbitrator` exists as an independent workspace crate.
+- Request envelopes, queue length 1, priority admission, queue-full rejection, queued cancellation, deadline expiry, lease release, dead-holder reclamation, device-drive authorization, and dispatch/receipt record generation are implemented as pure logic.
+- The runtime-core parallel `SchedulerGate` file now carries a deprecated-prototype banner.
+- The dead `actingcommand-runtime-core` and `actingcommand-task-loop` dependency declarations were removed from `apps/actinglab/Cargo.toml`.
+- Targeted crate tests and clippy passed locally.
+- Public five-command gate passed locally.
+- Next Lab-2 node is S4 / L3 CLI core verbs unless the task order is revised.
+
+Completed Lab-2 nodes:
+
 - S2 / L1 logging module core.
+- S1 / L0 prerequisite repair batch.
 
 S2 scope:
 
@@ -35,10 +58,6 @@ S2 status:
 - Targeted crate tests and clippy passed locally.
 - Public five-command gate passed locally.
 - Next Lab-2 node is S3 / L2 degraded arbitrator and lease unless the task order is revised.
-
-Completed Lab-2 nodes:
-
-- S1 / L0 prerequisite repair batch.
 
 S1 scope:
 

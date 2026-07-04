@@ -7,6 +7,7 @@ members = [
     "apps/vision-provider-check",
     "benchmarks/rust",
     "crates/actingcommand-contract",
+    "crates/arbitrator",
     "crates/device",
     "crates/ledger",
     "crates/page-detector",
@@ -28,6 +29,7 @@ repository = "https://github.com/HS7097/ActingCommand-Runtime"
 
 [workspace.dependencies]
 actingcommand-contract = { path = "crates/actingcommand-contract" }
+actingcommand-arbitrator = { path = "crates/arbitrator" }
 actingcommand-device = { path = "crates/device" }
 actingcommand-ledger = { path = "crates/ledger" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }

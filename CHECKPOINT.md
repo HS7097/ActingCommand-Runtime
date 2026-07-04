@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S3 L2 degraded arbitrator and lease
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S2 commit `e176705`.
+- Inspected the active `apps/actinglab` SessionLease path and confirmed `actingcommand-runtime-core::actinglab::SchedulerGate` is a parallel prototype, not the active L2 lease path.
+- Added the `actingcommand-arbitrator` workspace crate for the Lab-2 L2 degraded admission state machine.
+- Implemented request envelopes for `observe`, `do`, `ensure`, `wait`, and `run_task` with source, instance, priority, payload, destructive flag, and queue deadline fields.
+- Implemented lease admission for readonly acceptance, idle lease grant, idempotent same-request replay, lower-priority queueing behind a high-priority holder, equal-priority rejection, higher-priority preemption at a graceful boundary, queue-full rejection, queued cancellation, deadline expiry, release promotion, dead-holder reclamation, per-instance isolation, and non-holder device-drive denial.
+- Implemented dispatch and receipt `LedgerRecord` generation for each arbitration decision so L2 decisions can be written through the S2 ledger boundary.
+- Marked the old runtime-core scheduler gate with a deprecated-prototype banner.
+- Verified `apps/actinglab` did not import `actingcommand-runtime-core` or `actingcommand-task-loop`; removed those dead dependency declarations from `apps/actinglab/Cargo.toml`.
+- No real samples, resource repositories, live devices, OCR, UI, SQLite, game logic, or full CLI verbs were used for this S3 node.
+- Targeted crate tests and crate-local clippy passed.
+- Public five-command gate passed.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `crates/arbitrator/Cargo.toml`
+- `crates/arbitrator/src/lib.rs`
+- `crates/runtime-core/src/actinglab.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "SessionLease|LabLease|SchedulerGate|lease|preempt|yield|queue|request" apps\actinglab\src crates\runtime-core crates\task-loop Cargo.toml apps\actinglab\Cargo.toml -S`
+- `rg -n "actingcommand_runtime_core|runtime_core|actingcommand-runtime-core" apps\actinglab crates -S`
+- `rg -n "actingcommand_task_loop|task_loop|actingcommand-task-loop|actingcommand_contract|actingcommand-contract" apps\actinglab crates -S`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-arbitrator -- --nocapture`
+- `cargo clippy -p actingcommand-arbitrator -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-arbitrator -- --nocapture` passed: 15 tests.
+- `cargo clippy -p actingcommand-arbitrator -- -D warnings` passed.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S3 implementation.
+
+### Next step
+
+1. Commit and push S3 as an independent Lab-2 node.
+2. Continue with S4 / L3 CLI core verbs after the pushed S3 checkpoint.
+
 ## 2026-07-05 Lab-2 chain S2 L1 logging module core
 
 ### Current status

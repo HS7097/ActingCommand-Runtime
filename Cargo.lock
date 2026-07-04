@@ -26,13 +26,21 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
- "actingcommand-runtime-core",
- "actingcommand-task-loop",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "actingcommand-arbitrator"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-ledger",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
