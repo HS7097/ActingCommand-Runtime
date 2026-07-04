@@ -224,6 +224,8 @@ pub struct TargetEvaluation {
 pub struct TemplateEvaluation {
     pub x: i32,
     pub y: i32,
+    pub width: i32,
+    pub height: i32,
     pub raw_score: f32,
     pub score: f32,
     pub threshold: f32,
@@ -357,6 +359,8 @@ impl RecognitionEvaluator {
         let template = TemplateEvaluation {
             x: matched.x,
             y: matched.y,
+            width: matched.width,
+            height: matched.height,
             raw_score: matched.raw_score,
             score: matched.score,
             threshold,
@@ -874,6 +878,7 @@ mod tests {
 
         assert!(template.raw_score >= 0.99);
         assert!((0.0..=1.0).contains(&template.score));
+        assert_eq!((template.width, template.height), (8, 6));
     }
 
     #[test]

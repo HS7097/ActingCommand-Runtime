@@ -69,6 +69,8 @@ pub struct Rect {
 pub struct TemplateMatch {
     pub x: i32,
     pub y: i32,
+    pub width: i32,
+    pub height: i32,
 
     /// Raw score returned by the current template matching method.
     pub raw_score: f32,
@@ -232,6 +234,12 @@ impl Scene {
                     Ok(TemplateMatch {
                         x,
                         y,
+                        width: i32::try_from(template.width()).map_err(|_| {
+                            RecognitionError::fatal("template match width exceeds i32 range")
+                        })?,
+                        height: i32::try_from(template.height()).map_err(|_| {
+                            RecognitionError::fatal("template match height exceeds i32 range")
+                        })?,
                         raw_score,
                         score,
                     })
@@ -293,7 +301,7 @@ fn exact_metric_match(
         .into_iter()
         .next()
         .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
-    template_match_from_candidate(candidate, offset_x, offset_y)
+    template_match_from_candidate(candidate, template, offset_x, offset_y)
 }
 
 fn full_frame_pyramid_match(
@@ -358,11 +366,12 @@ fn full_frame_pyramid_match(
         .ok_or_else(|| {
             RecognitionError::fatal("full-frame template match produced no candidates")
         })?;
-    template_match_from_candidate(candidate, offset_x, offset_y)
+    template_match_from_candidate(candidate, template, offset_x, offset_y)
 }
 
 fn template_match_from_candidate(
     candidate: MatchCandidate,
+    template: &GrayImage,
     offset_x: u32,
     offset_y: u32,
 ) -> RecognitionResult<TemplateMatch> {
@@ -374,6 +383,10 @@ fn template_match_from_candidate(
     Ok(TemplateMatch {
         x,
         y,
+        width: i32::try_from(template.width())
+            .map_err(|_| RecognitionError::fatal("template match width exceeds i32 range"))?,
+        height: i32::try_from(template.height())
+            .map_err(|_| RecognitionError::fatal("template match height exceeds i32 range"))?,
         raw_score: candidate.raw_score,
         score: normalize_ncc_score(candidate.raw_score),
     })
@@ -822,6 +835,7 @@ mod tests {
             .expect("template match");
 
         assert_eq!((matched.x, matched.y), (200, 150));
+        assert_eq!((matched.width, matched.height), (24, 18));
         assert!(
             matched.raw_score >= 0.99,
             "raw_score was {}",

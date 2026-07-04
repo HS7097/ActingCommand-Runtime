@@ -25,7 +25,9 @@ Stage-one repair status:
 - S3 tests are synthetic-only and cover inherited parent templates, all-template-missing fallback defaults, child template override, and the existing `@` derived-template behavior.
 - S4/B2b+B4+B5 protocol-check batch is implemented. The MAA task compiler now records local protocol-source comments for `@` list rebasing, explicit/default template naming, bare `#back`, and algorithm-specific inheritance filtering.
 - S4 tests are synthetic-only and cover implicit `@` template inheritance, explicit `@` template rebasing, explicit `@` plus declared `baseTask` priority, bare `#back` skipping, and algorithm-change inheritance filtering.
-- S5-S8 remain open and must continue in the fixed order from the repair task file.
+- S5/B3 matched-rect offset semantics are implemented. Template matching now carries matched width/height, target diagnostics expose `matched_rect`, offset clicks use the live matched template rectangle plus offset instead of static guard `expected_rect`, and color-probe guards are rejected for offset clicks.
+- S5 tests are synthetic-only and cover matched-rect offset click placement, color-probe offset rejection, and propagated template match dimensions.
+- S6-S8 remain open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

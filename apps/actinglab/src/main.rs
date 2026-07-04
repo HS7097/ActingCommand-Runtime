@@ -6530,10 +6530,18 @@ fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
         "kind": format!("{:?}", evaluation.kind),
         "passed": evaluation.passed,
         "message": evaluation.message,
+        "matched_rect": evaluation.template.map(|template| rect_json(PackRect {
+            x: template.x,
+            y: template.y,
+            width: template.width,
+            height: template.height
+        })),
         "template": evaluation.template.map(|template| {
             json!({
                 "x": template.x,
                 "y": template.y,
+                "width": template.width,
+                "height": template.height,
                 "score": template.score,
                 "raw_score": template.raw_score,
                 "threshold": template.threshold

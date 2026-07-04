@@ -1717,6 +1717,22 @@ fn validate_converted_guard_references(
                 "operation '{operation_id}' guard.color_probe points to non-color target '{target_id}'"
             ));
         }
+        if operation.pointer("/click/kind").and_then(Value::as_str) == Some("offset") {
+            if guard
+                .get("verify_template")
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                errors.push(format!(
+                    "operation '{operation_id}' offset click requires a template guard that can produce matched_rect"
+                ));
+            }
+            if target.get("type").and_then(Value::as_str) != Some("template") {
+                errors.push(format!(
+                    "operation '{operation_id}' offset click guard target '{target_id}' must be a template target"
+                ));
+            }
+        }
     }
     if errors.is_empty() {
         Ok(())
@@ -2765,6 +2781,45 @@ mod tests {
             err.message
                 .contains("cannot synthesize guard expected_rect from click kind")
         );
+    }
+
+    #[test]
+    fn converted_offset_click_rejects_color_probe_guard() {
+        let pack = json!({
+            "game": "arknights",
+            "targets": [{
+                "type": "color",
+                "id": "target/button"
+            }]
+        });
+        let pages = json!({
+            "pages": [{
+                "id": "arknights/home"
+            }]
+        });
+        let primitives = json!({
+            "primitives": [{
+                "id": "tap_offset",
+                "from": "home",
+                "click": {
+                    "kind": "offset",
+                    "target_id": "target/button",
+                    "offset": {"x": 1, "y": 2, "width": 3, "height": 4}
+                },
+                "guard": {
+                    "page_id": "arknights/home",
+                    "target_id": "target/button",
+                    "expected_rect": {"x": 10, "y": 20, "width": 30, "height": 40},
+                    "color_probe": "target/button"
+                }
+            }]
+        });
+
+        let err = validate_converted_guard_references(&pack, &pages, &primitives)
+            .expect_err("offset click must require template matched_rect source");
+
+        assert!(err.message.contains("requires a template guard"));
+        assert!(err.message.contains("must be a template target"));
     }
 
     #[test]

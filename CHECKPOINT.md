@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S5 matched-rect offset
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S4 was pushed as `9d71b61378f0267e5d3584e853df93dd6017881c`.
+- Implemented S5/B3 matched-rect offset semantics.
+- Template matching now propagates matched rectangle width/height through `TemplateMatch` and `TemplateEvaluation`.
+- ActingLab target diagnostics now expose `matched_rect` for template-target evaluations.
+- Offset clicks now use the live matched template rectangle plus offset instead of the static guard `expected_rect`.
+- Offset clicks require a template guard; color-probe guards are rejected because they cannot produce `matched_rect`.
+- Added synthetic-only tests for matched-rect offset placement, color-probe offset rejection, converted offset guard rejection, and template match dimensions. No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `crates/recognition/src/lib.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "struct TargetEvaluation|TargetEvaluation" crates apps/actinglab/src -g *.rs`
+- `rg -n "specific_rect|offset|guard" apps/actinglab/src/resource_convert.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab offset_click -- --nocapture`
+- `cargo test -p actingcommand-actinglab converted_offset_click_rejects_color_probe_guard -- --nocapture`
+- `cargo test -p actingcommand-recognition template_match_finds_non_uniform_template -- --nocapture`
+- `cargo test -p actingcommand-recognition-pack template_evaluation_returns_raw_and_normalized_scores -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab offset_click -- --nocapture` passed: 3 tests.
+- `cargo test -p actingcommand-actinglab converted_offset_click_rejects_color_probe_guard -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-recognition template_match_finds_non_uniform_template -- --nocapture` passed: 2 tests.
+- `cargo test -p actingcommand-recognition-pack template_evaluation_returns_raw_and_normalized_scores -- --nocapture` passed: 1 test.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for S5.
+- S6-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in fixed order using synthetic-only validation.
+
+### Next step
+
+1. Commit and push S5.
+2. Continue with S6/W3 M3 Phase A loading diagnostics.
+
 ## 2026-07-04 fidelity stage-one repair S4 protocol-check batch
 
 ### Current status

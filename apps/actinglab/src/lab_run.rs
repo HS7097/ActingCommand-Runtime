@@ -17,7 +17,7 @@ use actingcommand_device::{
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, load_pack_from_json_str,
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -510,6 +510,7 @@ fn execute_lab_run(
             }
         };
 
+        let mut action_target = None;
         if let Some((current_page, target)) = stability_baseline {
             match wait_for_roi_stability(
                 ctx,
@@ -537,6 +538,7 @@ fn execute_lab_run(
                             "target": target_evaluation_json(&target)
                         }),
                     )?;
+                    action_target = Some(target);
                 }
                 RoiStabilityOutcome::Failed {
                     reason,
@@ -562,7 +564,11 @@ fn execute_lab_run(
             }
         }
 
-        let action = operation.input_action(&state.control.resolution, ctx.run_seed)?;
+        let action = operation.input_action(
+            &state.control.resolution,
+            ctx.run_seed,
+            action_target.as_ref(),
+        )?;
         let backend = ensure_touch_backend(
             &mut input,
             &device.target,
@@ -1296,9 +1302,17 @@ fn target_evaluation_json(target: &TargetEvaluation) -> Value {
         "kind": format!("{:?}", target.kind),
         "passed": target.passed,
         "message": target.message.as_str(),
+        "matched_rect": target.template.map(|template| rect_json(PackRect {
+            x: template.x,
+            y: template.y,
+            width: template.width,
+            height: template.height
+        })),
         "template": target.template.map(|template| json!({
             "x": template.x,
             "y": template.y,
+            "width": template.width,
+            "height": template.height,
             "raw_score": template.raw_score,
             "score": template.score,
             "threshold": template.threshold
@@ -1931,15 +1945,27 @@ impl Operation {
                     self.id, target_id, guard.target_id
                 )));
             }
+            if guard.verify_template.is_none() {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{}' offset click requires template guard metadata; color-probe guards cannot produce a matched_rect",
+                    self.id
+                )));
+            }
         }
         self.validate_guard(control)
     }
 
-    fn input_action(&self, resolution: &Resolution, seed_base: u64) -> CliOutcome<LabInputAction> {
+    fn input_action(
+        &self,
+        resolution: &Resolution,
+        seed_base: u64,
+        target: Option<&TargetEvaluation>,
+    ) -> CliOutcome<LabInputAction> {
         self.click.input_action(
             resolution,
             seed_base ^ hash_text(&self.id),
             self.guard.as_ref(),
+            target,
         )
     }
 
@@ -2129,6 +2155,7 @@ impl OperationClick {
         resolution: &Resolution,
         seed: u64,
         guard: Option<&OperationGuard>,
+        target: Option<&TargetEvaluation>,
     ) -> CliOutcome<LabInputAction> {
         match self.kind.as_str() {
             "rect" | "specific_rect" => Ok(LabInputAction::Tap(actual_click_point(
@@ -2184,12 +2211,22 @@ impl OperationClick {
                 let guard = guard.ok_or_else(|| {
                     CliError::package_invalid("offset click requires guard metadata")
                 })?;
+                let target = target.ok_or_else(|| {
+                    CliError::package_invalid("offset click requires matched template target")
+                })?;
+                if target.id != guard.target_id {
+                    return Err(CliError::package_invalid(format!(
+                        "offset click matched target '{}' does not match guard target_id '{}'",
+                        target.id, guard.target_id
+                    )));
+                }
+                let matched_rect = matched_template_rect(target)?;
                 let offset = self
                     .offset
                     .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
                 let rect = PackRect {
-                    x: guard.expected_rect.x + offset.x,
-                    y: guard.expected_rect.y + offset.y,
+                    x: matched_rect.x + offset.x,
+                    y: matched_rect.y + offset.y,
                     width: offset.width,
                     height: offset.height,
                 };
@@ -2231,6 +2268,37 @@ impl OperationClick {
                 .ok_or_else(|| CliError::package_invalid("rect click missing height"))?,
         })
     }
+}
+
+fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
+    if target.kind != TargetKind::Template {
+        return Err(CliError::package_invalid(format!(
+            "offset click requires template-target matched_rect, got {:?}",
+            target.kind
+        )));
+    }
+    let template = target.template.ok_or_else(|| {
+        CliError::package_invalid("offset click template target missing matched_rect")
+    })?;
+    if !target.passed {
+        return Err(CliError::package_invalid(format!(
+            "offset click target '{}' did not pass guard evaluation",
+            target.id
+        )));
+    }
+    let rect = PackRect {
+        x: template.x,
+        y: template.y,
+        width: template.width,
+        height: template.height,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::package_invalid(format!(
+            "offset click matched_rect dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    Ok(rect)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3850,7 +3918,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_click_uses_guard_rect_and_offset_for_actual_point() {
+    fn offset_click_rejects_color_probe_guard() {
         let control = test_control();
         let mut operation = test_operation(None, None);
         operation.unguarded_trusted_coordinate = false;
@@ -3884,15 +3952,68 @@ mod tests {
             target_id: Some("target/button".to_string()),
         };
 
+        let err = operation
+            .validate(&control)
+            .expect_err("color guard cannot drive offset");
+        assert!(err.message.contains("color-probe guards cannot produce"));
+    }
+
+    #[test]
+    fn offset_click_uses_matched_rect_and_offset_for_actual_point() {
+        let control = test_control();
+        let mut operation = test_operation(None, None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "offset".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: Some(PackRect {
+                x: 3,
+                y: 4,
+                width: 5,
+                height: 6,
+            }),
+            target_id: Some("target/button".to_string()),
+        };
+
         operation.validate(&control).expect("offset valid");
         let action = operation
-            .input_action(&control.resolution, 0)
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/button",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
             .expect("input action");
 
         match action {
             LabInputAction::Tap(point) => {
-                assert_eq!(point.rect.x, 103);
-                assert_eq!(point.rect.y, 204);
+                assert_eq!(point.rect.x, 303);
+                assert_eq!(point.rect.y, 404);
                 assert_eq!(point.rect.width, 5);
                 assert_eq!(point.rect.height, 6);
             }
@@ -4472,7 +4593,7 @@ mod tests {
     fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvaluation {
         TargetEvaluation {
             id: id.to_string(),
-            kind: actingcommand_recognition_pack::TargetKind::Color,
+            kind: TargetKind::Color,
             passed,
             template: None,
             color: Some(actingcommand_recognition_pack::ColorEvaluation {
@@ -4486,6 +4607,25 @@ mod tests {
             } else {
                 "color failed".to_string()
             },
+        }
+    }
+
+    fn template_target_evaluation(id: &str, rect: PackRect) -> TargetEvaluation {
+        TargetEvaluation {
+            id: id.to_string(),
+            kind: TargetKind::Template,
+            passed: true,
+            template: Some(actingcommand_recognition_pack::TemplateEvaluation {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                raw_score: 1.0,
+                score: 1.0,
+                threshold: 0.9,
+            }),
+            color: None,
+            message: "template passed".to_string(),
         }
     }
 
