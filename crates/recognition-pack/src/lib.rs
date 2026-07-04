@@ -763,6 +763,63 @@ mod tests {
     }
 
     #[test]
+    fn schema_0_4_pack_round_trips_template_color_and_click_targets() {
+        let fixture = TemplateFixture::new();
+        let pack = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.4",
+                "defaults": {"match_metric": "ccoeff_normed"},
+                "targets": [
+                    {
+                        "type": "template",
+                        "id": "page/home",
+                        "template_path": "templates/button.png",
+                        "region": {"x": 12, "y": 10, "width": 28, "height": 24},
+                        "threshold": 0.90
+                    },
+                    {
+                        "type": "color",
+                        "id": "color/ap",
+                        "region": {"x": 0, "y": 0, "width": 6, "height": 6},
+                        "expected": [30, 31, 32],
+                        "click": {"x": 1, "y": 2, "width": 3, "height": 4}
+                    },
+                    {
+                        "type": "click_only",
+                        "id": "tap/settings",
+                        "click": {"x": 5, "y": 6, "width": 7, "height": 8}
+                    }
+                ]
+            }"#,
+        )
+        .expect("pack parsed");
+        let evaluator =
+            RecognitionEvaluator::new(fixture.dir.path.clone(), pack).expect("schema 0.4 accepted");
+
+        assert_eq!(
+            evaluator.default_match_metric(),
+            MatchMetric::CorrelationCoefficientNormalized
+        );
+        assert!(evaluator.unsupported_targets().is_empty());
+        assert!(
+            evaluator
+                .evaluate_target(&fixture.scene_with_template(), "page/home")
+                .expect("template evaluation")
+                .passed
+        );
+        assert!(
+            evaluator
+                .evaluate_target(&fixture.blank_scene(), "color/ap")
+                .expect("color evaluation")
+                .passed
+        );
+        assert_eq!(
+            evaluator.get_click_target("tap/settings").expect("click"),
+            rect(5, 6, 7, 8)
+        );
+    }
+
+    #[test]
     fn schema_0_5_pack_loads_method_mask_and_fails_loud_when_used() {
         let fixture = TemplateFixture::new();
         let pack = load_pack_from_json_str(

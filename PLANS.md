@@ -31,7 +31,9 @@ Stage-one repair status:
 - S6 tests are synthetic-only and cover unsupported method/mask load markers, pure NCC count zero, lab validate diagnostics, package validate diagnostics, and fail-loud evaluation behavior.
 - S7/W4 expect-after and rectMove-to-offset flow is implemented. Operation primitives preserve `expect_after`, lab execution uses `expect_after.page_id` as an explicit after-action confirmation guard, and MAA-derived `rectMove` can convert guarded point/rect clicks into matched-rect `offset` clicks.
 - S7 tests are synthetic-only and cover expect-after hit/mismatch verification and MAA `rectMove` landing as a generated primitive offset click with preserved `expect_after`.
-- S8 remains open and must continue in the fixed order from the repair task file.
+- S8/W2 drift-to-amend is implemented. `session record amend --from-drift-diagnostics <path>` now consumes the resource-drift diagnostic contract, locates the matching anchor or verify-template record step, rejects proposed changes outside the region/threshold whitelist, refreshes frame-backed artifacts/evaluation, and leaves `session record build-task` as the bundle materialization authority.
+- S8 tests are synthetic-only and cover the drift diagnostic contract, whitelist rejection, missing diagnostics failure, amend-to-record-to-build-task flow, schema 0.4 pack construction, and schema describe output through 0.5.
+- S1-S8 are complete for the Codex synthetic Runtime lane. The next gate is external stage-one adversarial acceptance; true resource-repository validation remains outside this Codex task boundary.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

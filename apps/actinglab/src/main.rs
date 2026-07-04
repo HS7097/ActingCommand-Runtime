@@ -1088,6 +1088,15 @@ struct SessionRecordVerifyTemplateAmendTarget<'a> {
     evaluation: &'a mut SessionRecordStepEvaluation,
 }
 
+#[derive(Debug)]
+struct SessionRecordDriftDiagnostics {
+    path: PathBuf,
+    target_id: String,
+    region: SessionRecordRect,
+    threshold: Option<f64>,
+    changed_fields: Vec<&'static str>,
+}
+
 struct SessionRecordBuildDraft {
     bundle: Value,
     task_dir: PathBuf,
@@ -4540,7 +4549,7 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             ]
         }),
         "pack" => json!({
-            "schema_version": ["0.1", "0.3"],
+            "schema_version": ["0.1", "0.3", "0.4", "0.5"],
             "default_match_metric": "ccorr_normed",
             "supported_match_metric": ["ccorr_normed", "ccoeff_normed"]
         }),
@@ -19232,11 +19241,28 @@ fn run_session_record_inner(
                     &["session_record"],
                 ));
             }
-            let step_id = record_amend_step_id(&flags)?;
             let amend_context = SessionRecordAmendContext {
                 record_id: record.record_id.clone(),
                 state_dir: state_dir.clone(),
             };
+            if let Some(diagnostics_path) = session_record_drift_diagnostics_path(&flags)? {
+                let amend = amend_session_record_from_drift_diagnostics(
+                    &amend_context,
+                    &mut record,
+                    &flags,
+                    diagnostics_path,
+                )?;
+                record.updated_at_unix_ms = current_unix_ms();
+                write_json_file_atomic(&record_path, &record)?;
+                return Ok(json!({
+                    "status": "drift_diagnostics_amended",
+                    "amend": amend,
+                    "record": record,
+                    "path": record_path.display().to_string(),
+                    "step_count": record.steps.len()
+                }));
+            }
+            let step_id = record_amend_step_id(&flags)?;
             let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {
                 return Err(CliError::safety_blocked(
                     "record_step_not_found",
@@ -21249,6 +21275,347 @@ fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> CliOutcome<u64
         return Err(CliError::usage("--duration-ms must be positive"));
     }
     Ok(duration_ms)
+}
+
+fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {
+    let Some(value) = flags.optional("--from-drift-diagnostics") else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "session record amend --from-drift-diagnostics requires <path>",
+        ));
+    }
+    Ok(Some(PathBuf::from(value)))
+}
+
+fn amend_session_record_from_drift_diagnostics(
+    context: &SessionRecordAmendContext,
+    record: &mut SessionRecordContext,
+    flags: &FlagArgs,
+    diagnostics_path: PathBuf,
+) -> CliOutcome<Value> {
+    reject_direct_drift_amend_flags(flags)?;
+    let diagnostics = read_session_record_drift_diagnostics(&diagnostics_path)?;
+    let selector = flags
+        .optional("--step-id")
+        .filter(|value| value != "true")
+        .or_else(|| flags.positionals.first().cloned());
+    if flags.positionals.len() > 1 {
+        return Err(CliError::usage(
+            "session record amend --from-drift-diagnostics accepts at most one positional selector",
+        ));
+    }
+    let step_index = find_drift_amend_step(record, &diagnostics, selector.as_deref())?;
+    let mut amended_step = record.steps[step_index].clone();
+    let resource_kind = amend_drift_record_step(context, &mut amended_step, flags, &diagnostics)?;
+    let step_id = amended_step.step_id.clone();
+    record.steps[step_index] = amended_step;
+    Ok(json!({
+        "schema_version": "session.record_drift_amend.v0.1",
+        "diagnostics_path": diagnostics.path.display().to_string(),
+        "target_id": diagnostics.target_id,
+        "step_id": step_id,
+        "resource_kind": resource_kind,
+        "changed_fields": diagnostics.changed_fields,
+        "region": diagnostics.region,
+        "threshold": diagnostics.threshold,
+        "build_task_command": "session record build-task"
+    }))
+}
+
+fn reject_direct_drift_amend_flags(flags: &FlagArgs) -> CliOutcome<()> {
+    const ALLOWED: &[&str] = &[
+        "--from-drift-diagnostics",
+        "--state-dir",
+        "--step-id",
+        "--holder",
+        "--lease-holder",
+        "--lease-id",
+        "--contrast-frame",
+    ];
+    let unsupported = flags
+        .flags
+        .keys()
+        .filter(|name| !ALLOWED.contains(&name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(CliError::usage(format!(
+            "session record amend --from-drift-diagnostics only accepts drift diagnostics changes; unsupported direct flags: {}",
+            unsupported.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+fn read_session_record_drift_diagnostics(path: &Path) -> CliOutcome<SessionRecordDriftDiagnostics> {
+    let Some(value) = read_json_file::<Value>(path)? else {
+        return Err(CliError::usage(format!(
+            "session record amend drift diagnostics file is missing: {}",
+            path.display()
+        )));
+    };
+    parse_session_record_drift_diagnostics(path.to_path_buf(), &value)
+}
+
+fn parse_session_record_drift_diagnostics(
+    path: PathBuf,
+    value: &Value,
+) -> CliOutcome<SessionRecordDriftDiagnostics> {
+    let trigger = value
+        .get("trigger")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliError::usage("drift diagnostics must include trigger: resource_drift"))?;
+    if trigger != "resource_drift" {
+        return Err(CliError::usage(format!(
+            "drift diagnostics trigger must be resource_drift, got {trigger}"
+        )));
+    }
+    let target_id = value
+        .get("target_id")
+        .or_else(|| value.pointer("/guard/target_id"))
+        .and_then(Value::as_str)
+        .filter(|target_id| !target_id.trim().is_empty())
+        .ok_or_else(|| CliError::usage("drift diagnostics must include target_id"))?
+        .to_string();
+    let proposed = value.get("proposed_changes");
+    let (threshold, proposed_region) = parse_drift_proposed_changes(proposed)?;
+    let region = proposed_region
+        .or_else(|| {
+            value
+                .pointer("/measured/matched_rect")
+                .map(|rect| parse_session_record_rect_value(rect, "measured.matched_rect"))
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            CliError::usage(
+                "drift diagnostics must include proposed_changes.region or measured.matched_rect",
+            )
+        })?;
+    let mut changed_fields = vec!["region"];
+    if threshold.is_some() {
+        changed_fields.push("threshold");
+    }
+    Ok(SessionRecordDriftDiagnostics {
+        path,
+        target_id,
+        region,
+        threshold,
+        changed_fields,
+    })
+}
+
+fn parse_drift_proposed_changes(
+    proposed: Option<&Value>,
+) -> CliOutcome<(Option<f64>, Option<CliOutcome<SessionRecordRect>>)> {
+    let Some(proposed) = proposed else {
+        return Ok((None, None));
+    };
+    let object = proposed.as_object().ok_or_else(|| {
+        CliError::usage("drift diagnostics proposed_changes must be an object when provided")
+    })?;
+    let mut unsupported = object
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "region" | "threshold"))
+        .cloned()
+        .collect::<Vec<_>>();
+    unsupported.sort();
+    if !unsupported.is_empty() {
+        return Err(CliError::usage(format!(
+            "drift diagnostics proposed_changes contains fields outside the amend whitelist: {}",
+            unsupported.join(", ")
+        )));
+    }
+    let threshold = object
+        .get("threshold")
+        .map(|value| parse_unit_f64_value(value, "proposed_changes.threshold"))
+        .transpose()?;
+    let region = object
+        .get("region")
+        .map(|value| parse_session_record_region_value(value, "proposed_changes.region"));
+    Ok((threshold, region))
+}
+
+fn parse_session_record_region_value(value: &Value, label: &str) -> CliOutcome<SessionRecordRect> {
+    if value.get("mode").and_then(Value::as_str) == Some("rect") {
+        let rect = value
+            .get("rect")
+            .ok_or_else(|| CliError::usage(format!("{label}.rect is missing")))?;
+        return parse_session_record_rect_value(rect, label);
+    }
+    parse_session_record_rect_value(value, label)
+}
+
+fn parse_session_record_rect_value(value: &Value, label: &str) -> CliOutcome<SessionRecordRect> {
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_i64)
+            .ok_or_else(|| CliError::usage(format!("{label}.{name} must be an integer")))
+    };
+    let to_i32 = |name: &str, raw: i64| {
+        i32::try_from(raw).map_err(|_| {
+            CliError::usage(format!("{label}.{name} is outside the supported i32 range"))
+        })
+    };
+    let rect = SessionRecordRect {
+        x: to_i32("x", field("x")?)?,
+        y: to_i32("y", field("y")?)?,
+        width: to_i32("width", field("width")?)?,
+        height: to_i32("height", field("height")?)?,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(format!(
+            "{label} dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    Ok(rect)
+}
+
+fn parse_unit_f64_value(value: &Value, label: &str) -> CliOutcome<f64> {
+    let parsed = value
+        .as_f64()
+        .ok_or_else(|| CliError::usage(format!("{label} must be a number")))?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(CliError::usage(format!(
+            "{label} must be a finite number between 0 and 1"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn find_drift_amend_step(
+    record: &SessionRecordContext,
+    diagnostics: &SessionRecordDriftDiagnostics,
+    selector: Option<&str>,
+) -> CliOutcome<usize> {
+    let mut matches = record
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| drift_step_matches_target(step, &diagnostics.target_id))
+        .filter(|(_, step)| {
+            selector.is_none_or(|selector| {
+                step.step_id == selector || drift_step_matches_target(step, selector)
+            })
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return Err(CliError::safety_blocked(
+            "record_drift_target_not_found",
+            format!(
+                "no anchor or verify-template record step matches drift target '{}'",
+                diagnostics.target_id
+            ),
+            &["session_record", "resource_drift"],
+        ));
+    }
+    if matches.len() > 1 {
+        let step_ids = matches
+            .iter()
+            .map(|index| record.steps[*index].step_id.as_str())
+            .collect::<Vec<_>>();
+        return Err(CliError::safety_blocked(
+            "record_drift_target_ambiguous",
+            format!(
+                "drift target '{}' matches multiple record steps: {}",
+                diagnostics.target_id,
+                step_ids.join(", ")
+            ),
+            &["session_record", "resource_drift"],
+        ));
+    }
+    Ok(matches.remove(0))
+}
+
+fn drift_step_matches_target(step: &SessionRecordStep, target: &str) -> bool {
+    match &step.data {
+        SessionRecordStepData::Anchor { id, .. }
+        | SessionRecordStepData::VerifyTemplate { id, .. } => {
+            session_record_resource_id_matches_target(id, target)
+        }
+        SessionRecordStepData::ColorProbe { .. } | SessionRecordStepData::Operation { .. } => false,
+    }
+}
+
+fn session_record_resource_id_matches_target(id: &str, target: &str) -> bool {
+    id == target
+        || session_record_anchor_target_id(id) == target
+        || target
+            .strip_prefix("page/")
+            .is_some_and(|stripped| stripped == id)
+}
+
+fn amend_drift_record_step(
+    context: &SessionRecordAmendContext,
+    step: &mut SessionRecordStep,
+    flags: &FlagArgs,
+    diagnostics: &SessionRecordDriftDiagnostics,
+) -> CliOutcome<&'static str> {
+    match &mut step.data {
+        SessionRecordStepData::Anchor {
+            id,
+            region,
+            color_check,
+            threshold,
+            frame_provenance,
+            artifact,
+            evaluation,
+        } => {
+            *region = SessionRecordRegion::Rect {
+                rect: diagnostics.region.clone(),
+            };
+            if let Some(next_threshold) = diagnostics.threshold {
+                *threshold = Some(next_threshold);
+            }
+            let mut target = SessionRecordAnchorAmendTarget {
+                id,
+                region,
+                color_check,
+                threshold,
+                frame_provenance,
+                artifact,
+                evaluation,
+            };
+            refresh_amended_anchor_artifact(context, &step.step_id, &mut target, flags, None)?;
+            step.updated_at_unix_ms = current_unix_ms();
+            Ok("anchor")
+        }
+        SessionRecordStepData::VerifyTemplate {
+            id,
+            region,
+            threshold,
+            frame_provenance,
+            artifact,
+            evaluation,
+        } => {
+            *region = SessionRecordRegion::Rect {
+                rect: diagnostics.region.clone(),
+            };
+            if let Some(next_threshold) = diagnostics.threshold {
+                *threshold = Some(next_threshold);
+            }
+            let mut target = SessionRecordVerifyTemplateAmendTarget {
+                id,
+                region,
+                threshold,
+                frame_provenance,
+                artifact,
+                evaluation,
+            };
+            refresh_amended_verify_template(context, &step.step_id, &mut target, flags, None)?;
+            step.updated_at_unix_ms = current_unix_ms();
+            Ok("verify_template")
+        }
+        SessionRecordStepData::ColorProbe { .. } | SessionRecordStepData::Operation { .. } => {
+            Err(CliError::usage(
+                "drift diagnostics amend supports only anchor and verify-template record steps",
+            ))
+        }
+    }
 }
 
 fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
@@ -39544,6 +39911,283 @@ mod tests {
     }
 
     #[test]
+    fn drift_diagnostics_contract_rejects_fields_outside_amend_whitelist() {
+        let diagnostics = json!({
+            "trigger": "resource_drift",
+            "target_id": "page/home",
+            "measured": {
+                "matched_rect": {"x": 1, "y": 2, "width": 3, "height": 4}
+            },
+            "proposed_changes": {
+                "region": {"x": 1, "y": 2, "width": 3, "height": 4},
+                "click": {"x": 10, "y": 20}
+            }
+        });
+
+        let err = parse_session_record_drift_diagnostics(PathBuf::from("drift.json"), &diagnostics)
+            .expect_err("unsupported proposed field");
+
+        assert!(err.message.contains("outside the amend whitelist"));
+    }
+
+    #[test]
+    fn session_record_amend_from_drift_diagnostics_updates_anchor_and_build_task() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let diagnostics_path = temp.path().join("drift.json");
+        let out = temp.path().join("draft");
+        fs::write(&frame_path, test_record_frame_png(12, 10)).unwrap();
+        write_json_file(
+            &diagnostics_path,
+            &json!({
+                "trigger": "resource_drift",
+                "target_id": "page/home",
+                "measured": {
+                    "matched_rect": {"x": 1, "y": 2, "width": 3, "height": 4},
+                    "template": {"score": 0.82, "threshold": 0.95}
+                },
+                "proposed_changes": {
+                    "region": {"mode": "rect", "rect": {"x": 1, "y": 2, "width": 3, "height": 4}},
+                    "threshold": 0.90
+                }
+            }),
+        )
+        .unwrap();
+        set_config_env(&config);
+
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "open-home",
+                "--from",
+                "home",
+                "--to",
+                "home",
+                "--click",
+                "4,4",
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--from-drift-diagnostics",
+                diagnostics_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let build = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "build-task",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+                "--dry-run",
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(anchor.exit_code(), 0);
+        assert_eq!(operation.exit_code(), 0);
+        assert_eq!(
+            amend.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&amend.envelope).unwrap()
+        );
+        let amend_data = amend.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            amend_data.get("status").and_then(Value::as_str),
+            Some("drift_diagnostics_amended")
+        );
+        assert_eq!(
+            amend_data.pointer("/amend/step_id").and_then(Value::as_str),
+            Some("home-anchor")
+        );
+        assert_eq!(
+            amend_data
+                .pointer("/amend/changed_fields/0")
+                .and_then(Value::as_str),
+            Some("region")
+        );
+        assert_eq!(
+            amend_data
+                .pointer("/amend/changed_fields/1")
+                .and_then(Value::as_str),
+            Some("threshold")
+        );
+        assert_eq!(
+            amend_data
+                .pointer("/record/steps/0/region/rect/x")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            amend_data
+                .pointer("/record/steps/0/threshold")
+                .and_then(Value::as_f64),
+            Some(0.90)
+        );
+        assert_eq!(
+            amend_data
+                .pointer("/record/steps/0/evaluation/status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert!(
+            amend_data
+                .pointer("/record/steps/0/evaluation/backtest")
+                .is_some()
+        );
+        assert_eq!(
+            build.exit_code(),
+            0,
+            "{}",
+            serde_json::to_string_pretty(&build.envelope).unwrap()
+        );
+        let build_data = build.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            build_data
+                .pointer("/bundle/anchors/0/region/rect/x")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            build_data
+                .pointer("/bundle/anchors/0/threshold")
+                .and_then(Value::as_f64),
+            Some(0.90)
+        );
+    }
+
+    #[test]
+    fn session_record_amend_from_drift_diagnostics_requires_readable_json() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        set_config_env(&config);
+
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let amend = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "amend",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--from-drift-diagnostics",
+                temp.path().join("missing.json").to_str().unwrap(),
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(start.exit_code(), 0);
+        assert_eq!(amend.exit_code(), 2);
+        assert_eq!(
+            amend.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+        assert!(
+            amend
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("drift diagnostics file is missing")
+        );
+    }
+
+    #[test]
     fn session_record_start_requires_task_id() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -50185,6 +50829,22 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn schema_pack_describes_current_supported_versions() {
+        let result = run_cli(["--json", "schema", "pack"], true);
+        assert_eq!(result.exit_code(), 0);
+        let versions = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("schema_version")
+            .and_then(Value::as_array)
+            .expect("schema versions");
+        assert!(versions.iter().any(|value| value.as_str() == Some("0.4")));
+        assert!(versions.iter().any(|value| value.as_str() == Some("0.5")));
     }
 
     #[test]

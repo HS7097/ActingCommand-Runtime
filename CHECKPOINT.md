@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S8 drift-to-amend
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S7 was pushed as `dc6216c`.
+- Implemented S8/W2 drift-to-amend for the synthetic Runtime lane.
+- Added the drift diagnostic contract at `contracts/session-record-drift-amend.md`.
+- `session record amend --from-drift-diagnostics <path>` now reads resource-drift diagnostics, resolves the matching anchor or verify-template record step, rejects proposed changes outside the region/threshold whitelist, applies the measured/proposed rectangle, optionally applies a proposed threshold, and refreshes existing frame-backed artifact/evaluation data.
+- `session record build-task` remains the authority for materializing the amended bundle; the synthetic end-to-end test verifies amend -> record update -> build-task bundle output.
+- Closed the S8-adjacent T4/T6 gaps by adding schema 0.4 recognition-pack coverage and updating `schema pack` output to list 0.4/0.5.
+- No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `contracts/session-record-drift-amend.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "from-drift-diagnostics|drift diagnostics|drift_diagnostics|drift|amend|record amend|session record" apps/actinglab/src/main.rs apps/actinglab/src/lab_run.rs apps/actinglab/src -g *.rs`
+- `rg -n "schema_0_4|0\\.4|schema.*0\\.5|describe.*0\\.5|supported.*schema|schema_versions|schema version" apps/actinglab/src/main.rs crates/recognition-pack/src/lib.rs crates/page-detector/src/lib.rs crates/task-loop/src/lib.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab drift_diagnostics_contract_rejects_fields_outside_amend_whitelist -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_amend_from_drift_diagnostics_updates_anchor_and_build_task -- --nocapture`
+- `cargo test -p actingcommand-recognition-pack schema_0_4_pack_round_trips_template_color_and_click_targets -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_record_amend_from_drift_diagnostics_requires_readable_json -- --nocapture`
+- `cargo test -p actingcommand-actinglab schema_pack_describes_current_supported_versions -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab drift_diagnostics_contract_rejects_fields_outside_amend_whitelist -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-actinglab session_record_amend_from_drift_diagnostics_updates_anchor_and_build_task -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-recognition-pack schema_0_4_pack_round_trips_template_color_and_click_targets -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-actinglab session_record_amend_from_drift_diagnostics_requires_readable_json -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-actinglab schema_pack_describes_current_supported_versions -- --nocapture` passed: 1 test.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed: workspace tests passed.
+
+### Current blocker
+
+- No blocker for the Codex synthetic Runtime lane of `FIX-fidelity-stage1-673102e.md`.
+- External stage-one adversarial acceptance is still the next non-Codex gate.
+- True resource-repository verification remains outside this task boundary.
+
+### Next step
+
+1. Commit and push S8.
+2. Hand the completed S1-S8 synthetic Runtime repair chain to external stage-one adversarial acceptance.
+
 ## 2026-07-04 fidelity stage-one repair S7 expect-after and rectMove offset
 
 ### Current status
