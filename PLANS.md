@@ -19,7 +19,9 @@ Stage-one repair status:
 - Default Operation Bundle conversion remains unchanged when `--maa-tasks` is not supplied.
 - In explicit MAA mode, compiled task fields can feed template pack target metadata: `templThreshold` -> `threshold`, `method`/`matchMethod` -> `method`, `maskRange` -> `mask`, and `rectMove` -> `rect_move`.
 - S1 tests are synthetic-only and cover explicit `--maa-tasks` mode, expanded `baseTask`/`@`/`#` data landing in pack targets, and default-mode regression.
-- S2-S8 remain open and must continue in the fixed order from the repair task file.
+- S2/B1 virtual reference cycle handling is implemented. `#next`/`#sub`/other virtual field expansion now preserves the in-progress task stack through expression parsing and nested virtual lookups, so cycles fail with an explicit chain instead of recursing.
+- S2 tests are synthetic-only and cover self, two-node, three-node, and nested-expression virtual cycles plus a legal deep virtual chain.
+- S3-S8 remain open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

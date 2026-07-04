@@ -1,5 +1,52 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S2 virtual cycle stack
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S1 was pushed as `e45364b9b6dab0c083d710f16213a87ca041c32f`.
+- Implemented S2/B1 virtual-reference cycle detection by carrying the in-progress expansion stack through `expand_expression_list`, `MaaExpressionParser`, `expand_virtual_field`, and nested `expand_task` calls.
+- Virtual cycles now fail loudly with a chain such as `A -> B -> A` instead of creating a fresh empty stack and recursing.
+- Added synthetic-only tests for self, two-node, three-node, and nested-expression virtual cycles, plus a legal deep virtual chain.
+- No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture` passed: 15 tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for S2.
+- S3-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in fixed order using synthetic-only validation.
+
+### Next step
+
+1. Run the S2 public gates.
+2. Commit and push S2.
+3. Continue with S3/B2a plain `baseTask` template inheritance.
+
 ## 2026-07-04 fidelity stage-one repair S1 MAA wiring
 
 ### Current status

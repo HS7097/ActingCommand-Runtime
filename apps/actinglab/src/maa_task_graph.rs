@@ -254,7 +254,16 @@ impl MaaTaskCompiler {
         if let Some(task) = self.expanded.get(task_id) {
             return Ok(task.clone());
         }
-        let mut task = self.materialize_task(task_id, stack)?;
+        if stack.iter().any(|item| item == task_id) {
+            let mut chain = stack.clone();
+            chain.push(task_id.to_string());
+            return Err(CliError::package_invalid(format!(
+                "MAA virtual task cycle detected: {}",
+                chain.join(" -> ")
+            )));
+        }
+        let mut task = self.materialize_task(task_id, &mut Vec::new())?;
+        stack.push(task_id.to_string());
         for field in LIST_FIELDS {
             let Some(value) = task.get(field).cloned() else {
                 continue;
@@ -264,7 +273,7 @@ impl MaaTaskCompiler {
                     "MAA task '{task_id}' field '{field}' must be a string or string array"
                 ))
             })?;
-            let expanded = self.expand_expression_list(task_id, field, &expressions)?;
+            let expanded = self.expand_expression_list(task_id, field, &expressions, stack)?;
             task.as_object_mut()
                 .expect("materialized task is object")
                 .insert(
@@ -272,6 +281,7 @@ impl MaaTaskCompiler {
                     Value::Array(expanded.into_iter().map(Value::String).collect()),
                 );
         }
+        stack.pop();
         self.validate_task_references(task_id, &task)?;
         self.expanded.insert(task_id.to_string(), task.clone());
         Ok(task)
@@ -350,10 +360,11 @@ impl MaaTaskCompiler {
         task_id: &str,
         field: &str,
         expressions: &[String],
+        stack: &mut Vec<String>,
     ) -> CliOutcome<Vec<String>> {
         let mut out = Vec::new();
         for expression in expressions {
-            let mut parser = MaaExpressionParser::new(self, task_id, field, expression);
+            let mut parser = MaaExpressionParser::new(self, task_id, field, expression, stack);
             merge_unique(&mut out, parser.parse()?);
         }
         Ok(out)
@@ -417,6 +428,7 @@ impl MaaTaskCompiler {
         context_task: &str,
         left: &[String],
         sharp_type: &str,
+        stack: &mut Vec<String>,
     ) -> CliOutcome<Vec<String>> {
         self.stats.virtual_references += 1;
         match sharp_type {
@@ -427,7 +439,7 @@ impl MaaTaskCompiler {
                 let field = sharp_field_name(sharp_type);
                 let mut out = Vec::new();
                 for task_id in left {
-                    let task = self.expand_task(task_id, &mut Vec::new())?;
+                    let task = self.expand_task(task_id, stack)?;
                     let value = task.get(field).cloned().unwrap_or(Value::Null);
                     merge_unique(&mut out, task_list_expressions(&value).unwrap_or_default());
                 }
@@ -442,6 +454,7 @@ impl MaaTaskCompiler {
 
 struct MaaExpressionParser<'a> {
     compiler: &'a mut MaaTaskCompiler,
+    stack: &'a mut Vec<String>,
     context_task: &'a str,
     field: &'a str,
     input: &'a str,
@@ -455,9 +468,11 @@ impl<'a> MaaExpressionParser<'a> {
         context_task: &'a str,
         field: &'a str,
         input: &'a str,
+        stack: &'a mut Vec<String>,
     ) -> Self {
         Self {
             compiler,
+            stack,
             context_task,
             field,
             input,
@@ -514,9 +529,12 @@ impl<'a> MaaExpressionParser<'a> {
                 left = combine_at_tasks(&left, &right);
             } else if self.consume('#') {
                 let sharp_type = self.parse_ident()?;
-                left = self
-                    .compiler
-                    .expand_virtual_field(self.context_task, &left, &sharp_type)?;
+                left = self.compiler.expand_virtual_field(
+                    self.context_task,
+                    &left,
+                    &sharp_type,
+                    self.stack,
+                )?;
             } else {
                 return Ok(left);
             }
@@ -535,9 +553,12 @@ impl<'a> MaaExpressionParser<'a> {
         }
         if self.consume('#') {
             let sharp_type = self.parse_ident()?;
-            return self
-                .compiler
-                .expand_virtual_field(self.context_task, &[], &sharp_type);
+            return self.compiler.expand_virtual_field(
+                self.context_task,
+                &[],
+                &sharp_type,
+                self.stack,
+            );
         }
         let ident = self.parse_ident()?;
         if ident.is_empty() {
@@ -1000,6 +1021,71 @@ mod tests {
         .unwrap_err();
 
         assert!(err.message.contains("baseTask cycle"));
+    }
+
+    #[test]
+    fn virtual_self_cycle_fails_loudly() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["A#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("virtual task cycle"));
+        assert!(err.message.contains("A -> A"));
+    }
+
+    #[test]
+    fn virtual_two_node_cycle_fails_loudly_with_chain() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["B#next"]},
+            "B": {"next": ["A#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("virtual task cycle"));
+        assert!(err.message.contains("A -> B -> A") || err.message.contains("B -> A -> B"));
+    }
+
+    #[test]
+    fn virtual_three_node_cycle_fails_loudly_with_chain() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["B#next"]},
+            "B": {"next": ["C#next"]},
+            "C": {"next": ["A#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("virtual task cycle"));
+        assert!(
+            err.message.contains("A -> B -> C -> A")
+                || err.message.contains("B -> C -> A -> B")
+                || err.message.contains("C -> A -> B -> C")
+        );
+    }
+
+    #[test]
+    fn nested_expression_virtual_cycle_uses_same_stack() {
+        let err = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["(B#next)"]},
+            "B": {"next": ["A#next"]}
+        }))
+        .unwrap_err();
+
+        assert!(err.message.contains("virtual task cycle"));
+        assert!(err.message.contains("A -> B -> A") || err.message.contains("B -> A -> B"));
+    }
+
+    #[test]
+    fn legal_deep_virtual_chain_still_expands() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "A": {"next": ["B#next"]},
+            "B": {"next": ["C#next"]},
+            "C": {"next": ["D"]},
+            "D": {"next": ["Stop"]}
+        }))
+        .unwrap();
+
+        assert_eq!(graph.task("A").unwrap().get("next").unwrap(), &json!(["D"]));
     }
 
     #[test]
