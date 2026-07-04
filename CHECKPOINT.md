@@ -1,5 +1,62 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain repair strict closeout
+
+### Current status
+
+- Continued the strict audit for `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-9feebc3.md` after the initial repair checkpoint.
+- Added real CLI maintenance paths for the persistent Lab-2 arbitrator: `lab arbitrator status|release|cancel|reclaim-dead|mark-destructive`.
+- Preserved post-admission auditability by writing ledger records for Lab-2 write-admission failures instead of returning before audit.
+- Added queue-deadline expiry dispatch records and synthetic real-CLI coverage for lease grant, queue, queue_full, cancel, deadline replacement, reclaim, and preempt decisions.
+- Added low-margin suspicion for matched-but-ambiguous page candidates, delayed stub capture timing coverage, cross-game synthetic pack coverage without `--game`, and five error-axis coverage for `transient`, `recovering`, `resource_drift`, `lease_held`, and `fatal`.
+- Added a child-process Lab-2 stdout purity test that asserts real `actinglab` stdout starts with `{`, parses as JSON, and has empty stderr.
+- Exposed captured vendor stdout/stderr through capture diagnostics and kept Win32 handle capture covered by parallel-safe tests.
+- No real samples, resource repositories, live devices, OCR, UI, SQLite, MCP server, game logic, or upstream code copying were used in this closeout.
+- Repair source commit: `cf471d9`.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `crates/device/src/capture.rs`
+- `crates/device/src/vendor_stdio.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `git status --short --branch`
+
+### Test results
+
+- Focused Lab-2 tests passed: `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+- One intermediate `cargo test --workspace` run exposed a parallel-test issue in the Win32 std-handle capture test assertion; the assertion was tightened to prove vendor bytes were captured without assuming no unrelated test-harness stdout during parallel execution, and the final workspace test passed.
+
+### Current blocker
+
+- No Runtime code blocker remains for this synthetic repair closeout.
+- S7 / L6 MCP projection remains explicitly deferred because the Lab-2 chain marks it optional and non-blocking.
+- External binary/live validation remains outside this Runtime synthetic lane.
+
+### Next step
+
+1. Commit and push this closeout checkpoint.
+2. Hand `cf471d9` plus the checkpoint commit to external binary/live validation.
+
 ## 2026-07-05 Lab-2 chain repair after baseline 9feebc3
 
 ### Current status

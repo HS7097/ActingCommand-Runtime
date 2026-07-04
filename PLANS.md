@@ -20,13 +20,13 @@ Repair order:
 
 Repair status:
 
-- W1-W4 are implemented locally: persistent Lab-2 arbitrator state, real-click lease authorization, shared live-match coordinate derivation, ledger retention, suspicion helpers, and `lab evidence --id` are connected.
+- W1-W4 are implemented: persistent Lab-2 arbitrator state, real-click lease authorization, shared live-match coordinate derivation, ledger retention, suspicion helpers, `lab evidence --id`, and `lab arbitrator ...` maintenance commands are connected to real CLI paths.
 - P1-P3 are implemented locally: min projection keeps decision arrays with bounded summaries and `_full` evidence pointers, while verbose/field-aware errors use the shared Lab-2 projection request.
-- S1-S2 are implemented locally: `do` checks destructive geometry against navigation metadata and writes ledger records for post-admission rejection paths.
-- L0b is implemented locally at the device crate boundary by capturing Win32 standard-handle writes in addition to CRT fd writes.
-- T coverage has been strengthened with persistent-arbitrator, destructive-ledger, evidence, unknown+candidates, verbose-error, live-match drift, and non-dry-run fake-touch tests.
+- S1-S2 are implemented: `do` checks destructive geometry against navigation metadata and writes ledger records for post-admission rejection paths, including admission failures that previously returned before audit.
+- L0b is implemented at the device crate boundary by capturing Win32 standard-handle writes in addition to CRT fd writes and exposing captured vendor output through capture diagnostics.
+- T coverage has been strengthened with persistent-arbitrator six-state CLI coverage, queue deadline expiry, cancellation, reclaim, preemption, destructive-ledger, evidence, unknown+candidates, five error axes, verbose-error, live-match drift, delayed stub observe latency, cross-game synthetic pack coverage, child-process stdout purity, and non-dry-run fake-touch tests.
 - S7 / L6 MCP projection remains a documented deferred optional node.
-- Final public five-command gate passed locally for this repair commit.
+- Final public five-command gate passed locally for repair source commit `cf471d9`.
 
 ## Current Lab-2 CLI chain
 
