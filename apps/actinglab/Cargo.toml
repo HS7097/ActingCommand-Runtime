@@ -13,7 +13,9 @@ name = "actinglab"
 path = "src/main.rs"
 
 [dependencies]
+actingcommand-arbitrator = { workspace = true }
 actingcommand-device = { workspace = true }
+actingcommand-ledger = { workspace = true }
 actingcommand-page-detector = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }

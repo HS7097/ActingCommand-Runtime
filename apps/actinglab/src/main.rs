@@ -31,6 +31,7 @@ use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 mod frame_store;
+mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
 mod package_build;
@@ -139,7 +140,7 @@ impl CliResult {
     }
 
     fn envelope_json(&self) -> String {
-        serde_json::to_string_pretty(&self.envelope).unwrap_or_else(|err| {
+        serde_json::to_string(&self.envelope).unwrap_or_else(|err| {
             format!(r#"{{"ok":false,"error":"json_serialize_failed:{err}"}}"#)
         })
     }
@@ -193,6 +194,7 @@ impl Envelope {
                 code: err.code,
                 message: err.message,
                 blocked_by: err.blocked_by,
+                details: err.details,
             }),
             run_id: None,
             artifacts: None,
@@ -205,6 +207,8 @@ struct EnvelopeError {
     code: String,
     message: String,
     blocked_by: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Box<Value>>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +217,7 @@ struct CliError {
     code: String,
     message: String,
     blocked_by: Vec<String>,
+    details: Option<Box<Value>>,
 }
 
 impl CliError {
@@ -275,7 +280,13 @@ impl CliError {
             code: code.to_string(),
             message: message.into(),
             blocked_by: blocked_by.iter().map(|value| value.to_string()).collect(),
+            details: None,
         }
+    }
+
+    fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(Box::new(details));
+        self
     }
 
     fn exit_code(&self) -> i32 {
@@ -1290,6 +1301,10 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "capture" => run_capture(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
+        [cmd] if cmd == "observe" => lab2_cli::run_observe(&invocation.global, &invocation.args),
+        [cmd] if cmd == "do" => lab2_cli::run_do(&invocation.global, &invocation.args),
+        [cmd] if cmd == "ensure" => lab2_cli::run_ensure(&invocation.global, &invocation.args),
+        [cmd] if cmd == "wait" => lab2_cli::run_wait(&invocation.global, &invocation.args),
         [cmd] if cmd == "current-page" => run_current_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "is-visible" => run_is_visible(&invocation.global, &invocation.args),
         [cmd] if cmd == "locate" => run_locate(&invocation.global, &invocation.args),
@@ -15908,6 +15923,7 @@ fn session_request_cancel_payload(
             code: "request_cancelled".to_string(),
             message,
             blocked_by: vec!["request_queue".to_string()],
+            details: None,
         }),
         started_at_unix_ms: cancelled_at,
         completed_at_unix_ms: cancelled_at,
@@ -17016,6 +17032,7 @@ fn envelope_error_from_cli_error(err: CliError) -> EnvelopeError {
         code: err.code,
         message: err.message,
         blocked_by: err.blocked_by,
+        details: err.details,
     }
 }
 
@@ -17912,6 +17929,7 @@ fn execute_session_command_request(
                 code: err.code,
                 message: err.message,
                 blocked_by: err.blocked_by,
+                details: err.details,
             }),
             started_at_unix_ms,
             completed_at_unix_ms,
@@ -42463,6 +42481,7 @@ mod tests {
                         code: "session_request_failed".to_string(),
                         message: "session request failed".to_string(),
                         blocked_by: vec!["session_request".to_string()],
+                        details: None,
                     })
                 },
                 started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
@@ -43873,6 +43892,7 @@ mod tests {
                         code: "session_request_failed".to_string(),
                         message: "session request failed".to_string(),
                         blocked_by: vec!["session_request".to_string()],
+                        details: None,
                     })
                 },
                 started_at_unix_ms: completed_at_unix_ms.saturating_sub(1),
@@ -47122,6 +47142,7 @@ mod tests {
                 code: "lab_lease_required".to_string(),
                 message: "lease required".to_string(),
                 blocked_by: vec!["lab_lease".to_string()],
+                details: None,
             }),
             started_at_unix_ms: 41,
             completed_at_unix_ms: 42,
@@ -47717,6 +47738,7 @@ mod tests {
                         code: "monitor_failed".to_string(),
                         message: "monitor failed".to_string(),
                         blocked_by: vec!["monitor".to_string()],
+                        details: None,
                     })
                 },
                 started_at_unix_ms: completed_at_unix_ms - 1,
@@ -49368,6 +49390,7 @@ mod tests {
                 code: "lab_lease_required".to_string(),
                 message: "matching Session Layer lease is required".to_string(),
                 blocked_by: vec!["lab_lease".to_string()],
+                details: None,
             }),
             data_summary: None,
             created_at_unix_ms: 1,
@@ -52473,6 +52496,299 @@ mod tests {
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
             "navigation_destructive_overlap"
+        );
+    }
+
+    #[test]
+    fn lab2_observe_reports_page_targets_actions_and_frame_path() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        let frame_out = temp.path().join("observe-frame.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "observe",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--targets",
+                "home_button",
+                "--with-frame",
+                frame_out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert!(data.get("req_id").and_then(Value::as_str).is_some());
+        assert_eq!(
+            data.get("page").and_then(Value::as_str),
+            Some("arknights/home")
+        );
+        assert_eq!(
+            data.get("backend").and_then(Value::as_str),
+            Some("scene_file")
+        );
+        assert_eq!(
+            data.get("targets")
+                .and_then(Value::as_array)
+                .and_then(|targets| targets.first())
+                .and_then(|target| target.get("id"))
+                .and_then(Value::as_str),
+            Some("home_button")
+        );
+        assert_eq!(
+            data.get("actions")
+                .and_then(Value::as_array)
+                .and_then(|actions| actions.first())
+                .and_then(|action| action.get("id"))
+                .and_then(Value::as_str),
+            Some("home_to_target")
+        );
+        assert!(frame_out.exists());
+        assert!(!result.envelope_json().contains("base64"));
+    }
+
+    #[test]
+    fn lab2_do_dry_run_reports_guard_and_actual_click() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("executed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            data.get("actual_click")
+                .and_then(|value| value.get("point"))
+                .and_then(|value| value.get("x"))
+                .and_then(Value::as_i64),
+            Some(12)
+        );
+        assert_eq!(
+            data.get("guard_result")
+                .and_then(|value| value.get("passed"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn lab2_do_guard_miss_returns_actionable_error_details() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "target_not_visible");
+        let details = error.details.as_ref().unwrap();
+        assert!(details.get("req_id").and_then(Value::as_str).is_some());
+        assert_eq!(
+            details.get("error").and_then(Value::as_str),
+            Some("resource_drift")
+        );
+        assert!(details.get("hint").and_then(Value::as_str).is_some());
+    }
+
+    #[test]
+    fn lab2_ensure_is_idempotent_and_plans_routes() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let home = temp.path().join("home.png");
+        fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let idempotent = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "ensure",
+                "home",
+                "--scene",
+                home.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(idempotent.exit_code(), 0);
+        assert_eq!(
+            idempotent
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("state")
+                .and_then(Value::as_str),
+            Some("already_at_target")
+        );
+
+        let planned = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "ensure",
+                "target",
+                "--scene",
+                home.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(planned.exit_code(), 0);
+        let route = planned
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("route")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(route.len(), 1);
+        assert_eq!(
+            route[0].get("id").and_then(Value::as_str),
+            Some("home_to_target")
+        );
+    }
+
+    #[test]
+    fn lab2_wait_reports_page_and_stable_target() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let page = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "wait",
+                "--page",
+                "arknights/home",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--timeout-ms",
+                "100",
+            ],
+            true,
+        );
+        assert_eq!(page.exit_code(), 0);
+        assert_eq!(
+            page.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("state")
+                .and_then(Value::as_str),
+            Some("arrived")
+        );
+
+        let stable = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "wait",
+                "--stable",
+                "home_anchor",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--timeout-ms",
+                "100",
+            ],
+            true,
+        );
+        assert_eq!(stable.exit_code(), 0);
+        assert_eq!(
+            stable
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("state")
+                .and_then(Value::as_str),
+            Some("stable")
+        );
+        assert!(
+            stable
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("wf_id")
+                .and_then(Value::as_str)
+                .is_some()
         );
     }
 

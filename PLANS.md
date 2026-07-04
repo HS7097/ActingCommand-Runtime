@@ -20,15 +20,32 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
+- S4 / L3 CLI core verbs.
+
+S4 scope:
+
+- Add top-level Lab-2 `observe`, `do`, `ensure`, and `wait` verbs to the existing `actinglab` binary.
+- Route each verb through the S2 ledger projection boundary and the S3 degraded arbitrator request envelope.
+- Keep the implementation synthetic/offline-testable: no live devices, true resource repositories, UI, OCR, SQLite, game logic, or upstream code copying.
+- Preserve existing semantic recognition, navigation, guarded click, and ROI-stability helpers instead of duplicating them.
+
+S4 status:
+
+- Complete locally.
+- `observe` returns page, requested target evaluations, navigation actions, frame age/backend metadata, req_id, arbitration summary, optional `--with-frame` output path, and compact ledger projection output.
+- `do` performs a guarded target check before action planning/execution, returns `actual_click` and `guard_result`, supports dry-run, and reports guard failures with structured error details.
+- `ensure` handles idempotent target-page success and dry-run navigation route planning through the existing navigation graph.
+- `wait` supports page wait and target-stability wait using the existing Lab ROI target-stability comparator.
+- S4 targeted synthetic tests are added.
+- Public five-command gate passed locally.
+- Next Lab-2 node is S5 / L4 capabilities and safety unless the task order is revised.
+
+Completed Lab-2 nodes:
+
+- S4 / L3 CLI core verbs.
 - S3 / L2 degraded arbitrator and lease.
-
-S3 scope:
-
-- Add an independent `actingcommand-arbitrator` crate for the degraded single-instance admission state machine.
-- Use the active SessionLease concepts from `apps/actinglab` as the compatibility target while keeping the pure state machine outside `main.rs`.
-- Mark the older `actingcommand-runtime-core::actinglab` scheduler gate as a deprecated parallel prototype, not the Lab-2 L2 start point.
-- Verify and remove dead `actingcommand-runtime-core` / `actingcommand-task-loop` dependency declarations from `actinglab` if they are not actually imported.
-- Keep the node synthetic-only and avoid real samples, resource repositories, live devices, OCR, UI, SQLite, game logic, and full CLI verbs.
+- S2 / L1 logging module core.
+- S1 / L0 prerequisite repair batch.
 
 S3 status:
 
@@ -36,14 +53,7 @@ S3 status:
 - Request envelopes, queue length 1, priority admission, queue-full rejection, queued cancellation, deadline expiry, lease release, dead-holder reclamation, device-drive authorization, and dispatch/receipt record generation are implemented as pure logic.
 - The runtime-core parallel `SchedulerGate` file now carries a deprecated-prototype banner.
 - The dead `actingcommand-runtime-core` and `actingcommand-task-loop` dependency declarations were removed from `apps/actinglab/Cargo.toml`.
-- Targeted crate tests and clippy passed locally.
 - Public five-command gate passed locally.
-- Next Lab-2 node is S4 / L3 CLI core verbs unless the task order is revised.
-
-Completed Lab-2 nodes:
-
-- S2 / L1 logging module core.
-- S1 / L0 prerequisite repair batch.
 
 S2 scope:
 

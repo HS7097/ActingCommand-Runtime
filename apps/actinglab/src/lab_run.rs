@@ -1224,6 +1224,13 @@ fn target_stable_with(previous: &TargetEvaluation, current: &TargetEvaluation) -
     previous.passed && current.passed && target_measurement_stable_with(previous, current)
 }
 
+pub(crate) fn target_evaluations_stable_for_wait(
+    previous: &TargetEvaluation,
+    current: &TargetEvaluation,
+) -> bool {
+    target_stable_with(previous, current)
+}
+
 fn target_measurement_stable_with(previous: &TargetEvaluation, current: &TargetEvaluation) -> bool {
     if previous.id != current.id || previous.kind != current.kind {
         return false;

@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S4 L3 CLI core verbs
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S3 commit `b33e58d`.
+- Added top-level `actinglab observe`, `actinglab do`, `actinglab ensure`, and `actinglab wait` command dispatch.
+- Added `apps/actinglab/src/lab2_cli.rs` for the Lab-2 CLI verb layer instead of growing the existing `main.rs` command body further.
+- Wired Lab-2 verbs through `actingcommand-arbitrator` request admission and `actingcommand-ledger` compact projection.
+- Changed JSON envelope serialization to compact single-line JSON to align the Lab-2 stdout contract while preserving pure JSON output.
+- Added optional structured error details to `EnvelopeError` so guarded Lab-2 failures can include `req_id`, state, hint, and suspicion details without silent failure.
+- `observe` now reports current page, requested targets, current-page navigation actions, frame source/backend, frame age, arbitration decision, req_id, ledger status, and optional `--with-frame` file output.
+- `do` now performs guard evaluation before dry-run or real execution, reports `actual_click` and `guard_result`, refuses guard mismatches with actionable error details, and keeps real execution behind the existing `--capture` requirement.
+- `ensure` now supports idempotent target-page success and dry-run route planning through the existing navigation graph.
+- `wait` now supports page waits and stable-target waits while reusing the existing Lab ROI target-stability comparator through a crate-local wrapper.
+- Added synthetic tests for observe/do/ensure/wait behavior. No real samples, resource repositories, live devices, OCR, UI, SQLite, game logic, or upstream code copying were used.
+- Public five-command gate passed.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch; git log -1 --oneline`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md" -Raw`
+- `rg -n "fn (load_semantic_detector|load_navigation_graph|canonical_navigation_page|find_navigation_route|send_semantic_tap|target_argument|target_eval_json|capture_for_command|capture_frame_summary_json|run_cli|execute\(|run_current_page|run_is_visible|run_locate|run_tap_target|run_navigate|command_path_and_args)|struct PageDetectionOutcome|struct NavigationGraph|navigation_edge_json|point_json|rect_json" apps\actinglab\src\main.rs`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab` passed after adding `EnvelopeError.details` to the remaining initializers.
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture` passed: 5 tests.
+- `cargo fmt --all` completed.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S4 implementation.
+
+### Next step
+
+1. Commit and push S4 as an independent Lab-2 node.
+2. Continue with S5 / L4 capabilities and safety after the pushed S4 checkpoint.
+
 ## 2026-07-05 Lab-2 chain S3 L2 degraded arbitrator and lease
 
 ### Current status

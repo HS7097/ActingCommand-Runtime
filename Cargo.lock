@@ -22,7 +22,9 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 name = "actingcommand-actinglab"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-arbitrator",
  "actingcommand-device",
+ "actingcommand-ledger",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
