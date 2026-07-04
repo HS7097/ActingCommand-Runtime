@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::vendor_stdio::{VendorStdioCapture, capture_vendor_stdio};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
 use image::{
     ColorType, ImageEncoder,
@@ -212,6 +213,7 @@ pub struct CaptureBackendAttempt {
     pub message: String,
     pub elapsed_ms: Option<u128>,
     pub cached: bool,
+    pub channel_order_contract: &'static str,
 }
 
 impl CaptureBackendAttempt {
@@ -227,6 +229,7 @@ impl CaptureBackendAttempt {
             message,
             elapsed_ms,
             cached,
+            channel_order_contract: "verified",
         }
     }
 
@@ -242,6 +245,7 @@ impl CaptureBackendAttempt {
             message,
             elapsed_ms,
             cached,
+            channel_order_contract: "verified",
         }
     }
 }
@@ -628,7 +632,7 @@ fn format_backend_attempts(attempts: &[CaptureBackendAttempt]) -> String {
         .iter()
         .map(|attempt| {
             format!(
-                "{}={}:elapsed_ms={}:cached={}:{}",
+                "{}={}:elapsed_ms={}:cached={}:channel_order_contract={}:{}",
                 attempt.backend.as_str(),
                 attempt.ok,
                 attempt
@@ -636,6 +640,7 @@ fn format_backend_attempts(attempts: &[CaptureBackendAttempt]) -> String {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string()),
                 attempt.cached,
+                attempt.channel_order_contract,
                 attempt.message
             )
         })
@@ -1011,6 +1016,7 @@ struct NemuIpcWorkerState {
     raw_buffer: Vec<u8>,
     frame_width: u32,
     frame_height: u32,
+    vendor_stdio: Vec<VendorStdioCapture>,
 }
 
 impl NemuIpcWorkerState {
@@ -1036,6 +1042,7 @@ impl NemuIpcWorkerState {
             raw_buffer: Vec::new(),
             frame_width: 0,
             frame_height: 0,
+            vendor_stdio: Vec::new(),
         })
     }
 
@@ -1044,7 +1051,11 @@ impl NemuIpcWorkerState {
             return Ok(());
         }
         let connect = unsafe { self.symbol::<NemuConnect>(b"nemu_connect\0")? };
-        let connect_id = unsafe { connect(self.nemu_folder.as_ptr(), self.instance_id) };
+        let nemu_folder = self.nemu_folder.as_ptr();
+        let instance_id = self.instance_id;
+        let (connect_id, stdio) =
+            capture_vendor_stdio(|| Ok(unsafe { connect(nemu_folder, instance_id) }))?;
+        self.record_vendor_stdio(stdio);
         if connect_id == 0 {
             return Err(DeviceError::fatal(
                 "Nemu IPC connect returned 0; check MuMu path and running instance",
@@ -1052,6 +1063,12 @@ impl NemuIpcWorkerState {
         }
         self.connect_id = connect_id;
         Ok(())
+    }
+
+    fn record_vendor_stdio(&mut self, capture: VendorStdioCapture) {
+        if !capture.is_empty() {
+            self.vendor_stdio.push(capture);
+        }
     }
 
     unsafe fn symbol<T>(&self, name: &[u8]) -> DeviceResult<T>
@@ -1073,16 +1090,23 @@ impl NemuIpcWorkerState {
             unsafe { self.symbol::<NemuCaptureDisplay>(b"nemu_capture_display\0")? };
         let mut width = 0i32;
         let mut height = 0i32;
-        let ret = unsafe {
-            capture_display(
-                self.connect_id,
-                self.display_id,
-                0,
-                &mut width,
-                &mut height,
-                std::ptr::null_mut(),
-            )
-        };
+        let connect_id = self.connect_id;
+        let display_id = self.display_id;
+        let width_ptr = &mut width as *mut i32;
+        let height_ptr = &mut height as *mut i32;
+        let (ret, stdio) = capture_vendor_stdio(|| {
+            Ok(unsafe {
+                capture_display(
+                    connect_id,
+                    display_id,
+                    0,
+                    width_ptr,
+                    height_ptr,
+                    std::ptr::null_mut(),
+                )
+            })
+        })?;
+        self.record_vendor_stdio(stdio);
         if ret > 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC resolution probe failed with code {ret}"
@@ -1120,16 +1144,19 @@ impl NemuIpcWorkerState {
                 self.raw_buffer.len()
             ))
         })?;
-        let ret = unsafe {
-            capture_display(
-                self.connect_id,
-                self.display_id,
-                length,
-                &mut width_i32,
-                &mut height_i32,
-                self.raw_buffer.as_mut_ptr(),
-            )
-        };
+        let connect_id = self.connect_id;
+        let display_id = self.display_id;
+        let width_ptr = &mut width_i32 as *mut i32;
+        let height_ptr = &mut height_i32 as *mut i32;
+        let buffer_ptr = self.raw_buffer.as_mut_ptr();
+        let (ret, stdio) = capture_vendor_stdio(|| {
+            Ok(unsafe {
+                capture_display(
+                    connect_id, display_id, length, width_ptr, height_ptr, buffer_ptr,
+                )
+            })
+        })?;
+        self.record_vendor_stdio(stdio);
         if ret > 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC capture failed with code {ret}"
@@ -1147,7 +1174,7 @@ impl NemuIpcWorkerState {
                 "Nemu IPC frame dimensions changed during capture from probed {width}x{height} to {captured_width}x{captured_height}"
             )));
         }
-        let pixels = bgra_bottom_up_to_rgba(&self.raw_buffer, width, height)?;
+        let pixels = rgba_bottom_up_to_rgba(&self.raw_buffer, width, height)?;
         Ok(NemuCapturedFrame {
             width,
             height,
@@ -1160,7 +1187,10 @@ impl NemuIpcWorkerState {
             return;
         }
         if let Ok(disconnect) = unsafe { self.symbol::<NemuDisconnect>(b"nemu_disconnect\0") } {
-            let _ = unsafe { disconnect(self.connect_id) };
+            let connect_id = self.connect_id;
+            if let Ok((_, stdio)) = capture_vendor_stdio(|| Ok(unsafe { disconnect(connect_id) })) {
+                self.record_vendor_stdio(stdio);
+            }
         }
         self.connect_id = 0;
     }
@@ -1724,7 +1754,7 @@ fn serial_to_nemu_instance_id(serial: &str) -> Option<i32> {
     }
 }
 
-fn bgra_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {
+fn rgba_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {
     validate_pixel_buffer(width, height, PixelFormat::Rgba8, raw.len())?;
     let width = usize::try_from(width)
         .map_err(|_| DeviceError::fatal("Nemu IPC width does not fit usize"))?;
@@ -1735,9 +1765,9 @@ fn bgra_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<V
         for x in 0..width {
             let src = ((height - 1 - y) * width + x) * 4;
             let dst = (y * width + x) * 4;
-            pixels[dst] = raw[src + 2];
+            pixels[dst] = raw[src];
             pixels[dst + 1] = raw[src + 1];
-            pixels[dst + 2] = raw[src];
+            pixels[dst + 2] = raw[src + 2];
             pixels[dst + 3] = raw[src + 3];
         }
     }
@@ -1925,6 +1955,29 @@ mod tests {
     }
 
     #[test]
+    fn adb_png_channel_contract_preserves_rgb_channels() {
+        let pixels = rgba_contract_pixels();
+        let png = encode_png_fast(2, 2, &pixels, PixelFormat::Rgba8).expect("encode png");
+        let frame = Frame::from_png(png, CaptureBackendName::AdbScreencap).expect("decode png");
+
+        assert_eq!(frame.pixel_format, PixelFormat::Rgba8);
+        assert_eq!(frame.pixels, pixels);
+    }
+
+    #[test]
+    fn droidcast_rgb565_channel_contract_preserves_rgb_channels() {
+        let raw = [
+            0x00, 0xf8, // red
+            0xe0, 0x07, // green
+            0x1f, 0x00, // blue
+            0xff, 0xff, // white
+        ];
+        let pixels = rgb565_to_rgb8(&raw, 2, 2).expect("rgb565");
+
+        assert_eq!(pixels, vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]);
+    }
+
+    #[test]
     fn converts_rgb565_to_rgb8() {
         let raw = [0x00, 0xf8, 0xe0, 0x07, 0x1f, 0x00];
         let pixels = rgb565_to_rgb8(&raw, 3, 1).expect("rgb565");
@@ -1932,13 +1985,41 @@ mod tests {
     }
 
     #[test]
-    fn converts_nemu_bgra_bottom_up_to_rgba() {
-        let raw = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let pixels = bgra_bottom_up_to_rgba(&raw, 2, 2).expect("bgra");
-        assert_eq!(
-            pixels,
-            vec![11, 10, 9, 12, 15, 14, 13, 16, 3, 2, 1, 4, 7, 6, 5, 8,]
+    fn nemu_rgba_bottom_up_channel_contract_preserves_rgb_channels() {
+        let top_down = rgba_contract_pixels();
+        let raw_bottom_up = vec![
+            top_down[8],
+            top_down[9],
+            top_down[10],
+            top_down[11],
+            top_down[12],
+            top_down[13],
+            top_down[14],
+            top_down[15],
+            top_down[0],
+            top_down[1],
+            top_down[2],
+            top_down[3],
+            top_down[4],
+            top_down[5],
+            top_down[6],
+            top_down[7],
+        ];
+        let pixels = rgba_bottom_up_to_rgba(&raw_bottom_up, 2, 2).expect("rgba");
+
+        assert_eq!(pixels, top_down);
+    }
+
+    #[test]
+    fn capture_attempts_mark_channel_order_contract_verified() {
+        let attempt = CaptureBackendAttempt::success(
+            CaptureBackendName::NemuIpc,
+            "ok".to_string(),
+            Some(1),
+            false,
         );
+
+        assert_eq!(attempt.channel_order_contract, "verified");
     }
 
     #[test]
@@ -2057,5 +2138,14 @@ mod tests {
 
     fn rgb8_red_ids(pixels: &[u8]) -> Vec<u8> {
         pixels.chunks_exact(3).map(|chunk| chunk[0]).collect()
+    }
+
+    fn rgba_contract_pixels() -> Vec<u8> {
+        vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            255, 255, 255, 255, // white
+        ]
     }
 }

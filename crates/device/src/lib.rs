@@ -16,6 +16,7 @@ pub mod maatouch;
 pub mod minitouch;
 pub mod replay;
 pub mod touch;
+mod vendor_stdio;
 
 pub use adb::*;
 pub use capture::*;

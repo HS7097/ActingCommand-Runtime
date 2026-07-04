@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S1 L0 prerequisite repair
+
+### Current status
+
+- Started `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from clean `origin/main` at `fadab53`.
+- Read `C:\合作工作区\ActingCommand\FIX-nemu-channel-swap.md` for L0.a.
+- Implemented L0.a: Nemu IPC now treats captured buffers as RGBA bottom-up and converts them to top-down RGBA without red/blue channel swapping.
+- Added synthetic channel-order contract tests for adb PNG decode, DroidCast_raw RGB565 decode, and Nemu IPC RGBA bottom-up conversion.
+- Added `channel_order_contract: "verified"` to capture backend attempts and propagated it into ActingLab capture diagnostics JSON.
+- Implemented L0.b stage-one vendor stdout/stderr capture: Nemu IPC DLL calls now run inside a process fd-level stdout/stderr redirect boundary, and captured vendor output is stored in an internal diagnostics buffer.
+- Added a synthetic CRT fd noise test proving vendor stdout/stderr is captured instead of leaking through the process stdout stream.
+- No real samples, resource repositories, or live device validation were used for this S1 node.
+- Public five-command gate passed.
+
+### Files changed
+
+- `crates/device/src/vendor_stdio.rs`
+- `crates/device/src/lib.rs`
+- `crates/device/src/capture.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin; git pull --ff-only origin main; git status --short --branch; git log -1 --oneline --decorate`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md"`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\FIX-nemu-channel-swap.md"`
+- `Get-Content -LiteralPath "AGENTS.md"`
+- `Get-Content -LiteralPath "NOTICE.md" -TotalCount 120`
+- `Get-Content -LiteralPath "PLANS.md" -TotalCount 120; Get-Content -LiteralPath "PLANS.md" -Tail 120`
+- `Get-Content -LiteralPath "CHECKPOINT.md" -TotalCount 80; Get-Content -LiteralPath "CHECKPOINT.md" -Tail 120`
+- `rg -n "nemu|droidcast|screencap|capture|RGB|BGR|RGBA|channel|stdout|stderr|Command|Stdio|dll|provider" crates apps providers tests -S`
+- `cargo test -p actingcommand-device`
+- `cargo test -p actingcommand-actinglab capture_backend -- --nocapture`
+- `cargo clippy -p actingcommand-device -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-device` passed: 68 tests.
+- `cargo test -p actingcommand-actinglab capture_backend -- --nocapture` passed: 8 tests.
+- `cargo clippy -p actingcommand-device -- -D warnings` passed after the path-argument cleanup.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S1 implementation.
+
+### Next step
+
+1. Commit and push S1 as an independent Lab-2 node.
+2. Continue with S2 / L1 logging module core after the pushed S1 checkpoint.
+
 ## 2026-07-04 fidelity round-three repair P1-P3
 
 ### Current status

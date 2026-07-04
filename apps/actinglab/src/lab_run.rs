@@ -298,6 +298,7 @@ fn execute_lab_run(
                 "backend": attempt.backend.as_str(),
                 "ok": attempt.ok,
                 "severity": if attempt.ok { "info" } else { "warning" },
+                "channel_order_contract": attempt.channel_order_contract,
                 "message": attempt.message
             }),
         )?;
@@ -3192,6 +3193,7 @@ impl LabRunContext {
             "capture_backend_attempts": self.capture_backend_attempts.iter().map(|attempt| json!({
                 "backend": attempt.backend.as_str(),
                 "ok": attempt.ok,
+                "channel_order_contract": attempt.channel_order_contract,
                 "message": attempt.message
             })).collect::<Vec<_>>(),
             "frame_store": frame_store,

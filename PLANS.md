@@ -6,6 +6,43 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 CLI chain
+
+The active task is `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md`.
+
+This task chain is being implemented as independent nodes. Each completed node must pass the public five-command gate before commit:
+
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+Current node:
+
+- S1 / L0 prerequisite repair batch.
+
+S1 scope:
+
+- L0.a: fix the Nemu IPC capture channel-order contract so MuMu RGBA bottom-up buffers are converted to Runtime top-down RGBA without swapping red and blue channels.
+- L0.a: keep adb screencap, DroidCast_raw, and Nemu IPC covered by synthetic channel-order contract tests.
+- L0.b: add a process fd-level vendor stdout/stderr capture boundary around Nemu IPC DLL calls so vendor noise cannot leak into ActingLab command stdout before the command JSON.
+- L0.b: keep captured vendor output in an internal diagnostics buffer until the Lab-2 logging ledger lands in L1.
+
+S1 boundaries:
+
+- no real samples or resource repositories;
+- no live device validation;
+- no OCR, UI, SQLite, game logic, scheduler, or full logging-ledger implementation;
+- no upstream code copying.
+
+S1 status:
+
+- L0.a implementation is complete locally and covered by synthetic tests.
+- L0.b implementation is complete locally and covered by synthetic fd-capture tests.
+- Public five-command gate passed locally.
+- Next Lab-2 node is S2 / L1 logging module core unless the task order is revised.
+
 ## Current AK MAA data fidelity chain
 
 The active task is `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.

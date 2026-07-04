@@ -5219,7 +5219,8 @@ fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt
                 "ok": attempt.ok,
                 "message": attempt.message,
                 "elapsed_ms": attempt.elapsed_ms,
-                "cached": attempt.cached
+                "cached": attempt.cached,
+                "channel_order_contract": attempt.channel_order_contract
             })
         })
         .collect()
