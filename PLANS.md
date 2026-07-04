@@ -21,7 +21,9 @@ Stage-one repair status:
 - S1 tests are synthetic-only and cover explicit `--maa-tasks` mode, expanded `baseTask`/`@`/`#` data landing in pack targets, and default-mode regression.
 - S2/B1 virtual reference cycle handling is implemented. `#next`/`#sub`/other virtual field expansion now preserves the in-progress task stack through expression parsing and nested virtual lookups, so cycles fail with an explicit chain instead of recursing.
 - S2 tests are synthetic-only and cover self, two-node, three-node, and nested-expression virtual cycles plus a legal deep virtual chain.
-- S3-S8 remain open and must continue in the fixed order from the repair task file.
+- S3/B2a plain `baseTask` template inheritance is implemented. Plain `baseTask` derivations now preserve explicit templates inherited from the base chain, synthesize a task-specific fallback only when the whole plain base chain has no template, and keep explicit child templates authoritative.
+- S3 tests are synthetic-only and cover inherited parent templates, all-template-missing fallback defaults, child template override, and the existing `@` derived-template behavior.
+- S4-S8 remain open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

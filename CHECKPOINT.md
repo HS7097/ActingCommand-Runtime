@@ -1,5 +1,53 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S3 baseTask template inheritance
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S2 was pushed as `93c16a1b082d67df9aebcbcd9a9ddb1aeeae3a19`.
+- Implemented S3/B2a for plain `baseTask` template inheritance.
+- Plain `baseTask` derivations now preserve explicit templates inherited from the base chain, synthesize a task-specific fallback template only when the entire plain base chain has no template, and keep child-declared templates authoritative.
+- The existing explicit `@` derived-task behavior remains unchanged; `P@Base` still defaults to `P@Base.png`.
+- Added synthetic-only tests for inherited base templates, all-template-missing fallback defaults, and explicit child override. No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md`
+- `git diff -- apps/actinglab/src/maa_task_graph.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab maa_task_graph::tests -- --nocapture` passed: 18 tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for S3.
+- S4-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in fixed order using synthetic-only validation.
+
+### Next step
+
+1. Commit and push S3.
+2. Continue with S4/B2b+B4+B5 protocol-check batch.
+
 ## 2026-07-04 fidelity stage-one repair S2 virtual cycle stack
 
 ### Current status

@@ -330,10 +330,15 @@ impl MaaTaskCompiler {
                 filter_algorithm_specific_inheritance(&mut base, &raw.data);
                 merge_object(&mut base, &raw.data);
                 base.remove("baseTask");
-                if (base_task.is_some() || is_explicit_at)
-                    && !raw.data.contains_key("template")
-                    && looks_like_template_task(&base)
-                {
+                let should_default_template = if is_explicit_at {
+                    !raw.data.contains_key("template") && looks_like_template_task(&base)
+                } else if base_task.is_some() {
+                    !self.base_task_chain_has_template(&raw, &mut HashSet::new())
+                        && looks_like_template_task(&base)
+                } else {
+                    false
+                };
+                if should_default_template {
                     base.insert(
                         "template".to_string(),
                         Value::String(default_template_name(task_id)),
@@ -353,6 +358,24 @@ impl MaaTaskCompiler {
         let task = Value::Object(task);
         self.materialized.insert(task_id.to_string(), task.clone());
         Ok(task)
+    }
+
+    fn base_task_chain_has_template(&self, task: &RawMaaTask, seen: &mut HashSet<String>) -> bool {
+        if task.data.contains_key("template") {
+            return true;
+        }
+        if !seen.insert(task.task_id.clone()) {
+            return false;
+        }
+        let Some(base_id) = task.data.get("baseTask").and_then(Value::as_str) else {
+            return false;
+        };
+        if base_id == "#none" {
+            return false;
+        }
+        self.raw
+            .get(base_id)
+            .is_some_and(|base| self.base_task_chain_has_template(base, seen))
     }
 
     fn expand_expression_list(
@@ -985,6 +1008,83 @@ mod tests {
             Some("P@Base.png")
         );
         assert_eq!(task.get("next").unwrap(), &json!(["P@N1", "P"]));
+    }
+
+    #[test]
+    fn base_task_inherits_parent_template() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "template": "Base.png",
+                "next": ["Stop"]
+            },
+            "Child": {
+                "baseTask": "Base",
+                "threshold": 0.92
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Base.png")
+        );
+        assert_eq!(
+            task.pointer("/threshold").and_then(Value::as_f64),
+            Some(0.92)
+        );
+    }
+
+    #[test]
+    fn base_task_chain_without_template_uses_child_default() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "next": ["Stop"]
+            },
+            "Middle": {
+                "baseTask": "Base",
+                "threshold": 0.9
+            },
+            "Child": {
+                "baseTask": "Middle",
+                "threshold": 0.95
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("Child.png")
+        );
+        assert_eq!(
+            task.pointer("/threshold").and_then(Value::as_f64),
+            Some(0.95)
+        );
+    }
+
+    #[test]
+    fn base_task_child_template_overrides_parent_template() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "template": "Base.png",
+                "next": ["Stop"]
+            },
+            "Child": {
+                "baseTask": "Base",
+                "template": "ChildExplicit.png"
+            }
+        }))
+        .unwrap();
+
+        let task = graph.task("Child").unwrap();
+        assert_eq!(
+            task.pointer("/template").and_then(Value::as_str),
+            Some("ChildExplicit.png")
+        );
     }
 
     #[test]
