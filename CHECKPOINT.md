@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S5 L4 capabilities and safety
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S4 commit `c369a9b`.
+- Added Lab-2 capability self-description under `capabilities.lab2_cli`.
+- Added Lab-2 command contracts for `observe`, `do`, `ensure`, `wait`, and `lab receipt`, and reused that contract source for `schema <command>`.
+- Added current config instance reporting, schema-version range `0.3` through `0.5`, supported click kinds, recognition-engine capability truth, unsupported masked/count capability disclosure, error code table, exit code table, and escape-toolbox groups.
+- Added `lab receipt --req <id>` for request-id ledger-chain lookup under the configured run root.
+- Added `reco_id` to Lab-2 `do`, request dispatch ledger records, recognition/action drive records, and id-chained final receipts so a dry-run `do` can be reconstructed by `req_id`.
+- Added synthetic tests for capabilities/schema and request-chain reconstruction. No real samples, resource repositories, live devices, OCR, UI, SQLite, scheduler behavior, game logic, or upstream code copying were used.
+- Public five-command gate passed.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch; git log -1 --oneline`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md"`
+- `rg -n "fn exit_code_table|fn command_cap\(|fn run_schema|fn run_capabilities|fn command_capabilities|fn run_lab\(" apps\actinglab\src\main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture` passed: 7 Lab-2 tests.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S5 implementation.
+
+### Next step
+
+1. Commit and push S5 as an independent Lab-2 node.
+2. Continue with S6 / L5 self-heal transparency after the pushed S5 checkpoint.
+
 ## 2026-07-05 Lab-2 chain S4 L3 CLI core verbs
 
 ### Current status

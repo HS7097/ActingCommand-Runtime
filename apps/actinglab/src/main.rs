@@ -1514,6 +1514,7 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
             {"id": "auto", "fallback_allowed": true, "diagnostics_required": true},
             {"id": "auto-fastest", "probe_all_backends": true, "diagnostics_required": true}
         ],
+        "lab2_cli": lab2_cli::capability_summary(&config),
         "discovered_recognition_packs": discovered
     }))
 }
@@ -4543,8 +4544,12 @@ fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
 }
 
 fn run_schema(args: &[String]) -> CliOutcome<Value> {
-    let kind = args.first().map(String::as_str).unwrap_or("all");
-    let data = match kind {
+    let kind = if args.is_empty() {
+        "all".to_string()
+    } else {
+        args.join(" ")
+    };
+    let data = match kind.as_str() {
         "task" => json!({
             "schema_version": "0.1",
             "required": ["schema_version", "id", "steps"],
@@ -4584,9 +4589,10 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "security": ["no zip-slip", "no executable scripts", "hashes verified when declared"]
         }),
         "all" => json!({
-            "schemas": ["task", "control", "pack", "package"]
+            "schemas": ["task", "control", "pack", "package", "observe", "do", "ensure", "wait", "lab receipt"]
         }),
-        other => return Err(CliError::usage(format!("unknown schema kind: {other}"))),
+        other => lab2_cli::command_schema(other)
+            .ok_or_else(|| CliError::usage(format!("unknown schema kind: {other}")))?,
     };
     Ok(data)
 }
@@ -9144,6 +9150,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         "lease" => run_lab_lease(global, args),
         "preempt" => run_lab_preempt(global, args),
         "release" => run_lab_release(global, args),
+        "receipt" => lab2_cli::run_receipt(global, args),
         _ => Err(CliError::usage(format!("unknown lab command: {sub}"))),
     }
 }
@@ -24960,6 +24967,18 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("resource import-alas", ["offline"], "reserved"),
         command_cap("resource drift-alas", ["offline"], "reserved"),
         command_cap("resource check-release", ["offline"], "available"),
+        command_cap("observe", ["offline", "device_optional"], "available"),
+        command_cap(
+            "do",
+            ["offline", "device_optional", "lab_lease"],
+            "available",
+        ),
+        command_cap(
+            "ensure",
+            ["offline", "device_optional", "lab_lease"],
+            "available",
+        ),
+        command_cap("wait", ["offline", "device_optional"], "available"),
         command_cap("package validate", ["offline"], "available"),
         command_cap("package inspect", ["offline"], "available"),
         command_cap("package build-task", ["offline"], "available"),
@@ -25391,6 +25410,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab lease wait", ["offline", "lab_lease"], "available"),
         command_cap("lab preempt", ["offline", "lab_lease"], "available"),
         command_cap("lab release", ["offline", "lab_lease"], "available"),
+        command_cap("lab receipt", ["offline"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
@@ -52790,6 +52810,197 @@ mod tests {
                 .and_then(Value::as_str)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn lab2_capabilities_and_schema_report_compiled_contracts() {
+        let _guard = env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        set_config_env(temp.path().join("config.json"));
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak-live".to_string(),
+            InstanceConfig {
+                serial: Some("127.0.0.1:16416".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn".to_string()),
+                capture_backend: Some("adb".to_string()),
+                touch_backend: Some("maatouch".to_string()),
+                ..Default::default()
+            },
+        );
+        write_user_config(&config).unwrap();
+
+        let capabilities = run_cli(["--json", "capabilities"], true);
+
+        assert_eq!(capabilities.exit_code(), 0);
+        let data = capabilities.envelope.data.as_ref().unwrap();
+        assert!(
+            data.pointer("/lab2_cli/verbs")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|verb| verb.get("command").and_then(Value::as_str) == Some("do"))
+        );
+        assert!(
+            data.pointer("/lab2_cli/engine_capabilities/template_matching/families")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|family| family.get("id").and_then(Value::as_str) == Some("ccoeff"))
+        );
+        assert!(
+            data.pointer("/lab2_cli/engine_capabilities/template_matching/unsupported")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|capability| {
+                    capability.get("id").and_then(Value::as_str) == Some("masked_template_match")
+                })
+        );
+        assert_eq!(
+            data.pointer("/lab2_cli/instances/0/id")
+                .and_then(Value::as_str),
+            Some("ak-live")
+        );
+
+        let do_schema = run_cli(["--json", "schema", "do"], true);
+        assert_eq!(do_schema.exit_code(), 0);
+        assert_eq!(
+            do_schema
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("command")
+                .and_then(Value::as_str),
+            Some("do")
+        );
+
+        let receipt_schema = run_cli(["--json", "schema", "lab", "receipt"], true);
+        assert_eq!(receipt_schema.exit_code(), 0);
+        assert_eq!(
+            receipt_schema
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("command")
+                .and_then(Value::as_str),
+            Some("lab receipt")
+        );
+    }
+
+    #[test]
+    fn lab2_receipt_reconstructs_do_request_chain_by_req_id() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let run_root = temp.path().join("runs");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let action = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(action.exit_code(), 0);
+        let req_id = action
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("req_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+
+        let receipt = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "lab",
+                "receipt",
+                "--req",
+                &req_id,
+            ],
+            true,
+        );
+
+        assert_eq!(receipt.exit_code(), 0);
+        let records = receipt
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("records")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("dispatch")
+                && item
+                    .pointer("/record/payload/stage")
+                    .and_then(Value::as_str)
+                    == Some("request")
+        }));
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("dispatch")
+                && item
+                    .pointer("/record/payload/decision")
+                    .and_then(Value::as_str)
+                    == Some("lease_granted")
+        }));
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("drive")
+                && item
+                    .pointer("/record/payload/stage")
+                    .and_then(Value::as_str)
+                    == Some("recognition")
+                && item
+                    .pointer("/record/id_chain/reco_id")
+                    .and_then(Value::as_str)
+                    .is_some()
+        }));
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("drive")
+                && item
+                    .pointer("/record/payload/stage")
+                    .and_then(Value::as_str)
+                    == Some("action")
+                && item
+                    .pointer("/record/id_chain/action_id")
+                    .and_then(Value::as_str)
+                    .is_some()
+        }));
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("receipt")
+                && item
+                    .pointer("/record/id_chain/action_id")
+                    .and_then(Value::as_str)
+                    .is_some()
+                && item
+                    .pointer("/record/id_chain/reco_id")
+                    .and_then(Value::as_str)
+                    .is_some()
+        }));
     }
 
     #[test]

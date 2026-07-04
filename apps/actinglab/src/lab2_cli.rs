@@ -11,7 +11,7 @@ use actingcommand_ledger::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
@@ -50,6 +50,16 @@ struct WaitIds<'a> {
 struct WaitTiming {
     timeout: Duration,
     poll: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct Lab2CommandContract {
+    name: &'static str,
+    summary: &'static str,
+    required: &'static [&'static str],
+    optional: &'static [&'static str],
+    output_fields: &'static [&'static str],
+    requires_lease: bool,
 }
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -139,6 +149,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     guard_evaluable_target(&evaluator, &target, "do")?;
     let loaded_scene = load_lab2_scene(global, &flags)?;
     let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+    let reco_id = ids.issue(IdKind::Reco);
     let evaluation = evaluator
         .evaluate_target(&loaded_scene.scene, &target)
         .map_err(|err| CliError::usage(err.to_string()))?;
@@ -178,6 +189,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     };
     let payload = json!({
         "req_id": ids.req_id,
+        "reco_id": reco_id,
         "action_id": action_id,
         "state": if dry_run { "planned" } else { "sent" },
         "instance": instance,
@@ -192,6 +204,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "point": point_json(point)
         },
         "guard_result": {
+            "reco_id": reco_id,
             "target": target,
             "passed": true,
             "evaluation": target_eval_json(&evaluation)
@@ -388,6 +401,60 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     )
 }
 
+pub(crate) fn run_receipt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    let req_id = flags
+        .optional("--req")
+        .filter(|value| value != "true")
+        .or_else(|| flags.positionals.first().cloned())
+        .ok_or_else(|| CliError::usage("lab receipt requires --req <req_id>"))?;
+    let config = read_user_config()?;
+    let run_root = effective_run_root(global, &config)
+        .ok_or_else(|| CliError::usage("lab receipt requires --run-root or config run_root"))?;
+    let records = read_receipt_chain(&run_root, &req_id)?;
+    if records.is_empty() {
+        return Err(CliError::usage(format!(
+            "no lab ledger records found for req_id '{req_id}'"
+        )));
+    }
+    Ok(json!({
+        "req_id": req_id,
+        "ledger_count": distinct_ledger_count(&records),
+        "record_count": records.len(),
+        "records": records
+    }))
+}
+
+pub(crate) fn capability_summary(config: &UserConfig) -> Value {
+    let commands = lab2_command_contracts()
+        .into_iter()
+        .map(command_contract_summary)
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": "actingcommand.lab2.capabilities.v0.1",
+        "verbs": commands,
+        "click_kinds": ["target_rect_center"],
+        "schema_versions": {
+            "min": "0.3",
+            "max": "0.5",
+            "supported": ["0.3", "0.4", "0.5"]
+        },
+        "engine_capabilities": recognition_engine_capabilities(),
+        "instances": lab2_config_instances(config),
+        "error_codes": lab2_error_code_table(),
+        "exit_codes": exit_code_table(),
+        "escape_toolbox": escape_toolbox_groups()
+    })
+}
+
+pub(crate) fn command_schema(command: &str) -> Option<Value> {
+    let normalized = command.trim();
+    lab2_command_contracts()
+        .into_iter()
+        .find(|contract| contract.name == normalized)
+        .map(command_contract_schema)
+}
+
 fn admit_lab2_request(
     ids: &Lab2Ids,
     instance: String,
@@ -421,10 +488,20 @@ fn admit_lab2_request(
             CliError::usage(format!("invalid --queue-deadline-ms '{deadline}': {err}"))
         })?);
     }
+    let request_record = LedgerRecord::new(
+        LedgerRecordKind::Dispatch,
+        Some(ids.req_id.clone()),
+        json!({
+            "stage": "request",
+            "request": request
+        }),
+    );
     let mut arbitrator = DegradedArbitrator::new(IdIssuer::new());
-    arbitrator
+    let mut outcome = arbitrator
         .admit(request, current_unix_ms())
-        .map_err(|err| CliError::device(err.to_string()))
+        .map_err(|err| CliError::device(err.to_string()))?;
+    outcome.ledger_records.insert(0, request_record);
+    Ok(outcome)
 }
 
 fn finish_lab2_response(
@@ -462,22 +539,189 @@ fn write_lab2_ledger(
         SessionHeader::new(RUNTIME_VERSION, game, server, instance),
     )
     .map_err(|err| CliError::device(err.to_string()))?;
+    records.extend(lab2_drive_records_from_payload(req_id, payload));
     for record in records.drain(..) {
+        let record = with_lab2_id_chain(record, req_id, &[payload]);
         ledger
             .append(record)
             .map_err(|err| CliError::device(err.to_string()))?;
     }
-    ledger
-        .append(LedgerRecord::new(
+    let receipt = with_lab2_id_chain(
+        LedgerRecord::new(
             LedgerRecordKind::Receipt,
             Some(req_id.to_string()),
             payload.clone(),
-        ))
+        ),
+        req_id,
+        &[payload],
+    );
+    ledger
+        .append(receipt)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "written": true,
         "path": ledger.ledger_path().display().to_string()
     }))
+}
+
+fn lab2_drive_records_from_payload(req_id: &str, payload: &Value) -> Vec<LedgerRecord> {
+    let mut records = Vec::new();
+    if let Some(guard) = payload.get("guard_result") {
+        records.push(with_lab2_id_chain(
+            LedgerRecord::new(
+                LedgerRecordKind::Drive,
+                Some(req_id.to_string()),
+                json!({
+                    "stage": "recognition",
+                    "target": payload.get("target").cloned().unwrap_or(Value::Null),
+                    "guard_result": guard
+                }),
+            ),
+            req_id,
+            &[payload],
+        ));
+    }
+    if let Some(click) = payload.get("actual_click") {
+        records.push(with_lab2_id_chain(
+            LedgerRecord::new(
+                LedgerRecordKind::Drive,
+                Some(req_id.to_string()),
+                json!({
+                    "stage": "action",
+                    "executed": payload.get("executed").cloned().unwrap_or(Value::Null),
+                    "actual_click": click,
+                    "device": payload.get("device").cloned().unwrap_or(Value::Null)
+                }),
+            ),
+            req_id,
+            &[payload],
+        ));
+    }
+    if payload.get("wf_id").is_some() {
+        records.push(with_lab2_id_chain(
+            LedgerRecord::new(
+                LedgerRecordKind::Drive,
+                Some(req_id.to_string()),
+                json!({
+                    "stage": "wait",
+                    "state": payload.get("state").cloned().unwrap_or(Value::Null),
+                    "page": payload.get("page").cloned().unwrap_or(Value::Null),
+                    "target": payload.get("target").cloned().unwrap_or(Value::Null)
+                }),
+            ),
+            req_id,
+            &[payload],
+        ));
+    }
+    records
+}
+
+fn with_lab2_id_chain(
+    mut record: LedgerRecord,
+    req_id: &str,
+    extra_values: &[&Value],
+) -> LedgerRecord {
+    let mut values = Vec::with_capacity(extra_values.len() + 1);
+    values.push(&record.payload);
+    values.extend_from_slice(extra_values);
+    for (key, value) in lab2_id_chain(req_id, &values) {
+        record = record.with_id(key, value);
+    }
+    record
+}
+
+fn lab2_id_chain(req_id: &str, values: &[&Value]) -> Vec<(&'static str, String)> {
+    let mut chain = Vec::new();
+    chain.push(("req_id", req_id.to_string()));
+    for (key, paths) in [
+        (
+            "lease_id",
+            &[
+                "/lease_id",
+                "/lease/lease_id",
+                "/details/lease/lease_id",
+                "/arbitration/details/lease/lease_id",
+            ][..],
+        ),
+        ("reco_id", &["/reco_id", "/guard_result/reco_id"][..]),
+        ("action_id", &["/action_id"][..]),
+        ("wf_id", &["/wf_id"][..]),
+    ] {
+        if let Some(value) = first_string_at_paths(values, paths) {
+            chain.push((key, value));
+        }
+    }
+    chain
+}
+
+fn first_string_at_paths(values: &[&Value], paths: &[&str]) -> Option<String> {
+    values.iter().find_map(|value| {
+        paths.iter().find_map(|path| {
+            value
+                .pointer(path)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+    })
+}
+
+fn read_receipt_chain(run_root: &Path, req_id: &str) -> CliOutcome<Vec<Value>> {
+    let sessions = run_root.join("sessions");
+    let mut records = Vec::new();
+    for path in collect_ledger_paths(&sessions)? {
+        let read = LabLedger::read(&path)
+            .map_err(|err| CliError::device(format!("failed to read {}: {err}", path.display())))?;
+        for record in read.records {
+            if record_matches_req(&record, req_id) {
+                records.push(json!({
+                    "ledger_path": path.display().to_string(),
+                    "kind": record.kind.as_str(),
+                    "record": record
+                }));
+            }
+        }
+    }
+    Ok(records)
+}
+
+fn collect_ledger_paths(root: &Path) -> CliOutcome<Vec<PathBuf>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    collect_ledger_paths_inner(root, &mut paths)?;
+    Ok(paths)
+}
+
+fn collect_ledger_paths_inner(root: &Path, paths: &mut Vec<PathBuf>) -> CliOutcome<()> {
+    for entry in fs::read_dir(root)
+        .map_err(|err| CliError::device(format!("failed to read {}: {err}", root.display())))?
+    {
+        let entry = entry.map_err(|err| CliError::device(err.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_ledger_paths_inner(&path, paths)?;
+        } else if path.file_name().and_then(|name| name.to_str()) == Some("ledger.jsonl") {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn record_matches_req(record: &LedgerRecord, req_id: &str) -> bool {
+    record.req_id.as_deref() == Some(req_id)
+        || record
+            .id_chain
+            .get("req_id")
+            .is_some_and(|value| value == req_id)
+}
+
+fn distinct_ledger_count(records: &[Value]) -> usize {
+    records
+        .iter()
+        .filter_map(|record| record.get("ledger_path").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn project_lab2_payload(payload: &Value, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -519,6 +763,209 @@ fn lab2_error_payload(
 
 fn lab2_error_details(req_id: &str, error: &str, state: &str, hint: &str) -> CliOutcome<Value> {
     lab2_error_payload(req_id, error, state, hint, None)
+}
+
+fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
+    vec![
+        Lab2CommandContract {
+            name: "observe",
+            summary: "read one frame, detect page, evaluate visible targets, and list navigation actions",
+            required: &["--scene <png> or --capture"],
+            optional: &[
+                "--targets <id,id>",
+                "--with-frame <path>",
+                "--require-fresh",
+                "--fields <field,field>",
+                "--verbose",
+                "--pretty",
+            ],
+            output_fields: &[
+                "req_id",
+                "state",
+                "page",
+                "targets",
+                "actions",
+                "frame_age_ms",
+                "backend",
+            ],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "do",
+            summary: "guard a semantic target, derive the click point, optionally execute it, and observe once",
+            required: &["<target>", "--scene <png> or --capture"],
+            optional: &[
+                "--dry-run",
+                "--allow-destructive",
+                "--destructive",
+                "--priority <normal|high>",
+                "--fields <field,field>",
+            ],
+            output_fields: &[
+                "req_id",
+                "reco_id",
+                "action_id",
+                "actual_click",
+                "guard_result",
+                "observation",
+                "ledger",
+            ],
+            requires_lease: true,
+        },
+        Lab2CommandContract {
+            name: "ensure",
+            summary: "route from the current page to a requested page through guarded actions",
+            required: &[
+                "<page> or --page <page> or --to <page>",
+                "--scene <png> or --capture",
+            ],
+            optional: &[
+                "--dry-run",
+                "--allow-destructive",
+                "--step-timeout-ms <ms>",
+                "--poll-ms <ms>",
+            ],
+            output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],
+            requires_lease: true,
+        },
+        Lab2CommandContract {
+            name: "wait",
+            summary: "wait for a page or target stability using the shared ROI stability comparator",
+            required: &[
+                "--page <page> or --stable <target>",
+                "--scene <png> or --capture",
+            ],
+            optional: &[
+                "--timeout-ms <ms>",
+                "--poll-ms <ms>",
+                "--fields <field,field>",
+            ],
+            output_fields: &[
+                "req_id",
+                "wf_id",
+                "state",
+                "page",
+                "target",
+                "elapsed_ms",
+                "ledger",
+            ],
+            requires_lease: false,
+        },
+        Lab2CommandContract {
+            name: "lab receipt",
+            summary: "load all ledger records tied to a req_id",
+            required: &["--req <req_id>", "--run-root <path> or config run_root"],
+            optional: &[],
+            output_fields: &["req_id", "ledger_count", "record_count", "records"],
+            requires_lease: false,
+        },
+    ]
+}
+
+fn command_contract_summary(contract: Lab2CommandContract) -> Value {
+    json!({
+        "command": contract.name,
+        "summary": contract.summary,
+        "requires_lease": contract.requires_lease,
+        "required": contract.required,
+        "optional": contract.optional,
+        "output_fields": contract.output_fields
+    })
+}
+
+fn command_contract_schema(contract: Lab2CommandContract) -> Value {
+    json!({
+        "schema_version": "actingcommand.lab2.command_shape.v0.1",
+        "command": contract.name,
+        "summary": contract.summary,
+        "stdout": {
+            "format": "single_line_json",
+            "ansi": false,
+            "image_bytes": false
+        },
+        "requires_lease": contract.requires_lease,
+        "parameters": {
+            "required": contract.required,
+            "optional": contract.optional
+        },
+        "output": {
+            "shape": "json_object",
+            "fields": contract.output_fields
+        }
+    })
+}
+
+fn recognition_engine_capabilities() -> Value {
+    let metrics = [
+        MatchMetric::CrossCorrelationNormalized,
+        MatchMetric::CorrelationCoefficientNormalized,
+    ]
+    .into_iter()
+    .map(match_metric_name)
+    .collect::<Vec<_>>();
+    json!({
+        "template_matching": {
+            "supported_metrics": metrics,
+            "families": [
+                {"id": "ncc", "implemented_by": "ccorr_normed score normalization"},
+                {"id": "ccoeff", "implemented_by": "ccoeff_normed"}
+            ],
+            "unsupported": [
+                {"id": "masked_template_match", "reason": "not implemented in current recognition engine"},
+                {"id": "count_match", "reason": "resource-level count semantics are not implemented in Lab-2 CLI"}
+            ]
+        },
+        "color": {"rgb_mean_distance": true},
+        "ocr": {"default_screen_state": false, "explicit_command_required": true}
+    })
+}
+
+fn lab2_config_instances(config: &UserConfig) -> Vec<Value> {
+    config
+        .instances
+        .iter()
+        .map(|(id, instance)| {
+            json!({
+                "id": id,
+                "game": instance.game,
+                "server": instance.server,
+                "serial_configured": instance.serial.is_some(),
+                "package_configured": instance.package.is_some(),
+                "capture_backend": instance.capture_backend,
+                "touch_backend": instance.touch_backend
+            })
+        })
+        .collect()
+}
+
+fn lab2_error_code_table() -> Value {
+    json!([
+        {"code": "transient", "meaning": "retryable issue; retry may be appropriate if bounded and logged"},
+        {"code": "recovering", "meaning": "runtime recovery is active; write actions should wait or fail visibly"},
+        {"code": "resource_drift", "meaning": "resource or page expectation drift; stop and inspect rather than retry blindly"},
+        {"code": "lease_held", "meaning": "another holder owns the write lease"},
+        {"code": "queue_full", "meaning": "single-slot degraded queue is full"},
+        {"code": "fatal", "meaning": "non-recoverable fault; fail loud"},
+        {"code": "target_not_visible", "meaning": "guard target did not pass recognition"},
+        {"code": "current_page_unknown", "meaning": "current page was not matched before routing"}
+    ])
+}
+
+fn escape_toolbox_groups() -> Value {
+    json!([
+        {
+            "group": "evidence",
+            "commands": ["capture --with-frame", "detect-page --all", "locate --template", "read-text --region", "session journal"]
+        },
+        {
+            "group": "recovery",
+            "commands": ["session recover", "session self-heal-plan", "session capture-policy", "session instance app restart"]
+        },
+        {
+            "group": "lease_and_arbitration",
+            "commands": ["lab lease", "lab preempt", "lab release", "session request status"]
+        }
+    ])
 }
 
 fn load_lab2_scene(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2Scene> {

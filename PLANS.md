@@ -20,7 +20,29 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
-- S4 / L3 CLI core verbs.
+- S5 / L4 capabilities and safety.
+
+S5 scope:
+
+- Extend `capabilities` with Lab-2 verbs, parameter/output schemas, click kinds, schema-version range, recognition-engine capability truth, current config instances, error/exit code tables, and escape-toolbox groups.
+- Extend `schema <command>` for Lab-2 `observe`, `do`, `ensure`, `wait`, and `lab receipt`.
+- Add `lab receipt --req <id>` to reconstruct the ledger chain for a request id.
+- Carry `req_id` through the request, arbitration, lease, recognition, action, and receipt records for Lab-2 `do`.
+- Keep this node synthetic/offline-only: no live device work, UI, OCR, SQLite, full scheduler, true resource repository validation, or game logic.
+
+S5 status:
+
+- Complete locally.
+- `capabilities` now exposes a Lab-2 capability block generated from the same command-contract source used by `schema`.
+- `schema do`, `schema observe`, `schema ensure`, `schema wait`, and `schema lab receipt` describe the single-line JSON output shape and command parameters.
+- `do` now issues a `reco_id` alongside `action_id` and writes recognition/action drive records plus an id-chained final receipt when a run root is configured.
+- `lab receipt --req <id>` loads all matching JSONL ledger records from the configured run root.
+- S5 targeted synthetic tests are added.
+- Public five-command gate passed locally.
+
+Next Lab-2 node:
+
+- S6 / L5 self-heal transparency after S5 is committed and pushed.
 
 S4 scope:
 
@@ -42,6 +64,7 @@ S4 status:
 
 Completed Lab-2 nodes:
 
+- S5 / L4 capabilities and safety.
 - S4 / L3 CLI core verbs.
 - S3 / L2 degraded arbitrator and lease.
 - S2 / L1 logging module core.
