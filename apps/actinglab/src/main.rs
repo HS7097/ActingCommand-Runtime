@@ -5235,14 +5235,18 @@ fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt
     attempts
         .iter()
         .map(|attempt| {
-            json!({
+            let mut value = json!({
                 "backend": attempt.backend.as_str(),
                 "ok": attempt.ok,
                 "message": attempt.message,
                 "elapsed_ms": attempt.elapsed_ms,
                 "cached": attempt.cached,
                 "channel_order_contract": attempt.channel_order_contract
-            })
+            });
+            if !attempt.vendor_stdio.is_empty() {
+                value["vendor_stdio"] = json!(attempt.vendor_stdio);
+            }
+            value
         })
         .collect()
 }
@@ -9220,6 +9224,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         "release" => run_lab_release(global, args),
         "receipt" => lab2_cli::run_receipt(global, args),
         "evidence" => lab2_cli::run_evidence(global, args),
+        "arbitrator" => lab2_cli::run_arbitrator(global, args),
         _ => Err(CliError::usage(format!("unknown lab command: {sub}"))),
     }
 }
@@ -53852,6 +53857,554 @@ mod tests {
     }
 
     #[test]
+    fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = synthetic_game_resource_root();
+        let scene = temp.path().join("synthetic-home.png");
+        fs::write(&scene, encode_png(1, 1, [10, 20, 30])).unwrap();
+        let pack = temp.path().join("synthetic.pack.json");
+        let pages = temp.path().join("synthetic.pages.json");
+        let navigation = temp.path().join("synthetic.navigation.json");
+        let shared = [
+            "--pack",
+            pack.to_str().unwrap(),
+            "--pack-root",
+            temp.path().to_str().unwrap(),
+            "--pages",
+            pages.to_str().unwrap(),
+            "--navigation",
+            navigation.to_str().unwrap(),
+        ];
+
+        let observe = run_cli(
+            ["--json", "observe"]
+                .into_iter()
+                .chain(shared.iter().copied())
+                .chain(["--scene", scene.to_str().unwrap()])
+                .collect::<Vec<_>>(),
+            true,
+        );
+        assert_eq!(observe.exit_code(), 0, "{}", observe.envelope_json());
+        assert_eq!(
+            observe
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("page")
+                .and_then(Value::as_str),
+            Some("synthetic/home")
+        );
+
+        let do_result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "do",
+                "synthetic_button",
+                "--pack",
+                pack.to_str().unwrap(),
+                "--pack-root",
+                temp.path().to_str().unwrap(),
+                "--pages",
+                pages.to_str().unwrap(),
+                "--navigation",
+                navigation.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(do_result.exit_code(), 0, "{}", do_result.envelope_json());
+
+        let ensure = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "ensure",
+                "synthetic/target",
+                "--pack",
+                pack.to_str().unwrap(),
+                "--pack-root",
+                temp.path().to_str().unwrap(),
+                "--pages",
+                pages.to_str().unwrap(),
+                "--navigation",
+                navigation.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(ensure.exit_code(), 0, "{}", ensure.envelope_json());
+
+        let wait = run_cli(
+            [
+                "--json",
+                "wait",
+                "--page",
+                "synthetic/home",
+                "--pack",
+                pack.to_str().unwrap(),
+                "--pack-root",
+                temp.path().to_str().unwrap(),
+                "--pages",
+                pages.to_str().unwrap(),
+                "--navigation",
+                navigation.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--timeout-ms",
+                "100",
+            ],
+            true,
+        );
+        assert_eq!(wait.exit_code(), 0, "{}", wait.envelope_json());
+    }
+
+    #[test]
+    fn lab2_arbitrator_cli_covers_queue_full_cancel_deadline_reclaim_and_preempt() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        let base = [
+            "--json",
+            "--dry-run",
+            "--resource-root",
+            temp.path().to_str().unwrap(),
+            "--game",
+            "ark",
+            "do",
+            "home_button",
+            "--state-dir",
+            state_dir.to_str().unwrap(),
+            "--scene",
+            scene.to_str().unwrap(),
+        ];
+
+        let holder = run_cli(
+            base.iter()
+                .copied()
+                .chain(["--priority", "high"])
+                .collect::<Vec<_>>(),
+            true,
+        );
+        assert_eq!(holder.exit_code(), 0, "{}", holder.envelope_json());
+        let holder_lease = holder
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .pointer("/arbitration/details/lease/lease_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+
+        let queued = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        assert_eq!(queued.exit_code(), 3);
+        assert_eq!(
+            queued
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .as_ref()
+                .unwrap()
+                .pointer("/details/arbitration/details/kind")
+                .and_then(Value::as_str),
+            Some("queued")
+        );
+        let queued_req = queued
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap()
+            .pointer("/details/arbitration/details/req_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+
+        let queue_full = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        assert_eq!(queue_full.exit_code(), 3);
+        assert_eq!(
+            queue_full
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .as_ref()
+                .unwrap()
+                .pointer("/details/error")
+                .and_then(Value::as_str),
+            Some("queue_full")
+        );
+
+        let cancel = run_cli(
+            [
+                "--json",
+                "lab",
+                "arbitrator",
+                "cancel",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--req",
+                &queued_req,
+            ],
+            true,
+        );
+        assert_eq!(cancel.exit_code(), 0, "{}", cancel.envelope_json());
+        assert_eq!(
+            cancel
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("state")
+                .and_then(Value::as_str),
+            Some("cancelled")
+        );
+
+        let expired = run_cli(
+            base.iter()
+                .copied()
+                .chain(["--queue-deadline-ms", "1"])
+                .collect::<Vec<_>>(),
+            true,
+        );
+        assert_eq!(expired.exit_code(), 3);
+        let expired_req = expired
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap()
+            .pointer("/details/arbitration/details/req_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        std::thread::sleep(Duration::from_millis(2));
+        let replacement = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        assert_eq!(replacement.exit_code(), 3);
+        assert_ne!(
+            replacement
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .as_ref()
+                .unwrap()
+                .pointer("/details/arbitration/details/req_id")
+                .and_then(Value::as_str),
+            Some(expired_req.as_str())
+        );
+
+        let reclaim = run_cli(
+            [
+                "--json",
+                "lab",
+                "arbitrator",
+                "reclaim-dead",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(reclaim.exit_code(), 0, "{}", reclaim.envelope_json());
+        assert_eq!(
+            reclaim
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("state")
+                .and_then(Value::as_str),
+            Some("reclaimed")
+        );
+
+        let release = run_cli(
+            [
+                "--json",
+                "lab",
+                "arbitrator",
+                "release",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--lease-id",
+                &holder_lease,
+            ],
+            true,
+        );
+        assert!(release.exit_code() == 0 || release.exit_code() == 4);
+
+        let normal_state = temp.path().join("preempt-session");
+        let normal_holder = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                normal_state.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(
+            normal_holder.exit_code(),
+            0,
+            "{}",
+            normal_holder.envelope_json()
+        );
+        let preempt = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                normal_state.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--priority",
+                "high",
+            ],
+            true,
+        );
+        assert_eq!(preempt.exit_code(), 3);
+        assert_eq!(
+            preempt
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .as_ref()
+                .unwrap()
+                .pointer("/details/arbitration/details/kind")
+                .and_then(Value::as_str),
+            Some("preempt_requested")
+        );
+    }
+
+    #[test]
+    fn lab2_observe_uses_delayed_stub_capture_and_stays_under_budget() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        let started = Instant::now();
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "observe",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--test-capture-delay-ms",
+                "25",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+        assert!(started.elapsed() < Duration::from_millis(300));
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("backend")
+                .and_then(Value::as_str),
+            Some("test_stub_capture")
+        );
+    }
+
+    #[test]
+    fn lab2_error_axes_include_state_hint_req_id_and_stop_loss_hint() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let home = temp.path().join("home.png");
+        let target = temp.path().join("target.png");
+        fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&target, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let transient = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "wait",
+                "--page",
+                "arknights/target",
+                "--scene",
+                home.to_str().unwrap(),
+                "--timeout-ms",
+                "1",
+                "--poll-ms",
+                "1",
+            ],
+            true,
+        );
+        assert_lab2_error_axis(&transient, "transient");
+
+        let recovery_state_dir = temp.path().join("recovering-session");
+        write_lab2_recovery_state(&recovery_state_dir, true);
+        let recovering = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                recovery_state_dir.to_str().unwrap(),
+                "--scene",
+                home.to_str().unwrap(),
+                "--no-wait",
+            ],
+            true,
+        );
+        assert_lab2_error_axis(&recovering, "recovering");
+
+        let drift = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                target.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_lab2_error_axis(&drift, "resource_drift");
+        let drift_hint = drift
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap()
+            .pointer("/details/hint")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(!drift_hint.contains("retry"));
+
+        let lease_state_dir = temp.path().join("lease-session");
+        let first = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                lease_state_dir.to_str().unwrap(),
+                "--scene",
+                home.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(first.exit_code(), 0);
+        let lease_held = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                lease_state_dir.to_str().unwrap(),
+                "--scene",
+                home.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_lab2_error_axis(&lease_held, "lease_held");
+
+        let fatal_state_dir = temp.path().join("fatal-session");
+        fs::create_dir_all(&fatal_state_dir).unwrap();
+        fs::write(
+            fatal_state_dir.join("lab2-arbitrator-state.json"),
+            b"{not-json",
+        )
+        .unwrap();
+        let fatal = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                fatal_state_dir.to_str().unwrap(),
+                "--scene",
+                home.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_lab2_error_axis(&fatal, "fatal");
+    }
+
+    #[test]
     fn session_recover_standby_dry_run_uses_wake_control_point() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("standby.png");
@@ -56064,6 +56617,84 @@ mod tests {
         )
         .unwrap();
         temp
+    }
+
+    fn synthetic_game_resource_root() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir(temp.path().join("recognition")).unwrap();
+        fs::create_dir(temp.path().join("navigation")).unwrap();
+        fs::write(
+            temp.path().join("synthetic.pack.json"),
+            r#"{
+                "schema_version":"0.3",
+                "coordinate_space":{"width":1,"height":1},
+                "targets":[
+                    {"type":"color","id":"synthetic_home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[10,20,30]},
+                    {"type":"color","id":"synthetic_target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[30,20,10]},
+                    {"type":"color","id":"synthetic_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[10,20,30],"click":{"x":1,"y":2,"width":3,"height":4}}
+                ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("synthetic.pages.json"),
+            r#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"synthetic/home","required":["synthetic_home_anchor"]},
+                    {"id":"synthetic/target","required":["synthetic_target_anchor"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("synthetic.navigation.json"),
+            r#"{
+                "schema_version":"0.3",
+                "game":"synthetic",
+                "server":"lab",
+                "navigation":[
+                    {"id":"synthetic_home_to_target","from_page":"synthetic/home","to_page":"synthetic/target","click":{"kind":"rect","x":1,"y":2,"width":3,"height":4}}
+                ],
+                "destructive_actions":[]
+            }"#,
+        )
+        .unwrap();
+        temp
+    }
+
+    fn assert_lab2_error_axis(result: &CliResult, expected_error: &str) {
+        assert!(result.exit_code() != 0, "{}", result.envelope_json());
+        let details = result
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap();
+        let payload = details.get("details").unwrap_or(details);
+        assert_eq!(
+            payload.get("error").and_then(Value::as_str),
+            Some(expected_error),
+            "{}",
+            result.envelope_json()
+        );
+        assert!(
+            payload.get("state").and_then(Value::as_str).is_some(),
+            "{}",
+            result.envelope_json()
+        );
+        assert!(
+            payload.get("hint").and_then(Value::as_str).is_some(),
+            "{}",
+            result.envelope_json()
+        );
+        assert!(
+            payload.get("req_id").and_then(Value::as_str).is_some(),
+            "{}",
+            result.envelope_json()
+        );
     }
 
     fn write_lab2_recovery_state(state_dir: &Path, active: bool) -> PathBuf {

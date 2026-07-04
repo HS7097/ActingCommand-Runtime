@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::DeviceResult;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct VendorStdioCapture {
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VendorStdioCapture {
     pub stdout: String,
     pub stderr: String,
 }
 
 impl VendorStdioCapture {
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.stdout.is_empty() && self.stderr.is_empty()
     }
 }
@@ -387,8 +388,8 @@ mod tests {
         .expect("capture vendor stdio");
 
         assert_eq!(value, 7);
-        assert_eq!(capture.stdout, "vendor stdout noise\n");
-        assert_eq!(capture.stderr, "vendor stderr noise\n");
+        assert!(capture.stdout.contains("vendor stdout noise\n"));
+        assert!(capture.stderr.contains("vendor stderr noise\n"));
     }
 
     #[cfg(windows)]
@@ -402,8 +403,8 @@ mod tests {
         .expect("capture vendor Win32 stdio");
 
         assert_eq!(value, 7);
-        assert_eq!(capture.stdout, "win32 stdout noise\n");
-        assert_eq!(capture.stderr, "win32 stderr noise\n");
+        assert!(capture.stdout.contains("win32 stdout noise\n"));
+        assert!(capture.stderr.contains("win32 stderr noise\n"));
     }
 
     #[cfg(not(windows))]

@@ -31,6 +31,10 @@ const DEFAULT_CAPTURE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Single-shot screenshot boundary for device capture backends.
 pub trait CaptureBackend {
     fn capture(&mut self) -> DeviceResult<Frame>;
+
+    fn vendor_stdio(&self) -> &[VendorStdioCapture] {
+        &[]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +218,7 @@ pub struct CaptureBackendAttempt {
     pub elapsed_ms: Option<u128>,
     pub cached: bool,
     pub channel_order_contract: &'static str,
+    pub vendor_stdio: Vec<VendorStdioCapture>,
 }
 
 impl CaptureBackendAttempt {
@@ -230,6 +235,7 @@ impl CaptureBackendAttempt {
             elapsed_ms,
             cached,
             channel_order_contract: "verified",
+            vendor_stdio: Vec::new(),
         }
     }
 
@@ -246,7 +252,13 @@ impl CaptureBackendAttempt {
             elapsed_ms,
             cached,
             channel_order_contract: "verified",
+            vendor_stdio: Vec::new(),
         }
+    }
+
+    fn with_vendor_stdio(mut self, vendor_stdio: Vec<VendorStdioCapture>) -> Self {
+        self.vendor_stdio = vendor_stdio;
+        self
     }
 }
 
@@ -437,10 +449,11 @@ fn probe_or_cached_capture_backend(
     let started = Instant::now();
     match build_capture_backend(config, name) {
         Ok(backend) => match prime_capture_backend(name, backend) {
-            Ok((backend, message)) => {
+            Ok((backend, message, vendor_stdio)) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 let attempt =
-                    CaptureBackendAttempt::success(name, message, Some(elapsed_ms), false);
+                    CaptureBackendAttempt::success(name, message, Some(elapsed_ms), false)
+                        .with_vendor_stdio(vendor_stdio);
                 capture_probe_cache_store(key, &attempt)?;
                 Ok(CaptureProbeOutcome::Available(backend, attempt, elapsed_ms))
             }
@@ -589,6 +602,8 @@ fn capture_probe_cache_store(
     Ok(())
 }
 
+type PrimedCaptureResult = (Box<dyn CaptureBackend>, String, Vec<VendorStdioCapture>);
+
 struct PrimedCaptureBackend {
     inner: Box<dyn CaptureBackend>,
     primed: Option<Frame>,
@@ -601,14 +616,19 @@ impl CaptureBackend for PrimedCaptureBackend {
         }
         self.inner.capture()
     }
+
+    fn vendor_stdio(&self) -> &[VendorStdioCapture] {
+        self.inner.vendor_stdio()
+    }
 }
 
 fn prime_capture_backend(
     name: CaptureBackendName,
     mut backend: Box<dyn CaptureBackend>,
-) -> Result<(Box<dyn CaptureBackend>, String), String> {
+) -> Result<PrimedCaptureResult, String> {
     match backend.capture() {
         Ok(frame) => {
+            let vendor_stdio = backend.vendor_stdio().to_vec();
             let message = format!(
                 "auto selected available {} backend after probe capture {}x{}",
                 name.as_str(),
@@ -621,6 +641,7 @@ fn prime_capture_backend(
                     primed: Some(frame),
                 }),
                 message,
+                vendor_stdio,
             ))
         }
         Err(err) => Err(err.message().to_string()),
@@ -834,6 +855,7 @@ pub struct NemuIpcBackend {
     worker: Option<NemuIpcWorker>,
     frame_width: u32,
     frame_height: u32,
+    vendor_stdio: Vec<VendorStdioCapture>,
 }
 
 type NemuConnect = unsafe extern "C" fn(*const u16, i32) -> i32;
@@ -873,6 +895,7 @@ impl NemuIpcBackend {
             worker: Some(worker),
             frame_width,
             frame_height,
+            vendor_stdio: Vec::new(),
         })
     }
 }
@@ -887,6 +910,7 @@ struct NemuCapturedFrame {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
+    vendor_stdio: Vec<VendorStdioCapture>,
 }
 
 struct NemuIpcWorker {
@@ -1179,6 +1203,7 @@ impl NemuIpcWorkerState {
             width,
             height,
             pixels,
+            vendor_stdio: self.vendor_stdio.clone(),
         })
     }
 
@@ -1215,6 +1240,7 @@ impl CaptureBackend for NemuIpcBackend {
         let frame = worker.capture_frame()?;
         self.frame_width = frame.width;
         self.frame_height = frame.height;
+        self.vendor_stdio = frame.vendor_stdio.clone();
         Frame::from_pixels(
             frame.width,
             frame.height,
@@ -1222,6 +1248,10 @@ impl CaptureBackend for NemuIpcBackend {
             PixelFormat::Rgba8,
             CaptureBackendName::NemuIpc,
         )
+    }
+
+    fn vendor_stdio(&self) -> &[VendorStdioCapture] {
+        &self.vendor_stdio
     }
 }
 
