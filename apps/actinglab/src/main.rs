@@ -7322,6 +7322,34 @@ fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
     })
 }
 
+fn derive_absolute_coordinate_rect_from_match(
+    kind: &str,
+    declared: PackRect,
+    expected_rect: PackRect,
+    matched_rect: PackRect,
+) -> CliOutcome<PackRect> {
+    let dx = matched_rect
+        .x
+        .checked_sub(expected_rect.x)
+        .ok_or_else(|| CliError::package_invalid(format!("{kind} x delta overflow")))?;
+    let dy = matched_rect
+        .y
+        .checked_sub(expected_rect.y)
+        .ok_or_else(|| CliError::package_invalid(format!("{kind} y delta overflow")))?;
+    Ok(PackRect {
+        x: declared
+            .x
+            .checked_add(dx)
+            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated x overflow")))?,
+        y: declared
+            .y
+            .checked_add(dy)
+            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated y overflow")))?,
+        width: declared.width,
+        height: declared.height,
+    })
+}
+
 fn point_json(point: SemanticPoint) -> Value {
     json!({
         "x": point.x,
@@ -7354,6 +7382,11 @@ fn send_semantic_input(
     config: &UserConfig,
     input: &SemanticInput,
 ) -> CliOutcome<Value> {
+    #[cfg(test)]
+    if let Some(fake) = test_fake_semantic_input(global, config, input)? {
+        return Ok(fake);
+    }
+
     let device_config = device_config(global, config)?;
     let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
@@ -7384,6 +7417,41 @@ fn send_semantic_input(
         "handshake": handshake.map(handshake_json),
         "action": semantic_input_json(input)
     }))
+}
+
+#[cfg(test)]
+fn test_fake_semantic_input(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    input: &SemanticInput,
+) -> CliOutcome<Option<Value>> {
+    let Ok(path) = env::var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG") else {
+        return Ok(None);
+    };
+    let device_config = device_config(global, config)?;
+    let action = semantic_input_json(input);
+    let event = json!({
+        "backend": "test_fake_touch",
+        "serial": device_config.target.resolved_serial(),
+        "action": action
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec(&event).map_err(|err| CliError::device(err.to_string()))?,
+    )
+    .map_err(|err| CliError::device(format!("failed to write fake touch log {path}: {err}")))?;
+    Ok(Some(json!({
+        "backend": "test_fake_touch",
+        "touch_backend_requested": device_config.touch_backend.as_str(),
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": [],
+        "control_mode": "semantic",
+        "serial": device_config.target.resolved_serial(),
+        "device_state": "device",
+        "screen_size": "Physical size: 1280x720",
+        "handshake": Value::Null,
+        "action": action
+    })))
 }
 
 struct NavigationExecutionContext<'a> {
@@ -9151,6 +9219,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         "preempt" => run_lab_preempt(global, args),
         "release" => run_lab_release(global, args),
         "receipt" => lab2_cli::run_receipt(global, args),
+        "evidence" => lab2_cli::run_evidence(global, args),
         _ => Err(CliError::usage(format!("unknown lab command: {sub}"))),
     }
 }
@@ -25720,7 +25789,7 @@ mod tests {
     #[test]
     fn version_outputs_json_envelope() {
         let result = run_cli(["--json", "--version"], true);
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         assert!(result.envelope.ok);
         assert_eq!(result.envelope.command, "version");
     }
@@ -25810,7 +25879,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(
             data.get("schema_version").and_then(Value::as_str),
@@ -52661,7 +52730,11 @@ mod tests {
             details.get("error").and_then(Value::as_str),
             Some("resource_drift")
         );
-        assert!(details.get("hint").and_then(Value::as_str).is_some());
+        let hint = details
+            .get("hint")
+            .and_then(Value::as_str)
+            .expect("resource drift hint");
+        assert!(!hint.contains("retry"));
     }
 
     #[test]
@@ -53295,6 +53368,487 @@ mod tests {
                 "missing ledger kind {expected_kind}"
             );
         }
+    }
+
+    #[test]
+    fn lab2_arbitrator_state_persists_between_cli_invocations() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let first = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(first.exit_code(), 0);
+        assert!(state_dir.join("lab2-arbitrator-state.json").exists());
+
+        let second = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(second.exit_code(), 3);
+        assert_eq!(
+            second.envelope.error.as_ref().unwrap().code,
+            "lab2_write_not_admitted"
+        );
+        assert_eq!(
+            second
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .as_ref()
+                .unwrap()
+                .get("error")
+                .and_then(Value::as_str),
+            Some("lease_held")
+        );
+    }
+
+    #[test]
+    fn lab2_do_blocks_destructive_overlap_and_writes_ledger() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(true);
+        let run_root = temp.path().join("runs");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let details = result
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            details
+                .pointer("/blocked_error/code")
+                .and_then(Value::as_str),
+            Some("semantic_action_requires_destructive_opt_in")
+        );
+        assert_eq!(
+            details.pointer("/ledger/written").and_then(Value::as_bool),
+            Some(true)
+        );
+        let req_id = details.get("req_id").and_then(Value::as_str).unwrap();
+        let receipt = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "lab",
+                "receipt",
+                "--req",
+                req_id,
+            ],
+            true,
+        );
+        assert_eq!(receipt.exit_code(), 0);
+    }
+
+    #[test]
+    fn lab2_evidence_lists_debug_evidence_refs() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let evidence_dir = temp.path().join("evidence").join("req-1");
+        fs::create_dir_all(&evidence_dir).unwrap();
+        fs::write(evidence_dir.join("frame-deadbeef.bin"), b"frame").unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--run-root",
+                temp.path().to_str().unwrap(),
+                "lab",
+                "evidence",
+                "--id",
+                "req-1",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn lab2_observe_unknown_reports_candidates() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("unknown.png");
+        fs::write(&scene, encode_png(1, 1, [12, 34, 56])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "observe",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("state").and_then(Value::as_str), Some("unknown"));
+        assert_eq!(data.get("page").and_then(Value::as_str), Some("unknown"));
+        assert!(
+            data.get("candidates")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert_eq!(
+            data.pointer("/suspicion/reason").and_then(Value::as_str),
+            Some("low_page_margin")
+        );
+    }
+
+    #[test]
+    fn lab2_verbose_error_preserves_unprojected_details() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let scene = temp.path().join("target.png");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--verbose",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let details = result
+            .envelope
+            .error
+            .as_ref()
+            .unwrap()
+            .details
+            .as_ref()
+            .unwrap();
+        assert!(details.get("projection_schema_version").is_none());
+        assert_eq!(
+            details
+                .pointer("/details/suspicion/reason")
+                .and_then(Value::as_str),
+            Some("guard_rejected")
+        );
+    }
+
+    #[test]
+    fn lab2_do_click_rect_follows_live_template_match_delta() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = template_drift_resource_root();
+        let scene = temp.path().join("shifted.png");
+        fs::write(
+            &scene,
+            encode_rgb_png(3, 1, &[[0, 0, 0], [255, 0, 0], [0, 0, 0]]),
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        if result.exit_code() != 0 {
+            panic!("{}", result.envelope_json());
+        }
+        let click = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("actual_click")
+            .unwrap();
+        assert_eq!(
+            click.get("kind").and_then(Value::as_str),
+            Some("target_rect_center_live_match")
+        );
+        assert_eq!(click.pointer("/rect/x").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            click
+                .pointer("/coordinate_derivation/matched_rect/x")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn lab2_do_real_branch_requires_session_lease_before_touch() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+        let temp = semantic_resource_root(false);
+        let config_path = temp.path().join("config.json");
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb_path = temp.path().join(adb_name);
+        fs::write(&adb_path, b"test adb placeholder").unwrap();
+        let mut config = UserConfig {
+            adb_path: Some(adb_path.display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "default".to_string(),
+            InstanceConfig {
+                serial: Some("fake-device".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn".to_string()),
+                capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: Some("adb_shell_input".to_string()),
+                ..Default::default()
+            },
+        );
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        set_config_env(&config_path);
+        let state_dir = temp.path().join("session");
+        let scene = temp.path().join("home.png");
+        let touch_log = temp.path().join("fake-touch.json");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        unsafe {
+            env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "default",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--capture",
+                "--lease-holder",
+                "operator",
+                "--lease-id",
+                "session-1",
+                "--fields",
+                "executed,device,actual_click,guard_result",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+
+        assert_eq!(result.exit_code(), 3);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "lab_session_lease_required"
+        );
+        assert!(!touch_log.exists());
+    }
+
+    #[test]
+    fn lab2_do_real_branch_drives_fake_touch_after_dual_lease_checks() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+        let temp = semantic_resource_root(false);
+        let config_path = temp.path().join("config.json");
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb_path = temp.path().join(adb_name);
+        fs::write(&adb_path, b"test adb placeholder").unwrap();
+        let mut config = UserConfig {
+            adb_path: Some(adb_path.display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "default".to_string(),
+            InstanceConfig {
+                serial: Some("fake-device".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn".to_string()),
+                capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: Some("adb_shell_input".to_string()),
+                ..Default::default()
+            },
+        );
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        set_config_env(&config_path);
+        let state_dir = temp.path().join("session");
+        fs::create_dir_all(&state_dir).unwrap();
+        let session_lease = new_session_lease(
+            "default".to_string(),
+            "operator".to_string(),
+            Some("session-1".to_string()),
+            false,
+            None,
+        );
+        write_json_file_atomic(&session_lease_path(&state_dir, "default"), &session_lease).unwrap();
+        let scene = temp.path().join("home.png");
+        let touch_log = temp.path().join("fake-touch.json");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        unsafe {
+            env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "default",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--capture",
+                "--lease-holder",
+                "operator",
+                "--lease-id",
+                "session-1",
+                "--fields",
+                "executed,device,actual_click,guard_result",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("executed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.pointer("/device/backend").and_then(Value::as_str),
+            Some("test_fake_touch")
+        );
+        assert_eq!(
+            data.pointer("/device/action/point/x")
+                .and_then(Value::as_i64),
+            Some(12)
+        );
+        let logged = fs::read_to_string(touch_log).unwrap();
+        assert!(logged.contains("\"backend\":\"test_fake_touch\""));
+        assert!(state_dir.join("lab2-arbitrator-state.json").exists());
     }
 
     #[test]
@@ -55461,6 +56015,57 @@ mod tests {
         temp
     }
 
+    fn template_drift_resource_root() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        let recognition = temp.path().join("recognition");
+        let navigation = temp.path().join("navigation");
+        fs::create_dir(&recognition).unwrap();
+        fs::create_dir(&navigation).unwrap();
+        fs::write(
+            recognition.join("home-button.png"),
+            encode_png(1, 1, [255, 0, 0]),
+        )
+        .unwrap();
+        fs::write(
+            recognition.join("arknights.cn.pack.json"),
+            r#"{
+                "schema_version":"0.3",
+                "coordinate_space":{"width":3,"height":1},
+                "targets":[
+                    {
+                        "type":"template",
+                        "id":"home_button",
+                        "template_path":"recognition/home-button.png",
+                        "region":{"x":0,"y":0,"width":3,"height":1},
+                        "threshold":0.9,
+                        "click":{"x":0,"y":0,"width":1,"height":1}
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            recognition.join("arknights.cn.pages.json"),
+            r#"{
+                "schema_version":"0.3",
+                "pages":[{"id":"arknights/home","required":["home_button"]}]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            navigation.join("arknights.cn.navigation.json"),
+            r#"{
+                "schema_version":"0.3",
+                "game":"arknights",
+                "server":"cn",
+                "navigation":[],
+                "destructive_actions":[]
+            }"#,
+        )
+        .unwrap();
+        temp
+    }
+
     fn write_lab2_recovery_state(state_dir: &Path, active: bool) -> PathBuf {
         fs::create_dir_all(state_dir).unwrap();
         let path = state_dir.join("lab2-recovery-state.json");
@@ -55492,6 +56097,32 @@ mod tests {
             scanlines.push(0);
             for _x in 0..width {
                 scanlines.extend_from_slice(&color);
+            }
+        }
+
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        write_chunk(&mut png, b"IHDR", &ihdr);
+
+        let mut zlib = vec![0x78, 0x01];
+        write_uncompressed_deflate(&mut zlib, &scanlines);
+        zlib.extend_from_slice(&adler32(&scanlines).to_be_bytes());
+        write_chunk(&mut png, b"IDAT", &zlib);
+        write_chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    fn encode_rgb_png(width: u32, height: u32, pixels: &[[u8; 3]]) -> Vec<u8> {
+        assert_eq!(pixels.len(), (width * height) as usize);
+        let mut scanlines = Vec::with_capacity((width * height * 3 + height) as usize);
+        for row in pixels.chunks(width as usize) {
+            scanlines.push(0);
+            for pixel in row {
+                scanlines.extend_from_slice(pixel);
             }
         }
 

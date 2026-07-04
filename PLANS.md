@@ -6,6 +6,28 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 CLI chain repair
+
+The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-9feebc3.md`.
+
+Repair order:
+
+- W: wire the existing arbitrator, ledger, evidence, suspicion, and coordinate derivation logic into real Lab-2 CLI paths.
+- P: preserve decision arrays through projection by summarizing instead of deleting them.
+- S: enforce destructive-action safety geometrically and keep rejected actions auditable.
+- L0b: extend vendor stdout/stderr capture to Win32 standard handles.
+- T: add tests that cover the previously hollow integration paths, including non-dry-run device drive behind SessionLease plus Lab-2 arbitrator admission.
+
+Repair status:
+
+- W1-W4 are implemented locally: persistent Lab-2 arbitrator state, real-click lease authorization, shared live-match coordinate derivation, ledger retention, suspicion helpers, and `lab evidence --id` are connected.
+- P1-P3 are implemented locally: min projection keeps decision arrays with bounded summaries and `_full` evidence pointers, while verbose/field-aware errors use the shared Lab-2 projection request.
+- S1-S2 are implemented locally: `do` checks destructive geometry against navigation metadata and writes ledger records for post-admission rejection paths.
+- L0b is implemented locally at the device crate boundary by capturing Win32 standard-handle writes in addition to CRT fd writes.
+- T coverage has been strengthened with persistent-arbitrator, destructive-ledger, evidence, unknown+candidates, verbose-error, live-match drift, and non-dry-run fake-touch tests.
+- S7 / L6 MCP projection remains a documented deferred optional node.
+- Final public five-command gate passed locally for this repair commit.
+
 ## Current Lab-2 CLI chain
 
 The active task is `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md`.

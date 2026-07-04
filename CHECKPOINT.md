@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain repair after baseline 9feebc3
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-9feebc3.md` against baseline `9feebc3`.
+- Connected persistent Lab-2 arbitrator state under the selected Session state directory, so repeated CLI invocations can see existing holders and queue state.
+- Enforced Lab-2 real device drive through both SessionLease validation and the persistent Lab-2 arbitrator authorization path before touch dispatch.
+- Reused the shared round-three coordinate derivation helper so Lab-2 `do` click rectangles follow live matched-template drift instead of static pack rectangles.
+- Connected ledger retention, suspicion helpers, and `lab evidence --id`; post-admission rejection paths now write ledger evidence instead of returning before audit.
+- Reworked min projection so decision arrays survive as bounded summaries with `_more` and `_full`, while verbose and field-aware errors use the shared projection request.
+- Added geometric destructive-action overlap checks for Lab-2 `do`.
+- Extended vendor stdout/stderr capture to cover Win32 standard-handle writes in addition to CRT fd writes.
+- Added synthetic true-path coverage for persistent arbitrator state, destructive rejection ledger writes, evidence lookup, unknown+candidates, verbose error projection, live-match drift, and non-dry-run fake-touch execution behind SessionLease plus Lab-2 arbitrator admission.
+- No real samples, resource repositories, live devices, OCR, UI, SQLite, MCP server, game logic, or upstream code copying were used in this repair.
+- Milestone source commit: `ed071bc`.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `crates/arbitrator/src/lib.rs`
+- `crates/device/src/vendor_stdio.rs`
+- `crates/ledger/src/lib.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git rev-parse origin/main`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_do_real_branch -- --nocapture`
+- `cargo build --release`
+- `git diff --check`
+
+### Test results
+
+- Focused non-dry-run fake-touch tests passed:
+  - `lab2_do_real_branch_requires_session_lease_before_touch`
+  - `lab2_do_real_branch_drives_fake_touch_after_dual_lease_checks`
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for this Runtime repair commit.
+- S7 / L6 MCP projection remains explicitly deferred because the Lab-2 chain marks it optional and non-blocking.
+- External Claude/live binary revalidation is still outside this synthetic Runtime lane.
+
+### Next step
+
+1. Push this Lab-2 chain repair.
+2. Hand the Runtime repair to external binary/live validation.
+
 ## 2026-07-05 Lab-2 chain S8 L7 chain acceptance
 
 ### Current status

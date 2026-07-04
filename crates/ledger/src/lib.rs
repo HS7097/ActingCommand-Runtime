@@ -522,6 +522,16 @@ pub struct RetentionCandidate {
     pub protected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetentionReport {
+    pub max_bytes: u64,
+    pub total_before_bytes: u64,
+    pub total_after_bytes: u64,
+    pub deleted_count: usize,
+    pub deleted_paths: Vec<String>,
+    pub protected_over_budget: bool,
+}
+
 pub fn select_retention_deletions(
     candidates: &[RetentionCandidate],
     max_bytes: u64,
@@ -546,6 +556,38 @@ pub fn select_retention_deletions(
         deletions.push(candidate.path.clone());
     }
     deletions
+}
+
+pub fn enforce_retention(
+    root: impl AsRef<Path>,
+    max_bytes: u64,
+    protected_age: Duration,
+) -> LabLogResult<RetentionReport> {
+    let root = root.as_ref();
+    let mut candidates = Vec::new();
+    collect_retention_candidates(root, root, protected_age, &mut candidates)?;
+    let total_before = candidates
+        .iter()
+        .fold(0u64, |sum, candidate| sum.saturating_add(candidate.bytes));
+    let deletions = select_retention_deletions(&candidates, max_bytes);
+    let mut deleted_paths = Vec::new();
+    let mut deleted_bytes = 0u64;
+    for path in &deletions {
+        if let Some(candidate) = candidates.iter().find(|candidate| candidate.path == *path) {
+            deleted_bytes = deleted_bytes.saturating_add(candidate.bytes);
+        }
+        fs::remove_file(path)?;
+        deleted_paths.push(path.display().to_string());
+    }
+    let total_after = total_before.saturating_sub(deleted_bytes);
+    Ok(RetentionReport {
+        max_bytes,
+        total_before_bytes: total_before,
+        total_after_bytes: total_after,
+        deleted_count: deleted_paths.len(),
+        deleted_paths,
+        protected_over_budget: total_after > max_bytes,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -598,10 +640,26 @@ pub fn project_record(record: &Value, request: &ProjectionRequest) -> LabLogResu
     object.remove("schema_version");
     object.remove("cli_version");
     object.remove("runtime_version");
-    summarize_decision_array(object, "targets", request.evidence_id.as_deref());
-    summarize_decision_array(object, "actions", request.evidence_id.as_deref());
+    let soft_limit_exceeded = json_len(object)? > MIN_PROJECTION_SOFT_LIMIT_BYTES;
+    summarize_decision_array(
+        object,
+        "targets",
+        request.evidence_id.as_deref(),
+        soft_limit_exceeded,
+    );
+    summarize_decision_array(
+        object,
+        "actions",
+        request.evidence_id.as_deref(),
+        soft_limit_exceeded,
+    );
     if let Some(Value::Object(suspicion)) = object.get_mut("suspicion") {
-        summarize_decision_array(suspicion, "candidates", request.evidence_id.as_deref());
+        summarize_decision_array(
+            suspicion,
+            "candidates",
+            request.evidence_id.as_deref(),
+            soft_limit_exceeded,
+        );
     }
     ensure_error_fields(object);
     shrink_to_limit(object, request)?;
@@ -753,16 +811,66 @@ fn sha256_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn summarize_decision_array(object: &mut Map<String, Value>, key: &str, evidence_id: Option<&str>) {
+fn collect_retention_candidates(
+    root: &Path,
+    current: &Path,
+    protected_age: Duration,
+    candidates: &mut Vec<RetentionCandidate>,
+) -> LabLogResult<()> {
+    if !current.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_retention_candidates(root, &path, protected_age, candidates)?;
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or(Duration::ZERO);
+        candidates.push(RetentionCandidate {
+            path: path
+                .strip_prefix(root)
+                .map(|relative| root.join(relative))
+                .unwrap_or(path),
+            bytes: metadata.len(),
+            age,
+            protected: age < protected_age,
+        });
+    }
+    Ok(())
+}
+
+fn summarize_decision_array(
+    object: &mut Map<String, Value>,
+    key: &str,
+    evidence_id: Option<&str>,
+    soft_limit_exceeded: bool,
+) {
     let Some(Value::Array(items)) = object.get_mut(key) else {
         return;
     };
     if items.len() <= DECISION_ARRAY_LIMIT {
+        if soft_limit_exceeded {
+            let summarized = items
+                .drain(..)
+                .map(decision_item_summary)
+                .collect::<Vec<_>>();
+            *items = summarized;
+        }
         return;
     }
     items.sort_by(compare_decision_items);
-    let more = items.len() - DECISION_ARRAY_LIMIT;
-    let top = items.drain(..DECISION_ARRAY_LIMIT).collect::<Vec<_>>();
+    let keep = items.len().min(DECISION_ARRAY_LIMIT);
+    let more = items.len().saturating_sub(keep);
+    let top = items
+        .drain(..keep)
+        .map(decision_item_summary)
+        .collect::<Vec<_>>();
     object.insert(
         key.to_string(),
         json!({
@@ -771,6 +879,23 @@ fn summarize_decision_array(object: &mut Map<String, Value>, key: &str, evidence
             "_full": evidence_id.unwrap_or("unavailable")
         }),
     );
+}
+
+fn decision_item_summary(item: Value) -> Value {
+    let Value::Object(object) = item else {
+        return item;
+    };
+    let mut summary = Map::new();
+    for key in ["id", "target", "action", "kind", "state", "passed", "score"] {
+        if let Some(value) = object.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    if summary.is_empty() {
+        Value::Object(object)
+    } else {
+        Value::Object(summary)
+    }
 }
 
 fn compare_decision_items(left: &Value, right: &Value) -> std::cmp::Ordering {
@@ -861,14 +986,19 @@ fn protected_fields(extra: &BTreeSet<String>) -> BTreeSet<&str> {
         "error",
         "state",
         "hint",
+        "observation",
         "page",
         "standby",
         "stale",
         "frame_age_ms",
         "backend",
+        "actions",
         "actual_click",
         "guard_result",
+        "projection_schema_version",
         "recovered",
+        "suspicion",
+        "targets",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -1116,6 +1246,57 @@ mod tests {
         assert_eq!(projected["targets"]["items"][0]["id"], "c");
         assert_eq!(projected["targets"]["_more"], 1);
         assert_eq!(projected["targets"]["_full"], "full-targets");
+    }
+
+    #[test]
+    fn projection_keeps_decision_arrays_when_payload_exceeds_hard_limit() {
+        let bulky = "x".repeat(600);
+        let targets = (0..8)
+            .map(|index| {
+                json!({
+                    "id": format!("target-{index}"),
+                    "passed": index % 2 == 0,
+                    "score": index as f64 / 10.0,
+                    "debug": bulky
+                })
+            })
+            .collect::<Vec<_>>();
+        let actions = (0..8)
+            .map(|index| {
+                json!({
+                    "id": format!("action-{index}"),
+                    "passed": true,
+                    "score": 1.0 - index as f64 / 10.0,
+                    "diagnostics": bulky
+                })
+            })
+            .collect::<Vec<_>>();
+        let record = json!({
+            "req_id": "req-1",
+            "state": "ok",
+            "hint": "none",
+            "targets": targets,
+            "actions": actions,
+            "debug_blob": "z".repeat(4096)
+        });
+
+        let projected = project_record(
+            &record,
+            &ProjectionRequest::min().with_evidence_id("full-record"),
+        )
+        .expect("project");
+
+        assert!(projected.get("targets").is_some());
+        assert!(projected.get("actions").is_some());
+        assert_eq!(projected["targets"]["_full"], "full-record");
+        assert_eq!(projected["actions"]["_full"], "full-record");
+        assert!(projected["targets"]["items"][0].get("debug").is_none());
+        assert!(
+            projected["actions"]["items"][0]
+                .get("diagnostics")
+                .is_none()
+        );
+        assert!(serde_json::to_vec(&projected).unwrap().len() <= MIN_PROJECTION_HARD_LIMIT_BYTES);
     }
 
     #[test]

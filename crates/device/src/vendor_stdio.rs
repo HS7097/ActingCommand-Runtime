@@ -51,6 +51,8 @@ mod imp {
 
     const STDOUT_FD: i32 = 1;
     const STDERR_FD: i32 = 2;
+    pub(super) const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    pub(super) const STD_ERROR_HANDLE: u32 = -12i32 as u32;
     const O_CREAT: i32 = 0x0100;
     const O_TRUNC: i32 = 0x0200;
     const O_RDWR: i32 = 0x0002;
@@ -67,12 +69,21 @@ mod imp {
         fn _wopen(path: *const u16, flags: i32, mode: i32) -> i32;
         fn _read(fd: i32, buffer: *mut c_void, count: u32) -> i32;
         fn _lseek(fd: i32, offset: i32, origin: i32) -> i32;
+        fn _get_osfhandle(fd: i32) -> isize;
         fn fflush(stream: *mut c_void) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(std_handle: u32) -> *mut c_void;
+        fn SetStdHandle(std_handle: u32, handle: *mut c_void) -> i32;
     }
 
     pub(super) struct RedirectGuard {
         saved_stdout: i32,
         saved_stderr: i32,
+        saved_stdout_handle: *mut c_void,
+        saved_stderr_handle: *mut c_void,
         capture_stdout: i32,
         capture_stderr: i32,
         stdout_path: PathBuf,
@@ -131,10 +142,37 @@ mod imp {
                 let _ = std::fs::remove_file(&stderr_path);
                 return Err(err);
             }
+            let saved_stdout_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+            let saved_stderr_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+            if let Err(err) = set_std_handle(STD_OUTPUT_HANDLE, capture_stdout, "stdout") {
+                let _ = dup2_fd(saved_stdout, STDOUT_FD, "stdout");
+                let _ = dup2_fd(saved_stderr, STDERR_FD, "stderr");
+                close_fd(saved_stdout);
+                close_fd(saved_stderr);
+                close_fd(capture_stdout);
+                close_fd(capture_stderr);
+                let _ = std::fs::remove_file(&stdout_path);
+                let _ = std::fs::remove_file(&stderr_path);
+                return Err(err);
+            }
+            if let Err(err) = set_std_handle(STD_ERROR_HANDLE, capture_stderr, "stderr") {
+                let _ = unsafe { SetStdHandle(STD_OUTPUT_HANDLE, saved_stdout_handle) };
+                let _ = dup2_fd(saved_stdout, STDOUT_FD, "stdout");
+                let _ = dup2_fd(saved_stderr, STDERR_FD, "stderr");
+                close_fd(saved_stdout);
+                close_fd(saved_stderr);
+                close_fd(capture_stdout);
+                close_fd(capture_stderr);
+                let _ = std::fs::remove_file(&stdout_path);
+                let _ = std::fs::remove_file(&stderr_path);
+                return Err(err);
+            }
 
             Ok(Self {
                 saved_stdout,
                 saved_stderr,
+                saved_stdout_handle,
+                saved_stderr_handle,
                 capture_stdout,
                 capture_stderr,
                 stdout_path,
@@ -162,6 +200,16 @@ mod imp {
                 return Ok(());
             }
             flush_all();
+            if unsafe { SetStdHandle(STD_OUTPUT_HANDLE, self.saved_stdout_handle) } == 0 {
+                return Err(DeviceError::fatal(
+                    "failed to restore vendor stdout Win32 handle",
+                ));
+            }
+            if unsafe { SetStdHandle(STD_ERROR_HANDLE, self.saved_stderr_handle) } == 0 {
+                return Err(DeviceError::fatal(
+                    "failed to restore vendor stderr Win32 handle",
+                ));
+            }
             dup2_fd(self.saved_stdout, STDOUT_FD, "stdout")?;
             dup2_fd(self.saved_stderr, STDERR_FD, "stderr")?;
             close_fd(self.saved_stdout);
@@ -202,6 +250,21 @@ mod imp {
         if fd >= 0 {
             let _ = unsafe { _close(fd) };
         }
+    }
+
+    fn set_std_handle(std_handle: u32, fd: i32, name: &str) -> DeviceResult<()> {
+        let handle = unsafe { _get_osfhandle(fd) };
+        if handle == -1 {
+            return Err(DeviceError::fatal(format!(
+                "failed to get vendor {name} OS handle"
+            )));
+        }
+        if unsafe { SetStdHandle(std_handle, handle as *mut c_void) } == 0 {
+            return Err(DeviceError::fatal(format!(
+                "failed to redirect vendor {name} Win32 handle"
+            )));
+        }
+        Ok(())
     }
 
     fn flush_all() {
@@ -276,6 +339,37 @@ mod imp {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(super) fn write_win32_handle_for_test(std_handle: u32, bytes: &[u8]) -> DeviceResult<()> {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn WriteFile(
+                handle: *mut c_void,
+                buffer: *const c_void,
+                bytes_to_write: u32,
+                bytes_written: *mut u32,
+                overlapped: *mut c_void,
+            ) -> i32;
+        }
+        let handle = unsafe { GetStdHandle(std_handle) };
+        let mut written = 0u32;
+        let ok = unsafe {
+            WriteFile(
+                handle,
+                bytes.as_ptr().cast::<c_void>(),
+                bytes.len() as u32,
+                &mut written,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 || written as usize != bytes.len() {
+            return Err(DeviceError::fatal(
+                "failed to write test vendor Win32 noise",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +389,21 @@ mod tests {
         assert_eq!(value, 7);
         assert_eq!(capture.stdout, "vendor stdout noise\n");
         assert_eq!(capture.stderr, "vendor stderr noise\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn captures_win32_stdout_and_stderr_noise() {
+        let (value, capture) = capture_vendor_stdio(|| {
+            imp::write_win32_handle_for_test(imp::STD_OUTPUT_HANDLE, b"win32 stdout noise\n")?;
+            imp::write_win32_handle_for_test(imp::STD_ERROR_HANDLE, b"win32 stderr noise\n")?;
+            Ok(7)
+        })
+        .expect("capture vendor Win32 stdio");
+
+        assert_eq!(value, 7);
+        assert_eq!(capture.stdout, "win32 stdout noise\n");
+        assert_eq!(capture.stderr, "win32 stderr noise\n");
     }
 
     #[cfg(not(windows))]

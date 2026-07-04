@@ -322,6 +322,17 @@ impl DegradedArbitrator {
         }
     }
 
+    pub fn from_instances(
+        issuer: IdIssuer,
+        instances: BTreeMap<String, InstanceArbitration>,
+    ) -> Self {
+        Self { issuer, instances }
+    }
+
+    pub fn instances(&self) -> &BTreeMap<String, InstanceArbitration> {
+        &self.instances
+    }
+
     pub fn snapshot(&self, instance: &str) -> InstanceArbitration {
         self.instances.get(instance).cloned().unwrap_or_default()
     }

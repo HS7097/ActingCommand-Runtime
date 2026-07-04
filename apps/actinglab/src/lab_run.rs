@@ -2418,30 +2418,12 @@ fn derive_absolute_coordinate_rect(
         )));
     }
     let matched_rect = matched_template_rect(target)?;
-    let dx = matched_rect
-        .x
-        .checked_sub(guard.expected_rect.x)
-        .ok_or_else(|| CliError::package_invalid(format!("{kind} x delta overflow")))?;
-    let dy = matched_rect
-        .y
-        .checked_sub(guard.expected_rect.y)
-        .ok_or_else(|| CliError::package_invalid(format!("{kind} y delta overflow")))?;
-    translate_rect(kind, declared, dx, dy)
-}
-
-fn translate_rect(kind: &str, rect: PackRect, dx: i32, dy: i32) -> CliOutcome<PackRect> {
-    Ok(PackRect {
-        x: rect
-            .x
-            .checked_add(dx)
-            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated x overflow")))?,
-        y: rect
-            .y
-            .checked_add(dy)
-            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated y overflow")))?,
-        width: rect.width,
-        height: rect.height,
-    })
+    super::derive_absolute_coordinate_rect_from_match(
+        kind,
+        declared,
+        guard.expected_rect,
+        matched_rect,
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

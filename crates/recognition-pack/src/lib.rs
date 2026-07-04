@@ -321,6 +321,23 @@ impl RecognitionEvaluator {
         }
     }
 
+    pub fn get_template_anchor_rect(
+        &self,
+        target_id: &str,
+    ) -> RecognitionPackResult<Option<PackRect>> {
+        match self.target(target_id)? {
+            RecognitionTarget::Template(target) => match target.region {
+                PackRegion::Rect(rect) => Ok(Some(rect)),
+                PackRegion::Keyword(ref value) if value == "full_frame" => Ok(None),
+                PackRegion::Keyword(ref value) => Err(RecognitionPackError::fatal(format!(
+                    "template target '{}' has unsupported region '{value}'",
+                    target.id
+                ))),
+            },
+            RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => Ok(None),
+        }
+    }
+
     pub fn target_kind(&self, target_id: &str) -> RecognitionPackResult<TargetKind> {
         let target = self.target(target_id)?;
         Ok(match target {
