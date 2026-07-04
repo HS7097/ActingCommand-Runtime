@@ -20,7 +20,28 @@ This task chain is being implemented as independent nodes. Each completed node m
 
 Current node:
 
-- S5 / L4 capabilities and safety.
+- S6 / L5 self-heal transparency.
+
+S6 scope:
+
+- Let Lab-2 `observe` remain read-only during a recovery-in-progress state while surfacing `state:"recovering"` and a light-event-shaped recovery progress payload.
+- Let write verbs such as `do` and `ensure` wait by default for recovery to clear, with bounded timeout/poll controls.
+- Support `--no-wait` for immediate structured failure when recovery is active, including `req_id`, recovery context, and planned action details.
+- Keep this node a degraded bridge over the existing Session Layer/C2 recovery work: no full scheduler, no UI, no OCR, no SQLite, no live device validation, and no game logic.
+
+S6 status:
+
+- Complete locally.
+- Lab-2 reads `lab2-recovery-state.json` from the selected Session state directory as the current degraded recovery-state bridge.
+- `observe` now reports `state:"recovering"` and a `recovery.state.changed` light event when that bridge says recovery is active.
+- `do` and `ensure` now wait for recovery to clear by default and fail fast with `--no-wait`.
+- Capabilities and command schema now describe the recovery transparency behavior and wait flags.
+- S6 targeted synthetic tests are added.
+- Public five-command gate passed locally.
+
+Next Lab-2 node:
+
+- S7 / L6 MCP projection after S6 is committed and pushed, unless it is explicitly deferred.
 
 S5 scope:
 
@@ -64,6 +85,7 @@ S4 status:
 
 Completed Lab-2 nodes:
 
+- S6 / L5 self-heal transparency.
 - S5 / L4 capabilities and safety.
 - S4 / L3 CLI core verbs.
 - S3 / L2 degraded arbitrator and lease.

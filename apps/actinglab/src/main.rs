@@ -52863,6 +52863,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ak-live")
         );
+        assert_eq!(
+            data.pointer("/lab2_cli/recovery_transparency/event_type")
+                .and_then(Value::as_str),
+            Some("recovery.state.changed")
+        );
 
         let do_schema = run_cli(["--json", "schema", "do"], true);
         assert_eq!(do_schema.exit_code(), 0);
@@ -53001,6 +53006,150 @@ mod tests {
                     .and_then(Value::as_str)
                     .is_some()
         }));
+    }
+
+    #[test]
+    fn lab2_observe_reports_recovering_state_without_blocking() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session");
+        write_lab2_recovery_state(&state_dir, true);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "observe",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.get("state").and_then(Value::as_str),
+            Some("recovering")
+        );
+        assert_eq!(
+            data.pointer("/recovery/event/event_type")
+                .and_then(Value::as_str),
+            Some("recovery.state.changed")
+        );
+    }
+
+    #[test]
+    fn lab2_do_no_wait_reports_recovering_with_planned_action() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session");
+        write_lab2_recovery_state(&state_dir, true);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--no-wait",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 3);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "recovery_in_progress");
+        let details = error.details.as_ref().unwrap();
+        assert_eq!(
+            details.get("error").and_then(Value::as_str),
+            Some("recovering")
+        );
+        assert_eq!(
+            details
+                .pointer("/planned_action/target")
+                .and_then(Value::as_str),
+            Some("home_button")
+        );
+    }
+
+    #[test]
+    fn lab2_do_waits_until_recovery_state_clears() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let state_dir = temp.path().join("session");
+        let recovery_path = write_lab2_recovery_state(&state_dir, true);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        let cleanup_path = recovery_path.clone();
+        let cleanup = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(40));
+            let _ = fs::remove_file(cleanup_path);
+        });
+
+        let result = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--recovery-timeout-ms",
+                "1000",
+                "--recovery-poll-ms",
+                "10",
+            ],
+            true,
+        );
+        cleanup.join().unwrap();
+
+        assert_eq!(result.exit_code(), 0);
+        assert_eq!(
+            result
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .pointer("/recovery_wait/waited")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -55165,6 +55314,23 @@ mod tests {
         )
         .unwrap();
         temp
+    }
+
+    fn write_lab2_recovery_state(state_dir: &Path, active: bool) -> PathBuf {
+        fs::create_dir_all(state_dir).unwrap();
+        let path = state_dir.join("lab2-recovery-state.json");
+        fs::write(
+            &path,
+            json!({
+                "state": "recovering",
+                "active": active,
+                "reason": "synthetic_recovery",
+                "progress": {"step": "dismiss_popup", "percent": 50}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
     }
 
     fn write_startup_login_resource(root: &Path) {

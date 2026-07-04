@@ -5,11 +5,11 @@ use actingcommand_arbitrator::{
     RequestVerb,
 };
 use actingcommand_ledger::{
-    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, ProjectionRequest,
+    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, LightEvent, ProjectionRequest,
     ProjectionVerbosity, SessionHeader, error_projection, guard_reject_suspicion, project_record,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -51,6 +51,8 @@ struct WaitTiming {
     timeout: Duration,
     poll: Duration,
 }
+
+const LAB2_RECOVERY_STATE_FILE: &str = "lab2-recovery-state.json";
 
 #[derive(Clone, Copy)]
 struct Lab2CommandContract {
@@ -94,6 +96,10 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "actions": actions,
         "arbitration": arbitration_json(&arbitration.decision),
     });
+    if let Some(recovery) = active_lab2_recovery_state(&flags, &ids.req_id, &instance)? {
+        payload["state"] = json!("recovering");
+        payload["recovery"] = recovery;
+    }
     if let Some(path) = frame_path {
         payload["frame_path"] = json!(path.display().to_string());
     }
@@ -136,6 +142,13 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "do real execution requires --capture; use --dry-run with --scene for offline planning",
         ));
     }
+    let recovery_wait = wait_for_lab2_recovery_clear(
+        &flags,
+        &ids.req_id,
+        &instance,
+        "do",
+        json!({"verb": "do", "target": target.clone(), "dry_run": dry_run}),
+    )?;
 
     let arbitration = admit_lab2_request(
         &ids,
@@ -213,6 +226,10 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         "device": device,
         "arbitration": arbitration_json(&arbitration.decision),
     });
+    let mut payload = payload;
+    if let Some(recovery_wait) = recovery_wait {
+        payload["recovery_wait"] = recovery_wait;
+    }
     finish_lab2_response(
         global,
         &flags,
@@ -235,6 +252,13 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         ));
     }
     let instance = lab2_instance(global, &flags);
+    let recovery_wait = wait_for_lab2_recovery_clear(
+        &flags,
+        &ids.req_id,
+        &instance,
+        "ensure",
+        json!({"verb": "ensure", "to": to.clone(), "dry_run": dry_run}),
+    )?;
     let arbitration = admit_lab2_request(
         &ids,
         instance.clone(),
@@ -261,6 +285,10 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "backend": scene.backend,
             "arbitration": arbitration_json(&arbitration.decision),
         });
+        let mut payload = payload;
+        if let Some(recovery_wait) = recovery_wait {
+            payload["recovery_wait"] = recovery_wait;
+        }
         return finish_lab2_response(
             global,
             &flags,
@@ -312,6 +340,10 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "backend": scene.backend,
             "arbitration": arbitration_json(&arbitration.decision),
         });
+        let mut payload = payload;
+        if let Some(recovery_wait) = recovery_wait {
+            payload["recovery_wait"] = recovery_wait;
+        }
         return finish_lab2_response(
             global,
             &flags,
@@ -346,6 +378,10 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         "steps": steps,
         "arbitration": arbitration_json(&arbitration.decision),
     });
+    let mut payload = payload;
+    if let Some(recovery_wait) = recovery_wait {
+        payload["recovery_wait"] = recovery_wait;
+    }
     finish_lab2_response(
         global,
         &flags,
@@ -441,6 +477,13 @@ pub(crate) fn capability_summary(config: &UserConfig) -> Value {
         },
         "engine_capabilities": recognition_engine_capabilities(),
         "instances": lab2_config_instances(config),
+        "recovery_transparency": {
+            "state_file": LAB2_RECOVERY_STATE_FILE,
+            "event_type": "recovery.state.changed",
+            "observe": "allowed_with_state_recovering",
+            "write_verbs": "wait_by_default_or_fail_fast_with_--no-wait",
+            "wait_flags": ["--recovery-timeout-ms <ms>", "--recovery-poll-ms <ms>"]
+        },
         "error_codes": lab2_error_code_table(),
         "exit_codes": exit_code_table(),
         "escape_toolbox": escape_toolbox_groups()
@@ -765,6 +808,135 @@ fn lab2_error_details(req_id: &str, error: &str, state: &str, hint: &str) -> Cli
     lab2_error_payload(req_id, error, state, hint, None)
 }
 
+fn wait_for_lab2_recovery_clear(
+    flags: &FlagArgs,
+    req_id: &str,
+    instance: &str,
+    verb: &str,
+    planned_action: Value,
+) -> CliOutcome<Option<Value>> {
+    let Some(recovery) = active_lab2_recovery_state(flags, req_id, instance)? else {
+        return Ok(None);
+    };
+    if flags.bool("--no-wait") {
+        return Err(recovery_in_progress_error(
+            req_id,
+            verb,
+            recovery,
+            planned_action,
+        ));
+    }
+    let timeout = parse_optional_duration_ms(flags, "--recovery-timeout-ms", 5_000)?;
+    let poll = parse_optional_duration_ms(flags, "--recovery-poll-ms", 200)?;
+    if poll.is_zero() || poll > Duration::from_millis(5_000) {
+        return Err(CliError::usage(
+            "--recovery-poll-ms must be between 1 and 5000",
+        ));
+    }
+    let started = Instant::now();
+    loop {
+        if active_lab2_recovery_state(flags, req_id, instance)?.is_none() {
+            return Ok(Some(json!({
+                "waited": true,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "timeout_ms": timeout.as_millis() as u64
+            })));
+        }
+        if started.elapsed() >= timeout {
+            return Err(recovery_in_progress_error(
+                req_id,
+                verb,
+                recovery,
+                planned_action,
+            ));
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn active_lab2_recovery_state(
+    flags: &FlagArgs,
+    req_id: &str,
+    instance: &str,
+) -> CliOutcome<Option<Value>> {
+    let state_dir = session_state_dir_from_flags(flags)?;
+    let path = state_dir.join(LAB2_RECOVERY_STATE_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(CliError::device(format!(
+                "failed to read Lab-2 recovery state {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    let mut value = serde_json::from_str::<Value>(&text).map_err(|err| {
+        CliError::device(format!(
+            "failed to parse Lab-2 recovery state {}: {err}",
+            path.display()
+        ))
+    })?;
+    if !lab2_recovery_state_is_active(&value) {
+        return Ok(None);
+    }
+    value["state_dir"] = json!(state_dir.display().to_string());
+    value["state_file"] = json!(path.display().to_string());
+    value["event"] = lab2_recovery_light_event(req_id, instance, &value)?;
+    Ok(Some(value))
+}
+
+fn lab2_recovery_state_is_active(value: &Value) -> bool {
+    value
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            matches!(
+                value.get("state").and_then(Value::as_str),
+                Some("recovering" | "running" | "in_progress")
+            )
+        })
+}
+
+fn lab2_recovery_light_event(req_id: &str, instance: &str, recovery: &Value) -> CliOutcome<Value> {
+    let mut ids = BTreeMap::new();
+    ids.insert("req_id".to_string(), req_id.to_string());
+    ids.insert("instance".to_string(), instance.to_string());
+    LightEvent::new(
+        "recovery.state.changed",
+        ids,
+        json!({
+            "state": recovery.get("state").cloned().unwrap_or_else(|| json!("recovering")),
+            "reason": recovery.get("reason").cloned().unwrap_or(Value::Null),
+            "progress": recovery.get("progress").cloned().unwrap_or(Value::Null)
+        }),
+    )
+    .map(|event| json!(event))
+    .map_err(|err| CliError::device(err.to_string()))
+}
+
+fn recovery_in_progress_error(
+    req_id: &str,
+    verb: &str,
+    recovery: Value,
+    planned_action: Value,
+) -> CliError {
+    let mut details = error_projection(
+        req_id,
+        "recovering",
+        "recovering",
+        "wait-for-recovery-or-rerun-with---no-wait-to-fail-fast",
+    );
+    details["recovery"] = recovery;
+    details["planned_action"] = planned_action;
+    CliError::safety_blocked(
+        "recovery_in_progress",
+        format!("{verb} is deferred because recovery is in progress"),
+        &["recovery", "lab2"],
+    )
+    .with_details(details)
+}
+
 fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
     vec![
         Lab2CommandContract {
@@ -800,6 +972,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--destructive",
                 "--priority <normal|high>",
                 "--fields <field,field>",
+                "--no-wait",
+                "--recovery-timeout-ms <ms>",
+                "--recovery-poll-ms <ms>",
             ],
             output_fields: &[
                 "req_id",
@@ -824,6 +999,9 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--allow-destructive",
                 "--step-timeout-ms <ms>",
                 "--poll-ms <ms>",
+                "--no-wait",
+                "--recovery-timeout-ms <ms>",
+                "--recovery-poll-ms <ms>",
             ],
             output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],
             requires_lease: true,

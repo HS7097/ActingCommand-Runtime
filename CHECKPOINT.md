@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain S6 L5 self-heal transparency
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\TASK-Lab-2-chain.md` from pushed S5 commit `e257f61`.
+- Added a degraded Lab-2 recovery-state bridge at `lab2-recovery-state.json` under the selected Session state directory.
+- `observe` now remains allowed while recovery is active and returns `state:"recovering"` plus a `recovery.state.changed` light-event-shaped payload.
+- `do` and `ensure` now check recovery state before write admission. They wait by default for recovery to clear with bounded `--recovery-timeout-ms` and `--recovery-poll-ms` controls.
+- `do` and `ensure` now support `--no-wait` to fail immediately with a structured `recovery_in_progress` error, `req_id`, recovery context, and planned action details.
+- Lab-2 capability self-description and command schemas now include recovery transparency and wait/no-wait flags.
+- Added synthetic tests for observe transparency, no-wait write failure, and default write waiting. No real samples, resource repositories, live devices, OCR, UI, SQLite, full scheduler, game logic, or upstream code copying were used.
+- Public five-command gate passed.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch; git log -1 --oneline`
+- `rg -n "recovering|recovery|self-heal|self_heal|monitor_policy|recovered|--no-wait|no_wait" apps\actinglab\src\main.rs apps\actinglab\src\lab2_cli.rs crates\ledger\src\lib.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture` passed: 10 Lab-2 tests.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No blocker for S6 implementation.
+
+### Next step
+
+1. Commit and push S6 as an independent Lab-2 node.
+2. Continue with S7 / L6 MCP projection only if it is not deferred.
+
 ## 2026-07-05 Lab-2 chain S5 L4 capabilities and safety
 
 ### Current status
