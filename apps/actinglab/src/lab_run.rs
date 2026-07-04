@@ -644,21 +644,21 @@ fn execute_lab_run(
 
         ctx.event(
             "page_guard_started",
-            json!({"step_id": operation.id, "to": operation.to, "verify_template": operation.verify_template}),
+            json!({"step_id": operation.id, "to": operation.to, "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json), "verify_template": operation.verify_template}),
         )?;
         let after = poll_after_operation(
             ctx,
             capture.as_mut(),
             &state.resources,
             &operation,
-            step_timeout_ms,
+            operation.after_timeout_ms(step_timeout_ms),
             &state.control.game,
         )?;
         let verification = operation_verification_status(&state.control.game, &operation, &after);
         if verification == OperationVerification::Failed {
             ctx.event(
                 "page_guard_failed",
-                json!({"step_id": operation.id, "expected": operation.to, "after_page": after.matched_page}),
+                json!({"step_id": operation.id, "expected": operation.expected_after_page(), "after_page": after.matched_page}),
             )?;
             ctx.event(
                 "step_failed",
@@ -690,6 +690,7 @@ fn execute_lab_run(
             "purpose": operation.purpose,
             "from": operation.from,
             "to": operation.to,
+            "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json),
             "before_page": current_page,
             "after_page": after.matched_page,
             "after_anchor": after.matched_anchor(&state.control.game),
@@ -777,9 +778,8 @@ fn matched_page_matches_anchor(
 fn next_current_page(game: &str, after: &CapturedScene, operation: &Operation) -> Option<String> {
     after.matched_anchor(game).or_else(|| {
         operation
-            .to
-            .as_ref()
-            .map(|to| canonical_page_anchor(game, to))
+            .expected_after_page()
+            .map(|page| canonical_page_anchor(game, page))
     })
 }
 
@@ -806,14 +806,13 @@ fn operation_verification_status(
     after: &CapturedScene,
 ) -> OperationVerification {
     let matched_to = operation
-        .to
-        .as_ref()
-        .is_some_and(|to| matched_page_matches_anchor(game, after.matched_page.as_deref(), to));
+        .expected_after_page()
+        .is_some_and(|page| matched_page_matches_anchor(game, after.matched_page.as_deref(), page));
     let matched_template = operation.verify_template.is_some() && after.verify_template_matched;
     if matched_to || matched_template {
         return OperationVerification::Verified;
     }
-    if operation.to.is_none() && operation.verify_template.is_none() {
+    if operation.expected_after_page().is_none() && operation.verify_template.is_none() {
         return OperationVerification::ExecutedUnverified;
     }
     OperationVerification::Failed
@@ -1390,8 +1389,7 @@ fn operation_arrival_page_ids(
     operation: &Operation,
 ) -> CliOutcome<Option<Vec<String>>> {
     operation
-        .to
-        .as_ref()
+        .expected_after_page()
         .map(|to| resolve_detector_page_id(resources, game, to).map(|page| vec![page]))
         .transpose()
 }
@@ -1493,11 +1491,11 @@ fn poll_after_operation(
                 resources.operation_bundle.defaults.template_threshold,
             )?;
         }
-        let matched_to = operation
-            .to
-            .as_ref()
-            .is_some_and(|to| matched_page_matches_anchor(game, scene.matched_page.as_deref(), to));
-        let unverified_single_frame = operation.to.is_none() && operation.verify_template.is_none();
+        let matched_to = operation.expected_after_page().is_some_and(|page| {
+            matched_page_matches_anchor(game, scene.matched_page.as_deref(), page)
+        });
+        let unverified_single_frame =
+            operation.expected_after_page().is_none() && operation.verify_template.is_none();
         if matched_to || scene.verify_template_matched || unverified_single_frame {
             return Ok(scene);
         }
@@ -1922,6 +1920,8 @@ struct Operation {
     #[serde(default)]
     verify_template: Option<String>,
     #[serde(default)]
+    expect_after: Option<OperationExpectation>,
+    #[serde(default)]
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
@@ -1967,6 +1967,9 @@ impl Operation {
                 )));
             }
         }
+        if let Some(expect_after) = &self.expect_after {
+            expect_after.validate(&self.id)?;
+        }
         self.validate_guard(control)
     }
 
@@ -1997,6 +2000,58 @@ impl Operation {
             ))),
             (Some(guard), false) => guard.validate(&self.id, &self.from, control),
         }
+    }
+
+    fn expected_after_page(&self) -> Option<&str> {
+        self.expect_after
+            .as_ref()
+            .map(|expectation| expectation.page_id.as_str())
+            .or(self.to.as_deref())
+    }
+
+    fn after_timeout_ms(&self, default_timeout_ms: u64) -> u64 {
+        self.expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.timeout_ms)
+            .unwrap_or(default_timeout_ms)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OperationExpectation {
+    page_id: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    interval_ms: Option<u64>,
+}
+
+impl OperationExpectation {
+    fn validate(&self, operation_id: &str) -> CliOutcome<()> {
+        if self.page_id.trim().is_empty() {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' expect_after.page_id must not be empty"
+            )));
+        }
+        if self.timeout_ms == Some(0) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
+            )));
+        }
+        if self.interval_ms == Some(0) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{operation_id}' expect_after.interval_ms must be positive when provided"
+            )));
+        }
+        Ok(())
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "page_id": self.page_id.as_str(),
+            "timeout_ms": self.timeout_ms,
+            "interval_ms": self.interval_ms
+        })
     }
 }
 
@@ -4376,6 +4431,29 @@ mod tests {
     }
 
     #[test]
+    fn operation_verification_uses_expect_after_page() {
+        let mut operation = test_operation(None, None);
+        operation.expect_after = Some(OperationExpectation {
+            page_id: "terminal".to_string(),
+            timeout_ms: Some(50),
+            interval_ms: None,
+        });
+        let matched = captured_scene(Some("arknights/terminal"), false);
+        let mismatched = captured_scene(Some("arknights/home"), false);
+
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &matched),
+            OperationVerification::Verified
+        );
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &mismatched),
+            OperationVerification::Failed
+        );
+        assert_eq!(operation.expected_after_page(), Some("terminal"));
+        assert_eq!(operation.after_timeout_ms(10_000), 50);
+    }
+
+    #[test]
     fn manifest_entry_task_id_conflict_is_fatal() {
         let control = test_control();
         let manifest = json!({"entry_task_id": "other_task"});
@@ -4575,6 +4653,7 @@ mod tests {
                 target_id: None,
             },
             verify_template: verify_template.map(str::to_string),
+            expect_after: None,
             guard: None,
             unguarded_trusted_coordinate: true,
             consumes: Vec::new(),

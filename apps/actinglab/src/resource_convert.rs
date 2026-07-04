@@ -676,6 +676,13 @@ impl OperationConverter {
                         "click",
                         click_to_navigation(required_field(operation, "click")?)?,
                     ),
+                    (
+                        "expect_after",
+                        operation
+                            .get("expect_after")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
                     ("verify_template", verify_template),
                     (
                         "consumes",
@@ -777,6 +784,7 @@ impl OperationConverter {
                     .map(Value::String)
                     .unwrap_or(Value::Null);
                 let guard = self.operation_guard(bundle, operation)?;
+                let click = self.operation_click(bundle, operation, &guard)?;
                 primitives.push(ordered_object([
                     ("id", Value::String(operation_id)),
                     ("task_id", Value::String(bundle.task_id.clone())),
@@ -789,7 +797,14 @@ impl OperationConverter {
                         operation.get("from").cloned().unwrap_or(Value::Null),
                     ),
                     ("to", operation.get("to").cloned().unwrap_or(Value::Null)),
-                    ("click", required_field(operation, "click")?.clone()),
+                    ("click", click),
+                    (
+                        "expect_after",
+                        operation
+                            .get("expect_after")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
                     ("verify_template", verify_template),
                     ("guard", guard),
                     (
@@ -833,6 +848,85 @@ impl OperationConverter {
             ("generated_by", Value::String(GENERATED_BY.to_string())),
             ("primitives", Value::Array(primitives)),
         ]))
+    }
+
+    fn operation_click(
+        &self,
+        bundle: &Bundle,
+        operation: &Value,
+        guard: &Value,
+    ) -> CliOutcome<Value> {
+        let click = required_field(operation, "click")?;
+        if click.get("kind").and_then(Value::as_str) == Some("offset") {
+            return Ok(click.clone());
+        }
+        let Some(rect_move) = self.operation_rect_move(bundle, operation)? else {
+            return Ok(click.clone());
+        };
+        let target_id = guard
+            .get("target_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "operation '{}' has rect_move but cannot resolve a template guard target",
+                    required_string(operation, "id").unwrap_or_else(|_| "<unknown>".to_string())
+                ))
+            })?;
+        Ok(ordered_object([
+            ("kind", Value::String("offset".to_string())),
+            ("target_id", Value::String(target_id.to_string())),
+            ("offset", rect_move),
+        ]))
+    }
+
+    fn operation_rect_move(&self, bundle: &Bundle, operation: &Value) -> CliOutcome<Option<Value>> {
+        if let Some(rect_move) = operation.get("rect_move") {
+            return Ok(Some(rect_move.clone()));
+        }
+        let operation_id = required_string(operation, "id")?;
+        let source = self.enrich_template_source(operation, &operation_id)?;
+        if let Some(rect_move) = source.get("rect_move") {
+            return Ok(Some(rect_move.clone()));
+        }
+        if let Some(verify_template) = operation
+            .get("verify_template")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            if let Some(verify) =
+                array_field(&bundle.data, "verify_templates")
+                    .iter()
+                    .find(|entry| {
+                        entry.get("template").and_then(Value::as_str) == Some(verify_template)
+                    })
+            {
+                let target_id = required_string(verify, "id")?;
+                let source = self.enrich_template_source(verify, &target_id)?;
+                if let Some(rect_move) = source.get("rect_move") {
+                    return Ok(Some(rect_move.clone()));
+                }
+            }
+            if let Some(anchor) = array_field(&bundle.data, "anchors").iter().find(|entry| {
+                entry.get("template").and_then(Value::as_str) == Some(verify_template)
+            }) {
+                let anchor_id = required_string(anchor, "id")?;
+                let source = self.enrich_template_source(anchor, &anchor_id)?;
+                if let Some(rect_move) = source.get("rect_move") {
+                    return Ok(Some(rect_move.clone()));
+                }
+            }
+        }
+        let from = required_string(operation, "from")?;
+        if let Some(anchor) = array_field(&bundle.data, "anchors")
+            .iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(from.as_str()))
+        {
+            let source = self.enrich_template_source(anchor, &from)?;
+            if let Some(rect_move) = source.get("rect_move") {
+                return Ok(Some(rect_move.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn operation_guard(&self, bundle: &Bundle, operation: &Value) -> CliOutcome<Value> {
@@ -2327,6 +2421,7 @@ mod tests {
         let task_dir = root.path().join("operations/synthetic-maa");
         fs::create_dir_all(task_dir.join("assets")).unwrap();
         fs::write(task_dir.join("assets/HOME.png"), b"synthetic").unwrap();
+        fs::write(task_dir.join("assets/TERMINAL.png"), b"synthetic").unwrap();
         fs::write(
             root.path().join("operations/resources.json"),
             serde_json::to_vec_pretty(&json!({"resources":[]})).unwrap(),
@@ -2346,8 +2441,21 @@ mod tests {
                     "maa_task": "Check@Base",
                     "template": "assets/HOME.png",
                     "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}}
+                }, {
+                    "id": "terminal",
+                    "template": "assets/TERMINAL.png",
+                    "region": {"mode":"rect","rect":{"x":50,"y":60,"width":30,"height":40}}
                 }],
-                "operations": []
+                "operations": [{
+                    "id": "tap_home",
+                    "purpose": "synthetic rectMove",
+                    "from": "home",
+                    "to": "terminal",
+                    "click": {"kind":"point","x":100,"y":100},
+                    "expect_after": {"page_id":"terminal","timeout_ms":500},
+                    "consumes": [],
+                    "produces": []
+                }]
             }))
             .unwrap(),
         )
@@ -2418,6 +2526,27 @@ mod tests {
             target.pointer("/rect_move"),
             Some(&json!({"x":11,"y":22,"width":33,"height":44}))
         );
+        let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
+        assert_eq!(
+            primitive.pointer("/click/kind").and_then(Value::as_str),
+            Some("offset")
+        );
+        assert_eq!(
+            primitive
+                .pointer("/click/target_id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            primitive.pointer("/click/offset"),
+            Some(&json!({"x":11,"y":22,"width":33,"height":44}))
+        );
+        assert_eq!(
+            primitive
+                .pointer("/expect_after/page_id")
+                .and_then(Value::as_str),
+            Some("terminal")
+        );
     }
 
     #[test]
@@ -2448,7 +2577,7 @@ mod tests {
             summary.get("maa_compiled_tasks").and_then(Value::as_u64),
             Some(3)
         );
-        assert_eq!(summary.get("targets").and_then(Value::as_u64), Some(1));
+        assert_eq!(summary.get("targets").and_then(Value::as_u64), Some(2));
     }
 
     #[test]

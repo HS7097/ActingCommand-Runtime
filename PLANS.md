@@ -29,7 +29,9 @@ Stage-one repair status:
 - S5 tests are synthetic-only and cover matched-rect offset click placement, color-probe offset rejection, and propagated template match dimensions.
 - S6/W3 M3 Phase A loading diagnostics are implemented. Recognition pack loading now records unsupported method/mask targets, lab package diagnostics expose unsupported target counts/details, and package validation reports unsupported recognition target counts without evaluating templates.
 - S6 tests are synthetic-only and cover unsupported method/mask load markers, pure NCC count zero, lab validate diagnostics, package validate diagnostics, and fail-loud evaluation behavior.
-- S7-S8 remain open and must continue in the fixed order from the repair task file.
+- S7/W4 expect-after and rectMove-to-offset flow is implemented. Operation primitives preserve `expect_after`, lab execution uses `expect_after.page_id` as an explicit after-action confirmation guard, and MAA-derived `rectMove` can convert guarded point/rect clicks into matched-rect `offset` clicks.
+- S7 tests are synthetic-only and cover expect-after hit/mismatch verification and MAA `rectMove` landing as a generated primitive offset click with preserved `expect_after`.
+- S8 remains open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 
