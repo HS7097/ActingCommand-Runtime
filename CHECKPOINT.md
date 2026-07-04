@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S1 MAA wiring
+
+### Current status
+
+- Read `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md`.
+- Refreshed `HS7097/ActingCommand-Runtime` to `origin/main` at baseline `673102e8494e24100133b1806cc90005d5d5934c` before making changes.
+- Implemented S1/W1 in the narrowed explicit-input form: `resource convert --maa-tasks <dir>` compiles synthetic MAA task JSON and feeds compiled template metadata into generated pack targets.
+- Default Operation Bundle conversion is unchanged when `--maa-tasks` is not supplied.
+- Added synthetic-only S1/T3 regression coverage. No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `apps/actinglab/src/maa_task_graph.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md -Raw`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab resource_convert::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- `cargo test -p actingcommand-actinglab resource_convert::tests -- --nocapture` passed: 20 tests.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for S1.
+- S2-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in the fixed order using synthetic-only validation.
+
+### Next step
+
+1. Commit and push S1.
+2. Continue with S2/B1 virtual-reference cycle stack propagation.
+
 ## 2026-07-04 AK MAA data fidelity r3/r4 boundary realignment
 
 ### Current status

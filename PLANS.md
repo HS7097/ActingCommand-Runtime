@@ -10,6 +10,17 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 
 The active task is `C:\合作工作区\ActingCommand\TASK-AK-maa-data-fidelity.md`.
 
+The active repair task is `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md`.
+
+Stage-one repair status:
+
+- S1/W1 MAA compiler wiring is implemented in the narrowed explicit-input form.
+- `resource convert --maa-tasks <dir>` now enables MAA task graph expansion before pack generation.
+- Default Operation Bundle conversion remains unchanged when `--maa-tasks` is not supplied.
+- In explicit MAA mode, compiled task fields can feed template pack target metadata: `templThreshold` -> `threshold`, `method`/`matchMethod` -> `method`, `maskRange` -> `mask`, and `rectMove` -> `rect_move`.
+- S1 tests are synthetic-only and cover explicit `--maa-tasks` mode, expanded `baseTask`/`@`/`#` data landing in pack targets, and default-mode regression.
+- S2-S8 remain open and must continue in the fixed order from the repair task file.
+
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 
 - Codex owns the Runtime implementation for M1-M4 and M7.

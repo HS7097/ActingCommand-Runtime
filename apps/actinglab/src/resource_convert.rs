@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, ResolvedResourceRoot, canonical_game};
+use super::{
+    CliError, CliOutcome, FlagArgs, GlobalOptions, ResolvedResourceRoot, canonical_game,
+    maa_task_graph,
+};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -21,18 +24,22 @@ pub(super) fn run_resource_convert(
     let game_override = game_override.as_deref().map(canonical_game).transpose()?;
     let server_override = flags.optional("--server").or_else(|| global.server.clone());
     let locale_override = flags.optional("--locale");
-    let converter = OperationConverter::load(
+    let mut converter = OperationConverter::load(
         repo,
         game_override.as_deref(),
         server_override.as_deref(),
         locale_override.as_deref(),
     )?;
+    let maa_tasks_root = flags.optional_path("--maa-tasks");
+    if let Some(tasks_root) = maa_tasks_root.as_deref() {
+        converter.load_maa_task_overlays(tasks_root)?;
+    }
     let outputs = converter.build_all()?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
     if !dry_run {
         outputs.write(repo)?;
     }
-    Ok(json!({
+    let mut summary = json!({
         "repo": resource_root.input.display().to_string(),
         "resource_root": repo.display().to_string(),
         "resource_layout": resource_root.layout,
@@ -48,7 +55,27 @@ pub(super) fn run_resource_convert(
         "index_tasks": outputs.index.get("operations").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "primitives": outputs.primitives.get("primitives").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "status": if dry_run { "validated" } else { "written" }
-    }))
+    });
+    if let Some(tasks_root) = maa_tasks_root {
+        let object = summary
+            .as_object_mut()
+            .expect("resource convert summary is object");
+        object.insert(
+            "source_mode".to_string(),
+            Value::String("maa_tasks".to_string()),
+        );
+        object.insert(
+            "maa_tasks_root".to_string(),
+            Value::String(tasks_root.display().to_string()),
+        );
+        object.insert(
+            "maa_compiled_tasks".to_string(),
+            Value::Number(serde_json::Number::from(
+                converter.maa_task_overlays.len() as u64
+            )),
+        );
+    }
+    Ok(summary)
 }
 
 #[derive(Debug)]
@@ -62,6 +89,7 @@ pub(super) struct OperationConverter {
     resource_ids: HashSet<String>,
     pub(super) bundles: Vec<Bundle>,
     existing_navigation: Option<Value>,
+    maa_task_overlays: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,9 +194,61 @@ impl OperationConverter {
             resource_ids,
             bundles,
             existing_navigation,
+            maa_task_overlays: HashMap::new(),
         };
         converter.validate_bundles()?;
         Ok(converter)
+    }
+
+    pub(super) fn load_maa_task_overlays(&mut self, tasks_root: &Path) -> CliOutcome<()> {
+        let graph = maa_task_graph::compile_maa_task_graph_family(tasks_root)?;
+        self.maa_task_overlays = graph
+            .tasks()
+            .iter()
+            .map(|(task_id, task)| (task_id.clone(), task.clone()))
+            .collect();
+        Ok(())
+    }
+
+    fn enrich_template_source(&self, source: &Value, source_task_id: &str) -> CliOutcome<Value> {
+        if self.maa_task_overlays.is_empty() {
+            return Ok(source.clone());
+        }
+        let explicit_task_id =
+            string_field(source, "maa_task").or_else(|| string_field(source, "maa_task_id"));
+        let task_id = explicit_task_id.or_else(|| {
+            self.maa_task_overlays
+                .contains_key(source_task_id)
+                .then(|| source_task_id.to_string())
+        });
+        let Some(task_id) = task_id else {
+            return Ok(source.clone());
+        };
+        let Some(compiled) = self.maa_task_overlays.get(&task_id) else {
+            return Err(CliError::package_invalid(format!(
+                "MAA task overlay '{task_id}' was requested but was not found"
+            )));
+        };
+        let mut out = source.as_object().cloned().ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "resource template source for MAA task '{task_id}' must be a JSON object"
+            ))
+        })?;
+        copy_maa_template_field(
+            &mut out,
+            compiled,
+            "threshold",
+            &["threshold", "templThreshold"],
+        )?;
+        copy_maa_template_field(
+            &mut out,
+            compiled,
+            "method",
+            &["method", "matchMethod", "match_method"],
+        )?;
+        copy_maa_template_field(&mut out, compiled, "mask", &["mask", "maskRange"])?;
+        copy_maa_template_field(&mut out, compiled, "rect_move", &["rect_move", "rectMove"])?;
+        Ok(Value::Object(out))
     }
 
     pub(super) fn build_all(&self) -> CliOutcome<ConvertOutputs> {
@@ -212,6 +292,7 @@ impl OperationConverter {
             resource_ids: self.resource_ids.clone(),
             bundles: selected,
             existing_navigation: self.existing_navigation.clone(),
+            maa_task_overlays: self.maa_task_overlays.clone(),
         };
         subset.validate_bundles()?;
         subset.build_all()
@@ -318,18 +399,19 @@ impl OperationConverter {
             for anchor in array_field(&bundle.data, "anchors") {
                 let anchor_id = required_string(anchor, "id")?;
                 let target_id = anchor_target_id(&anchor_id);
-                let template = required_string(anchor, "template")?;
+                let source = self.enrich_template_source(anchor, &anchor_id)?;
+                let template = required_string(&source, "template")?;
                 let target = pack_target(
-                    anchor,
+                    &source,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(&template))?,
-                    region_to_pack(required_field(anchor, "region")?)?,
-                    anchor.get("threshold").cloned().unwrap_or_else(|| {
+                    region_to_pack(required_field(&source, "region")?)?,
+                    source.get("threshold").cloned().unwrap_or_else(|| {
                         required_field(&self.defaults, "template_threshold")
                             .cloned()
                             .unwrap_or(Value::Null)
                     }),
-                    color_check_to_pack(anchor.get("color_check"))?,
+                    color_check_to_pack(source.get("color_check"))?,
                     None,
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
@@ -346,20 +428,18 @@ impl OperationConverter {
             }
             for verify_template in array_field(&bundle.data, "verify_templates") {
                 let target_id = required_string(verify_template, "id")?;
-                let template = required_string(verify_template, "template")?;
+                let source = self.enrich_template_source(verify_template, &target_id)?;
+                let template = required_string(&source, "template")?;
                 let target = pack_target(
-                    verify_template,
+                    &source,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(&template))?,
-                    region_to_pack(required_field(verify_template, "region")?)?,
-                    verify_template
-                        .get("threshold")
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            required_field(&self.defaults, "template_threshold")
-                                .cloned()
-                                .unwrap_or(Value::Null)
-                        }),
+                    region_to_pack(required_field(&source, "region")?)?,
+                    source.get("threshold").cloned().unwrap_or_else(|| {
+                        required_field(&self.defaults, "template_threshold")
+                            .cloned()
+                            .unwrap_or(Value::Null)
+                    }),
                     None,
                     None,
                 );
@@ -371,12 +451,20 @@ impl OperationConverter {
                     continue;
                 };
                 let target_id = template_target_id(template);
+                let operation_id = operation
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(target_id.as_str());
+                let source = self.enrich_template_source(operation, operation_id)?;
                 let target = pack_target(
-                    operation,
+                    &source,
                     &target_id,
                     &repo_rel(&self.root, &bundle.dir.join(template))?,
                     Value::String(FULL_FRAME_SENTINEL.to_string()),
-                    required_field(&self.defaults, "template_threshold")?.clone(),
+                    source
+                        .get("threshold")
+                        .cloned()
+                        .unwrap_or(required_field(&self.defaults, "template_threshold")?.clone()),
                     None,
                     None,
                 );
@@ -1027,6 +1115,100 @@ fn require_click_keys(
             ));
         }
     }
+}
+
+fn copy_maa_template_field(
+    out: &mut Map<String, Value>,
+    compiled: &Value,
+    output_key: &str,
+    input_keys: &[&str],
+) -> CliOutcome<()> {
+    if out.contains_key(output_key) {
+        return Ok(());
+    }
+    let Some((input_key, value)) = input_keys
+        .iter()
+        .find_map(|key| compiled.get(*key).map(|value| (*key, value)))
+    else {
+        return Ok(());
+    };
+    let value = match output_key {
+        "method" => normalize_maa_method(value)?,
+        "mask" if input_key == "maskRange" => normalize_maa_mask_range(value)?,
+        "rect_move" if input_key == "rectMove" => normalize_maa_rect(value)?,
+        _ => value.clone(),
+    };
+    out.insert(output_key.to_string(), value);
+    Ok(())
+}
+
+fn normalize_maa_method(value: &Value) -> CliOutcome<Value> {
+    let method = value.as_str().ok_or_else(|| {
+        CliError::package_invalid("MAA template method must be a string when provided")
+    })?;
+    let normalized = match method {
+        "ncc" | "NCC" | "MatchTemplate" | "match_template" | "TemplateMatch" => "ncc",
+        "rgb_count" | "RGBCount" | "rgbCount" => "rgb_count",
+        "hsv_count" | "HSVCount" | "hsvCount" => "hsv_count",
+        other => other,
+    };
+    Ok(Value::String(normalized.to_string()))
+}
+
+fn normalize_maa_mask_range(value: &Value) -> CliOutcome<Value> {
+    if let Some(object) = value.as_object() {
+        if object.contains_key("type") {
+            return Ok(value.clone());
+        }
+        let lower = required_u8_field(value, "lower")?;
+        let upper = required_u8_field(value, "upper")?;
+        return Ok(json!({"type":"range","lower":lower,"upper":upper}));
+    }
+    let values = value.as_array().ok_or_else(|| {
+        CliError::package_invalid("MAA maskRange must be [lower, upper] or an object")
+    })?;
+    if values.len() != 2 {
+        return Err(CliError::package_invalid(
+            "MAA maskRange must contain exactly two values",
+        ));
+    }
+    let lower = value_to_u8(&values[0], "MAA maskRange lower")?;
+    let upper = value_to_u8(&values[1], "MAA maskRange upper")?;
+    Ok(json!({"type":"range","lower":lower,"upper":upper}))
+}
+
+fn normalize_maa_rect(value: &Value) -> CliOutcome<Value> {
+    if let Some(object) = value.as_object() {
+        let x = required_i64_field(value, "x")?;
+        let y = required_i64_field(value, "y")?;
+        let width = object
+            .get("width")
+            .or_else(|| object.get("w"))
+            .ok_or_else(|| CliError::package_invalid("MAA rectMove object missing width"))?
+            .as_i64()
+            .ok_or_else(|| CliError::package_invalid("MAA rectMove width must be an integer"))?;
+        let height = object
+            .get("height")
+            .or_else(|| object.get("h"))
+            .ok_or_else(|| CliError::package_invalid("MAA rectMove object missing height"))?
+            .as_i64()
+            .ok_or_else(|| CliError::package_invalid("MAA rectMove height must be an integer"))?;
+        return Ok(json!({"x":x,"y":y,"width":width,"height":height}));
+    }
+    let values = value.as_array().ok_or_else(|| {
+        CliError::package_invalid("MAA rectMove must be [x, y, width, height] or an object")
+    })?;
+    if values.len() != 4 {
+        return Err(CliError::package_invalid(
+            "MAA rectMove must contain exactly four values",
+        ));
+    }
+    Ok(json!({
+        "x": value_to_i64(&values[0], "MAA rectMove x")?,
+        "y": value_to_i64(&values[1], "MAA rectMove y")?,
+        "width": value_to_i64(&values[2], "MAA rectMove width")?,
+        "height": value_to_i64(&values[3], "MAA rectMove height")?
+    }))
 }
 
 fn pack_target(
@@ -1743,6 +1925,33 @@ fn required_string(value: &Value, key: &str) -> CliOutcome<String> {
         .ok_or_else(|| CliError::package_invalid(format!("missing string field {key}")))
 }
 
+fn required_i64_field(value: &Value, key: &str) -> CliOutcome<i64> {
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| CliError::package_invalid(format!("missing integer field {key}")))
+}
+
+fn required_u8_field(value: &Value, key: &str) -> CliOutcome<u8> {
+    let raw = value
+        .get(key)
+        .ok_or_else(|| CliError::package_invalid(format!("missing integer field {key}")))?;
+    value_to_u8(raw, key)
+}
+
+fn value_to_i64(value: &Value, label: &str) -> CliOutcome<i64> {
+    value
+        .as_i64()
+        .ok_or_else(|| CliError::package_invalid(format!("{label} must be an integer")))
+}
+
+fn value_to_u8(value: &Value, label: &str) -> CliOutcome<u8> {
+    let raw = value_to_i64(value, label)?;
+    u8::try_from(raw).map_err(|_| {
+        CliError::package_invalid(format!("{label} must be an integer between 0 and 255"))
+    })
+}
+
 fn string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -1873,6 +2082,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let pages = converter.build_pages().unwrap();
@@ -1916,6 +2126,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let pages = converter.build_pages().unwrap();
@@ -1954,6 +2165,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let err = converter.build_pages().expect_err("unknown page rule");
@@ -2018,6 +2230,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let pack = converter.build_pack().unwrap();
@@ -2066,6 +2279,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let pack = converter.build_pack().unwrap();
@@ -2089,6 +2303,178 @@ mod tests {
         assert_eq!(
             target_value.pointer("/threshold").and_then(Value::as_f64),
             Some(0.97)
+        );
+    }
+
+    fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let task_dir = root.path().join("operations/synthetic-maa");
+        fs::create_dir_all(task_dir.join("assets")).unwrap();
+        fs::write(task_dir.join("assets/HOME.png"), b"synthetic").unwrap();
+        fs::write(
+            root.path().join("operations/resources.json"),
+            serde_json::to_vec_pretty(&json!({"resources":[]})).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            task_dir.join("task.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "0.5",
+                "task_id": "synthetic-maa",
+                "game": "arknights",
+                "server_scope": ["cn"],
+                "coordinate_space": {"width":1280,"height":720},
+                "defaults": {"template_threshold":0.5},
+                "anchors": [{
+                    "id": "home",
+                    "maa_task": "Check@Base",
+                    "template": "assets/HOME.png",
+                    "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}}
+                }],
+                "operations": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let maa_dir = root.path().join("maa-tasks");
+        fs::create_dir_all(&maa_dir).unwrap();
+        fs::write(
+            maa_dir.join("tasks.json"),
+            serde_json::to_vec_pretty(&json!({
+                "Base": {
+                    "template": "BASE.png",
+                    "templThreshold": 0.67,
+                    "method": "RGBCount",
+                    "maskRange": [7, 199],
+                    "rectMove": [1, 2, 3, 4],
+                    "next": ["Helper"]
+                },
+                "Helper": {
+                    "template": "HELPER.png",
+                    "next": ["Stop"]
+                },
+                "Check@Base": {
+                    "templThreshold": 0.91,
+                    "rectMove": [11, 22, 33, 44],
+                    "next": ["Base#next"]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        (root, maa_dir)
+    }
+
+    #[test]
+    fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
+        let (root, maa_dir) = write_synthetic_maa_convert_fixture();
+
+        let mut converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+        converter.load_maa_task_overlays(&maa_dir).unwrap();
+        let outputs = converter.build_all().unwrap();
+        let target = outputs.pack.pointer("/targets/0").unwrap();
+
+        assert_eq!(
+            target.pointer("/id").and_then(Value::as_str),
+            Some("page/home")
+        );
+        assert_eq!(
+            target.pointer("/threshold").and_then(Value::as_f64),
+            Some(0.91)
+        );
+        assert_eq!(
+            target.pointer("/method").and_then(Value::as_str),
+            Some("rgb_count")
+        );
+        assert_eq!(
+            target.pointer("/mask/type").and_then(Value::as_str),
+            Some("range")
+        );
+        assert_eq!(
+            target.pointer("/mask/lower").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            target.pointer("/mask/upper").and_then(Value::as_u64),
+            Some(199)
+        );
+        assert_eq!(
+            target.pointer("/rect_move"),
+            Some(&json!({"x":11,"y":22,"width":33,"height":44}))
+        );
+    }
+
+    #[test]
+    fn resource_convert_accepts_explicit_maa_tasks_mode() {
+        let (root, maa_dir) = write_synthetic_maa_convert_fixture();
+        let flags = FlagArgs::parse(&[
+            "--maa-tasks".to_string(),
+            maa_dir.display().to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap();
+        let summary = run_resource_convert(
+            &GlobalOptions::default(),
+            &flags,
+            &ResolvedResourceRoot {
+                input: root.path().to_path_buf(),
+                root: root.path().to_path_buf(),
+                layout: "direct",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.get("source_mode").and_then(Value::as_str),
+            Some("maa_tasks")
+        );
+        assert_eq!(
+            summary.get("maa_compiled_tasks").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(summary.get("targets").and_then(Value::as_u64), Some(1));
+    }
+
+    #[test]
+    fn default_operation_bundle_mode_does_not_apply_maa_overlay_fields() {
+        let root = std::env::current_dir().unwrap();
+        let converter = OperationConverter {
+            root: root.clone(),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.5}),
+            resource_ids: HashSet::new(),
+            bundles: vec![Bundle {
+                task_id: "synthetic-maa".to_string(),
+                dir: root.join("operations/synthetic-maa"),
+                data: json!({
+                    "schema_version": "0.5",
+                    "task_id": "synthetic-maa",
+                    "anchors": [{
+                        "id": "home",
+                        "maa_task": "Check@Base",
+                        "template": "assets/HOME.png",
+                        "region": {"mode":"rect","rect":{"x":10,"y":20,"width":30,"height":40}}
+                    }],
+                    "operations": []
+                }),
+            }],
+            existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
+        };
+
+        let pack = converter.build_pack().unwrap();
+        assert_eq!(
+            pack.pointer("/targets/0"),
+            Some(&json!({
+                "type": "template",
+                "id": "page/home",
+                "template_path": "operations/synthetic-maa/assets/HOME.png",
+                "region": {"x":10,"y":20,"width":30,"height":40},
+                "threshold": 0.5
+            }))
         );
     }
 
@@ -2130,6 +2516,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let outputs = converter.build_all().unwrap();
@@ -2198,6 +2585,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let outputs = converter.build_all().unwrap();
@@ -2262,6 +2650,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let outputs = converter.build_all().unwrap();
@@ -2311,6 +2700,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let outputs = converter.build_all().unwrap();
@@ -2364,6 +2754,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let err = converter
@@ -2408,6 +2799,7 @@ mod tests {
                 }),
             }],
             existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
         };
 
         let outputs = converter.build_all().unwrap();

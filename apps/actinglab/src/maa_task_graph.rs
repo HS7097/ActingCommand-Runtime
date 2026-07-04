@@ -31,6 +31,10 @@ impl MaaTaskGraph {
         self.tasks.get(task_id)
     }
 
+    pub(super) fn tasks(&self) -> &BTreeMap<String, Value> {
+        &self.tasks
+    }
+
     pub(super) fn to_summary_json(&self) -> Value {
         json!({
             "schema_version": "actingcommand.maa-task-graph.v1",
