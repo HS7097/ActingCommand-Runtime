@@ -17,7 +17,8 @@ use actingcommand_device::{
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
+    load_pack_from_json_str,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -178,6 +179,8 @@ fn validate_lab_package_zip_inner(zip_path: &Path, input_dir: &Path) -> CliOutco
             "operation": resources.operation_path.display().to_string(),
             "operation_count": resources.operation_bundle.operations.len(),
             "pack": resources.pack_path.display().to_string(),
+            "recognition_unsupported_target_count": resources.evaluator.unsupported_target_count(),
+            "recognition_unsupported_targets": unsupported_targets_json(resources.evaluator.unsupported_targets()),
             "pages": resources.pages_path.display().to_string(),
             "navigation": resources.navigation_path.as_ref().map(|path| path.display().to_string())
         }
@@ -1324,6 +1327,18 @@ fn target_evaluation_json(target: &TargetEvaluation) -> Value {
             "expected": color.expected
         }))
     })
+}
+
+fn unsupported_targets_json(targets: &[UnsupportedRecognitionTarget]) -> Vec<Value> {
+    targets
+        .iter()
+        .map(|target| {
+            json!({
+                "id": target.id.as_str(),
+                "reason": target.reason.as_str()
+            })
+        })
+        .collect()
 }
 
 fn actionable_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
@@ -3056,6 +3071,8 @@ impl LabRunContext {
                 "operation": state.resources.operation_path,
                 "resource_root": state.resources.resource_root,
                 "pack": state.resources.pack_path,
+                "recognition_unsupported_target_count": state.resources.evaluator.unsupported_target_count(),
+                "recognition_unsupported_targets": unsupported_targets_json(state.resources.evaluator.unsupported_targets()),
                 "pages": state.resources.pages_path,
                 "navigation": state.resources.navigation_path,
                 "navigation_loaded": state.resources.navigation.is_some(),
@@ -3829,6 +3846,39 @@ mod tests {
         assert_eq!(data["status"], "valid");
         assert_eq!(data["control"]["entry_task_id"], "task");
         assert_eq!(data["resources"]["operation_count"], 1);
+    }
+
+    #[test]
+    fn lab_validate_reports_unsupported_recognition_target_count() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_lab_package_with_unsupported_recognition(&zip);
+
+        let result = super::super::run_cli(
+            ["--json", "lab", "validate", "--zip", zip.to_str().unwrap()],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let resources = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("resources")
+            .unwrap();
+        assert_eq!(
+            resources
+                .get("recognition_unsupported_target_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            resources
+                .pointer("/recognition_unsupported_targets/0/id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
     }
 
     #[test]
@@ -4713,6 +4763,90 @@ mod tests {
                                 "template_path":"operations/task/assets/PAGE_HOME.png",
                                 "region":{"x":0,"y":0,"width":1,"height":1},
                                 "threshold":0.9
+                            }
+                        ]
+                    }"#,
+                ),
+                (
+                    "resources/recognition/arknights.cn.pages.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "pages":[
+                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}
+                        ]
+                    }"#,
+                ),
+            ],
+        );
+    }
+
+    fn write_lab_package_with_unsupported_recognition(path: &Path) {
+        write_test_zip(
+            path,
+            &[
+                (
+                    "control.json",
+                    br#"{
+                        "schema_version":"Lab-1y.control.v1",
+                        "package_id":"fixture.task",
+                        "execution_mode":"recognize_only",
+                        "game":"arknights",
+                        "server":"cn",
+                        "resolution":{"width":1280,"height":720},
+                        "entry_task_id":"task"
+                    }"#,
+                ),
+                (
+                    "resources/manifest.json",
+                    br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+                ),
+                (
+                    "resources/operations/task/task.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "task_id":"task",
+                        "game":"arknights",
+                        "server_scope":["cn"],
+                        "goal":"fixture",
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
+                        "anchors":[{"id":"home","template":"assets/PAGE_HOME.png"}],
+                        "entry_page":"home",
+                        "target_page":"home",
+                        "operations":[
+                            {
+                                "id":"noop",
+                                "purpose":"fixture",
+                                "from":"home",
+                                "to":null,
+                                "click":{"kind":"point","x":1,"y":1},
+                                "verify_template":null,
+                                "unguarded_trusted_coordinate":true,
+                                "consumes":[],
+                                "produces":[]
+                            }
+                        ]
+                    }"#,
+                ),
+                ("resources/operations/task/assets/PAGE_HOME.png", one_pixel_png()),
+                (
+                    "resources/recognition/arknights.cn.pack.json",
+                    br#"{
+                        "schema_version":"0.5",
+                        "game":"arknights",
+                        "server":"cn",
+                        "locale":"zh-CN",
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
+                        "targets":[
+                            {
+                                "type":"template",
+                                "id":"page/home",
+                                "template_path":"operations/task/assets/PAGE_HOME.png",
+                                "region":{"x":0,"y":0,"width":1,"height":1},
+                                "threshold":0.9,
+                                "method":"rgb_count",
+                                "mask":{"type":"range","lower":1,"upper":255}
                             }
                         ]
                     }"#,

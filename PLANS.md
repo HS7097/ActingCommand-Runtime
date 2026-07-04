@@ -27,7 +27,9 @@ Stage-one repair status:
 - S4 tests are synthetic-only and cover implicit `@` template inheritance, explicit `@` template rebasing, explicit `@` plus declared `baseTask` priority, bare `#back` skipping, and algorithm-change inheritance filtering.
 - S5/B3 matched-rect offset semantics are implemented. Template matching now carries matched width/height, target diagnostics expose `matched_rect`, offset clicks use the live matched template rectangle plus offset instead of static guard `expected_rect`, and color-probe guards are rejected for offset clicks.
 - S5 tests are synthetic-only and cover matched-rect offset click placement, color-probe offset rejection, and propagated template match dimensions.
-- S6-S8 remain open and must continue in the fixed order from the repair task file.
+- S6/W3 M3 Phase A loading diagnostics are implemented. Recognition pack loading now records unsupported method/mask targets, lab package diagnostics expose unsupported target counts/details, and package validation reports unsupported recognition target counts without evaluating templates.
+- S6 tests are synthetic-only and cover unsupported method/mask load markers, pure NCC count zero, lab validate diagnostics, package validate diagnostics, and fail-loud evaluation behavior.
+- S7-S8 remain open and must continue in the fixed order from the repair task file.
 
 The 2026-07-04 r3/r4 task-file update narrows the current Codex lane to Runtime logic and synthetic/offline program construction only:
 

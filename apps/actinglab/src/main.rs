@@ -9,7 +9,8 @@ use actingcommand_device::{
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
+    PackRect, RecognitionEvaluator, RecognitionPack, TargetEvaluation, TargetKind,
+    UnsupportedRecognitionTarget, load_pack_from_json_str, unsupported_recognition_targets,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23800,6 +23801,13 @@ struct PackageValidation {
     dangerous_entries: Vec<String>,
     entries: Vec<String>,
     manifest: Value,
+    recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
+}
+
+#[derive(Debug)]
+struct RecognitionPackDiagnostics {
+    path: String,
+    unsupported_targets: Vec<UnsupportedRecognitionTarget>,
 }
 
 fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
@@ -23883,6 +23891,7 @@ fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
         )));
     }
     validate_manifest_hashes(&manifest, &entries, &module)?;
+    let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
     Ok(PackageValidation {
         module,
         manifest_path,
@@ -23891,7 +23900,31 @@ fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
         dangerous_entries: dangerous,
         entries: entries.keys().cloned().collect(),
         manifest,
+        recognition_pack_diagnostics,
     })
+}
+
+fn collect_recognition_pack_diagnostics(
+    entries: &BTreeMap<String, Vec<u8>>,
+) -> CliOutcome<Vec<RecognitionPackDiagnostics>> {
+    let mut diagnostics = Vec::new();
+    for (path, bytes) in entries {
+        if !path.ends_with(".pack.json") {
+            continue;
+        }
+        let pack: RecognitionPack =
+            load_pack_from_json_str(std::str::from_utf8(bytes).map_err(|err| {
+                CliError::package_invalid(format!("failed to decode {path} as UTF-8: {err}"))
+            })?)
+            .map_err(|err| {
+                CliError::package_invalid(format!("failed to parse recognition pack {path}: {err}"))
+            })?;
+        diagnostics.push(RecognitionPackDiagnostics {
+            path: path.clone(),
+            unsupported_targets: unsupported_recognition_targets(&pack),
+        });
+    }
+    Ok(diagnostics)
 }
 
 fn read_zip_entry_limited<R: Read>(
@@ -24025,9 +24058,30 @@ fn package_validation_json(validation: &PackageValidation, include_entries: bool
         "task_count": validation.task_count,
         "entry_count": validation.entry_count,
         "dangerous_entries": validation.dangerous_entries,
+        "recognition_pack_diagnostics": validation.recognition_pack_diagnostics.iter().map(recognition_pack_diagnostics_json).collect::<Vec<_>>(),
         "manifest": validation.manifest,
         "entries": if include_entries { json!(validation.entries) } else { Value::Null }
     })
+}
+
+fn recognition_pack_diagnostics_json(diagnostics: &RecognitionPackDiagnostics) -> Value {
+    json!({
+        "path": diagnostics.path.as_str(),
+        "unsupported_target_count": diagnostics.unsupported_targets.len(),
+        "unsupported_targets": unsupported_targets_json(&diagnostics.unsupported_targets)
+    })
+}
+
+fn unsupported_targets_json(targets: &[UnsupportedRecognitionTarget]) -> Vec<Value> {
+    targets
+        .iter()
+        .map(|target| {
+            json!({
+                "id": target.id.as_str(),
+                "reason": target.reason.as_str()
+            })
+        })
+        .collect()
 }
 
 fn create_package_blocked_result_zip(
@@ -50870,6 +50924,63 @@ mod tests {
             true,
         );
         assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn package_validate_reports_unsupported_recognition_targets() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                (
+                    "module/recognition/arknights.cn.pack.json",
+                    br#"{
+                        "schema_version":"0.5",
+                        "targets":[{
+                            "type":"template",
+                            "id":"page/home",
+                            "template_path":"templates/home.png",
+                            "region":{"x":0,"y":0,"width":1,"height":1},
+                            "method":"rgb_count",
+                            "mask":{"type":"range","lower":1,"upper":255}
+                        }]
+                    }"#
+                    .as_slice(),
+                ),
+            ],
+        );
+        let result = run_cli(
+            [
+                "--json",
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/recognition_pack_diagnostics/0/unsupported_target_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            data.pointer("/recognition_pack_diagnostics/0/unsupported_targets/0/id")
+                .and_then(Value::as_str),
+            Some("page/home")
+        );
     }
 
     #[test]

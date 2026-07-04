@@ -201,6 +201,7 @@ pub struct RecognitionEvaluator {
     pack_root: PathBuf,
     pack: RecognitionPack,
     target_indexes: HashMap<String, usize>,
+    unsupported_targets: Vec<UnsupportedRecognitionTarget>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +232,12 @@ pub struct TemplateEvaluation {
     pub threshold: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedRecognitionTarget {
+    pub id: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorEvaluation {
     pub distance: f32,
@@ -259,11 +266,13 @@ impl RecognitionEvaluator {
             .enumerate()
             .map(|(index, target)| (target.id().to_string(), index))
             .collect();
+        let unsupported_targets = unsupported_recognition_targets(&pack);
 
         Ok(Self {
             pack_root,
             pack,
             target_indexes,
+            unsupported_targets,
         })
     }
 
@@ -326,16 +335,11 @@ impl RecognitionEvaluator {
     }
 
     pub fn unsupported_target_count(&self) -> usize {
-        self.pack
-            .targets
-            .iter()
-            .filter(|target| match target {
-                RecognitionTarget::Template(target) => {
-                    unsupported_template_reason(target).is_some()
-                }
-                RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => false,
-            })
-            .count()
+        self.unsupported_targets.len()
+    }
+
+    pub fn unsupported_targets(&self) -> &[UnsupportedRecognitionTarget] {
+        &self.unsupported_targets
     }
 
     fn evaluate_template(
@@ -456,6 +460,23 @@ impl RecognitionEvaluator {
         })?;
         Ok(&self.pack.targets[*index])
     }
+}
+
+pub fn unsupported_recognition_targets(
+    pack: &RecognitionPack,
+) -> Vec<UnsupportedRecognitionTarget> {
+    pack.targets
+        .iter()
+        .filter_map(|target| match target {
+            RecognitionTarget::Template(target) => {
+                unsupported_template_reason(target).map(|reason| UnsupportedRecognitionTarget {
+                    id: target.id.clone(),
+                    reason,
+                })
+            }
+            RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => None,
+        })
+        .collect()
 }
 
 impl RecognitionTarget {
@@ -737,6 +758,8 @@ mod tests {
             evaluator.default_match_metric(),
             MatchMetric::CorrelationCoefficientNormalized
         );
+        assert_eq!(evaluator.unsupported_target_count(), 0);
+        assert!(evaluator.unsupported_targets().is_empty());
     }
 
     #[test]
@@ -763,6 +786,13 @@ mod tests {
             RecognitionEvaluator::new(fixture.dir.path.clone(), pack).expect("schema 0.5 accepted");
 
         assert_eq!(evaluator.unsupported_target_count(), 1);
+        assert_eq!(evaluator.unsupported_targets()[0].id, "template");
+        assert!(
+            evaluator.unsupported_targets()[0]
+                .reason
+                .contains("method=RgbCount")
+        );
+        assert!(evaluator.unsupported_targets()[0].reason.contains("mask"));
         let err = evaluator
             .evaluate_target(&fixture.blank_scene(), "template")
             .expect_err("unsupported target fails loud");

@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-04 fidelity stage-one repair S6 loading diagnostics
+
+### Current status
+
+- Continued `C:\合作工作区\ActingCommand\FIX-fidelity-stage1-673102e.md` after S5 was pushed as `827e29bb4464505526a8696fb6ebb9a1d10f2e91`.
+- Implemented S6/W3 M3 Phase A loading diagnostics.
+- Recognition pack loading now stores unsupported target markers for template targets that use unsupported `method` or `mask` semantics.
+- `RecognitionEvaluator::unsupported_target_count()` now returns the load-time marker count, and `unsupported_targets()` exposes marker id/reason details.
+- Lab package diagnostics now include `recognition_unsupported_target_count` and `recognition_unsupported_targets`.
+- Package validation now parses embedded `.pack.json` files for diagnostics and reports unsupported recognition target counts/details without evaluating templates.
+- Evaluation still fails loudly when an unsupported target is used. No true resource repository, real sample, or live device validation was used.
+
+### Files changed
+
+- `crates/recognition-pack/src/lib.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "unsupported|method|mask|unsupported_target_count|TargetSpec|TargetKind|load_pack|RecognitionPack|PackTarget|schema" crates/recognition-pack/src/lib.rs apps/actinglab/src -g *.rs`
+- `rg -n "fn validate_package_zip|package_validation_json|Validation|validate_package|unsupported_target_count|recognition_pack" apps/actinglab/src/main.rs apps/actinglab/src/package_build.rs apps/actinglab/src/lab_run.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-recognition-pack schema_0_5_pack_loads_method_mask_and_fails_loud_when_used schema_0_3_pack_is_supported -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_validate_reports_unsupported_recognition_target_count -- --nocapture`
+- `cargo test -p actingcommand-actinglab package_validate_reports_unsupported_recognition_targets -- --nocapture`
+- `cargo test -p actingcommand-recognition-pack schema_0_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- The first `cargo test -p actingcommand-recognition-pack ...` command with two test filters failed with Cargo usage error because Cargo accepts one test filter. The tests were rerun with the single `schema_0_` filter.
+- `cargo test -p actingcommand-recognition-pack schema_0_ -- --nocapture` passed: 2 tests.
+- `cargo test -p actingcommand-actinglab lab_validate_reports_unsupported_recognition_target_count -- --nocapture` passed: 1 test.
+- `cargo test -p actingcommand-actinglab package_validate_reports_unsupported_recognition_targets -- --nocapture` passed: 1 test.
+- `cargo fmt --all -- --check` passed.
+- `cargo build --release` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `git diff --check` passed.
+
+### Current blocker
+
+- No blocker for S6.
+- S7-S8 from `FIX-fidelity-stage1-673102e.md` remain open and must continue in fixed order using synthetic-only validation.
+
+### Next step
+
+1. Run the S6 public gates.
+2. Commit and push S6.
+3. Continue with S7/W4 expect_after and rectMove-to-offset.
+
 ## 2026-07-04 fidelity stage-one repair S5 matched-rect offset
 
 ### Current status
