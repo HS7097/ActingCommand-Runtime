@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain repair round 3
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round3-1da3aa0.md` against baseline `1da3aa0`.
+- Added a child-process vendor-stdio self-test path: `actinglab --json lab vendor-stdio-selftest` simulates vendor Win32 stdout/stderr writes inside the redirection session and verifies public stdout remains pure JSON.
+- Added pid-aware Lab-2 liveness: short-lived write holders record `holder_pid`, `reclaim-dead` checks process liveness before reclaiming, and long leases without pid fail honestly instead of reporting fake liveness.
+- Made `lab arbitrator acquire` the single long-lease issuer by projecting the same lease id into SessionLease state; `do --lease-id <id>` can now pass both arbitrator and SessionLease gates without tests manually aligning two independent leases.
+- Added dispatch/receipt ledger coverage for arbitrator state-load/admission failures and `lab arbitrator ...` command failures.
+- Required recognition packs to declare positive `coordinate_space`, with Runtime and device-test fixtures updated to avoid arbitrary-resolution acceptance.
+- Documented `--test-capture-delay-ms` in the Lab-2 command contract as a test-only scene-delay flag.
+- No UI, OCR, SQLite, live-device operation, resource repository changes, or upstream code copying were done in this round.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `apps/device-test/src/main.rs`
+- `crates/arbitrator/src/lib.rs`
+- `crates/device/src/lib.rs`
+- `crates/device/src/vendor_stdio.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round3-1da3aa0.md" -Raw`
+- `cargo check -p actingcommand-arbitrator -p actingcommand-device -p actingcommand-recognition-pack -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab --test lab2_cli_contract`
+- `cargo test -p actingcommand-arbitrator`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `git diff --check`
+
+### Test results
+
+- Focused Lab-2 child-process contract tests passed: 9/9.
+- Focused Lab-2 unit/integration filter passed: 24 unit tests plus 9 child-process contract tests.
+- Arbitrator unit tests passed: 17/17, including pid-aware reclaim and missing-pid honesty.
+- Recognition-pack tests passed: 31 unit tests plus 1 from-disk integration test.
+- Device-test tests passed: 55/55 after updating click-only/missing-template fixtures with `coordinate_space`.
+- Initial full workspace run exposed missing `coordinate_space` in two device-test fixtures; those fixtures were fixed and the focused device-test suite passed.
+- Final public five-command gate passed after documentation updates:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No code blocker is currently known.
+- True Nemu/live stdout validation remains an external environment check; this round adds an equivalent child-process/Win32-handle regression guard but does not claim live MuMu/Nemu validation.
+- RAII panic/drop cleanup for short leases remains deferred; pid-aware reclaim now provides crash-residue recovery when a holder process is no longer alive.
+- R8.6 remote-drive state warning remains a follow-up and is not marked exempt.
+
+### Next step
+
+1. Commit and push the round-3 repair with `PLANS.md` and `CHECKPOINT.md`.
+2. Create a checkpoint tag for the pushed repair commit.
+3. Hand off external live MuMu/Nemu stdout validation and the deferred R8.6 warning follow-up.
+
 ## 2026-07-05 Lab-2 chain repair round 2
 
 ### Current status

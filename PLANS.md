@@ -6,6 +6,29 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 chain repair round 3
+
+The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round3-1da3aa0.md`.
+
+Repair order:
+
+- T1: add a child-process stdout purification guard that exercises the vendor-stdio redirection path with Win32-handle diagnostic noise instead of relying only on dry-run static PNG output.
+- T2/T3: make `reclaim-dead` honest by storing `holder_pid` on short-lived lease holders and reclaiming only after real process-liveness checks; long leases without a pid require explicit `force-unlock`.
+- T4: route arbitrator state-load/admission failures and `lab arbitrator ...` command failures through Lab-2 dispatch/receipt ledger writes.
+- T5: require recognition packs to declare `coordinate_space` so missing or zero authored resolution fails loudly instead of accepting arbitrary scene sizes.
+- T7: make `lab arbitrator acquire` the single long-lease issuer and project the same lease id into SessionLease state so `do --lease-id <id>` works without manual dual-lease alignment.
+- T6: keep lower-priority cleanup honest by documenting the test-only capture delay flag and keeping existing projection/destructive/drift coverage visible without claiming true-device execution for fake-touch tests.
+
+Round-3 status:
+
+- Implemented locally and awaiting final commit/push.
+- `VendorStdioSession` now has an actinglab child-process self-test entrypoint that proves stdout starts with JSON while simulated vendor stdout/stderr noise is captured internally.
+- `RequestEnvelope` and `LeaseGrant` carry optional `holder_pid`; pid-aware reclaim is covered by arbitrator unit tests and CLI liveness honesty assertions.
+- `lab arbitrator acquire` now writes a SessionLease projection with the same lease id, and release/reclaim/force-unlock remove the matching projection.
+- Admission and arbitrator command failures now produce dispatch/receipt records that `lab receipt --req` can reconstruct.
+- Recognition pack validation now rejects missing or zero `coordinate_space`; affected Runtime/device-test fixtures have been updated to declare authored resolution.
+- No UI, OCR, SQLite, live-device operation, resource repository changes, or upstream code copying are part of this round.
+
 ## Current Lab-2 chain repair round 2
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round2-b2507b7.md`.

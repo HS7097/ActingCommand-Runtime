@@ -513,6 +513,17 @@ fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<Stri
             pack.schema_version
         ));
     }
+    match pack.coordinate_space {
+        Some(space) if space.width > 0 && space.height > 0 => {}
+        Some(space) => errors.push(format!(
+            "coordinate_space dimensions must be positive: {}x{}",
+            space.width, space.height
+        )),
+        None => errors.push(
+            "coordinate_space is required; packs must declare their authored resolution"
+                .to_string(),
+        ),
+    }
     validate_defaults(pack.defaults, errors);
 
     let mut seen = HashSet::new();
@@ -740,6 +751,7 @@ mod tests {
         let pack = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.1",
+                "coordinate_space": {"width": 20, "height": 20},
                 "targets": [
                     {"type": "click_only", "id": "tap", "click": {"x": 1, "y": 2, "width": 3, "height": 4}}
                 ]
@@ -761,6 +773,7 @@ mod tests {
         let pack = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.3",
+                "coordinate_space": {"width": 20, "height": 20},
                 "defaults": {"match_metric": "ccoeff_normed"},
                 "targets": [
                     {"type": "click_only", "id": "tap", "click": {"x": 1, "y": 2, "width": 3, "height": 4}}
@@ -785,6 +798,7 @@ mod tests {
         let pack = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.4",
+                "coordinate_space": {"width": 64, "height": 48},
                 "defaults": {"match_metric": "ccoeff_normed"},
                 "targets": [
                     {
@@ -842,6 +856,7 @@ mod tests {
         let pack = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.5",
+                "coordinate_space": {"width": 64, "height": 48},
                 "targets": [
                     {
                         "type": "template",
@@ -1234,6 +1249,20 @@ mod tests {
     }
 
     #[test]
+    fn missing_coordinate_space_is_fatal_in_new() {
+        let dir = TestDir::new();
+        let pack = RecognitionPack {
+            coordinate_space: None,
+            targets: vec![click_target("tap")],
+            ..base_pack()
+        };
+        let err = RecognitionEvaluator::new(dir.path.clone(), pack)
+            .expect_err("missing coordinate_space");
+
+        assert_fatal_contains(err, "coordinate_space is required");
+    }
+
+    #[test]
     fn get_click_target_handles_all_target_kinds() {
         let fixture = TemplateFixture::new();
         let pack = RecognitionPack {
@@ -1341,6 +1370,7 @@ mod tests {
         format!(
             r#"{{
                 "schema_version": "0.1",
+                "coordinate_space": {{"width": 20, "height": 20}},
                 "defaults": {{"template_threshold": 0.90, "color_max_distance": 20.0}},
                 "targets": [
                     {{
@@ -1360,7 +1390,10 @@ mod tests {
             game: None,
             server: None,
             locale: None,
-            coordinate_space: None,
+            coordinate_space: Some(PackCoordinateSpace {
+                width: 20,
+                height: 20,
+            }),
             defaults: RecognitionDefaults::default(),
             targets: Vec::new(),
         }
@@ -1455,6 +1488,10 @@ mod tests {
             target_threshold: Option<f32>,
         ) -> RecognitionEvaluator {
             let pack = RecognitionPack {
+                coordinate_space: Some(PackCoordinateSpace {
+                    width: 64,
+                    height: 48,
+                }),
                 defaults,
                 targets: vec![RecognitionTarget::Template(TemplateTarget {
                     id: "template".to_string(),
@@ -1474,6 +1511,10 @@ mod tests {
 
         fn template_with_color_evaluator(&self, expected: [u8; 3]) -> RecognitionEvaluator {
             let pack = RecognitionPack {
+                coordinate_space: Some(PackCoordinateSpace {
+                    width: 64,
+                    height: 48,
+                }),
                 targets: vec![RecognitionTarget::Template(TemplateTarget {
                     id: "template".to_string(),
                     template_path: "templates/button.png".to_string(),

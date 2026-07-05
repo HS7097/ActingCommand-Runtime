@@ -27,3 +27,4 @@ pub use maatouch::*;
 pub use minitouch::*;
 pub use replay::*;
 pub use touch::*;
+pub use vendor_stdio::vendor_stdio_session_diagnostic;

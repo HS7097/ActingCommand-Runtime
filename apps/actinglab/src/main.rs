@@ -5,6 +5,7 @@ use actingcommand_device::{
     Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
+    vendor_stdio_session_diagnostic,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
@@ -9225,8 +9226,21 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         "receipt" => lab2_cli::run_receipt(global, args),
         "evidence" => lab2_cli::run_evidence(global, args),
         "arbitrator" => lab2_cli::run_arbitrator(global, args),
+        "vendor-stdio-selftest" => run_lab_vendor_stdio_selftest(args),
         _ => Err(CliError::usage(format!("unknown lab command: {sub}"))),
     }
+}
+
+fn run_lab_vendor_stdio_selftest(args: &[String]) -> CliOutcome<Value> {
+    FlagArgs::parse(args)?.expect_positionals("lab vendor-stdio-selftest", 0)?;
+    let capture =
+        vendor_stdio_session_diagnostic().map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "status": "ok",
+        "stdout_captured": !capture.stdout.is_empty(),
+        "stderr_captured": !capture.stderr.is_empty(),
+        "captured": capture
+    }))
 }
 
 fn run_lab_lease(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -53752,6 +53766,7 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap()
             .to_string();
+        fs::remove_file(session_lease_path(&state_dir, "default")).unwrap();
 
         let result = run_cli(
             [
@@ -53769,8 +53784,6 @@ mod tests {
                 "--scene",
                 scene.to_str().unwrap(),
                 "--capture",
-                "--lease-holder",
-                "operator",
                 "--lease-id",
                 &lab_lease_id,
                 "--fields",
@@ -53849,14 +53862,11 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap()
             .to_string();
-        let session_lease = new_session_lease(
-            "default".to_string(),
-            "operator".to_string(),
-            Some(lab_lease_id.clone()),
-            false,
-            None,
-        );
-        write_json_file_atomic(&session_lease_path(&state_dir, "default"), &session_lease).unwrap();
+        let projected_session_lease =
+            read_json_file::<SessionLease>(&session_lease_path(&state_dir, "default"))
+                .unwrap()
+                .expect("lab arbitrator acquire should project a matching SessionLease");
+        assert_eq!(projected_session_lease.lease_id, lab_lease_id);
         let scene = temp.path().join("home.png");
         let touch_log = temp.path().join("fake-touch.json");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
@@ -53880,8 +53890,6 @@ mod tests {
                 "--scene",
                 scene.to_str().unwrap(),
                 "--capture",
-                "--lease-holder",
-                "operator",
                 "--lease-id",
                 &lab_lease_id,
                 "--fields",
@@ -54194,6 +54202,16 @@ mod tests {
             true,
         );
         assert_ne!(reclaim_alive.exit_code(), 0);
+        assert!(
+            reclaim_alive.envelope_json().contains("holder_pid"),
+            "{}",
+            reclaim_alive.envelope_json()
+        );
+        assert!(
+            !reclaim_alive
+                .envelope_json()
+                .contains("\"liveness_checked\":true")
+        );
 
         let reclaim = run_cli(
             [

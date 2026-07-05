@@ -234,6 +234,42 @@ fn lab2_child_process_stdout_starts_with_json_object() {
 }
 
 #[test]
+fn lab2_vendor_stdio_selftest_keeps_child_stdout_json_clean() {
+    let output = run_actinglab(&["--json", "lab", "vendor-stdio-selftest"], None);
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout.first(), Some(&b'{'));
+    assert!(output.stderr.is_empty());
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed.get("ok").and_then(Value::as_bool), Some(true));
+    let data = response_data(&parsed);
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            data.get("stdout_captured").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("stderr_captured").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            data.pointer("/captured/stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("nemu dll init stdout diagnostic")
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        assert_eq!(
+            data.get("stdout_captured").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+}
+
+#[test]
 fn lab2_arbitrator_defaults_to_persistent_local_app_data_path() {
     let local = TempDir::new().unwrap();
     let acquire = run_actinglab(
@@ -532,4 +568,76 @@ fn lab2_post_admit_failures_write_receipts_for_all_cli_verbs() {
         let req_id = error_req_id(&value);
         assert_receipt_has_dispatch_and_receipt(&run_root, req_id, local.path());
     }
+}
+
+#[test]
+fn lab2_admit_state_load_failure_writes_dispatch_and_receipt() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let run_root = temp.path().join("run");
+    let state_dir = temp.path().join("state");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(state_dir.join("lab2-arbitrator-state.json"), b"{not json").unwrap();
+    let scene = temp.path().join("home.png");
+    fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+    let output = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--resource-root",
+            temp.path().to_str().unwrap(),
+            "--game",
+            "ark",
+            "--instance",
+            "ak",
+            "do",
+            "home_button",
+            "--dry-run",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--state-dir",
+            state_dir.to_str().unwrap(),
+        ],
+        Some(local.path()),
+    );
+
+    assert!(!output.status.success());
+    let value = parse_stdout_json(&output);
+    let req_id = error_req_id(&value);
+    assert_receipt_has_dispatch_and_receipt(&run_root, req_id, local.path());
+}
+
+#[test]
+fn lab2_arbitrator_command_failure_writes_dispatch_and_receipt() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let run_root = temp.path().join("run");
+    let state_dir = temp.path().join("state");
+
+    let output = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "release",
+            "--state-dir",
+            state_dir.to_str().unwrap(),
+            "--instance",
+            "ak",
+            "--lease-id",
+            "missing-lease",
+        ],
+        Some(local.path()),
+    );
+
+    assert!(!output.status.success());
+    let value = parse_stdout_json(&output);
+    let req_id = error_req_id(&value);
+    assert_receipt_has_dispatch_and_receipt(&run_root, req_id, local.path());
 }

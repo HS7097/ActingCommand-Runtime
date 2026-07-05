@@ -15,6 +15,12 @@ impl VendorStdioCapture {
     }
 }
 
+pub fn vendor_stdio_session_diagnostic() -> DeviceResult<VendorStdioCapture> {
+    let mut session = VendorStdioSession::start()?;
+    write_vendor_stdio_diagnostic_noise()?;
+    session.snapshot()
+}
+
 #[cfg(windows)]
 pub(crate) struct VendorStdioSession {
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -43,6 +49,12 @@ impl VendorStdioSession {
 }
 
 #[cfg(windows)]
+fn write_vendor_stdio_diagnostic_noise() -> DeviceResult<()> {
+    imp::write_win32_handle(imp::STD_OUTPUT_HANDLE, b"nemu dll init stdout diagnostic\n")?;
+    imp::write_win32_handle(imp::STD_ERROR_HANDLE, b"nemu dll init stderr diagnostic\n")
+}
+
+#[cfg(windows)]
 impl Drop for VendorStdioSession {
     fn drop(&mut self) {
         if let Some(mut guard) = self.guard.take() {
@@ -63,6 +75,11 @@ impl VendorStdioSession {
     pub(crate) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
         Ok(VendorStdioCapture::default())
     }
+}
+
+#[cfg(not(windows))]
+fn write_vendor_stdio_diagnostic_noise() -> DeviceResult<()> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -384,8 +401,7 @@ mod imp {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn write_win32_handle_for_test(std_handle: u32, bytes: &[u8]) -> DeviceResult<()> {
+    pub(super) fn write_win32_handle(std_handle: u32, bytes: &[u8]) -> DeviceResult<()> {
         #[link(name = "kernel32")]
         unsafe extern "system" {
             fn WriteFile(
@@ -413,6 +429,11 @@ mod imp {
             ));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn write_win32_handle_for_test(std_handle: u32, bytes: &[u8]) -> DeviceResult<()> {
+        write_win32_handle(std_handle, bytes)
     }
 }
 

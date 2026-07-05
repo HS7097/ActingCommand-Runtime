@@ -66,6 +66,7 @@ const LAB2_ARBITRATOR_STATE_FILE: &str = "lab2-arbitrator-state.json";
 const LAB2_ARBITRATOR_STATE_VERSION: &str = "actingcommand.lab2.arbitrator_state.v0.1";
 const LAB2_LEDGER_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const LAB2_LEDGER_PROTECTED_DAYS: u64 = 7;
+const LAB2_PROJECTED_SESSION_HOLDER: &str = "lab_arbitrator";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Lab2ArbitratorState {
@@ -90,6 +91,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let ids = Lab2Ids::new();
     let instance = lab2_instance(global, &flags);
     let arbitration = admit_lab2_request(
+        global,
         &ids,
         instance.clone(),
         RequestVerb::Observe,
@@ -182,6 +184,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     )?;
 
     let arbitration = admit_lab2_request(
+        global,
         &ids,
         instance.clone(),
         RequestVerb::Do,
@@ -349,6 +352,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         json!({"verb": "ensure", "to": to.clone(), "dry_run": dry_run}),
     )?;
     let arbitration = admit_lab2_request(
+        global,
         &ids,
         instance.clone(),
         RequestVerb::Ensure,
@@ -507,6 +511,7 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let wf_id = ids.issue(IdKind::Wf);
     let instance = lab2_instance(global, &flags);
     let arbitration = admit_lab2_request(
+        global,
         &ids,
         instance.clone(),
         RequestVerb::Wait,
@@ -595,23 +600,66 @@ pub(crate) fn run_evidence(global: &GlobalOptions, args: &[String]) -> CliOutcom
 
 pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    let ids = Lab2Ids::new();
+    let instance = lab2_instance(global, &flags);
+    match run_arbitrator_inner(global, &flags, &ids, &instance) {
+        Ok(data) => Ok(data),
+        Err(error) => {
+            let command = flags
+                .positionals
+                .first()
+                .map(String::as_str)
+                .unwrap_or("status");
+            let details = cli_error_details_or_projection(
+                &error,
+                &ids.req_id,
+                "fatal",
+                "arbitrator_command_failed",
+                "inspect-lab2-arbitrator-state",
+            );
+            let dispatch = LedgerRecord::new(
+                LedgerRecordKind::Dispatch,
+                Some(ids.req_id.clone()),
+                json!({
+                    "stage": "arbitrator_command",
+                    "command": command,
+                    "instance": instance
+                }),
+            );
+            return_lab2_error_with_ledger(
+                global,
+                &flags,
+                &ids.req_id,
+                &instance,
+                details,
+                error,
+                vec![dispatch],
+            )
+        }
+    }
+}
+
+fn run_arbitrator_inner(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    ids: &Lab2Ids,
+    instance: &str,
+) -> CliOutcome<Value> {
     let command = flags
         .positionals
         .first()
         .map(String::as_str)
         .unwrap_or("status");
-    let instance = lab2_instance(global, &flags);
-    let (state_path, mut arbitrator) = load_lab2_arbitrator(&flags)?;
+    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
     let mut records = Vec::new();
     let data = match command {
         "status" => json!({
             "state": "status",
             "instance": instance,
             "state_file": state_path.display().to_string(),
-            "arbitration": arbitrator.snapshot(&instance)
+            "arbitration": arbitrator.snapshot(instance)
         }),
         "acquire" => {
-            let ids = Lab2Ids::new();
             let req_id = flags
                 .optional("--req")
                 .filter(|value| value != "true")
@@ -626,7 +674,7 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
             let mut request = RequestEnvelope::new(
                 req_id,
                 RequestSource::Cli,
-                instance.clone(),
+                instance.to_string(),
                 verb,
                 json!({"source": "lab_arbitrator_acquire"}),
                 current_unix_ms(),
@@ -645,11 +693,15 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
                 .admit(request, current_unix_ms())
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
-            json!({
+            let mut data = json!({
                 "state": outcome.decision.as_str(),
                 "instance": instance,
                 "arbitration": arbitration_json(&outcome.decision)
-            })
+            });
+            if let ArbitrationDecision::LeaseGranted { lease, .. } = &outcome.decision {
+                data["session_lease"] = project_lab2_lease_to_session(flags, instance, lease)?;
+            }
+            data
         }
         "release" => {
             let lease_id = flags
@@ -660,14 +712,19 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
                     CliError::usage("lab arbitrator release requires --lease-id <id>")
                 })?;
             let outcome = arbitrator
-                .release(&instance, &lease_id, current_unix_ms())
+                .release(instance, &lease_id, current_unix_ms())
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
-            json!({
+            let mut data = json!({
                 "state": outcome.decision.as_str(),
                 "instance": instance,
                 "arbitration": arbitration_json(&outcome.decision)
-            })
+            });
+            if let ArbitrationDecision::Released { released_lease, .. } = &outcome.decision {
+                data["session_lease"] =
+                    remove_projected_session_lease(flags, instance, &released_lease.lease_id)?;
+            }
+            data
         }
         "cancel" => {
             let req_id = flags
@@ -680,7 +737,7 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
                 .filter(|value| value != "true")
                 .unwrap_or_else(|| "operator_cancelled".to_string());
             let outcome = arbitrator
-                .cancel_queued(&instance, &req_id, reason)
+                .cancel_queued(instance, &req_id, reason)
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
             json!({
@@ -691,30 +748,50 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
         }
         "reclaim-dead" => {
             let outcome = arbitrator
-                .reclaim_dead_holder(&instance, current_unix_ms())
+                .reclaim_dead_holder_with_liveness(
+                    instance,
+                    current_unix_ms(),
+                    platform_process_is_alive,
+                )
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
-            json!({
+            let mut data = json!({
                 "state": outcome.decision.as_str(),
                 "instance": instance,
                 "liveness_checked": true,
                 "arbitration": arbitration_json(&outcome.decision)
-            })
+            });
+            if let ArbitrationDecision::Reclaimed {
+                reclaimed_lease, ..
+            } = &outcome.decision
+            {
+                data["session_lease"] =
+                    remove_projected_session_lease(flags, instance, &reclaimed_lease.lease_id)?;
+            }
+            data
         }
         "force-unlock" => {
-            arbitrator.mark_holder_dead(&instance);
+            arbitrator.mark_holder_dead(instance);
             let outcome = arbitrator
-                .reclaim_dead_holder(&instance, current_unix_ms())
+                .reclaim_dead_holder(instance, current_unix_ms())
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
-            json!({
+            let mut data = json!({
                 "state": outcome.decision.as_str(),
                 "instance": instance,
                 "force_unlock": true,
                 "liveness_checked": false,
                 "warning": "admin_force_unlock_bypassed_liveness_check",
                 "arbitration": arbitration_json(&outcome.decision)
-            })
+            });
+            if let ArbitrationDecision::Reclaimed {
+                reclaimed_lease, ..
+            } = &outcome.decision
+            {
+                data["session_lease"] =
+                    remove_projected_session_lease(flags, instance, &reclaimed_lease.lease_id)?;
+            }
+            data
         }
         "mark-destructive" => {
             let active = flags
@@ -723,12 +800,12 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
                 .map(|value| parse_bool_flag_value("--active", &value))
                 .transpose()?
                 .unwrap_or(true);
-            arbitrator.mark_holder_destructive_step(&instance, active);
+            arbitrator.mark_holder_destructive_step(instance, active);
             json!({
                 "state": "holder_destructive_step_marked",
                 "instance": instance,
                 "active": active,
-                "arbitration": arbitrator.snapshot(&instance)
+                "arbitration": arbitrator.snapshot(instance)
             })
         }
         other => {
@@ -746,7 +823,7 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
         .find_map(|record| record.req_id.clone())
         .unwrap_or_else(|| "lab2-arbitrator".to_string());
     let mut data = data;
-    data["ledger"] = write_lab2_ledger(global, &instance, &req_id, &data, &mut records)?;
+    data["ledger"] = write_lab2_ledger(global, instance, &req_id, &data, &mut records)?;
     Ok(data)
 }
 
@@ -788,6 +865,7 @@ pub(crate) fn command_schema(command: &str) -> Option<Value> {
 }
 
 fn admit_lab2_request(
+    global: &GlobalOptions,
     ids: &Lab2Ids,
     instance: String,
     verb: RequestVerb,
@@ -803,6 +881,9 @@ fn admit_lab2_request(
         current_unix_ms(),
     );
     request.allow_destructive = flags.bool("--allow-destructive");
+    if request.verb.requires_lease() && lab2_explicit_lease_id(flags).is_none() {
+        request.holder_pid = Some(std::process::id());
+    }
     request.priority = match flags.optional("--priority").as_deref() {
         Some("high") => RequestPriority::High,
         Some("normal") | None => RequestPriority::Normal,
@@ -838,7 +919,18 @@ fn admit_lab2_request(
                 "arbitrator_state_unavailable",
                 "inspect-or-remove-corrupt-lab2-arbitrator-state",
             )?;
-            return Err(err.with_details(details));
+            return match return_lab2_error_with_ledger(
+                global,
+                flags,
+                &ids.req_id,
+                &instance,
+                details,
+                err,
+                vec![request_record],
+            ) {
+                Err(error) => Err(error),
+                Ok(_) => unreachable!("error ledger helper always returns Err"),
+            };
         }
     };
     let now_ms = current_unix_ms();
@@ -847,13 +939,57 @@ fn admit_lab2_request(
         .queued
         .filter(|queued| now_ms > queued.deadline_ms);
     let mut outcome = if let Some(lease_id) = lab2_explicit_lease_id(flags) {
-        arbitrator
-            .admit_with_existing_lease(request, &lease_id, now_ms)
-            .map_err(|err| CliError::device(err.to_string()))?
+        match arbitrator.admit_with_existing_lease(request, &lease_id, now_ms) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let error = CliError::device(err.to_string());
+                let details = cli_error_details_or_projection(
+                    &error,
+                    &ids.req_id,
+                    "fatal",
+                    "arbitrator_admit_failed",
+                    "inspect-lab2-arbitrator-state",
+                );
+                return match return_lab2_error_with_ledger(
+                    global,
+                    flags,
+                    &ids.req_id,
+                    &instance,
+                    details,
+                    error,
+                    vec![request_record],
+                ) {
+                    Err(error) => Err(error),
+                    Ok(_) => unreachable!("error ledger helper always returns Err"),
+                };
+            }
+        }
     } else {
-        arbitrator
-            .admit(request, now_ms)
-            .map_err(|err| CliError::device(err.to_string()))?
+        match arbitrator.admit(request, now_ms) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let error = CliError::device(err.to_string());
+                let details = cli_error_details_or_projection(
+                    &error,
+                    &ids.req_id,
+                    "fatal",
+                    "arbitrator_admit_failed",
+                    "inspect-lab2-arbitrator-state",
+                );
+                return match return_lab2_error_with_ledger(
+                    global,
+                    flags,
+                    &ids.req_id,
+                    &instance,
+                    details,
+                    error,
+                    vec![request_record],
+                ) {
+                    Err(error) => Err(error),
+                    Ok(_) => unreachable!("error ledger helper always returns Err"),
+                };
+            }
+        }
     };
     save_lab2_arbitrator(&state_path, &arbitrator)?;
     outcome.ledger_records.insert(0, request_record);
@@ -906,6 +1042,94 @@ fn save_lab2_arbitrator(path: &Path, arbitrator: &DegradedArbitrator) -> CliOutc
         instances: arbitrator.instances().clone(),
     };
     write_json_file_atomic(path, &state)
+}
+
+fn project_lab2_lease_to_session(
+    flags: &FlagArgs,
+    instance: &str,
+    lease: &LeaseGrant,
+) -> CliOutcome<Value> {
+    let state_dir = session_state_dir_from_flags(flags)?;
+    fs::create_dir_all(&state_dir).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to create SessionLease projection dir {}: {err}",
+            state_dir.display()
+        ))
+    })?;
+    let lease_path = session_lease_path(&state_dir, instance);
+    if let Some(current) = read_json_file::<SessionLease>(&lease_path)? {
+        if current.lease_id != lease.lease_id {
+            return Err(CliError::safety_blocked(
+                "session_lease_conflict",
+                format!(
+                    "cannot project Lab-2 lease {} because SessionLease for {instance} already has id {}",
+                    lease.lease_id, current.lease_id
+                ),
+                &["session_lease", "lab2_arbitrator"],
+            ));
+        }
+        return Ok(json!({
+            "status": "already_projected",
+            "holder": current.holder,
+            "lease_id": current.lease_id,
+            "path": lease_path.display().to_string()
+        }));
+    }
+    let holder = flags
+        .optional("--lease-holder")
+        .or_else(|| flags.optional("--holder"))
+        .filter(|value| value != "true")
+        .unwrap_or_else(|| LAB2_PROJECTED_SESSION_HOLDER.to_string());
+    let session_lease = new_session_lease(
+        instance.to_string(),
+        holder,
+        Some(lease.lease_id.clone()),
+        false,
+        None,
+    );
+    write_json_file_atomic(&lease_path, &session_lease)?;
+    Ok(json!({
+        "status": "projected",
+        "holder": session_lease.holder,
+        "lease_id": session_lease.lease_id,
+        "path": lease_path.display().to_string()
+    }))
+}
+
+fn remove_projected_session_lease(
+    flags: &FlagArgs,
+    instance: &str,
+    lease_id: &str,
+) -> CliOutcome<Value> {
+    let state_dir = session_state_dir_from_flags(flags)?;
+    let lease_path = session_lease_path(&state_dir, instance);
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Ok(json!({
+            "status": "not_found",
+            "lease_id": lease_id,
+            "path": lease_path.display().to_string()
+        }));
+    };
+    if current.lease_id != lease_id {
+        return Ok(json!({
+            "status": "left_unchanged",
+            "reason": "session_lease_id_mismatch",
+            "requested_lease_id": lease_id,
+            "current_lease_id": current.lease_id,
+            "path": lease_path.display().to_string()
+        }));
+    }
+    fs::remove_file(&lease_path).map_err(|err| {
+        CliError::runtime_not_running(format!(
+            "failed to remove projected SessionLease {}: {err}",
+            lease_path.display()
+        ))
+    })?;
+    Ok(json!({
+        "status": "removed",
+        "lease_id": lease_id,
+        "path": lease_path.display().to_string()
+    }))
 }
 
 fn explicit_lab2_state_dir(flags: &FlagArgs) -> CliOutcome<PathBuf> {
@@ -1069,7 +1293,60 @@ fn lab2_session_lease_gate(global: &GlobalOptions, flags: &FlagArgs) -> CliOutco
     if let Some(instance) = flags.optional("--instance").filter(|value| value != "true") {
         scoped_global.instance = Some(instance);
     }
+    if flags
+        .optional("--lease-holder")
+        .or_else(|| flags.optional("--holder"))
+        .filter(|value| value != "true")
+        .is_none()
+        && let Some(lease_id) = lab2_explicit_lease_id(flags)
+    {
+        return lab2_session_lease_gate_by_id(&state_dir, &scoped_global, &lease_id);
+    }
     session_command_check_lease_gate(&state_dir, &scoped_global, flags, true)
+}
+
+fn lab2_session_lease_gate_by_id(
+    state_dir: &Path,
+    global: &GlobalOptions,
+    lease_id: &str,
+) -> CliOutcome<Value> {
+    let instance = global
+        .instance
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    let lease_path = session_lease_path(state_dir, &instance);
+    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
+        return Ok(json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "lab_lease_missing",
+            "message": format!("control command requires an active projected SessionLease for {instance}"),
+            "instance": instance,
+            "lease_path": lease_path.display().to_string()
+        }));
+    };
+    if current.lease_id != lease_id {
+        return Ok(json!({
+            "ok": false,
+            "required": true,
+            "status": "blocked",
+            "code": "lease_id_mismatch",
+            "message": format!("projected SessionLease for {instance} has id {}, not {lease_id}", current.lease_id),
+            "current_lease": current,
+            "instance": instance,
+            "lease_path": lease_path.display().to_string()
+        }));
+    }
+    Ok(json!({
+        "ok": true,
+        "required": true,
+        "status": "ready",
+        "id_only_match": true,
+        "current_lease": current,
+        "instance": instance,
+        "lease_path": lease_path.display().to_string()
+    }))
 }
 
 fn finish_lab2_response(
@@ -1568,6 +1845,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--fields <field,field>",
                 "--verbose",
                 "--pretty",
+                "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
                 "req_id",
@@ -1594,6 +1872,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--no-wait",
                 "--recovery-timeout-ms <ms>",
                 "--recovery-poll-ms <ms>",
+                "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
                 "req_id",
@@ -1622,6 +1901,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--no-wait",
                 "--recovery-timeout-ms <ms>",
                 "--recovery-poll-ms <ms>",
+                "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &["req_id", "state", "page", "to", "route", "steps", "ledger"],
             requires_lease: true,
@@ -1637,6 +1917,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--timeout-ms <ms>",
                 "--poll-ms <ms>",
                 "--fields <field,field>",
+                "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
                 "req_id",

@@ -3212,6 +3212,7 @@ mod tests {
     fn click_only_pack_json() -> &'static str {
         r#"{
             "schema_version": "0.1",
+            "coordinate_space": { "width": 64, "height": 48 },
             "targets": [
               {
                 "type": "click_only",
@@ -3225,6 +3226,7 @@ mod tests {
     fn missing_template_pack_json() -> &'static str {
         r#"{
             "schema_version": "0.1",
+            "coordinate_space": { "width": 64, "height": 48 },
             "targets": [
               {
                 "type": "template",

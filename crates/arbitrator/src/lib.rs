@@ -94,6 +94,8 @@ pub struct RequestEnvelope {
     pub created_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_deadline_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_pid: Option<u32>,
 }
 
 impl RequestEnvelope {
@@ -116,6 +118,7 @@ impl RequestEnvelope {
             allow_destructive: false,
             created_at_ms,
             queue_deadline_ms: None,
+            holder_pid: None,
         }
     }
 
@@ -162,6 +165,8 @@ pub struct LeaseGrant {
     pub preempt_requested: bool,
     pub destructive_step_active: bool,
     pub alive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_pid: Option<u32>,
 }
 
 impl LeaseGrant {
@@ -178,6 +183,7 @@ impl LeaseGrant {
             preempt_requested: false,
             destructive_step_active: false,
             alive: true,
+            holder_pid: request.holder_pid,
         }
     }
 }
@@ -552,12 +558,28 @@ impl DegradedArbitrator {
         instance: &str,
         now_ms: u64,
     ) -> ArbitrationResult<ArbitrationOutcome> {
+        self.reclaim_dead_holder_with_liveness(instance, now_ms, |_| true)
+    }
+
+    pub fn reclaim_dead_holder_with_liveness(
+        &mut self,
+        instance: &str,
+        now_ms: u64,
+        is_process_alive: impl FnMut(u32) -> bool,
+    ) -> ArbitrationResult<ArbitrationOutcome> {
         let state = self.instances.entry(instance.to_string()).or_default();
         let holder = state
             .holder
             .take()
             .ok_or_else(|| ArbitrationError::NotFound(format!("no lease for {instance}")))?;
-        if holder.alive {
+        let process_alive = holder.holder_pid.map(is_process_alive).unwrap_or(false);
+        if holder.alive && holder.holder_pid.is_none() {
+            state.holder = Some(holder.clone());
+            return Err(ArbitrationError::InvalidRequest(format!(
+                "lease for {instance} has no holder_pid; liveness cannot be proven by reclaim-dead"
+            )));
+        }
+        if holder.alive && process_alive {
             state.holder = Some(holder.clone());
             return Err(ArbitrationError::InvalidRequest(format!(
                 "lease for {instance} is still alive"
@@ -1037,6 +1059,60 @@ mod tests {
             }
             other => panic!("expected reclaim, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn reclaim_dead_holder_checks_pid_liveness_before_reclaiming() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let mut holder = request("holder", RequestSource::Cli, "ak", RequestVerb::Do);
+        holder.holder_pid = Some(12_345);
+        arbitrator.admit(holder, 100).expect("holder");
+
+        let still_alive = arbitrator
+            .reclaim_dead_holder_with_liveness("ak", 200, |pid| pid == 12_345)
+            .expect_err("live pid should block reclaim");
+        assert!(still_alive.to_string().contains("still alive"));
+        assert_eq!(
+            arbitrator
+                .snapshot("ak")
+                .holder
+                .and_then(|lease| lease.holder_pid),
+            Some(12_345)
+        );
+
+        let reclaimed = arbitrator
+            .reclaim_dead_holder_with_liveness("ak", 300, |_| false)
+            .expect("dead pid should reclaim");
+        assert!(matches!(
+            reclaimed.decision,
+            ArbitrationDecision::Reclaimed { .. }
+        ));
+        assert!(arbitrator.snapshot("ak").holder.is_none());
+    }
+
+    #[test]
+    fn reclaim_dead_holder_rejects_alive_lease_without_pid() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        arbitrator
+            .admit(
+                request("holder", RequestSource::Cli, "ak", RequestVerb::Do),
+                100,
+            )
+            .expect("holder");
+
+        let err = arbitrator
+            .reclaim_dead_holder_with_liveness("ak", 200, |_| false)
+            .expect_err("missing pid should be honest");
+
+        assert!(err.to_string().contains("holder_pid"));
+        assert_eq!(
+            arbitrator
+                .snapshot("ak")
+                .holder
+                .as_ref()
+                .map(|lease| lease.req_id.as_str()),
+            Some("holder")
+        );
     }
 
     #[test]
