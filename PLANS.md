@@ -21,7 +21,7 @@ Repair order:
 
 Round-3 status:
 
-- Implemented locally and awaiting final commit/push.
+- Implemented and committed in Runtime source commit `53ff3b0`; this checkpoint metadata update will be pushed with the same round-3 closeout.
 - `VendorStdioSession` now has an actinglab child-process self-test entrypoint that proves stdout starts with JSON while simulated vendor stdout/stderr noise is captured internally.
 - `RequestEnvelope` and `LeaseGrant` carry optional `holder_pid`; pid-aware reclaim is covered by arbitrator unit tests and CLI liveness honesty assertions.
 - `lab arbitrator acquire` now writes a SessionLease projection with the same lease id, and release/reclaim/force-unlock remove the matching projection.

@@ -5,6 +5,7 @@
 ### Current status
 
 - Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round3-1da3aa0.md` against baseline `1da3aa0`.
+- Runtime source repair commit: `53ff3b0`.
 - Added a child-process vendor-stdio self-test path: `actinglab --json lab vendor-stdio-selftest` simulates vendor Win32 stdout/stderr writes inside the redirection session and verifies public stdout remains pure JSON.
 - Added pid-aware Lab-2 liveness: short-lived write holders record `holder_pid`, `reclaim-dead` checks process liveness before reclaiming, and long leases without pid fail honestly instead of reporting fake liveness.
 - Made `lab arbitrator acquire` the single long-lease issuer by projecting the same lease id into SessionLease state; `do --lease-id <id>` can now pass both arbitrator and SessionLease gates without tests manually aligning two independent leases.
@@ -40,6 +41,7 @@
 - `cargo fmt --all -- --check`
 - `cargo build --release`
 - `git diff --check`
+- `git commit -m "fix lab2 round3 lease and stdout fidelity"`
 
 ### Test results
 
@@ -65,8 +67,8 @@
 
 ### Next step
 
-1. Commit and push the round-3 repair with `PLANS.md` and `CHECKPOINT.md`.
-2. Create a checkpoint tag for the pushed repair commit.
+1. Commit and push this checkpoint metadata closeout.
+2. Create a checkpoint tag for the pushed round-3 closeout.
 3. Hand off external live MuMu/Nemu stdout validation and the deferred R8.6 warning follow-up.
 
 ## 2026-07-05 Lab-2 chain repair round 2
