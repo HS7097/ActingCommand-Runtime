@@ -5,6 +5,7 @@
 ### Current status
 
 - Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round4-ea3744e.md` against baseline `ea3744e`.
+- Runtime source repair commit: `2551356`.
 - Sealed Lab-2 tests from real `%LOCALAPPDATA%` and `%APPDATA`; child-process helpers now require explicit local app data and set both environment variables.
 - Routed invalid `--priority` and `--queue-deadline-ms` admission validation errors through Lab-2 dispatch/receipt ledger writing.
 - Added PATH-ADB baseline resolution with an explicit non-MuMu warning when MuMu/user-config ADB discovery does not resolve an ADB path.
@@ -65,7 +66,7 @@
 
 ### Next step
 
-1. Commit and push the round-4 closeout.
+1. Push the round-4 closeout.
 2. Create a checkpoint tag for the pushed round-4 closeout.
 3. Use the next task to address any remaining external/live validation items separately.
 
