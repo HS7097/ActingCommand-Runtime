@@ -6,6 +6,35 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 chain repair round 5 closeout
+
+The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round5-2a03180.md`.
+
+Repair order:
+
+- D1: make implicit Lab-2 lease release use real platform process liveness; stop using production fake-liveness release wrappers; drop expired queued requests with ledger records.
+- D2: make explicit `lab arbitrator acquire` create bearer/long leases without `holder_pid`, reject `reclaim-dead` for those leases, keep `force-unlock` as the administrative escape, and prevent concurrent `do --lease-id` double driving.
+- D3/D4: make PATH-ADB baseline warnings visible in doctor/devices/device connection payloads, remove stale "does not fall back to PATH" wording, ignore empty/relative PATH entries, require `adb.exe` on Windows PATH, and isolate ProgramFiles discovery in tests.
+- D5: add a true child-process contract test for dead queued requester drop on release.
+- D6: keep Lab-2 ledger failures from masking original usage errors, remove session/config env leakage in contract helpers, fix the destructive-gate error axis, and record boundaries for remaining lease/session closeout follow-ups.
+
+Round-5 status:
+
+- Implemented locally and verified against Runtime baseline `2a03180`.
+- Implicit short-lease release now uses `platform_process_is_alive`; production `release`/`reclaim_dead_holder` fake-liveness wrappers are test-only.
+- Explicit arbitrator acquire now grants a bearer long lease without `holder_pid`; `reclaim-dead` fails loudly when liveness cannot be proven, while `force-unlock` remains the explicit bypass.
+- Explicit `do --lease-id` calls now set an active driver request on the long lease and reject concurrent drivers with `lease_in_use` until the first driver finishes.
+- Expired queued requests and dead queued requester drops now write dispatch ledger records from the arbitrator boundary.
+- PATH-ADB baseline warning metadata is surfaced through doctor, devices, capture, touch, stream, session instance, and session app paths; MuMu/Nemu IPC targets reject PATH baseline unless `ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU=1` is set.
+- Lab-2 contract helpers remove `ACTINGLAB_SESSION_STATE_DIR` and `ACTINGLAB_CONFIG_PATH`; ledger-write failure now preserves the original usage error in the response.
+- No UI, OCR, SQLite, live-device operation, resource repository changes, or upstream code copying were done in this round.
+
+Round-5 follow-ups:
+
+- The alive-promotion SessionLease projection remains bounded to existing explicit projection calls; no new projection ownership model was added.
+- Adjacent `session_closeout.rs` environment isolation should be reviewed in a future task if those tests start sharing process-level env state.
+- Real-device validation remains outside this synthetic/offline repair round.
+
 ## Current Lab-2 chain repair round 4 closeout
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round4-ea3744e.md`.

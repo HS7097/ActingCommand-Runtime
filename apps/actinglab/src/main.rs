@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceTarget,
-    Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
+    Adb, AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
+    DeviceTarget, Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat,
+    TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
     vendor_stdio_session_diagnostic,
 };
@@ -47,6 +47,7 @@ const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
 const REQUIRE_SESSION_DAEMON_ENV: &str = "ACTINGLAB_REQUIRE_SESSION_DAEMON";
 const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
 const TRUSTED_REMOTE_CLIENT_CERT_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT";
+const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU";
 const SESSION_INFO_FILE: &str = "session.json";
 const SESSION_HEARTBEAT_FILE: &str = "heartbeat.json";
 const SESSION_STOP_FILE: &str = "stop.request";
@@ -1456,7 +1457,8 @@ fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
             "name": "adb",
             "ok": true,
             "path": resolved.path,
-            "source": resolved.source.as_str()
+            "source": resolved.source.as_str(),
+            "warning": resolved.warning
         }),
         Err(err) => json!({
             "name": "adb",
@@ -4540,6 +4542,7 @@ fn run_devices(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "adb_stderr": output.stderr,
         "adb_path": resolved.path,
         "adb_source": resolved.source.as_str(),
+        "adb_warning": resolved.warning,
         "touch_backends": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"]
     }))
 }
@@ -4630,6 +4633,8 @@ fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         "mode": "touch_probe",
         "requested_backend": requested.as_str(),
         "selected_backend": report.selected.map(actingcommand_device::TouchBackendName::as_str),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "action_executed": false,
         "touch_backend_attempts": touch_attempts_json(&report),
         "touch_backend_warnings": report.warnings
@@ -4691,6 +4696,8 @@ fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "width": frame.width,
         "height": frame.height,
         "capture_backend_used": frame.backend_name.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "capture_backend_attempts": captured.attempts,
         "freshness": captured.freshness,
         "out": out.display().to_string()
@@ -4715,6 +4722,8 @@ fn run_capture_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<
         "status": report.status.as_str(),
         "mode": "capture_diagnose",
         "requested_backend": requested.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "click_allowed": false,
         "action_executed": false,
         "freshness": report.freshness,
@@ -5575,6 +5584,8 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
         "status": "sent",
         "backend": backend.backend_name().as_str(),
         "touch_backend_requested": device_config.touch_backend.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
         "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "direct_trusted_manual",
@@ -5608,6 +5619,8 @@ fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> C
         "status": "sent",
         "backend": backend.backend_name().as_str(),
         "touch_backend_requested": device_config.touch_backend.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
         "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "direct_trusted_manual",
@@ -5823,6 +5836,8 @@ fn run_stream_input_relay(
         "status": "sent",
         "backend": backend.backend_name().as_str(),
         "touch_backend_requested": device_config.touch_backend.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
         "touch_backend_warnings": backend.diagnostics().warnings.clone(),
         "control_mode": "stream_input_relay",
@@ -7448,6 +7463,8 @@ fn test_fake_semantic_input(
     Ok(Some(json!({
         "backend": "test_fake_touch",
         "touch_backend_requested": device_config.touch_backend.as_str(),
+        "adb_source": device_config.adb_source.as_str(),
+        "adb_warning": device_config.adb_warning,
         "touch_backend_attempts": [],
         "touch_backend_warnings": [],
         "control_mode": "semantic",
@@ -7941,6 +7958,8 @@ fn stream_capture_frames(
             "captured_at_unix_ms": current_unix_ms(),
             "frame": capture_frame_summary_json(&captured.frame),
             "freshness": captured.freshness,
+            "adb_source": device_config.adb_source.as_str(),
+            "adb_warning": device_config.adb_warning.clone(),
             "capture_backend_attempts": captured.attempts
         }));
         if index + 1 < max_frames && !interval.is_zero() {
@@ -18528,6 +18547,8 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
                 "status": instance_health_status(capture_status),
                 "state": state,
                 "screen_size": screen_size,
+                "adb_source": device_config.adb_source.as_str(),
+                "adb_warning": device_config.adb_warning,
                 "action": action,
                 "keep_alive": action == "keep-alive",
                 "capture": capture
@@ -18553,7 +18574,7 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     let package = resolve_app_package(global, &config, &flags, &instance_id)?;
     let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
     let serial = device_config.target.resolved_serial();
-    let adb = Adb::new(device_config.adb);
+    let adb = Adb::new(device_config.adb.clone());
     adb.ensure_device(&serial, device_config.target.connect)
         .map_err(|err| CliError::device(err.to_string()))?;
     match action {
@@ -18566,6 +18587,8 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                 "instance": instance_id,
                 "serial": serial,
                 "package": package,
+                "adb_source": device_config.adb_source.as_str(),
+                "adb_warning": device_config.adb_warning,
                 "stdout": output.stdout,
                 "stderr": output.stderr
             }))
@@ -18579,6 +18602,8 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                 "instance": instance_id,
                 "serial": serial,
                 "package": package,
+                "adb_source": device_config.adb_source.as_str(),
+                "adb_warning": device_config.adb_warning,
                 "stdout": output.stdout,
                 "stderr": output.stderr
             }))
@@ -18596,6 +18621,8 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                 "instance": instance_id,
                 "serial": serial,
                 "package": package,
+                "adb_source": device_config.adb_source.as_str(),
+                "adb_warning": device_config.adb_warning,
                 "stop_stdout": stop.stdout,
                 "stop_stderr": stop.stderr,
                 "launch_stdout": launch.stdout,
@@ -22745,15 +22772,19 @@ fn device_config_for_instance(
     } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
         target.serial = Some(instance_id.clone());
     }
-    let adb = AdbConfig {
-        adb_path: effective_adb_path_for_instance(config, instance)?.path,
-        ..Default::default()
-    };
     let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
     let touch_backend = effective_touch_backend_choice(global, &instance_id, instance)?;
+    let resolved_adb = effective_adb_path_for_instance(config, instance)?;
+    enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
+    let adb = AdbConfig {
+        adb_path: resolved_adb.path.clone(),
+        ..Default::default()
+    };
     Ok(DeviceRuntimeConfig {
         adb,
         target,
+        adb_source: resolved_adb.source,
+        adb_warning: resolved_adb.warning,
         capture_backend,
         touch_backend,
     })
@@ -22763,6 +22794,8 @@ fn device_config_for_instance(
 struct DeviceRuntimeConfig {
     adb: AdbConfig,
     target: DeviceTarget,
+    adb_source: AdbPathSource,
+    adb_warning: Option<String>,
     capture_backend: CaptureBackendChoice,
     touch_backend: TouchBackendChoice,
 }
@@ -24124,6 +24157,43 @@ fn effective_adb_path_for_instance(
         .and_then(|instance| instance.adb_path.as_deref())
         .or(config.adb_path.as_deref());
     resolve_adb_path(configured).map_err(|err| CliError::device(err.to_string()))
+}
+
+fn enforce_path_adb_target_boundary(
+    resolved: &actingcommand_device::ResolvedAdbPath,
+    instance: Option<&InstanceConfig>,
+    capture_backend: CaptureBackendChoice,
+) -> CliOutcome<()> {
+    if resolved.source != AdbPathSource::PathBaseline
+        || !is_mumu_capture_target(instance, capture_backend)
+    {
+        return Ok(());
+    }
+    if env_flag(ALLOW_PATH_ADB_FOR_MUMU_ENV) {
+        return Ok(());
+    }
+    Err(CliError::device(format!(
+        "PATH adb baseline is not allowed for MuMu/Nemu IPC targets without {ALLOW_PATH_ADB_FOR_MUMU_ENV}=1; configure ACTINGCOMMAND_NEMU_FOLDER, ACTINGCOMMAND_ADB_PATH, or instance adb_path"
+    )))
+}
+
+fn is_mumu_capture_target(
+    instance: Option<&InstanceConfig>,
+    capture_backend: CaptureBackendChoice,
+) -> bool {
+    capture_backend == CaptureBackendChoice::NemuIpc
+        || instance
+            .and_then(|instance| instance.capture_backend.as_deref())
+            .is_some_and(|backend| backend.eq_ignore_ascii_case("nemu_ipc"))
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn resolved_adb_json(config: &UserConfig) -> Value {
@@ -25651,6 +25721,25 @@ mod tests {
         )
     }
 
+    fn configure_path_baseline_adb_env(temp: &TempDir) -> PathBuf {
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb_path = temp.path().join(adb_name);
+        let program_files = temp.path().join("program-files");
+        let program_files_x86 = temp.path().join("program-files-x86");
+        fs::write(&adb_path, b"test adb placeholder").unwrap();
+        fs::create_dir_all(&program_files).unwrap();
+        fs::create_dir_all(&program_files_x86).unwrap();
+        unsafe {
+            env::set_var("PATH", temp.path());
+            env::remove_var(actingcommand_device::ACTINGCOMMAND_ADB_PATH_ENV);
+            env::remove_var(actingcommand_device::ACTINGCOMMAND_NEMU_FOLDER_ENV);
+            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
+            env::set_var("ProgramFiles", program_files);
+            env::set_var("ProgramFiles(x86)", program_files_x86);
+        }
+        adb_path
+    }
+
     #[test]
     fn tests_mutate_config_env_only_through_fixture_helpers() {
         let source = include_str!("main.rs");
@@ -26281,6 +26370,100 @@ mod tests {
                 .and_then(Value::as_str),
             Some("trusted_remote_auth_required")
         );
+    }
+
+    #[test]
+    fn doctor_reports_path_adb_baseline_warning() {
+        let _guard = env_lock();
+        let temp = set_isolated_app_env();
+        set_missing_config_env();
+        configure_path_baseline_adb_env(&temp);
+
+        let result = run_cli(["--json", "doctor"], true);
+
+        assert_eq!(result.exit_code(), 0);
+        let checks = result
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("checks")
+            .and_then(Value::as_array)
+            .unwrap();
+        let adb = checks
+            .iter()
+            .find(|check| check.get("name").and_then(Value::as_str) == Some("adb"))
+            .expect("adb check");
+        assert_eq!(
+            adb.get("source").and_then(Value::as_str),
+            Some("path_adb_baseline")
+        );
+        assert!(
+            adb.get("warning")
+                .and_then(Value::as_str)
+                .is_some_and(|warning| warning.contains("non-MuMu baseline"))
+        );
+    }
+
+    #[test]
+    fn device_config_rejects_path_adb_for_nemu_ipc_without_opt_in() {
+        let _guard = env_lock();
+        let temp = set_isolated_app_env();
+        configure_path_baseline_adb_env(&temp);
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                capture_backend: Some("nemu_ipc".to_string()),
+                ..Default::default()
+            },
+        );
+        let global = GlobalOptions {
+            instance: Some("ak".to_string()),
+            ..Default::default()
+        };
+
+        let error = device_config_for_instance(&global, &config, Some("ak"))
+            .expect_err("MuMu/Nemu IPC must not use PATH baseline by default");
+
+        assert_eq!(error.code, "device_error");
+        assert!(error.message.contains(ALLOW_PATH_ADB_FOR_MUMU_ENV));
+    }
+
+    #[test]
+    fn device_config_allows_path_adb_for_nemu_ipc_with_explicit_opt_in() {
+        let _guard = env_lock();
+        let temp = set_isolated_app_env();
+        configure_path_baseline_adb_env(&temp);
+        unsafe {
+            env::set_var(ALLOW_PATH_ADB_FOR_MUMU_ENV, "1");
+        }
+        let mut config = UserConfig::default();
+        config.instances.insert(
+            "ak".to_string(),
+            InstanceConfig {
+                capture_backend: Some("nemu_ipc".to_string()),
+                ..Default::default()
+            },
+        );
+        let global = GlobalOptions {
+            instance: Some("ak".to_string()),
+            ..Default::default()
+        };
+
+        let device = device_config_for_instance(&global, &config, Some("ak"))
+            .expect("explicit opt-in allows PATH baseline");
+
+        assert_eq!(device.adb_source, AdbPathSource::PathBaseline);
+        assert!(
+            device
+                .adb_warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("non-MuMu baseline"))
+        );
+        unsafe {
+            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
+        }
     }
 
     #[test]
@@ -54407,7 +54590,7 @@ mod tests {
         );
         assert_ne!(reclaim_alive.exit_code(), 0);
         assert!(
-            reclaim_alive.envelope_json().contains("still alive"),
+            reclaim_alive.envelope_json().contains("holder_pid"),
             "{}",
             reclaim_alive.envelope_json()
         );

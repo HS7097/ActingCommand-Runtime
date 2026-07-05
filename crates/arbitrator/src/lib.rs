@@ -167,6 +167,10 @@ pub struct LeaseGrant {
     pub alive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_drive_req_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_drive_pid: Option<u32>,
 }
 
 impl LeaseGrant {
@@ -184,6 +188,8 @@ impl LeaseGrant {
             destructive_step_active: false,
             alive: true,
             holder_pid: request.holder_pid,
+            active_drive_req_id: None,
+            active_drive_pid: None,
         }
     }
 }
@@ -320,6 +326,28 @@ pub struct DegradedArbitrator {
     instances: BTreeMap<String, InstanceArbitration>,
 }
 
+fn queue_dropped_record(queued: QueuedRequest, reason: &'static str) -> LedgerRecord {
+    let stage = match reason {
+        "queue_deadline_expired" => "queue_deadline_expired",
+        _ => "queue_dropped_dead_requester",
+    };
+    LedgerRecord::new(
+        LedgerRecordKind::Dispatch,
+        Some(queued.request.req_id.clone()),
+        json!({
+            "schema_version": ARBITRATOR_SCHEMA_VERSION,
+            "stage": stage,
+            "state": stage,
+            "reason": reason,
+            "req_id": queued.request.req_id,
+            "instance": queued.request.instance,
+            "holder_pid": queued.request.holder_pid,
+            "queued_at_ms": queued.queued_at_ms,
+            "deadline_ms": queued.deadline_ms,
+        }),
+    )
+}
+
 impl DegradedArbitrator {
     pub fn new(issuer: IdIssuer) -> Self {
         Self {
@@ -345,44 +373,68 @@ impl DegradedArbitrator {
 
     pub fn admit(
         &mut self,
-        request: RequestEnvelope,
+        mut request: RequestEnvelope,
         now_ms: u64,
     ) -> ArbitrationResult<ArbitrationOutcome> {
         request.validate()?;
-        self.expire_queued_request(&request.instance, now_ms);
+        let expired_records = self.expire_queued_request(&request.instance, now_ms);
         if !request.verb.requires_lease() {
-            return Ok(Self::outcome(ArbitrationDecision::ReadonlyAccepted {
-                req_id: request.req_id,
-                instance: request.instance,
-            }));
+            return Ok(Self::outcome_with_records(
+                ArbitrationDecision::ReadonlyAccepted {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                },
+                expired_records,
+            ));
+        }
+
+        let instance_has_holder = self
+            .instances
+            .get(&request.instance)
+            .and_then(|state| state.holder.as_ref())
+            .is_some();
+        if !instance_has_holder
+            && request.payload.get("source").and_then(Value::as_str)
+                == Some("lab_arbitrator_acquire")
+        {
+            request.holder_pid = None;
         }
 
         let instance = self.instances.entry(request.instance.clone()).or_default();
         let Some(holder) = instance.holder.as_mut() else {
             let lease = LeaseGrant::new(&request, self.issuer.issue(IdKind::Lease).value, now_ms);
             instance.holder = Some(lease.clone());
-            return Ok(Self::outcome(ArbitrationDecision::LeaseGranted {
-                req_id: request.req_id,
-                instance: request.instance,
-                lease,
-            }));
+            return Ok(Self::outcome_with_records(
+                ArbitrationDecision::LeaseGranted {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                    lease,
+                },
+                expired_records,
+            ));
         };
         if holder.req_id == request.req_id {
-            return Ok(Self::outcome(ArbitrationDecision::LeaseGranted {
-                req_id: request.req_id,
-                instance: request.instance,
-                lease: holder.clone(),
-            }));
+            return Ok(Self::outcome_with_records(
+                ArbitrationDecision::LeaseGranted {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                    lease: holder.clone(),
+                },
+                expired_records,
+            ));
         }
         if let Some(queued) = &instance.queued {
-            return Ok(Self::outcome(ArbitrationDecision::Rejected {
-                req_id: request.req_id,
-                instance: request.instance,
-                error: "queue_full".to_string(),
-                holder: Some(holder.clone()),
-                queued_req_id: Some(queued.request.req_id.clone()),
-                hint: "retry-later|escalate-priority".to_string(),
-            }));
+            return Ok(Self::outcome_with_records(
+                ArbitrationDecision::Rejected {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                    error: "queue_full".to_string(),
+                    holder: Some(holder.clone()),
+                    queued_req_id: Some(queued.request.req_id.clone()),
+                    hint: "retry-later|escalate-priority".to_string(),
+                },
+                expired_records,
+            ));
         }
 
         match request.priority.cmp_holder(holder.priority) {
@@ -398,14 +450,17 @@ impl DegradedArbitrator {
                     queued_at_ms: now_ms,
                     deadline_ms,
                 });
-                Ok(Self::outcome(ArbitrationDecision::PreemptRequested {
-                    req_id: queued_req_id.clone(),
-                    instance: holder.instance.clone(),
-                    holder: holder.clone(),
-                    queued_req_id,
-                    yield_after_destructive: holder.destructive_step_active,
-                    hint: "yield-at-next-safe-boundary".to_string(),
-                }))
+                Ok(Self::outcome_with_records(
+                    ArbitrationDecision::PreemptRequested {
+                        req_id: queued_req_id.clone(),
+                        instance: holder.instance.clone(),
+                        holder: holder.clone(),
+                        queued_req_id,
+                        yield_after_destructive: holder.destructive_step_active,
+                        hint: "yield-at-next-safe-boundary".to_string(),
+                    },
+                    expired_records,
+                ))
             }
             Ordering::Less => {
                 let deadline_ms = request
@@ -418,22 +473,28 @@ impl DegradedArbitrator {
                     queued_at_ms: now_ms,
                     deadline_ms,
                 });
-                Ok(Self::outcome(ArbitrationDecision::Queued {
-                    req_id,
-                    instance: instance_id,
-                    holder: holder.clone(),
-                    deadline_ms,
-                    hint: "wait-for-current-holder".to_string(),
-                }))
+                Ok(Self::outcome_with_records(
+                    ArbitrationDecision::Queued {
+                        req_id,
+                        instance: instance_id,
+                        holder: holder.clone(),
+                        deadline_ms,
+                        hint: "wait-for-current-holder".to_string(),
+                    },
+                    expired_records,
+                ))
             }
-            Ordering::Equal => Ok(Self::outcome(ArbitrationDecision::Rejected {
-                req_id: request.req_id,
-                instance: request.instance,
-                error: "lease_held".to_string(),
-                holder: Some(holder.clone()),
-                queued_req_id: None,
-                hint: "retry-later|escalate-priority".to_string(),
-            })),
+            Ordering::Equal => Ok(Self::outcome_with_records(
+                ArbitrationDecision::Rejected {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                    error: "lease_held".to_string(),
+                    holder: Some(holder.clone()),
+                    queued_req_id: None,
+                    hint: "retry-later|escalate-priority".to_string(),
+                },
+                expired_records,
+            )),
         }
     }
 
@@ -445,41 +506,97 @@ impl DegradedArbitrator {
     ) -> ArbitrationResult<ArbitrationOutcome> {
         request.validate()?;
         let instance = request.instance.clone();
-        self.expire_queued_request(&instance, now_ms);
+        let expired_records = self.expire_queued_request(&instance, now_ms);
         if !request.verb.requires_lease() {
-            return Ok(Self::outcome(ArbitrationDecision::ReadonlyAccepted {
-                req_id: request.req_id,
-                instance,
-            }));
+            return Ok(Self::outcome_with_records(
+                ArbitrationDecision::ReadonlyAccepted {
+                    req_id: request.req_id,
+                    instance,
+                },
+                expired_records,
+            ));
         }
 
         let holder = self
             .instances
-            .get(&instance)
-            .and_then(|state| state.holder.clone());
+            .get_mut(&instance)
+            .and_then(|state| state.holder.as_mut());
         match holder {
             Some(holder) if holder.lease_id == lease_id && holder.alive => {
-                Ok(Self::outcome(ArbitrationDecision::LeaseGranted {
+                if holder
+                    .active_drive_req_id
+                    .as_deref()
+                    .is_some_and(|active| active != request.req_id)
+                {
+                    return Ok(Self::outcome_with_records(
+                        ArbitrationDecision::Rejected {
+                            req_id: request.req_id,
+                            instance: request.instance,
+                            error: "lease_in_use".to_string(),
+                            holder: Some(holder.clone()),
+                            queued_req_id: None,
+                            hint: "wait-for-current-lease-driver".to_string(),
+                        },
+                        expired_records,
+                    ));
+                }
+                holder.active_drive_req_id = Some(request.req_id.clone());
+                holder.active_drive_pid = request.holder_pid;
+                holder.updated_at_ms = now_ms;
+                Ok(Self::outcome_with_records(
+                    ArbitrationDecision::LeaseGranted {
+                        req_id: request.req_id,
+                        instance: request.instance,
+                        lease: holder.clone(),
+                    },
+                    expired_records,
+                ))
+            }
+            holder => Ok(Self::outcome_with_records(
+                ArbitrationDecision::Rejected {
                     req_id: request.req_id,
                     instance: request.instance,
-                    lease: holder,
-                }))
-            }
-            holder => Ok(Self::outcome(ArbitrationDecision::Rejected {
-                req_id: request.req_id,
-                instance: request.instance,
-                error: "lease_held".to_string(),
-                holder,
-                queued_req_id: self
-                    .instances
-                    .get(&instance)
-                    .and_then(|state| state.queued.as_ref())
-                    .map(|queued| queued.request.req_id.clone()),
-                hint: "acquire-matching-lab2-arbitrator-lease".to_string(),
-            })),
+                    error: "lease_held".to_string(),
+                    holder: holder.cloned(),
+                    queued_req_id: self
+                        .instances
+                        .get(&instance)
+                        .and_then(|state| state.queued.as_ref())
+                        .map(|queued| queued.request.req_id.clone()),
+                    hint: "acquire-matching-lab2-arbitrator-lease".to_string(),
+                },
+                expired_records,
+            )),
         }
     }
 
+    pub fn finish_existing_lease_drive(
+        &mut self,
+        instance: &str,
+        lease_id: &str,
+        req_id: &str,
+        now_ms: u64,
+    ) -> ArbitrationResult<()> {
+        let holder = self
+            .instances
+            .get_mut(instance)
+            .and_then(|state| state.holder.as_mut())
+            .ok_or_else(|| ArbitrationError::NotFound(format!("no lease for {instance}")))?;
+        if holder.lease_id != lease_id {
+            return Err(ArbitrationError::Unauthorized(format!(
+                "lease for {instance} is {}, not {lease_id}",
+                holder.lease_id
+            )));
+        }
+        if holder.active_drive_req_id.as_deref() == Some(req_id) {
+            holder.active_drive_req_id = None;
+            holder.active_drive_pid = None;
+            holder.updated_at_ms = now_ms;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub fn release(
         &mut self,
         instance: &str,
@@ -566,6 +683,7 @@ impl DegradedArbitrator {
         }
     }
 
+    #[cfg(test)]
     pub fn reclaim_dead_holder(
         &mut self,
         instance: &str,
@@ -643,15 +761,17 @@ impl DegradedArbitrator {
         }
     }
 
-    fn expire_queued_request(&mut self, instance: &str, now_ms: u64) {
+    fn expire_queued_request(&mut self, instance: &str, now_ms: u64) -> Vec<LedgerRecord> {
         if let Some(state) = self.instances.get_mut(instance)
             && state
                 .queued
                 .as_ref()
                 .is_some_and(|queued| now_ms > queued.deadline_ms)
         {
-            state.queued = None;
+            let queued = state.queued.take().expect("queued checked above");
+            return vec![queue_dropped_record(queued, "queue_deadline_expired")];
         }
+        Vec::new()
     }
 
     fn promote_queued_with_liveness(
@@ -666,6 +786,12 @@ impl DegradedArbitrator {
         let Some(queued) = state.queued.take() else {
             return (None, Vec::new());
         };
+        if now_ms > queued.deadline_ms {
+            return (
+                None,
+                vec![queue_dropped_record(queued, "queue_deadline_expired")],
+            );
+        }
         let requester_alive = queued.request.holder_pid.is_some_and(&mut is_process_alive);
         if !requester_alive {
             let reason = if queued.request.holder_pid.is_some() {
@@ -673,24 +799,7 @@ impl DegradedArbitrator {
             } else {
                 "requester_holder_pid_missing"
             };
-            return (
-                None,
-                vec![LedgerRecord::new(
-                    LedgerRecordKind::Dispatch,
-                    Some(queued.request.req_id.clone()),
-                    json!({
-                        "schema_version": ARBITRATOR_SCHEMA_VERSION,
-                        "stage": "queue_dropped_dead_requester",
-                        "state": "queue_dropped_dead_requester",
-                        "reason": reason,
-                        "req_id": queued.request.req_id,
-                        "instance": queued.request.instance,
-                        "holder_pid": queued.request.holder_pid,
-                        "queued_at_ms": queued.queued_at_ms,
-                        "deadline_ms": queued.deadline_ms,
-                    }),
-                )],
-            );
+            return (None, vec![queue_dropped_record(queued, reason)]);
         }
         let lease = LeaseGrant::new(
             &queued.request,
@@ -699,6 +808,15 @@ impl DegradedArbitrator {
         );
         state.holder = Some(lease.clone());
         (Some(lease), Vec::new())
+    }
+
+    fn outcome_with_records(
+        decision: ArbitrationDecision,
+        extra_records: Vec<LedgerRecord>,
+    ) -> ArbitrationOutcome {
+        let mut outcome = Self::outcome(decision);
+        outcome.ledger_records.extend(extra_records);
+        outcome
     }
 
     fn outcome(decision: ArbitrationDecision) -> ArbitrationOutcome {
@@ -830,6 +948,26 @@ mod tests {
         assert_eq!(lease.lease_id, "lease-000000000000002a-1");
         assert_eq!(lease.req_id, "req-1");
         assert_eq!(arbitrator.snapshot("ak").holder.as_ref(), Some(&lease));
+    }
+
+    #[test]
+    fn explicit_lab_arbitrator_acquire_grants_bearer_lease_without_holder_pid() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let mut request = request_with_pid("req-1", RequestSource::Cli, "ak", RequestVerb::Do, 123);
+        request.payload = json!({"source": "lab_arbitrator_acquire"});
+
+        let lease = grant(arbitrator.admit(request, 100).expect("admit"));
+
+        assert_eq!(lease.req_id, "req-1");
+        assert_eq!(lease.holder_pid, None);
+        assert_eq!(
+            arbitrator
+                .snapshot("ak")
+                .holder
+                .as_ref()
+                .and_then(|lease| lease.holder_pid),
+            None
+        );
     }
 
     #[test]
@@ -1351,6 +1489,55 @@ mod tests {
             denied.decision,
             ArbitrationDecision::DeviceDenied { .. }
         ));
+    }
+
+    #[test]
+    fn matching_explicit_lease_id_allows_only_one_active_driver() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let mut request = request_with_pid("holder", RequestSource::Cli, "ak", RequestVerb::Do, 1);
+        request.payload = json!({"source": "lab_arbitrator_acquire"});
+        let holder = grant(arbitrator.admit(request, 100).expect("holder"));
+
+        let first = grant(
+            arbitrator
+                .admit_with_existing_lease(
+                    request_with_pid("drive-1", RequestSource::Cli, "ak", RequestVerb::Do, 11),
+                    &holder.lease_id,
+                    200,
+                )
+                .expect("first driver"),
+        );
+        assert_eq!(first.active_drive_req_id.as_deref(), Some("drive-1"));
+        assert_eq!(first.active_drive_pid, Some(11));
+
+        let rejected = arbitrator
+            .admit_with_existing_lease(
+                request_with_pid("drive-2", RequestSource::Cli, "ak", RequestVerb::Do, 22),
+                &holder.lease_id,
+                300,
+            )
+            .expect("second driver rejection");
+        match rejected.decision {
+            ArbitrationDecision::Rejected { error, hint, .. } => {
+                assert_eq!(error, "lease_in_use");
+                assert_eq!(hint, "wait-for-current-lease-driver");
+            }
+            other => panic!("expected lease_in_use, got {other:?}"),
+        }
+
+        arbitrator
+            .finish_existing_lease_drive("ak", &holder.lease_id, "drive-1", 400)
+            .expect("finish first driver");
+        let second = grant(
+            arbitrator
+                .admit_with_existing_lease(
+                    request_with_pid("drive-2", RequestSource::Cli, "ak", RequestVerb::Do, 22),
+                    &holder.lease_id,
+                    500,
+                )
+                .expect("second driver after release"),
+        );
+        assert_eq!(second.active_drive_req_id.as_deref(), Some("drive-2"));
     }
 
     #[test]

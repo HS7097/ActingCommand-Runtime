@@ -57,6 +57,8 @@ fn run_actinglab(args: &[&str], local_app_data: &Path) -> Output {
     command.args(args);
     command.env("LOCALAPPDATA", local_app_data);
     command.env("APPDATA", local_app_data);
+    command.env_remove("ACTINGLAB_SESSION_STATE_DIR");
+    command.env_remove("ACTINGLAB_CONFIG_PATH");
     command
         .output()
         .expect("actinglab child process should run")
@@ -67,6 +69,8 @@ fn run_actinglab_owned(args: &[String], local_app_data: &Path) -> Output {
     command.args(args);
     command.env("LOCALAPPDATA", local_app_data);
     command.env("APPDATA", local_app_data);
+    command.env_remove("ACTINGLAB_SESSION_STATE_DIR");
+    command.env_remove("ACTINGLAB_CONFIG_PATH");
     command
         .output()
         .expect("actinglab child process should run")
@@ -77,6 +81,8 @@ fn spawn_actinglab(args: &[String], local_app_data: &Path) -> Child {
     command.args(args);
     command.env("LOCALAPPDATA", local_app_data);
     command.env("APPDATA", local_app_data);
+    command.env_remove("ACTINGLAB_SESSION_STATE_DIR");
+    command.env_remove("ACTINGLAB_CONFIG_PATH");
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     command
         .spawn()
@@ -132,6 +138,26 @@ fn assert_receipt_has_dispatch_and_receipt(run_root: &Path, req_id: &str, local_
             .iter()
             .any(|record| { record.get("kind").and_then(Value::as_str) == Some("receipt") })
     );
+}
+
+fn tree_contains(path: &Path, needle: &str) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if tree_contains(&path, needle) {
+                return true;
+            }
+        } else if fs::read_to_string(&path)
+            .map(|text| text.contains(needle))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn encode_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
@@ -375,6 +401,67 @@ fn lab2_bare_do_uses_short_lease_without_self_locking_next_call() {
 }
 
 #[test]
+fn lab2_explicit_arbitrator_acquire_is_bearer_lease_and_reclaim_dead_rejects_it() {
+    let local = TempDir::new().unwrap();
+    let acquire = run_actinglab(
+        &[
+            "--json",
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "acquire",
+            "--instance",
+            "ak",
+            "--verb",
+            "do",
+        ],
+        local.path(),
+    );
+    assert!(acquire.status.success());
+    let acquire_json = parse_stdout_json(&acquire);
+    let lease = response_data(&acquire_json)
+        .pointer("/arbitration/details/lease")
+        .expect("lease");
+    assert!(lease.get("holder_pid").is_none());
+
+    let reclaim = run_actinglab(
+        &[
+            "--json",
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "reclaim-dead",
+            "--instance",
+            "ak",
+        ],
+        local.path(),
+    );
+    assert!(!reclaim.status.success());
+    assert!(String::from_utf8_lossy(&reclaim.stdout).contains("holder_pid"));
+
+    let force = run_actinglab(
+        &[
+            "--json",
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "force-unlock",
+            "--instance",
+            "ak",
+        ],
+        local.path(),
+    );
+    assert!(
+        force.status.success(),
+        "{}",
+        String::from_utf8_lossy(&force.stdout)
+    );
+}
+
+#[test]
 fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
     let local = TempDir::new().unwrap();
     let temp = write_lab2_resource_root();
@@ -456,6 +543,65 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
 }
 
 #[test]
+fn lab2_explicit_lease_id_blocks_concurrent_driver_until_first_finishes() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let scene = temp.path().join("home.png");
+    fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+    let acquire = run_actinglab(
+        &[
+            "--json",
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "acquire",
+            "--instance",
+            "ak",
+            "--verb",
+            "do",
+        ],
+        local.path(),
+    );
+    assert!(acquire.status.success());
+    let acquire_json = parse_stdout_json(&acquire);
+    let lease_id = response_data(&acquire_json)
+        .pointer("/arbitration/details/lease/lease_id")
+        .and_then(Value::as_str)
+        .expect("lease id")
+        .to_string();
+    let args = vec![
+        "--json".to_string(),
+        "--dry-run".to_string(),
+        "--resource-root".to_string(),
+        temp.path().display().to_string(),
+        "--game".to_string(),
+        "ark".to_string(),
+        "--instance".to_string(),
+        "ak".to_string(),
+        "do".to_string(),
+        "home_button".to_string(),
+        "--scene".to_string(),
+        scene.display().to_string(),
+        "--lease-id".to_string(),
+        lease_id,
+        "--test-capture-delay-ms".to_string(),
+        "1200".to_string(),
+    ];
+
+    let first = spawn_actinglab(&args, local.path());
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let second = run_actinglab_owned(&args, local.path());
+    let first = first.wait_with_output().expect("first output");
+    let first_ok = first.status.success();
+    let second_ok = second.status.success();
+
+    assert_ne!(first_ok, second_ok);
+    let blocked = if first_ok { &second } else { &first };
+    assert!(String::from_utf8_lossy(&blocked.stdout).contains("lease_in_use"));
+}
+
+#[test]
 fn lab2_concurrent_bare_do_blocks_same_instance_writer_during_short_lease() {
     let local = TempDir::new().unwrap();
     let temp = write_lab2_resource_root();
@@ -488,6 +634,116 @@ fn lab2_concurrent_bare_do_blocks_same_instance_writer_during_short_lease() {
     assert_ne!(first_ok, second_ok);
     let blocked = if first_ok { &second } else { &first };
     assert!(String::from_utf8_lossy(&blocked.stdout).contains("lease_held"));
+}
+
+#[test]
+fn lab2_release_drops_dead_queued_request_from_real_finished_process() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let run_root = temp.path().join("run");
+    let holder = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "acquire",
+            "--instance",
+            "ak",
+            "--verb",
+            "do",
+            "--priority",
+            "high",
+        ],
+        local.path(),
+    );
+    assert!(holder.status.success());
+    let holder_json = parse_stdout_json(&holder);
+    let lease_id = response_data(&holder_json)
+        .pointer("/arbitration/details/lease/lease_id")
+        .and_then(Value::as_str)
+        .expect("lease id")
+        .to_string();
+
+    let queued = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "acquire",
+            "--instance",
+            "ak",
+            "--verb",
+            "do",
+            "--req",
+            "dead-queued",
+        ],
+        local.path(),
+    );
+    assert!(queued.status.success());
+    let queued_json = parse_stdout_json(&queued);
+    assert_eq!(
+        response_data(&queued_json)
+            .get("state")
+            .and_then(Value::as_str),
+        Some("queued")
+    );
+
+    let release = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root.to_str().unwrap(),
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "release",
+            "--instance",
+            "ak",
+            "--lease-id",
+            &lease_id,
+        ],
+        local.path(),
+    );
+    assert!(
+        release.status.success(),
+        "{}",
+        String::from_utf8_lossy(&release.stdout)
+    );
+    assert!(tree_contains(&run_root, "queue_dropped_dead_requester"));
+
+    let status = run_actinglab(
+        &[
+            "--json",
+            "--game",
+            "ark",
+            "lab",
+            "arbitrator",
+            "status",
+            "--instance",
+            "ak",
+        ],
+        local.path(),
+    );
+    let status_json = parse_stdout_json(&status);
+    assert!(
+        response_data(&status_json)
+            .pointer("/arbitration/holder")
+            .is_none()
+    );
+    assert!(
+        response_data(&status_json)
+            .pointer("/arbitration/queued")
+            .is_none()
+    );
 }
 
 #[test]
@@ -626,6 +882,63 @@ fn lab2_admit_usage_validation_failures_write_dispatch_and_receipt() {
         let req_id = error_req_id(&value);
         assert_receipt_has_dispatch_and_receipt(&run_root, req_id, local.path());
     }
+}
+
+#[test]
+fn lab2_ledger_write_failure_preserves_original_usage_error() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let scene = temp.path().join("home.png");
+    fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+    let run_root_file = temp.path().join("run-root-file");
+    fs::write(&run_root_file, b"not a directory").unwrap();
+
+    let output = run_actinglab(
+        &[
+            "--json",
+            "--run-root",
+            run_root_file.to_str().unwrap(),
+            "--resource-root",
+            temp.path().to_str().unwrap(),
+            "--game",
+            "ark",
+            "--instance",
+            "ak",
+            "do",
+            "home_button",
+            "--dry-run",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--priority",
+            "urgent",
+        ],
+        local.path(),
+    );
+
+    assert!(!output.status.success());
+    let value = parse_stdout_json(&output);
+    assert_eq!(
+        value.pointer("/error/code").and_then(Value::as_str),
+        Some("validation_failed")
+    );
+    assert!(
+        value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("unsupported --priority"))
+    );
+    assert_eq!(
+        value
+            .pointer("/error/details/ledger/written")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        value
+            .pointer("/error/details/ledger/reason")
+            .and_then(Value::as_str),
+        Some("ledger_write_failed")
+    );
 }
 
 #[test]

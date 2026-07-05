@@ -156,7 +156,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         let details = lab2_error_details_for_flags(
             &flags,
             &ids.req_id,
-            "resource_drift",
+            "blocked",
             "blocked",
             "rerun-with---allow-destructive-if-this-action-is-intended",
         )?;
@@ -328,6 +328,17 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 );
             }
         }
+    } else if let Some(lease_id) = lab2_explicit_lease_id(&flags)
+        && let Err(error) = finish_explicit_lab2_drive(&flags, &instance, &lease_id, &ids.req_id)
+    {
+        return finish_lab2_result_with_ledger(
+            global,
+            &flags,
+            &ids.req_id,
+            &instance,
+            Err(error),
+            records,
+        );
     }
     finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
 }
@@ -501,6 +512,17 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 );
             }
         }
+    } else if let Some(lease_id) = lab2_explicit_lease_id(&flags)
+        && let Err(error) = finish_explicit_lab2_drive(&flags, &instance, &lease_id, &ids.req_id)
+    {
+        return finish_lab2_result_with_ledger(
+            global,
+            &flags,
+            &ids.req_id,
+            &instance,
+            Err(error),
+            records,
+        );
     }
     finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
 }
@@ -891,7 +913,7 @@ fn admit_lab2_request(
         current_unix_ms(),
     );
     request.allow_destructive = flags.bool("--allow-destructive");
-    if request.verb.requires_lease() && lab2_explicit_lease_id(flags).is_none() {
+    if request.verb.requires_lease() {
         request.holder_pid = Some(std::process::id());
     }
     let request_record = LedgerRecord::new(
@@ -994,10 +1016,6 @@ fn admit_lab2_request(
         }
     };
     let now_ms = current_unix_ms();
-    let expired_queued = arbitrator
-        .snapshot(&instance)
-        .queued
-        .filter(|queued| now_ms > queued.deadline_ms);
     let mut outcome = if let Some(lease_id) = lab2_explicit_lease_id(flags) {
         match arbitrator.admit_with_existing_lease(request, &lease_id, now_ms) {
             Ok(outcome) => outcome,
@@ -1051,22 +1069,30 @@ fn admit_lab2_request(
             }
         }
     };
-    save_lab2_arbitrator(&state_path, &arbitrator)?;
-    outcome.ledger_records.insert(0, request_record);
-    if let Some(queued) = expired_queued {
-        outcome.ledger_records.push(LedgerRecord::new(
-            LedgerRecordKind::Dispatch,
-            Some(queued.request.req_id.clone()),
-            json!({
-                "stage": "queue_deadline_expired",
-                "req_id": queued.request.req_id,
-                "instance": queued.request.instance,
-                "deadline_ms": queued.deadline_ms,
-                "state": "queue_deadline_expired",
-                "hint": "resubmit-or-escalate-priority"
-            }),
-        ));
+    if let Err(error) = save_lab2_arbitrator(&state_path, &arbitrator) {
+        let details = cli_error_details_or_projection(
+            &error,
+            &ids.req_id,
+            "fatal",
+            "arbitrator_state_save_failed",
+            "inspect-lab2-arbitrator-state-directory",
+        );
+        let mut records = vec![request_record.clone()];
+        records.extend(outcome.ledger_records.clone());
+        return match return_lab2_error_with_ledger(
+            global,
+            flags,
+            &ids.req_id,
+            &instance,
+            details,
+            error,
+            records,
+        ) {
+            Err(error) => Err(error),
+            Ok(_) => unreachable!("error ledger helper always returns Err"),
+        };
     }
+    outcome.ledger_records.insert(0, request_record);
     Ok(outcome)
 }
 
@@ -1234,10 +1260,28 @@ fn release_implicit_lab2_lease(
 ) -> CliOutcome<Vec<LedgerRecord>> {
     let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
     let outcome = arbitrator
-        .release(instance, &lease.lease_id, current_unix_ms())
+        .release_with_liveness(
+            instance,
+            &lease.lease_id,
+            current_unix_ms(),
+            platform_process_is_alive,
+        )
         .map_err(|err| CliError::device(err.to_string()))?;
     save_lab2_arbitrator(&state_path, &arbitrator)?;
     Ok(outcome.ledger_records)
+}
+
+fn finish_explicit_lab2_drive(
+    flags: &FlagArgs,
+    instance: &str,
+    lease_id: &str,
+    req_id: &str,
+) -> CliOutcome<()> {
+    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
+    arbitrator
+        .finish_existing_lease_drive(instance, lease_id, req_id, current_unix_ms())
+        .map_err(|err| CliError::device(err.to_string()))?;
+    save_lab2_arbitrator(&state_path, &arbitrator)
 }
 
 fn ensure_lab2_write_admitted(
@@ -1521,7 +1565,14 @@ fn return_lab2_error_with_ledger(
         },
         "details": details
     });
-    payload["ledger"] = write_lab2_ledger(global, instance, req_id, &payload, &mut records)?;
+    payload["ledger"] = match write_lab2_ledger(global, instance, req_id, &payload, &mut records) {
+        Ok(ledger) => ledger,
+        Err(ledger_error) => json!({
+            "written": false,
+            "reason": "ledger_write_failed",
+            "error": ledger_error.message
+        }),
+    };
     Err(error.with_details(payload))
 }
 

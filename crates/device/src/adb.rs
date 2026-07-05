@@ -94,13 +94,14 @@ fn resolved_existing_adb(path: PathBuf, source: AdbPathSource) -> DeviceResult<R
 
 fn path_adb_candidate() -> Option<PathBuf> {
     let names = if cfg!(windows) {
-        &["adb.exe", "adb"][..]
+        &["adb.exe"][..]
     } else {
         &["adb"][..]
     };
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .filter(|dir| !dir.as_os_str().is_empty() && dir.is_absolute())
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|path| path.is_file())
 }
@@ -388,7 +389,7 @@ pub fn run_binary_with_timeout(
 fn validate_adb_path(adb_path: &str) -> DeviceResult<()> {
     if adb_path.trim().is_empty() {
         return Err(DeviceError::fatal(
-            "ADB path is unresolved. Set ACTINGCOMMAND_ADB_PATH or ACTINGCOMMAND_NEMU_FOLDER, or configure actinglab adb_path. ActingCommand intentionally does not fall back to PATH adb.",
+            "ADB path is unresolved. Set ACTINGCOMMAND_ADB_PATH or ACTINGCOMMAND_NEMU_FOLDER, configure actinglab adb_path, or install adb on an absolute PATH entry for the non-MuMu baseline channel.",
         ));
     }
     Ok(())
@@ -563,7 +564,7 @@ mod tests {
         let adb = Adb::new(config);
         let err = adb.run(&["version"]).expect_err("empty adb must fail");
 
-        assert!(err.to_string().contains("does not fall back to PATH adb"));
+        assert!(err.to_string().contains("non-MuMu baseline channel"));
     }
 
     #[test]
@@ -602,10 +603,18 @@ mod tests {
         let original_path = std::env::var_os("PATH");
         let original_adb = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV);
         let original_mumu = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+        let original_program_files = std::env::var_os("ProgramFiles");
+        let original_program_files_x86 = std::env::var_os("ProgramFiles(x86)");
+        let program_files = temp.join("program-files");
+        let program_files_x86 = temp.join("program-files-x86");
+        fs::create_dir_all(&program_files).unwrap();
+        fs::create_dir_all(&program_files_x86).unwrap();
         unsafe {
             std::env::set_var("PATH", &temp);
             std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
             std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+            std::env::set_var("ProgramFiles", &program_files);
+            std::env::set_var("ProgramFiles(x86)", &program_files_x86);
         }
 
         let resolved = resolve_adb_path(None).expect("PATH adb baseline");
@@ -623,6 +632,14 @@ mod tests {
                 Some(value) => std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, value),
                 None => std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV),
             }
+            match original_program_files {
+                Some(value) => std::env::set_var("ProgramFiles", value),
+                None => std::env::remove_var("ProgramFiles"),
+            }
+            match original_program_files_x86 {
+                Some(value) => std::env::set_var("ProgramFiles(x86)", value),
+                None => std::env::remove_var("ProgramFiles(x86)"),
+            }
         }
         let _ = fs::remove_file(&adb);
         let _ = fs::remove_dir(&temp);
@@ -635,5 +652,42 @@ mod tests {
                 .as_deref()
                 .is_some_and(|warning| warning.contains("non-MuMu baseline"))
         );
+    }
+
+    #[test]
+    fn path_adb_candidate_ignores_empty_relative_and_windows_extensionless_entries() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-path-hygiene-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let adb = temp.join("adb");
+        fs::write(&adb, b"test adb").unwrap();
+        let original_path = std::env::var_os("PATH");
+        let path = std::env::join_paths([PathBuf::new(), temp.clone(), PathBuf::from("relative")])
+            .expect("test PATH should join");
+        unsafe {
+            std::env::set_var("PATH", path);
+        }
+
+        let candidate = path_adb_candidate();
+
+        unsafe {
+            match original_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        let _ = fs::remove_file(&adb);
+        let _ = fs::remove_dir(&temp);
+
+        if cfg!(windows) {
+            assert!(candidate.is_none());
+        } else {
+            assert_eq!(candidate.as_deref(), Some(adb.as_path()));
+        }
     }
 }

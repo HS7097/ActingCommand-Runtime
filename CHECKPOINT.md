@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-07-06 Lab-2 chain repair round 5 closeout
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round5-2a03180.md` against baseline `2a03180`.
+- Runtime source repair commit: this closeout commit; checkpoint tag will identify the exact rollback point after push.
+- Reworked Lab-2 implicit short-lease release to use real `platform_process_is_alive`.
+- Made production fake-liveness arbitrator `release` and `reclaim_dead_holder` wrappers test-only.
+- Moved queued-request deadline expiry/drop ledger records into the arbitrator boundary.
+- Changed explicit `lab arbitrator acquire` into a bearer long lease with no `holder_pid`; `reclaim-dead` rejects missing-pid liveness, and `force-unlock` remains the explicit bypass.
+- Added active-driver tracking for explicit `do --lease-id`, rejecting concurrent same-lease drivers with `lease_in_use`.
+- Surfaced PATH-ADB baseline warnings through doctor, devices, capture, touch, stream, session instance, and session app outputs.
+- Removed stale "does not fall back to PATH adb" wording; PATH baseline now skips empty/relative entries and Windows PATH discovery only accepts `adb.exe`.
+- Added MuMu/Nemu IPC protection: PATH baseline is rejected unless `ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU=1`.
+- Updated Lab-2 child-process helpers to remove `ACTINGLAB_SESSION_STATE_DIR` and `ACTINGLAB_CONFIG_PATH`.
+- Preserved original usage errors when Lab-2 ledger writing fails.
+- No UI, OCR, SQLite, game logic, resource repository changes, live-device operation, or upstream code copying were done in this round.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `crates/arbitrator/src/lib.rs`
+- `crates/device/src/adb.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git status --short`
+- `git diff -- crates/device/src/adb.rs`
+- `git diff -- crates/arbitrator/src/lib.rs`
+- `git diff -- apps/actinglab/src/lab2_cli.rs`
+- `cargo test -p actingcommand-arbitrator -- --nocapture`
+- `cargo test -p actingcommand-device adb::tests -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test lab2_cli_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_arbitrator_cli_covers_queue_full_cancel_deadline_reclaim_and_preempt -- --nocapture`
+- `cargo test -p actingcommand-actinglab doctor_reports_path_adb_baseline_warning -- --nocapture`
+- `cargo test -p actingcommand-actinglab device_config_rejects_path_adb_for_nemu_ipc_without_opt_in -- --nocapture`
+- `cargo test -p actingcommand-actinglab device_config_allows_path_adb_for_nemu_ipc_with_explicit_opt_in -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `rg -n "does not fall back to PATH" .`
+- `rg -n "adb shell input|shell input tap|shell input swipe" apps crates`
+
+### Test results
+
+- Arbitrator tests passed: 22/22, including bearer long lease and active-driver exclusion coverage.
+- Device ADB tests passed: 6/6, including PATH baseline warning and PATH hygiene coverage.
+- Lab-2 focused suite passed: 26 unit tests plus 14 child-process contract tests.
+- New Lab-2 contract tests passed for explicit bearer lease reclaim rejection, concurrent explicit lease driver rejection, true-process dead queued requester drop, env isolation, and ledger-write failure preserving original usage error.
+- Final public gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+- Stale-string/prohibited-command scans found no `does not fall back to PATH`, `adb shell input`, `shell input tap`, or `shell input swipe` matches under the checked project paths.
+
+### Current blocker
+
+- No code blocker is currently known.
+- Real-device validation remains outside this round.
+- Alive-promotion SessionLease projection is still limited to the existing projection boundary; no new ownership model was added.
+- `session_closeout.rs` process-env isolation remains a future review item if those tests start colliding with shared environment state.
+
+### Next step
+
+1. Commit and push the round-5 closeout.
+2. Create a checkpoint tag for the pushed round-5 closeout.
+3. Let the next task decide whether to continue lease/session closeout hardening or move to live validation.
+
 ## 2026-07-05 Lab-2 chain repair round 4 closeout
 
 ### Current status
