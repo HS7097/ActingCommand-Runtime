@@ -5,7 +5,8 @@
 ### Current status
 
 - Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round5-2a03180.md` against baseline `2a03180`.
-- Runtime source repair commit: this closeout commit; checkpoint tag will identify the exact rollback point after push.
+- Runtime source repair commit: `636e4941033b181bb3e22794ae05ef5896de3280`.
+- Checkpoint tag: `checkpoint/20260706-lab2-round5-closeout`.
 - Reworked Lab-2 implicit short-lease release to use real `platform_process_is_alive`.
 - Made production fake-liveness arbitrator `release` and `reclaim_dead_holder` wrappers test-only.
 - Moved queued-request deadline expiry/drop ledger records into the arbitrator boundary.
