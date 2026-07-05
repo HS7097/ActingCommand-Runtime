@@ -90,7 +90,6 @@ fn discover_mumu_adb() -> Option<PathBuf> {
 fn mumu_folder_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     candidates.extend(std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
-    candidates.push(PathBuf::from(r"D:\BST\MuMuPlayer"));
     candidates.extend(
         ["ProgramFiles", "ProgramFiles(x86)"]
             .into_iter()
@@ -140,12 +139,15 @@ fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 pub struct CommandOutput {
     pub stdout: String,
     pub stderr: String,
+    pub stdout_lossy_decode: bool,
+    pub stderr_lossy_decode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryOutput {
     pub stdout: Vec<u8>,
     pub stderr: String,
+    pub stderr_lossy_decode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -315,15 +317,22 @@ pub fn run_text_with_timeout(
 ) -> DeviceResult<CommandOutput> {
     validate_adb_path(adb_path)?;
     let output = run_raw_with_timeout(adb_path, args, timeout)?;
-    let stdout = decode_adb_text(output.stdout, "stdout", args)?;
-    let stderr = decode_adb_text(output.stderr, "stderr", args)?;
+    let stdout = decode_adb_text(output.stdout, "stdout", args);
+    let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
-        return Ok(CommandOutput { stdout, stderr });
+        return Ok(CommandOutput {
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_lossy_decode: stdout.lossy,
+            stderr_lossy_decode: stderr.lossy,
+        });
     }
     Err(DeviceError::fatal(format!(
         "adb {} failed with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         args.join(" "),
-        output.status
+        output.status,
+        stdout = stdout.diagnostic_text(),
+        stderr = stderr.diagnostic_text()
     )))
 }
 
@@ -334,18 +343,20 @@ pub fn run_binary_with_timeout(
 ) -> DeviceResult<BinaryOutput> {
     validate_adb_path(adb_path)?;
     let output = run_raw_with_timeout(adb_path, args, timeout)?;
-    let stderr = decode_adb_text(output.stderr, "stderr", args)?;
+    let stderr = decode_adb_text(output.stderr, "stderr", args);
     if output.status.success() {
         return Ok(BinaryOutput {
             stdout: output.stdout,
-            stderr,
+            stderr: stderr.text,
+            stderr_lossy_decode: stderr.lossy,
         });
     }
     Err(DeviceError::fatal(format!(
         "adb {} failed with {}\nstdout bytes: {}\nstderr:\n{stderr}",
         args.join(" "),
         output.status,
-        output.stdout.len()
+        output.stdout.len(),
+        stderr = stderr.diagnostic_text()
     )))
 }
 
@@ -444,13 +455,44 @@ fn join_pipe_reader(
         .map_err(|err| DeviceError::fatal(format!("failed to read adb {stream_name}: {err}")))
 }
 
-fn decode_adb_text(bytes: Vec<u8>, stream_name: &str, args: &[&str]) -> DeviceResult<String> {
-    String::from_utf8(bytes).map_err(|err| {
-        DeviceError::fatal(format!(
-            "adb {} produced non-UTF-8 {stream_name}: {err}",
-            args.join(" ")
-        ))
-    })
+struct DecodedAdbText {
+    text: String,
+    lossy: bool,
+    stream_name: &'static str,
+    command: String,
+}
+
+impl DecodedAdbText {
+    fn diagnostic_text(&self) -> String {
+        if self.lossy {
+            format!(
+                "[lossy_decode=true stream={} command={}] {}",
+                self.stream_name, self.command, self.text
+            )
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
+fn decode_adb_text(bytes: Vec<u8>, stream_name: &'static str, args: &[&str]) -> DecodedAdbText {
+    match String::from_utf8(bytes) {
+        Ok(text) => DecodedAdbText {
+            text,
+            lossy: false,
+            stream_name,
+            command: args.join(" "),
+        },
+        Err(err) => {
+            let text = String::from_utf8_lossy(err.as_bytes()).to_string();
+            DecodedAdbText {
+                text,
+                lossy: true,
+                stream_name,
+                command: args.join(" "),
+            }
+        }
+    }
 }
 
 pub fn stop_child(child: &mut Child, timeout: Duration) -> bool {
@@ -493,6 +535,15 @@ mod tests {
         let err = adb.run(&["version"]).expect_err("empty adb must fail");
 
         assert!(err.to_string().contains("does not fall back to PATH adb"));
+    }
+
+    #[test]
+    fn adb_text_decode_is_lossy_with_diagnostic_flag() {
+        let decoded = decode_adb_text(vec![b'o', b'k', 0xff], "stdout", &["shell", "echo"]);
+
+        assert!(decoded.lossy);
+        assert!(decoded.text.contains("ok"));
+        assert!(decoded.diagnostic_text().contains("lossy_decode=true"));
     }
 
     #[test]

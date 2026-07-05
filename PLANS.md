@@ -6,6 +6,27 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 chain repair round 2
+
+The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round2-b2507b7.md`.
+
+Repair order:
+
+- R1: make the Lab-2 degraded arbitrator persistent by default under the app state root when `--state-dir` is not provided.
+- R7: define lease lifecycle semantics: bare `do`/`ensure` use implicit short leases that occupy the persistent arbitrator during execution and release on success or failure; explicit long leases are acquired with `lab arbitrator acquire` and reused by `do --lease-id`.
+- R2: guarantee that every post-admission exit path for `observe`, `wait`, `do`, and `ensure` writes dispatch/receipt ledger records.
+- R3/R4: move Nemu vendor stdout/stderr capture to a session boundary that covers DLL load and Win32 handle writes, and keep tests honest about synthetic versus true device paths.
+- R8: remove the hard-coded `D:\BST\MuMuPlayer` production discovery path, make ADB text decoding lossy with diagnostics instead of fatal, require navigation `coordinate_space`, derive probe-run click space from runtime metadata, and mark Nemu channel order as MuMu-verified rather than universal.
+
+Round-2 status:
+
+- R1 is implemented: `explicit_lab2_state_dir` now defaults to `app_state_root()/lab2`, so production-style calls no longer silently fall back to an in-memory arbitrator.
+- R7 is implemented: implicit short leases are acquired, persisted, and released around bare `do`/`ensure`; `lab arbitrator acquire` provides the long-lease path; `reclaim-dead` no longer marks a live holder dead, and `force-unlock` is explicit about bypassing liveness.
+- R2 is implemented structurally with a shared post-admission result finalizer for success and error responses.
+- R3/R4 are implemented at the capture boundary with `VendorStdioSession`, including a Win32-handle snapshot test. True Nemu/live validation remains an external machine check, not claimed by synthetic tests.
+- R8.1/R8.2/R8.3/R8.4 code-level safeguards are implemented for the Runtime paths touched in this round. R8.5/R8.6 remain recorded as lower-priority portability follow-ups.
+- Focused tests now cover default arbitrator persistence, short-lease no-self-lock, concurrent bare-write blocking, explicit long-lease reuse and third-party blocking, post-admission receipts for all four Lab-2 verbs, lossy ADB decode diagnostics, navigation coordinate-space-derived click bounds, and MuMu-specific Nemu channel-order labeling.
+
 ## Current Lab-2 CLI chain repair
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-9feebc3.md`.

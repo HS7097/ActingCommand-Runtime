@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
-use crate::vendor_stdio::{VendorStdioCapture, capture_vendor_stdio};
+use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
 use image::{
     ColorType, ImageEncoder,
@@ -234,7 +234,7 @@ impl CaptureBackendAttempt {
             message,
             elapsed_ms,
             cached,
-            channel_order_contract: "verified",
+            channel_order_contract: channel_order_contract_for(backend),
             vendor_stdio: Vec::new(),
         }
     }
@@ -251,7 +251,7 @@ impl CaptureBackendAttempt {
             message,
             elapsed_ms,
             cached,
-            channel_order_contract: "verified",
+            channel_order_contract: channel_order_contract_for(backend),
             vendor_stdio: Vec::new(),
         }
     }
@@ -259,6 +259,13 @@ impl CaptureBackendAttempt {
     fn with_vendor_stdio(mut self, vendor_stdio: Vec<VendorStdioCapture>) -> Self {
         self.vendor_stdio = vendor_stdio;
         self
+    }
+}
+
+fn channel_order_contract_for(backend: CaptureBackendName) -> &'static str {
+    match backend {
+        CaptureBackendName::NemuIpc => "mumu_nemu_verified",
+        _ => "verified",
     }
 }
 
@@ -1033,6 +1040,7 @@ impl Drop for NemuIpcWorker {
 
 struct NemuIpcWorkerState {
     library: Library,
+    stdio_session: VendorStdioSession,
     nemu_folder: Vec<u16>,
     instance_id: i32,
     display_id: i32,
@@ -1051,14 +1059,21 @@ impl NemuIpcWorkerState {
         display_id: i32,
     ) -> DeviceResult<Self> {
         let nemu_folder = nul_terminated_utf16_path(&nemu_folder)?;
+        let mut stdio_session = VendorStdioSession::start()?;
         let library = unsafe { Library::new(&dll_path) }.map_err(|err| {
             DeviceError::fatal(format!(
                 "Nemu IPC unavailable: failed to load {}: {err}",
                 dll_path.display()
             ))
         })?;
+        let mut vendor_stdio = Vec::new();
+        let load_stdio = stdio_session.snapshot()?;
+        if !load_stdio.is_empty() {
+            vendor_stdio.push(load_stdio);
+        }
         Ok(Self {
             library,
+            stdio_session,
             nemu_folder,
             instance_id,
             display_id,
@@ -1066,7 +1081,7 @@ impl NemuIpcWorkerState {
             raw_buffer: Vec::new(),
             frame_width: 0,
             frame_height: 0,
-            vendor_stdio: Vec::new(),
+            vendor_stdio,
         })
     }
 
@@ -1077,9 +1092,8 @@ impl NemuIpcWorkerState {
         let connect = unsafe { self.symbol::<NemuConnect>(b"nemu_connect\0")? };
         let nemu_folder = self.nemu_folder.as_ptr();
         let instance_id = self.instance_id;
-        let (connect_id, stdio) =
-            capture_vendor_stdio(|| Ok(unsafe { connect(nemu_folder, instance_id) }))?;
-        self.record_vendor_stdio(stdio);
+        let connect_id = unsafe { connect(nemu_folder, instance_id) };
+        self.record_vendor_stdio_snapshot()?;
         if connect_id == 0 {
             return Err(DeviceError::fatal(
                 "Nemu IPC connect returned 0; check MuMu path and running instance",
@@ -1093,6 +1107,12 @@ impl NemuIpcWorkerState {
         if !capture.is_empty() {
             self.vendor_stdio.push(capture);
         }
+    }
+
+    fn record_vendor_stdio_snapshot(&mut self) -> DeviceResult<()> {
+        let capture = self.stdio_session.snapshot()?;
+        self.record_vendor_stdio(capture);
+        Ok(())
     }
 
     unsafe fn symbol<T>(&self, name: &[u8]) -> DeviceResult<T>
@@ -1118,19 +1138,17 @@ impl NemuIpcWorkerState {
         let display_id = self.display_id;
         let width_ptr = &mut width as *mut i32;
         let height_ptr = &mut height as *mut i32;
-        let (ret, stdio) = capture_vendor_stdio(|| {
-            Ok(unsafe {
-                capture_display(
-                    connect_id,
-                    display_id,
-                    0,
-                    width_ptr,
-                    height_ptr,
-                    std::ptr::null_mut(),
-                )
-            })
-        })?;
-        self.record_vendor_stdio(stdio);
+        let ret = unsafe {
+            capture_display(
+                connect_id,
+                display_id,
+                0,
+                width_ptr,
+                height_ptr,
+                std::ptr::null_mut(),
+            )
+        };
+        self.record_vendor_stdio_snapshot()?;
         if ret > 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC resolution probe failed with code {ret}"
@@ -1173,14 +1191,12 @@ impl NemuIpcWorkerState {
         let width_ptr = &mut width_i32 as *mut i32;
         let height_ptr = &mut height_i32 as *mut i32;
         let buffer_ptr = self.raw_buffer.as_mut_ptr();
-        let (ret, stdio) = capture_vendor_stdio(|| {
-            Ok(unsafe {
-                capture_display(
-                    connect_id, display_id, length, width_ptr, height_ptr, buffer_ptr,
-                )
-            })
-        })?;
-        self.record_vendor_stdio(stdio);
+        let ret = unsafe {
+            capture_display(
+                connect_id, display_id, length, width_ptr, height_ptr, buffer_ptr,
+            )
+        };
+        self.record_vendor_stdio_snapshot()?;
         if ret > 0 {
             return Err(DeviceError::fatal(format!(
                 "Nemu IPC capture failed with code {ret}"
@@ -1213,9 +1229,8 @@ impl NemuIpcWorkerState {
         }
         if let Ok(disconnect) = unsafe { self.symbol::<NemuDisconnect>(b"nemu_disconnect\0") } {
             let connect_id = self.connect_id;
-            if let Ok((_, stdio)) = capture_vendor_stdio(|| Ok(unsafe { disconnect(connect_id) })) {
-                self.record_vendor_stdio(stdio);
-            }
+            unsafe { disconnect(connect_id) };
+            let _ = self.record_vendor_stdio_snapshot();
         }
         self.connect_id = 0;
     }
@@ -2041,7 +2056,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_attempts_mark_channel_order_contract_verified() {
+    fn capture_attempts_mark_nemu_channel_order_as_mumu_verified() {
         let attempt = CaptureBackendAttempt::success(
             CaptureBackendName::NemuIpc,
             "ok".to_string(),
@@ -2049,7 +2064,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(attempt.channel_order_contract, "verified");
+        assert_eq!(attempt.channel_order_contract, "mumu_nemu_verified");
     }
 
     #[test]

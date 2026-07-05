@@ -96,46 +96,49 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         json!({"targets": target_list(&flags)}),
         &flags,
     )?;
-    let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
-    let loaded_scene = load_lab2_scene(global, &flags)?;
-    let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
-    let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
-    let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
-    let actions = observe_actions(global, &config, &flags, &outcome)?;
-    let mut payload = json!({
-        "req_id": ids.req_id,
-        "state": if outcome.matched { "observed" } else { "unknown" },
-        "instance": instance,
-        "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
-        "matched": outcome.matched,
-        "standby": outcome.standby,
-        "frame_age_ms": loaded_scene.frame_age_ms,
-        "backend": loaded_scene.backend,
-        "frame_source": loaded_scene.source,
-        "targets": targets,
-        "actions": actions,
-        "arbitration": arbitration_json(&arbitration.decision),
-    });
-    if !outcome.matched {
-        payload["candidates"] = json!(lab2_page_candidates(&outcome));
-    }
-    if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
-        payload["suspicion"] = suspicion;
-    }
-    if let Some(recovery) = active_lab2_recovery_state(&flags, &ids.req_id, &instance)? {
-        payload["state"] = json!("recovering");
-        payload["recovery"] = recovery;
-    }
-    if let Some(path) = frame_path {
-        payload["frame_path"] = json!(path.display().to_string());
-    }
-    finish_lab2_response(
+    let result = (|| -> CliOutcome<Value> {
+        let config = read_user_config()?;
+        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let loaded_scene = load_lab2_scene(global, &flags)?;
+        let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
+        let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
+        let actions = observe_actions(global, &config, &flags, &outcome)?;
+        let mut payload = json!({
+            "req_id": ids.req_id,
+            "state": if outcome.matched { "observed" } else { "unknown" },
+            "instance": instance,
+            "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
+            "matched": outcome.matched,
+            "standby": outcome.standby,
+            "frame_age_ms": loaded_scene.frame_age_ms,
+            "backend": loaded_scene.backend,
+            "frame_source": loaded_scene.source,
+            "targets": targets,
+            "actions": actions,
+            "arbitration": arbitration_json(&arbitration.decision),
+        });
+        if !outcome.matched {
+            payload["candidates"] = json!(lab2_page_candidates(&outcome));
+        }
+        if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
+            payload["suspicion"] = suspicion;
+        }
+        if let Some(recovery) = active_lab2_recovery_state(&flags, &ids.req_id, &instance)? {
+            payload["state"] = json!("recovering");
+            payload["recovery"] = recovery;
+        }
+        if let Some(path) = frame_path {
+            payload["frame_path"] = json!(path.display().to_string());
+        }
+        Ok(payload)
+    })();
+    finish_lab2_result_with_ledger(
         global,
         &flags,
         &ids.req_id,
         &instance,
-        payload,
+        result,
         arbitration.ledger_records,
     )
 }
@@ -207,124 +210,123 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 );
             }
         };
-    let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
-    guard_evaluable_target(&evaluator, &target, "do")?;
-    let loaded_scene = load_lab2_scene(global, &flags)?;
-    let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
-    let reco_id = ids.issue(IdKind::Reco);
-    let evaluation = evaluator
-        .evaluate_target(&loaded_scene.scene, &target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    if !evaluation.passed {
-        let details = lab2_error_payload_for_flags(
-            &flags,
-            &ids.req_id,
-            "resource_drift",
-            before.page,
-            "observe-current-page-and-refresh-resource-or-target",
-            Some(guard_reject_suspicion(&target, &evaluation.message)),
-        )?;
-        let error = CliError::safety_blocked(
-            "target_not_visible",
-            format!(
-                "target '{target}' did not pass guard recognition: {}",
-                evaluation.message
-            ),
-            &["guard_target"],
-        );
-        return return_lab2_error_with_ledger(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            details,
-            error,
-            arbitration.ledger_records.clone(),
-        );
-    }
-    let click = evaluator
-        .get_click_target(&target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    let actual_click = derive_lab2_click_rect(&evaluator, &target, click, &evaluation)?;
-    if !allow_destructive {
-        let graph = load_navigation_graph(global, &config, &flags)?;
-        if let Err(error) =
-            reject_lab2_destructive_click_overlap(&target, &before.page, actual_click.rect, &graph)
-        {
+    let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
+    let result = (|| -> CliOutcome<Value> {
+        let config = read_user_config()?;
+        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        guard_evaluable_target(&evaluator, &target, "do")?;
+        let loaded_scene = load_lab2_scene(global, &flags)?;
+        let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        let reco_id = ids.issue(IdKind::Reco);
+        let evaluation = evaluator
+            .evaluate_target(&loaded_scene.scene, &target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        if !evaluation.passed {
             let details = lab2_error_payload_for_flags(
                 &flags,
                 &ids.req_id,
                 "resource_drift",
-                "blocked",
-                "rerun-with---allow-destructive-if-this-action-is-intended",
-                Some(forbidden_target_suspicion(vec![target.clone()])),
+                before.page,
+                "observe-current-page-and-refresh-resource-or-target",
+                Some(guard_reject_suspicion(&target, &evaluation.message)),
             )?;
-            return return_lab2_error_with_ledger(
-                global,
-                &flags,
-                &ids.req_id,
-                &instance,
-                details,
-                error,
-                arbitration.ledger_records.clone(),
-            );
+            return Err(CliError::safety_blocked(
+                "target_not_visible",
+                format!(
+                    "target '{target}' did not pass guard recognition: {}",
+                    evaluation.message
+                ),
+                &["guard_target"],
+            )
+            .with_details(details));
+        }
+        let click = evaluator
+            .get_click_target(&target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        let actual_click = derive_lab2_click_rect(&evaluator, &target, click, &evaluation)?;
+        if !allow_destructive {
+            let graph = load_navigation_graph(global, &config, &flags)?;
+            if let Err(error) = reject_lab2_destructive_click_overlap(
+                &target,
+                &before.page,
+                actual_click.rect,
+                &graph,
+            ) {
+                let details = lab2_error_payload_for_flags(
+                    &flags,
+                    &ids.req_id,
+                    "resource_drift",
+                    "blocked",
+                    "rerun-with---allow-destructive-if-this-action-is-intended",
+                    Some(forbidden_target_suspicion(vec![target.clone()])),
+                )?;
+                return Err(error.with_details(details));
+            }
+        }
+        let point = rect_center(actual_click.rect)?;
+        let action_id = ids.issue(IdKind::Action);
+        let device = if dry_run {
+            json!({"executed": false, "mode": "dry_run"})
+        } else {
+            authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
+            send_semantic_tap(global, &config, point)?
+        };
+        let after = if dry_run {
+            before
+        } else {
+            let after_scene = load_lab2_scene(global, &flags)?;
+            detect_current_page(&evaluator, &detector, &after_scene.scene)?
+        };
+        let mut payload = json!({
+            "req_id": ids.req_id,
+            "reco_id": reco_id,
+            "action_id": action_id,
+            "state": if dry_run { "planned" } else { "sent" },
+            "instance": instance,
+            "executed": !dry_run,
+            "target": target,
+            "page": after.page,
+            "frame_age_ms": loaded_scene.frame_age_ms,
+            "backend": loaded_scene.backend,
+            "actual_click": {
+                "kind": actual_click.kind,
+                "declared_rect": rect_json(click),
+                "rect": rect_json(actual_click.rect),
+                "point": point_json(point),
+                "coordinate_derivation": actual_click.derivation
+            },
+            "guard_result": {
+                "reco_id": reco_id,
+                "target": target,
+                "passed": true,
+                "evaluation": target_eval_json(&evaluation)
+            },
+            "observation": page_detection_json(&after),
+            "device": device,
+            "arbitration": arbitration_json(&arbitration.decision),
+        });
+        if let Some(recovery_wait) = recovery_wait {
+            payload["recovery_wait"] = recovery_wait;
+        }
+        Ok(payload)
+    })();
+    let mut records = arbitration.ledger_records;
+    if let Some(lease) = implicit_lease {
+        match release_implicit_lab2_lease(&flags, &instance, &lease) {
+            Ok(release_records) => records.extend(release_records),
+            Err(error) => {
+                return finish_lab2_result_with_ledger(
+                    global,
+                    &flags,
+                    &ids.req_id,
+                    &instance,
+                    Err(error),
+                    records,
+                );
+            }
         }
     }
-    let point = rect_center(actual_click.rect)?;
-    let action_id = ids.issue(IdKind::Action);
-    let device = if dry_run {
-        json!({"executed": false, "mode": "dry_run"})
-    } else {
-        authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
-        send_semantic_tap(global, &config, point)?
-    };
-    let after = if dry_run {
-        before
-    } else {
-        let after_scene = load_lab2_scene(global, &flags)?;
-        detect_current_page(&evaluator, &detector, &after_scene.scene)?
-    };
-    let payload = json!({
-        "req_id": ids.req_id,
-        "reco_id": reco_id,
-        "action_id": action_id,
-        "state": if dry_run { "planned" } else { "sent" },
-        "instance": instance,
-        "executed": !dry_run,
-        "target": target,
-        "page": after.page,
-        "frame_age_ms": loaded_scene.frame_age_ms,
-        "backend": loaded_scene.backend,
-        "actual_click": {
-            "kind": actual_click.kind,
-            "declared_rect": rect_json(click),
-            "rect": rect_json(actual_click.rect),
-            "point": point_json(point),
-            "coordinate_derivation": actual_click.derivation
-        },
-        "guard_result": {
-            "reco_id": reco_id,
-            "target": target,
-            "passed": true,
-            "evaluation": target_eval_json(&evaluation)
-        },
-        "observation": page_detection_json(&after),
-        "device": device,
-        "arbitration": arbitration_json(&arbitration.decision),
-    });
-    let mut payload = payload;
-    if let Some(recovery_wait) = recovery_wait {
-        payload["recovery_wait"] = recovery_wait;
-    }
-    finish_lab2_response(
-        global,
-        &flags,
-        &ids.req_id,
-        &instance,
-        payload,
-        arbitration.ledger_records,
-    )
+    finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
 }
 
 pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -375,140 +377,128 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 );
             }
         };
-    let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
-    let graph = load_navigation_graph(global, &config, &flags)?;
-    let scene = load_lab2_scene(global, &flags)?;
-    let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
-    let target_page = canonical_navigation_page(&graph, &to);
-    if start.matched && start.page == target_page {
-        let payload = json!({
-            "req_id": ids.req_id,
-            "state": "already_at_target",
-            "instance": instance,
-            "executed": false,
-            "page": start.page,
-            "to": target_page,
-            "route": [],
-            "frame_age_ms": scene.frame_age_ms,
-            "backend": scene.backend,
-            "arbitration": arbitration_json(&arbitration.decision),
-        });
-        let mut payload = payload;
-        if let Some(recovery_wait) = recovery_wait {
-            payload["recovery_wait"] = recovery_wait;
+    let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
+    let result = (|| -> CliOutcome<Value> {
+        let config = read_user_config()?;
+        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let graph = load_navigation_graph(global, &config, &flags)?;
+        let scene = load_lab2_scene(global, &flags)?;
+        let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
+        let target_page = canonical_navigation_page(&graph, &to);
+        if start.matched && start.page == target_page {
+            let mut payload = json!({
+                "req_id": ids.req_id,
+                "state": "already_at_target",
+                "instance": instance,
+                "executed": false,
+                "page": start.page,
+                "to": target_page,
+                "route": [],
+                "frame_age_ms": scene.frame_age_ms,
+                "backend": scene.backend,
+                "arbitration": arbitration_json(&arbitration.decision),
+            });
+            if let Some(recovery_wait) = recovery_wait {
+                payload["recovery_wait"] = recovery_wait;
+            }
+            return Ok(payload);
         }
-        return finish_lab2_response(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            payload,
-            arbitration.ledger_records,
-        );
-    }
-    if !start.matched {
-        let details = lab2_error_payload_for_flags(
-            &flags,
-            &ids.req_id,
-            "resource_drift",
-            start.page,
-            "observe-current-page-or-route-home-before-ensure",
-            None,
-        )?;
-        let error = CliError::safety_blocked(
-            "current_page_unknown",
-            "ensure requires a matched current page before navigation",
-            &["current_page"],
-        );
-        return return_lab2_error_with_ledger(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            details,
-            error,
-            arbitration.ledger_records.clone(),
-        );
-    }
-    let route =
-        find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
-            CliError::usage(format!(
-                "no navigation route from '{}' to '{}'",
-                start.page, target_page
-            ))
-        })?;
-    for edge in &route {
-        if !allow_destructive {
-            reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-            reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+        if !start.matched {
+            let details = lab2_error_payload_for_flags(
+                &flags,
+                &ids.req_id,
+                "resource_drift",
+                start.page,
+                "observe-current-page-or-route-home-before-ensure",
+                None,
+            )?;
+            return Err(CliError::safety_blocked(
+                "current_page_unknown",
+                "ensure requires a matched current page before navigation",
+                &["current_page"],
+            )
+            .with_details(details));
         }
-    }
-    let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
-    if dry_run {
-        let payload = json!({
+        let route =
+            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+                CliError::usage(format!(
+                    "no navigation route from '{}' to '{}'",
+                    start.page, target_page
+                ))
+            })?;
+        for edge in &route {
+            if !allow_destructive {
+                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+            }
+        }
+        let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
+        if dry_run {
+            let mut payload = json!({
+                "req_id": ids.req_id,
+                "state": "planned",
+                "instance": instance,
+                "executed": false,
+                "page": start.page,
+                "to": target_page,
+                "route": route_json,
+                "frame_age_ms": scene.frame_age_ms,
+                "backend": scene.backend,
+                "arbitration": arbitration_json(&arbitration.decision),
+            });
+            if let Some(recovery_wait) = recovery_wait {
+                payload["recovery_wait"] = recovery_wait;
+            }
+            return Ok(payload);
+        }
+
+        let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
+        let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
+        let execution = NavigationExecutionContext {
+            global,
+            flags: &flags,
+            config: &config,
+            evaluator: &evaluator,
+            detector: &detector,
+            step_timeout,
+            poll,
+        };
+        authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
+        let (steps, arrived) = execute_navigation_route(&execution, start.page.clone(), route)?;
+        let mut payload = json!({
             "req_id": ids.req_id,
-            "state": "planned",
+            "state": "arrived",
             "instance": instance,
-            "executed": false,
-            "page": start.page,
+            "executed": true,
+            "from": start.page,
+            "page": arrived,
             "to": target_page,
             "route": route_json,
-            "frame_age_ms": scene.frame_age_ms,
-            "backend": scene.backend,
+            "steps": steps,
             "arbitration": arbitration_json(&arbitration.decision),
         });
-        let mut payload = payload;
         if let Some(recovery_wait) = recovery_wait {
             payload["recovery_wait"] = recovery_wait;
         }
-        return finish_lab2_response(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            payload,
-            arbitration.ledger_records,
-        );
+        Ok(payload)
+    })();
+    let mut records = arbitration.ledger_records;
+    if let Some(lease) = implicit_lease {
+        match release_implicit_lab2_lease(&flags, &instance, &lease) {
+            Ok(release_records) => records.extend(release_records),
+            Err(error) => {
+                return finish_lab2_result_with_ledger(
+                    global,
+                    &flags,
+                    &ids.req_id,
+                    &instance,
+                    Err(error),
+                    records,
+                );
+            }
+        }
     }
-
-    let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
-    let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
-    let execution = NavigationExecutionContext {
-        global,
-        flags: &flags,
-        config: &config,
-        evaluator: &evaluator,
-        detector: &detector,
-        step_timeout,
-        poll,
-    };
-    authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
-    let (steps, arrived) = execute_navigation_route(&execution, start.page.clone(), route)?;
-    let payload = json!({
-        "req_id": ids.req_id,
-        "state": "arrived",
-        "instance": instance,
-        "executed": true,
-        "from": start.page,
-        "page": arrived,
-        "to": target_page,
-        "route": route_json,
-        "steps": steps,
-        "arbitration": arbitration_json(&arbitration.decision),
-    });
-    let mut payload = payload;
-    if let Some(recovery_wait) = recovery_wait {
-        payload["recovery_wait"] = recovery_wait;
-    }
-    finish_lab2_response(
-        global,
-        &flags,
-        &ids.req_id,
-        &instance,
-        payload,
-        arbitration.ledger_records,
-    )
+    finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
 }
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -523,35 +513,38 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         json!({"page": flags.optional("--page"), "stable": flags.optional("--stable")}),
         &flags,
     )?;
-    let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
-    let timeout = parse_optional_duration_ms(&flags, "--timeout-ms", 5_000)?;
-    let poll = parse_optional_duration_ms(&flags, "--poll-ms", 200)?;
-    let wait_ids = WaitIds {
-        req_id: &ids.req_id,
-        wf_id: &wf_id,
-    };
-    let timing = WaitTiming { timeout, poll };
-    let payload = if let Some(page) = wait_page_target(&flags) {
-        wait_for_page(
-            global, &flags, &evaluator, &detector, wait_ids, &page, timing,
-        )?
-    } else if let Some(target) = flags.optional("--stable").filter(|value| value != "true") {
-        wait_for_stable_target(global, &flags, &evaluator, wait_ids, &target, timing)?
-    } else {
-        return Err(CliError::usage(
-            "wait requires --page <page> or --stable <target>",
-        ));
-    };
-    let mut payload = payload;
-    payload["instance"] = json!(instance);
-    payload["arbitration"] = arbitration_json(&arbitration.decision);
-    finish_lab2_response(
+    let result = (|| -> CliOutcome<Value> {
+        let config = read_user_config()?;
+        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let timeout = parse_optional_duration_ms(&flags, "--timeout-ms", 5_000)?;
+        let poll = parse_optional_duration_ms(&flags, "--poll-ms", 200)?;
+        let wait_ids = WaitIds {
+            req_id: &ids.req_id,
+            wf_id: &wf_id,
+        };
+        let timing = WaitTiming { timeout, poll };
+        let payload = if let Some(page) = wait_page_target(&flags) {
+            wait_for_page(
+                global, &flags, &evaluator, &detector, wait_ids, &page, timing,
+            )?
+        } else if let Some(target) = flags.optional("--stable").filter(|value| value != "true") {
+            wait_for_stable_target(global, &flags, &evaluator, wait_ids, &target, timing)?
+        } else {
+            return Err(CliError::usage(
+                "wait requires --page <page> or --stable <target>",
+            ));
+        };
+        let mut payload = payload;
+        payload["instance"] = json!(instance);
+        payload["arbitration"] = arbitration_json(&arbitration.decision);
+        Ok(payload)
+    })();
+    finish_lab2_result_with_ledger(
         global,
         &flags,
         &ids.req_id,
         &instance,
-        payload,
+        result,
         arbitration.ledger_records,
     )
 }
@@ -614,9 +607,50 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
         "status" => json!({
             "state": "status",
             "instance": instance,
-            "state_file": state_path.as_ref().map(|path| path.display().to_string()),
+            "state_file": state_path.display().to_string(),
             "arbitration": arbitrator.snapshot(&instance)
         }),
+        "acquire" => {
+            let ids = Lab2Ids::new();
+            let req_id = flags
+                .optional("--req")
+                .filter(|value| value != "true")
+                .unwrap_or_else(|| ids.req_id.clone());
+            let verb = parse_lab2_arbitrator_verb(
+                flags
+                    .optional("--verb")
+                    .filter(|value| value != "true")
+                    .as_deref()
+                    .unwrap_or("do"),
+            )?;
+            let mut request = RequestEnvelope::new(
+                req_id,
+                RequestSource::Cli,
+                instance.clone(),
+                verb,
+                json!({"source": "lab_arbitrator_acquire"}),
+                current_unix_ms(),
+            );
+            request.allow_destructive = flags.bool("--allow-destructive");
+            request.priority = match flags.optional("--priority").as_deref() {
+                Some("high") => RequestPriority::High,
+                Some("normal") | None => RequestPriority::Normal,
+                Some(other) => {
+                    return Err(CliError::usage(format!(
+                        "unsupported --priority '{other}', expected normal or high"
+                    )));
+                }
+            };
+            let outcome = arbitrator
+                .admit(request, current_unix_ms())
+                .map_err(|err| CliError::device(err.to_string()))?;
+            records.extend(outcome.ledger_records.clone());
+            json!({
+                "state": outcome.decision.as_str(),
+                "instance": instance,
+                "arbitration": arbitration_json(&outcome.decision)
+            })
+        }
         "release" => {
             let lease_id = flags
                 .optional("--lease-id")
@@ -656,6 +690,18 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
             })
         }
         "reclaim-dead" => {
+            let outcome = arbitrator
+                .reclaim_dead_holder(&instance, current_unix_ms())
+                .map_err(|err| CliError::device(err.to_string()))?;
+            records.extend(outcome.ledger_records.clone());
+            json!({
+                "state": outcome.decision.as_str(),
+                "instance": instance,
+                "liveness_checked": true,
+                "arbitration": arbitration_json(&outcome.decision)
+            })
+        }
+        "force-unlock" => {
             arbitrator.mark_holder_dead(&instance);
             let outcome = arbitrator
                 .reclaim_dead_holder(&instance, current_unix_ms())
@@ -664,6 +710,9 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
             json!({
                 "state": outcome.decision.as_str(),
                 "instance": instance,
+                "force_unlock": true,
+                "liveness_checked": false,
+                "warning": "admin_force_unlock_bypassed_liveness_check",
                 "arbitration": arbitration_json(&outcome.decision)
             })
         }
@@ -688,7 +737,7 @@ pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutc
             )));
         }
     };
-    save_lab2_arbitrator(state_path.as_deref(), &arbitrator)?;
+    save_lab2_arbitrator(&state_path, &arbitrator)?;
     if records.is_empty() {
         return Ok(data);
     }
@@ -797,10 +846,16 @@ fn admit_lab2_request(
         .snapshot(&instance)
         .queued
         .filter(|queued| now_ms > queued.deadline_ms);
-    let mut outcome = arbitrator
-        .admit(request, now_ms)
-        .map_err(|err| CliError::device(err.to_string()))?;
-    save_lab2_arbitrator(state_path.as_deref(), &arbitrator)?;
+    let mut outcome = if let Some(lease_id) = lab2_explicit_lease_id(flags) {
+        arbitrator
+            .admit_with_existing_lease(request, &lease_id, now_ms)
+            .map_err(|err| CliError::device(err.to_string()))?
+    } else {
+        arbitrator
+            .admit(request, now_ms)
+            .map_err(|err| CliError::device(err.to_string()))?
+    };
+    save_lab2_arbitrator(&state_path, &arbitrator)?;
     outcome.ledger_records.insert(0, request_record);
     if let Some(queued) = expired_queued {
         outcome.ledger_records.push(LedgerRecord::new(
@@ -819,10 +874,8 @@ fn admit_lab2_request(
     Ok(outcome)
 }
 
-fn load_lab2_arbitrator(flags: &FlagArgs) -> CliOutcome<(Option<PathBuf>, DegradedArbitrator)> {
-    let Some(state_dir) = explicit_lab2_state_dir(flags)? else {
-        return Ok((None, DegradedArbitrator::new(IdIssuer::new())));
-    };
+fn load_lab2_arbitrator(flags: &FlagArgs) -> CliOutcome<(PathBuf, DegradedArbitrator)> {
+    let state_dir = explicit_lab2_state_dir(flags)?;
     fs::create_dir_all(&state_dir).map_err(|err| {
         CliError::runtime_not_running(format!(
             "failed to create Lab-2 arbitrator state dir {}: {err}",
@@ -831,7 +884,7 @@ fn load_lab2_arbitrator(flags: &FlagArgs) -> CliOutcome<(Option<PathBuf>, Degrad
     })?;
     let path = state_dir.join(LAB2_ARBITRATOR_STATE_FILE);
     let Some(state) = read_json_file::<Lab2ArbitratorState>(&path)? else {
-        return Ok((Some(path), DegradedArbitrator::new(IdIssuer::new())));
+        return Ok((path, DegradedArbitrator::new(IdIssuer::new())));
     };
     if state.schema_version != LAB2_ARBITRATOR_STATE_VERSION {
         return Err(CliError::device(format!(
@@ -841,15 +894,12 @@ fn load_lab2_arbitrator(flags: &FlagArgs) -> CliOutcome<(Option<PathBuf>, Degrad
         )));
     }
     Ok((
-        Some(path),
+        path,
         DegradedArbitrator::from_instances(IdIssuer::new(), state.instances),
     ))
 }
 
-fn save_lab2_arbitrator(path: Option<&Path>, arbitrator: &DegradedArbitrator) -> CliOutcome<()> {
-    let Some(path) = path else {
-        return Ok(());
-    };
+fn save_lab2_arbitrator(path: &Path, arbitrator: &DegradedArbitrator) -> CliOutcome<()> {
     let state = Lab2ArbitratorState {
         schema_version: LAB2_ARBITRATOR_STATE_VERSION.to_string(),
         updated_at_unix_ms: current_unix_ms(),
@@ -858,14 +908,52 @@ fn save_lab2_arbitrator(path: Option<&Path>, arbitrator: &DegradedArbitrator) ->
     write_json_file_atomic(path, &state)
 }
 
-fn explicit_lab2_state_dir(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {
+fn explicit_lab2_state_dir(flags: &FlagArgs) -> CliOutcome<PathBuf> {
     if let Some(path) = flags.optional_path("--state-dir") {
-        return Ok(Some(path));
+        return Ok(path);
     }
     if let Ok(path) = env::var(SESSION_STATE_ENV) {
-        return Ok(Some(PathBuf::from(path)));
+        return Ok(PathBuf::from(path));
     }
-    Ok(None)
+    Ok(app_state_root()?.join("lab2"))
+}
+
+fn lab2_explicit_lease_id(flags: &FlagArgs) -> Option<String> {
+    flags.optional("--lease-id").filter(|value| value != "true")
+}
+
+fn parse_lab2_arbitrator_verb(value: &str) -> CliOutcome<RequestVerb> {
+    match value {
+        "do" => Ok(RequestVerb::Do),
+        "ensure" => Ok(RequestVerb::Ensure),
+        "run_task" => Ok(RequestVerb::RunTask),
+        other => Err(CliError::usage(format!(
+            "unsupported lab arbitrator --verb '{other}', expected do, ensure, or run_task"
+        ))),
+    }
+}
+
+fn implicit_lab2_lease(flags: &FlagArgs, decision: &ArbitrationDecision) -> Option<LeaseGrant> {
+    if lab2_explicit_lease_id(flags).is_some() {
+        return None;
+    }
+    match decision {
+        ArbitrationDecision::LeaseGranted { lease, .. } => Some(lease.clone()),
+        _ => None,
+    }
+}
+
+fn release_implicit_lab2_lease(
+    flags: &FlagArgs,
+    instance: &str,
+    lease: &LeaseGrant,
+) -> CliOutcome<Vec<LedgerRecord>> {
+    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
+    let outcome = arbitrator
+        .release(instance, &lease.lease_id, current_unix_ms())
+        .map_err(|err| CliError::device(err.to_string()))?;
+    save_lab2_arbitrator(&state_path, &arbitrator)?;
+    Ok(outcome.ledger_records)
 }
 
 fn ensure_lab2_write_admitted(
@@ -995,6 +1083,29 @@ fn finish_lab2_response(
     let mut payload = payload;
     payload["ledger"] = write_lab2_ledger(global, instance, req_id, &payload, &mut records)?;
     project_lab2_payload(&payload, flags)
+}
+
+fn finish_lab2_result_with_ledger(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    req_id: &str,
+    instance: &str,
+    result: CliOutcome<Value>,
+    records: Vec<LedgerRecord>,
+) -> CliOutcome<Value> {
+    match result {
+        Ok(payload) => finish_lab2_response(global, flags, req_id, instance, payload, records),
+        Err(error) => {
+            let details = cli_error_details_or_projection(
+                &error,
+                req_id,
+                "fatal",
+                "failed",
+                "inspect-lab2-ledger",
+            );
+            return_lab2_error_with_ledger(global, flags, req_id, instance, details, error, records)
+        }
+    }
 }
 
 fn write_lab2_ledger(
@@ -1478,6 +1589,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--allow-destructive",
                 "--destructive",
                 "--priority <normal|high>",
+                "--lease-id <id>",
                 "--fields <field,field>",
                 "--no-wait",
                 "--recovery-timeout-ms <ms>",
@@ -1504,6 +1616,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             optional: &[
                 "--dry-run",
                 "--allow-destructive",
+                "--lease-id <id>",
                 "--step-timeout-ms <ms>",
                 "--poll-ms <ms>",
                 "--no-wait",
@@ -1555,12 +1668,14 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         Lab2CommandContract {
             name: "lab arbitrator",
             summary: "inspect or maintain the persistent degraded arbitrator state",
-            required: &["status|release|cancel|reclaim-dead|mark-destructive"],
+            required: &["status|acquire|release|cancel|reclaim-dead|force-unlock|mark-destructive"],
             optional: &[
                 "--state-dir <path>",
                 "--instance <name>",
                 "--lease-id <id>",
                 "--req <id>",
+                "--verb <do|ensure|run_task>",
+                "--priority <normal|high>",
             ],
             output_fields: &["state", "instance", "arbitration", "ledger"],
             requires_lease: false,
@@ -1669,7 +1784,7 @@ fn escape_toolbox_groups() -> Value {
         },
         {
             "group": "lease_and_arbitration",
-            "commands": ["lab lease", "lab preempt", "lab release", "session request status"]
+            "commands": ["lab arbitrator acquire", "lab arbitrator release", "lab arbitrator status", "lab arbitrator force-unlock", "session request status"]
         }
     ])
 }

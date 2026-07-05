@@ -431,6 +431,49 @@ impl DegradedArbitrator {
         }
     }
 
+    pub fn admit_with_existing_lease(
+        &mut self,
+        request: RequestEnvelope,
+        lease_id: &str,
+        now_ms: u64,
+    ) -> ArbitrationResult<ArbitrationOutcome> {
+        request.validate()?;
+        let instance = request.instance.clone();
+        self.expire_queued_request(&instance, now_ms);
+        if !request.verb.requires_lease() {
+            return Ok(Self::outcome(ArbitrationDecision::ReadonlyAccepted {
+                req_id: request.req_id,
+                instance,
+            }));
+        }
+
+        let holder = self
+            .instances
+            .get(&instance)
+            .and_then(|state| state.holder.clone());
+        match holder {
+            Some(holder) if holder.lease_id == lease_id && holder.alive => {
+                Ok(Self::outcome(ArbitrationDecision::LeaseGranted {
+                    req_id: request.req_id,
+                    instance: request.instance,
+                    lease: holder,
+                }))
+            }
+            holder => Ok(Self::outcome(ArbitrationDecision::Rejected {
+                req_id: request.req_id,
+                instance: request.instance,
+                error: "lease_held".to_string(),
+                holder,
+                queued_req_id: self
+                    .instances
+                    .get(&instance)
+                    .and_then(|state| state.queued.as_ref())
+                    .map(|queued| queued.request.req_id.clone()),
+                hint: "acquire-matching-lab2-arbitrator-lease".to_string(),
+            })),
+        }
+    }
+
     pub fn release(
         &mut self,
         instance: &str,

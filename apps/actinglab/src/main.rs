@@ -53387,24 +53387,24 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let first = run_cli(
+        let holder = run_cli(
             [
                 "--json",
-                "--dry-run",
-                "--resource-root",
-                temp.path().to_str().unwrap(),
                 "--game",
                 "ark",
-                "do",
-                "home_button",
+                "lab",
+                "arbitrator",
+                "acquire",
                 "--state-dir",
                 state_dir.to_str().unwrap(),
-                "--scene",
-                scene.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
             ],
             true,
         );
-        assert_eq!(first.exit_code(), 0);
+        assert_eq!(holder.exit_code(), 0);
         assert!(state_dir.join("lab2-arbitrator-state.json").exists());
 
         let second = run_cli(
@@ -53725,6 +53725,33 @@ mod tests {
         unsafe {
             env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
         }
+        let lab_lease = run_cli(
+            [
+                "--json",
+                "--game",
+                "ark",
+                "lab",
+                "arbitrator",
+                "acquire",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
+            ],
+            true,
+        );
+        assert_eq!(lab_lease.exit_code(), 0, "{}", lab_lease.envelope_json());
+        let lab_lease_id = lab_lease
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .pointer("/arbitration/details/lease/lease_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
 
         let result = run_cli(
             [
@@ -53745,7 +53772,7 @@ mod tests {
                 "--lease-holder",
                 "operator",
                 "--lease-id",
-                "session-1",
+                &lab_lease_id,
                 "--fields",
                 "executed,device,actual_click,guard_result",
             ],
@@ -53795,10 +53822,37 @@ mod tests {
         set_config_env(&config_path);
         let state_dir = temp.path().join("session");
         fs::create_dir_all(&state_dir).unwrap();
+        let lab_lease = run_cli(
+            [
+                "--json",
+                "--game",
+                "ark",
+                "lab",
+                "arbitrator",
+                "acquire",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
+            ],
+            true,
+        );
+        assert_eq!(lab_lease.exit_code(), 0, "{}", lab_lease.envelope_json());
+        let lab_lease_id = lab_lease
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .pointer("/arbitration/details/lease/lease_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
         let session_lease = new_session_lease(
             "default".to_string(),
             "operator".to_string(),
-            Some("session-1".to_string()),
+            Some(lab_lease_id.clone()),
             false,
             None,
         );
@@ -53829,7 +53883,7 @@ mod tests {
                 "--lease-holder",
                 "operator",
                 "--lease-id",
-                "session-1",
+                &lab_lease_id,
                 "--fields",
                 "executed,device,actual_click,guard_result",
             ],
@@ -53993,10 +54047,22 @@ mod tests {
         ];
 
         let holder = run_cli(
-            base.iter()
-                .copied()
-                .chain(["--priority", "high"])
-                .collect::<Vec<_>>(),
+            [
+                "--json",
+                "--game",
+                "ark",
+                "lab",
+                "arbitrator",
+                "acquire",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
+                "--priority",
+                "high",
+            ],
             true,
         );
         assert_eq!(holder.exit_code(), 0, "{}", holder.envelope_json());
@@ -54116,12 +54182,25 @@ mod tests {
             Some(expired_req.as_str())
         );
 
-        let reclaim = run_cli(
+        let reclaim_alive = run_cli(
             [
                 "--json",
                 "lab",
                 "arbitrator",
                 "reclaim-dead",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_ne!(reclaim_alive.exit_code(), 0);
+
+        let reclaim = run_cli(
+            [
+                "--json",
+                "lab",
+                "arbitrator",
+                "force-unlock",
                 "--state-dir",
                 state_dir.to_str().unwrap(),
             ],
@@ -54137,6 +54216,16 @@ mod tests {
                 .get("state")
                 .and_then(Value::as_str),
             Some("reclaimed")
+        );
+        assert_eq!(
+            reclaim
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("force_unlock")
+                .and_then(Value::as_bool),
+            Some(true)
         );
 
         let release = run_cli(
@@ -54158,17 +54247,17 @@ mod tests {
         let normal_holder = run_cli(
             [
                 "--json",
-                "--dry-run",
-                "--resource-root",
-                temp.path().to_str().unwrap(),
                 "--game",
                 "ark",
-                "do",
-                "home_button",
+                "lab",
+                "arbitrator",
+                "acquire",
                 "--state-dir",
                 normal_state.to_str().unwrap(),
-                "--scene",
-                scene.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
             ],
             true,
         );
@@ -54343,17 +54432,17 @@ mod tests {
         let first = run_cli(
             [
                 "--json",
-                "--dry-run",
-                "--resource-root",
-                temp.path().to_str().unwrap(),
                 "--game",
                 "ark",
-                "do",
-                "home_button",
+                "lab",
+                "arbitrator",
+                "acquire",
                 "--state-dir",
                 lease_state_dir.to_str().unwrap(),
-                "--scene",
-                home.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
             ],
             true,
         );

@@ -16,23 +16,53 @@ impl VendorStdioCapture {
 }
 
 #[cfg(windows)]
-pub(crate) fn capture_vendor_stdio<T>(
-    operation: impl FnOnce() -> DeviceResult<T>,
-) -> DeviceResult<(T, VendorStdioCapture)> {
-    let _lock = stdio_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut guard = imp::RedirectGuard::new()?;
-    let result = operation();
-    let captured = guard.finish()?;
-    result.map(|value| (value, captured))
+pub(crate) struct VendorStdioSession {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    guard: Option<imp::RedirectGuard>,
+}
+
+#[cfg(windows)]
+impl VendorStdioSession {
+    pub(crate) fn start() -> DeviceResult<Self> {
+        let lock = stdio_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = imp::RedirectGuard::new()?;
+        Ok(Self {
+            _lock: lock,
+            guard: Some(guard),
+        })
+    }
+
+    pub(crate) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
+        self.guard
+            .as_mut()
+            .ok_or_else(|| crate::DeviceError::fatal("vendor stdio session is closed"))?
+            .snapshot()
+    }
+}
+
+#[cfg(windows)]
+impl Drop for VendorStdioSession {
+    fn drop(&mut self) {
+        if let Some(mut guard) = self.guard.take() {
+            let _ = guard.finish();
+        }
+    }
 }
 
 #[cfg(not(windows))]
-pub(crate) fn capture_vendor_stdio<T>(
-    operation: impl FnOnce() -> DeviceResult<T>,
-) -> DeviceResult<(T, VendorStdioCapture)> {
-    operation().map(|value| (value, VendorStdioCapture::default()))
+pub(crate) struct VendorStdioSession;
+
+#[cfg(not(windows))]
+impl VendorStdioSession {
+    pub(crate) fn start() -> DeviceResult<Self> {
+        Ok(Self)
+    }
+
+    pub(crate) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
+        Ok(VendorStdioCapture::default())
+    }
 }
 
 #[cfg(windows)]
@@ -89,6 +119,8 @@ mod imp {
         capture_stderr: i32,
         stdout_path: PathBuf,
         stderr_path: PathBuf,
+        stdout_offset: i32,
+        stderr_offset: i32,
         restored: bool,
     }
 
@@ -178,22 +210,30 @@ mod imp {
                 capture_stderr,
                 stdout_path,
                 stderr_path,
+                stdout_offset: 0,
+                stderr_offset: 0,
                 restored: false,
+            })
+        }
+
+        pub(super) fn snapshot(&mut self) -> DeviceResult<VendorStdioCapture> {
+            flush_all();
+            let stdout = read_capture_fd(self.capture_stdout, &mut self.stdout_offset, "stdout")?;
+            let stderr = read_capture_fd(self.capture_stderr, &mut self.stderr_offset, "stderr")?;
+            Ok(VendorStdioCapture {
+                stdout: String::from_utf8_lossy(&stdout).to_string(),
+                stderr: String::from_utf8_lossy(&stderr).to_string(),
             })
         }
 
         pub(super) fn finish(&mut self) -> DeviceResult<VendorStdioCapture> {
             self.restore()?;
-            let stdout = read_capture_fd(self.capture_stdout, "stdout")?;
-            let stderr = read_capture_fd(self.capture_stderr, "stderr")?;
+            let captured = self.snapshot()?;
             close_fd(self.capture_stdout);
             close_fd(self.capture_stderr);
             let _ = std::fs::remove_file(&self.stdout_path);
             let _ = std::fs::remove_file(&self.stderr_path);
-            Ok(VendorStdioCapture {
-                stdout: String::from_utf8_lossy(&stdout).to_string(),
-                stderr: String::from_utf8_lossy(&stderr).to_string(),
-            })
+            Ok(captured)
         }
 
         fn restore(&mut self) -> DeviceResult<()> {
@@ -290,8 +330,8 @@ mod imp {
         Ok(fd)
     }
 
-    fn read_capture_fd(fd: i32, name: &str) -> DeviceResult<Vec<u8>> {
-        if unsafe { _lseek(fd, 0, SEEK_SET) } < 0 {
+    fn read_capture_fd(fd: i32, offset: &mut i32, name: &str) -> DeviceResult<Vec<u8>> {
+        if unsafe { _lseek(fd, *offset, SEEK_SET) } < 0 {
             return Err(DeviceError::fatal(format!(
                 "failed to rewind vendor {name} capture fd"
             )));
@@ -306,6 +346,9 @@ mod imp {
                 )));
             }
             if read == 0 {
+                *offset += i32::try_from(output.len()).map_err(|_| {
+                    DeviceError::fatal(format!("vendor {name} capture offset exceeded i32"))
+                })?;
                 return Ok(output);
             }
             output.extend_from_slice(&buffer[..read as usize]);
@@ -380,12 +423,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn captures_crt_stdout_and_stderr_noise() {
-        let (value, capture) = capture_vendor_stdio(|| {
-            imp::write_fd_for_test(1, b"vendor stdout noise\n")?;
-            imp::write_fd_for_test(2, b"vendor stderr noise\n")?;
-            Ok(7)
-        })
-        .expect("capture vendor stdio");
+        let mut session = VendorStdioSession::start().expect("start vendor stdio session");
+        imp::write_fd_for_test(1, b"vendor stdout noise\n").expect("write stdout noise");
+        imp::write_fd_for_test(2, b"vendor stderr noise\n").expect("write stderr noise");
+        let value = 7;
+        let capture = session.snapshot().expect("capture vendor stdio");
 
         assert_eq!(value, 7);
         assert!(capture.stdout.contains("vendor stdout noise\n"));
@@ -395,22 +437,41 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn captures_win32_stdout_and_stderr_noise() {
-        let (value, capture) = capture_vendor_stdio(|| {
-            imp::write_win32_handle_for_test(imp::STD_OUTPUT_HANDLE, b"win32 stdout noise\n")?;
-            imp::write_win32_handle_for_test(imp::STD_ERROR_HANDLE, b"win32 stderr noise\n")?;
-            Ok(7)
-        })
-        .expect("capture vendor Win32 stdio");
+        let mut session = VendorStdioSession::start().expect("start vendor stdio session");
+        imp::write_win32_handle_for_test(imp::STD_OUTPUT_HANDLE, b"win32 stdout noise\n")
+            .expect("write stdout noise");
+        imp::write_win32_handle_for_test(imp::STD_ERROR_HANDLE, b"win32 stderr noise\n")
+            .expect("write stderr noise");
+        let value = 7;
+        let capture = session.snapshot().expect("capture vendor Win32 stdio");
 
         assert_eq!(value, 7);
         assert!(capture.stdout.contains("win32 stdout noise\n"));
         assert!(capture.stderr.contains("win32 stderr noise\n"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn session_captures_win32_noise_across_snapshots() {
+        let mut session = VendorStdioSession::start().expect("start vendor stdio session");
+        imp::write_win32_handle_for_test(imp::STD_OUTPUT_HANDLE, b"first stdout\n")
+            .expect("write first stdout noise");
+        let first = session.snapshot().expect("first snapshot");
+        imp::write_win32_handle_for_test(imp::STD_OUTPUT_HANDLE, b"second stdout\n")
+            .expect("write second stdout noise");
+        let second = session.snapshot().expect("second snapshot");
+
+        assert!(first.stdout.contains("first stdout\n"));
+        assert!(!first.stdout.contains("second stdout\n"));
+        assert!(second.stdout.contains("second stdout\n"));
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn non_windows_capture_is_noop() {
-        let (value, capture) = capture_vendor_stdio(|| Ok(7)).expect("capture vendor stdio");
+        let mut session = VendorStdioSession::start().expect("start vendor stdio session");
+        let value = 7;
+        let capture = session.snapshot().expect("capture vendor stdio");
 
         assert_eq!(value, 7);
         assert!(capture.is_empty());

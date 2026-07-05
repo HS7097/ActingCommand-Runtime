@@ -22,8 +22,6 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const CLICK_SPACE_WIDTH: i32 = 1280;
-const CLICK_SPACE_HEIGHT: i32 = 720;
 const DEFAULT_CLICK_RECT_RADIUS: i32 = 20;
 const DEFAULT_FORBIDDEN_RADIUS: i32 = 20;
 const DEFAULT_EXPECT_TIMEOUT_MS: u64 = 3000;
@@ -63,9 +61,15 @@ enum ActualInputAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClickSpace {
+    width: i32,
+    height: i32,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct NavigationFile {
-    coordinate_space: Option<NavigationCoordinateSpace>,
+    coordinate_space: NavigationCoordinateSpace,
     #[serde(default)]
     control_points: Vec<NavigationControlPoint>,
     #[serde(default)]
@@ -172,6 +176,7 @@ struct ForbiddenDestructivePoint {
 
 #[derive(Debug)]
 struct NavigationBridge {
+    click_space: ClickSpace,
     overrides: ProbeReferenceOverrides,
     arrival_anchors: HashMap<String, ArrivalAnchor>,
     drag_targets: HashMap<String, NavigationDrag>,
@@ -506,14 +511,16 @@ fn execute_probe_run(
                     "safety_check_started",
                     json!({"step_id": step.id, "target_id": target_id, "before_page": before_page}),
                 )?;
+                let click_space = click_space_for_scene(&scene, navigation.as_ref())?;
                 let input_action = actual_input_action(
                     click,
                     navigation
                         .as_ref()
                         .and_then(|bridge| bridge.drag_target(&target_id)),
                     seed_base ^ hash_text(&step.id),
+                    click_space,
                 )?;
-                validate_input_action(&input_action, navigation.as_ref())?;
+                validate_input_action(&input_action, navigation.as_ref(), click_space)?;
                 journal.event(
                     "safety_check_done",
                     json!({
@@ -935,12 +942,14 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
             path.display()
         ))
     })?;
-    if let Some(space) = navigation.coordinate_space
-        && (space.width != CLICK_SPACE_WIDTH || space.height != CLICK_SPACE_HEIGHT)
-    {
+    let click_space = ClickSpace {
+        width: navigation.coordinate_space.width,
+        height: navigation.coordinate_space.height,
+    };
+    if click_space.width <= 0 || click_space.height <= 0 {
         return Err(DeviceError::fatal(format!(
-            "navigation coordinate_space {}x{} does not match probe click space {}x{}",
-            space.width, space.height, CLICK_SPACE_WIDTH, CLICK_SPACE_HEIGHT
+            "navigation coordinate_space must be positive, got {}x{}",
+            click_space.width, click_space.height
         )));
     }
 
@@ -962,7 +971,7 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
             overrides.insert_page(route.from_page.clone());
         }
         let target_id = navigation_target_id(&route.id);
-        match route_input(route)? {
+        match route_input(route, click_space)? {
             NavigationInput::Tap(click_rect) => {
                 overrides.insert_click_target(target_id, click_rect);
             }
@@ -984,7 +993,10 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
         }
     }
     for point in &navigation.control_points {
-        overrides.insert_click_target(control_target_id(&point.name), point_rect(point.point));
+        overrides.insert_click_target(
+            control_target_id(&point.name),
+            point_rect(point.point, click_space),
+        );
         control_points.insert(point.name.clone(), point.point);
     }
     let forbidden = navigation
@@ -994,6 +1006,7 @@ fn load_navigation_bridge(path: &Path) -> DeviceResult<NavigationBridge> {
         .collect::<Vec<_>>();
 
     Ok(NavigationBridge {
+        click_space,
         overrides,
         arrival_anchors,
         drag_targets,
@@ -1019,7 +1032,7 @@ enum NavigationInput {
     None,
 }
 
-fn route_input(route: &NavigationRoute) -> DeviceResult<NavigationInput> {
+fn route_input(route: &NavigationRoute, click_space: ClickSpace) -> DeviceResult<NavigationInput> {
     match route.click.kind.as_str() {
         "point" => {
             let point = parse_point_string(&route.click.point).map_err(|message| {
@@ -1028,14 +1041,17 @@ fn route_input(route: &NavigationRoute) -> DeviceResult<NavigationInput> {
                     route.id
                 ))
             })?;
-            Ok(NavigationInput::Tap(point_rect(point)))
+            Ok(NavigationInput::Tap(point_rect(point, click_space)))
         }
         "rect" => {
             let rect = route_click_rect(route)?;
+            validate_rect_in_click_space(rect, click_space)?;
             Ok(NavigationInput::Tap(rect))
         }
         "drag" => {
             let drag = route_drag(route)?;
+            validate_rect_in_click_space(drag.from, click_space)?;
+            validate_rect_in_click_space(drag.to, click_space)?;
             Ok(NavigationInput::Drag(drag))
         }
         "template_center" => {
@@ -1419,11 +1435,12 @@ fn actual_input_action(
     click: PackRect,
     drag: Option<NavigationDrag>,
     seed: u64,
+    click_space: ClickSpace,
 ) -> DeviceResult<ActualInputAction> {
     match drag {
         Some(drag) => {
-            validate_rect_in_click_space(drag.from)?;
-            validate_rect_in_click_space(drag.to)?;
+            validate_rect_in_click_space(drag.from, click_space)?;
+            validate_rect_in_click_space(drag.to, click_space)?;
             let from = actual_click_point(drag.from, seed ^ hash_text("drag.from"));
             let to = actual_click_point(drag.to, seed ^ hash_text("drag.to"));
             Ok(ActualInputAction::Drag {
@@ -1433,7 +1450,7 @@ fn actual_input_action(
             })
         }
         None => {
-            validate_rect_in_click_space(click)?;
+            validate_rect_in_click_space(click, click_space)?;
             Ok(ActualInputAction::Tap(actual_click_point(click, seed)))
         }
     }
@@ -1442,18 +1459,19 @@ fn actual_input_action(
 fn validate_input_action(
     action: &ActualInputAction,
     navigation: Option<&NavigationBridge>,
+    click_space: ClickSpace,
 ) -> DeviceResult<()> {
     match action {
         ActualInputAction::Tap(actual) => {
-            validate_point_in_click_space(actual.x, actual.y)?;
+            validate_point_in_click_space(actual.x, actual.y, click_space)?;
             if let Some(bridge) = navigation {
                 bridge.validate_rect_not_forbidden(actual.rect)?;
                 bridge.validate_point_not_forbidden(actual.x, actual.y)?;
             }
         }
         ActualInputAction::Drag { from, to, .. } => {
-            validate_point_in_click_space(from.x, from.y)?;
-            validate_point_in_click_space(to.x, to.y)?;
+            validate_point_in_click_space(from.x, from.y, click_space)?;
+            validate_point_in_click_space(to.x, to.y, click_space)?;
             if let Some(bridge) = navigation {
                 bridge.validate_rect_not_forbidden(from.rect)?;
                 bridge.validate_rect_not_forbidden(to.rect)?;
@@ -1581,11 +1599,25 @@ fn rect_json(rect: PackRect) -> serde_json::Value {
     json!({"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height})
 }
 
-fn point_rect(point: [i32; 2]) -> PackRect {
+fn click_space_for_scene(
+    scene: &Scene,
+    navigation: Option<&NavigationBridge>,
+) -> DeviceResult<ClickSpace> {
+    if let Some(bridge) = navigation {
+        return Ok(bridge.click_space);
+    }
+    let width = i32::try_from(scene.width())
+        .map_err(|_| DeviceError::fatal(format!("scene width exceeds i32: {}", scene.width())))?;
+    let height = i32::try_from(scene.height())
+        .map_err(|_| DeviceError::fatal(format!("scene height exceeds i32: {}", scene.height())))?;
+    Ok(ClickSpace { width, height })
+}
+
+fn point_rect(point: [i32; 2], click_space: ClickSpace) -> PackRect {
     let x = (point[0] - DEFAULT_CLICK_RECT_RADIUS).max(0);
     let y = (point[1] - DEFAULT_CLICK_RECT_RADIUS).max(0);
-    let right = (point[0] + DEFAULT_CLICK_RECT_RADIUS).min(CLICK_SPACE_WIDTH - 1);
-    let bottom = (point[1] + DEFAULT_CLICK_RECT_RADIUS).min(CLICK_SPACE_HEIGHT - 1);
+    let right = (point[0] + DEFAULT_CLICK_RECT_RADIUS).min(click_space.width - 1);
+    let bottom = (point[1] + DEFAULT_CLICK_RECT_RADIUS).min(click_space.height - 1);
     PackRect {
         x,
         y,
@@ -1594,22 +1626,26 @@ fn point_rect(point: [i32; 2]) -> PackRect {
     }
 }
 
-fn validate_rect_in_click_space(rect: PackRect) -> DeviceResult<()> {
+fn validate_rect_in_click_space(rect: PackRect, click_space: ClickSpace) -> DeviceResult<()> {
     if rect.width <= 0 || rect.height <= 0 {
         return Err(DeviceError::fatal(format!(
             "click rect dimensions must be positive: {}x{}",
             rect.width, rect.height
         )));
     }
-    validate_point_in_click_space(rect.x, rect.y)?;
-    validate_point_in_click_space(rect.x + rect.width - 1, rect.y + rect.height - 1)
+    validate_point_in_click_space(rect.x, rect.y, click_space)?;
+    validate_point_in_click_space(
+        rect.x + rect.width - 1,
+        rect.y + rect.height - 1,
+        click_space,
+    )
 }
 
-fn validate_point_in_click_space(x: i32, y: i32) -> DeviceResult<()> {
-    if !(0..CLICK_SPACE_WIDTH).contains(&x) || !(0..CLICK_SPACE_HEIGHT).contains(&y) {
+fn validate_point_in_click_space(x: i32, y: i32, click_space: ClickSpace) -> DeviceResult<()> {
+    if !(0..click_space.width).contains(&x) || !(0..click_space.height).contains(&y) {
         return Err(DeviceError::fatal(format!(
             "click point {x},{y} is outside {}x{} click space",
-            CLICK_SPACE_WIDTH, CLICK_SPACE_HEIGHT
+            click_space.width, click_space.height
         )));
     }
     Ok(())
@@ -1742,8 +1778,12 @@ mod tests {
 
     #[test]
     fn point_rect_wraps_point_with_radius() {
+        let click_space = ClickSpace {
+            width: 1280,
+            height: 720,
+        };
         assert_eq!(
-            point_rect([66, 237]),
+            point_rect([66, 237], click_space),
             PackRect {
                 x: 46,
                 y: 217,
@@ -1756,6 +1796,10 @@ mod tests {
     #[test]
     fn forbidden_point_uses_radius_not_exact_equality() {
         let bridge = NavigationBridge {
+            click_space: ClickSpace {
+                width: 1280,
+                height: 720,
+            },
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
             drag_targets: HashMap::new(),
@@ -1775,6 +1819,10 @@ mod tests {
     #[test]
     fn forbidden_rect_rejects_inside_point() {
         let bridge = NavigationBridge {
+            click_space: ClickSpace {
+                width: 1280,
+                height: 720,
+            },
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
             drag_targets: HashMap::new(),
@@ -1799,6 +1847,10 @@ mod tests {
     #[test]
     fn forbidden_candidate_rect_rejects_point_and_radius_overlap() {
         let bridge = NavigationBridge {
+            click_space: ClickSpace {
+                width: 1280,
+                height: 720,
+            },
             overrides: ProbeReferenceOverrides::new(),
             arrival_anchors: HashMap::new(),
             drag_targets: HashMap::new(),

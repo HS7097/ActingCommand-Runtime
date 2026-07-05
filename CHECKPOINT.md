@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain repair round 2
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round2-b2507b7.md`.
+- Lab-2 degraded arbitrator now persists by default under `app_state_root()/lab2` when no `--state-dir` or `ACTINGLAB_SESSION_STATE_DIR` is provided.
+- Bare `do` and `ensure` now use implicit short leases: they persist an active holder during execution, block concurrent same-instance write attempts, and release on success or failure. Explicit long leases are acquired with `lab arbitrator acquire` and consumed with `do --lease-id`.
+- `observe`, `wait`, `do`, and `ensure` now route post-admission success and error exits through a shared ledger finalizer so dispatch/receipt records remain traceable.
+- `reclaim-dead` no longer turns a live holder into a dead holder. `force-unlock` is the explicit admin bypass and reports `liveness_checked:false`.
+- Nemu vendor stdout/stderr capture now uses a session-level redirection boundary that starts before DLL load and records Win32-handle snapshots.
+- Removed the production `D:\BST\MuMuPlayer` ADB discovery candidate, changed ADB text decode to lossy-with-diagnostics, required navigation `coordinate_space`, derived probe-run click space from metadata, and marked Nemu channel order as `mumu_nemu_verified`.
+- No UI, OCR, SQLite, game logic, resource repository changes, or upstream code copying were done in this round.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `apps/device-test/src/probe_run.rs`
+- `crates/arbitrator/src/lib.rs`
+- `crates/device/src/adb.rs`
+- `crates/device/src/capture.rs`
+- `crates/device/src/vendor_stdio.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-actinglab`
+- `cargo check -p actingcommand-device -p actingcommand-device-test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab --test lab2_cli_contract -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_arbitrator_cli -- --nocapture`
+- `cargo test -p actingcommand-device-test`
+- `cargo test -p actingcommand-device`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Focused Lab-2 child-process contract tests passed: 6/6.
+- Focused Lab-2 arbitrator unit coverage passed.
+- Device crate tests passed: 71/71.
+- Device-test crate tests passed: 55/55.
+- Focused Lab-2 suite passed: 24 unit tests plus 6 child-process contract tests.
+- Workspace clippy passed with `-D warnings`.
+- Public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No code blocker is currently known.
+- True Nemu/live stdout validation remains outside the synthetic unit/integration tests and must be checked on a real MuMu/Nemu environment.
+- W1 cross-process file-lock/CAS hardening remains deferred to the SP8 sentinel batch as stated by the task file.
+- R8.5 language-independent destructive semantics and R8.6 remote-drive state warning remain lower-priority follow-ups.
+
+### Next step
+
+1. Commit and push the round-2 repair.
+2. Hand the pushed commit to live Nemu/stdout and true-device validation.
+
 ## 2026-07-05 Lab-2 chain repair strict closeout
 
 ### Current status
