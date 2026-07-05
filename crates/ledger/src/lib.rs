@@ -1249,6 +1249,39 @@ mod tests {
     }
 
     #[test]
+    fn projection_summarizes_twenty_decision_targets_with_more_and_full_pointer() {
+        let targets = (0..20)
+            .map(|index| {
+                json!({
+                    "id": format!("target-{index:02}"),
+                    "passed": index == 17,
+                    "score": index as f64 / 20.0,
+                    "diagnostics": "x".repeat(200)
+                })
+            })
+            .collect::<Vec<_>>();
+        let record = json!({
+            "req_id": "req-1",
+            "state": "ok",
+            "hint": "none",
+            "targets": targets
+        });
+
+        let projected = project_record(
+            &record,
+            &ProjectionRequest::min().with_evidence_id("full-twenty-targets"),
+        )
+        .expect("project");
+
+        let items = projected["targets"]["items"].as_array().expect("items");
+        assert_eq!(items.len(), DECISION_ARRAY_LIMIT);
+        assert_eq!(projected["targets"]["_more"], 16);
+        assert_eq!(projected["targets"]["_full"], "full-twenty-targets");
+        assert_eq!(items[0]["id"], "target-17");
+        assert!(items.iter().all(|item| item.get("diagnostics").is_none()));
+    }
+
+    #[test]
     fn projection_keeps_decision_arrays_when_payload_exceeds_hard_limit() {
         let bulky = "x".repeat(600);
         let targets = (0..8)

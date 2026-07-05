@@ -412,8 +412,12 @@ mod imp {
                 overlapped: *mut c_void,
             ) -> i32;
         }
+        // SAFETY: std_handle is one of the Win32 standard handle constants supplied by
+        // this module's callers; the returned handle is checked by the following write.
         let handle = unsafe { GetStdHandle(std_handle) };
         let mut written = 0u32;
+        // SAFETY: bytes points to a valid immutable buffer for bytes.len(), and the
+        // stack-local written pointer remains valid for the duration of WriteFile.
         let ok = unsafe {
             WriteFile(
                 handle,

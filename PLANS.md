@@ -6,6 +6,30 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current Lab-2 chain repair round 4 closeout
+
+The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round4-ea3744e.md`.
+
+Repair order:
+
+- C1: seal Lab-2 tests from real `%LOCALAPPDATA%` and `%APPDATA`; child-process helpers now require an explicit app-data TempDir.
+- C2: route `admit_lab2_request` usage-validation failures for invalid `--priority` and `--queue-deadline-ms` through dispatch/receipt ledger records.
+- C3: add a non-MuMu PATH-ADB baseline channel with explicit warning metadata, and keep R8.6/do-stub disclosures visible.
+- C4: add the missing R6 coverage for non-dry-run resource drift before fake touch, destructive tri-state opt-in, and projection of 20 decision targets with `_more`/`_full`.
+- C5: keep the RAII panic-cleanup item deferred, add Win32 FFI `SAFETY` notes, and register the PID reuse/creation-time-key risk.
+- C6: make queued-request promotion liveness-aware so dead queued requesters are dropped and ledgered instead of becoming orphan holders.
+
+Round-4 status:
+
+- Implemented locally and verified against Runtime baseline `ea3744e`.
+- Lab-2 unit and child-process contract tests are isolated from the user's real app-data directories.
+- `lab arbitrator release`, `reclaim-dead`, and `force-unlock` now check queued requester liveness before promotion; dropped queued requests write `queue_dropped_dead_requester` ledger records.
+- The PATH-ADB fallback is intentionally a baseline channel for non-MuMu environments and reports a warning rather than silently pretending to be MuMu-specific discovery.
+- True-device `do` execution remains represented in tests by the explicit fake-touch/test-stub path; these tests verify admission, drift, and safety gates but do not claim live click validation.
+- R8.6 remote-drive state warning and RAII short-lease cleanup remain follow-up items; pid-aware reclaim is the current crash-residue recovery boundary.
+- PID reuse remains a registered low-frequency TOCTOU risk; a future process creation-time key should be added before treating pid identity as strong proof.
+- No UI, OCR, SQLite, game logic, resource repository changes, live-device operation, or upstream code copying are part of this round.
+
 ## Current Lab-2 chain repair round 3
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round3-1da3aa0.md`.

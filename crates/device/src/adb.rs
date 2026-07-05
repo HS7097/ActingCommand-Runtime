@@ -32,6 +32,7 @@ impl Default for AdbConfig {
 pub struct ResolvedAdbPath {
     pub path: String,
     pub source: AdbPathSource,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub enum AdbPathSource {
     Environment,
     MumuDiscovery,
     UserConfig,
+    PathBaseline,
 }
 
 impl AdbPathSource {
@@ -47,6 +49,7 @@ impl AdbPathSource {
             Self::Environment => "env:ACTINGCOMMAND_ADB_PATH",
             Self::MumuDiscovery => "mumu_discovery",
             Self::UserConfig => "user_config",
+            Self::PathBaseline => "path_adb_baseline",
         }
     }
 }
@@ -61,8 +64,16 @@ pub fn resolve_adb_path(configured: Option<&str>) -> DeviceResult<ResolvedAdbPat
     if let Some(path) = configured.filter(|value| !value.trim().is_empty()) {
         return resolved_existing_adb(PathBuf::from(path), AdbPathSource::UserConfig);
     }
+    if let Some(path) = path_adb_candidate() {
+        let mut resolved = resolved_existing_adb(path, AdbPathSource::PathBaseline)?;
+        resolved.warning = Some(
+            "WARNING: using PATH adb as a non-MuMu baseline channel because MuMu-specific ADB discovery and user configuration did not resolve an adb path"
+                .to_string(),
+        );
+        return Ok(resolved);
+    }
     Err(DeviceError::fatal(
-        "ADB path is not configured. Set ACTINGCOMMAND_ADB_PATH, set ACTINGCOMMAND_NEMU_FOLDER to a MuMu folder, install MuMu at a known path, or configure actinglab adb_path. ActingCommand will not fall back to PATH adb because mixed adb versions can kill the MuMu server.",
+        "ADB path is not configured. Set ACTINGCOMMAND_ADB_PATH, set ACTINGCOMMAND_NEMU_FOLDER to a MuMu folder, install MuMu at a known path, configure actinglab adb_path, or install adb on PATH for the non-MuMu baseline channel.",
     ))
 }
 
@@ -77,7 +88,21 @@ fn resolved_existing_adb(path: PathBuf, source: AdbPathSource) -> DeviceResult<R
     Ok(ResolvedAdbPath {
         path: path.to_string_lossy().to_string(),
         source,
+        warning: None,
     })
+}
+
+fn path_adb_candidate() -> Option<PathBuf> {
+    let names = if cfg!(windows) {
+        &["adb.exe", "adb"][..]
+    } else {
+        &["adb"][..]
+    };
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .find(|path| path.is_file())
 }
 
 fn discover_mumu_adb() -> Option<PathBuf> {
@@ -513,6 +538,10 @@ pub fn stop_child(child: &mut Child, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn mumu_adb_candidates_prefer_nx_main_before_device_shells() {
@@ -554,5 +583,57 @@ mod tests {
         );
         assert_eq!(AdbPathSource::MumuDiscovery.as_str(), "mumu_discovery");
         assert_eq!(AdbPathSource::UserConfig.as_str(), "user_config");
+        assert_eq!(AdbPathSource::PathBaseline.as_str(), "path_adb_baseline");
+    }
+
+    #[test]
+    fn resolve_adb_path_uses_path_baseline_with_warning_when_mumu_and_config_are_absent() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-path-adb-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb = temp.join(adb_name);
+        fs::write(&adb, b"test adb").unwrap();
+        let original_path = std::env::var_os("PATH");
+        let original_adb = std::env::var_os(ACTINGCOMMAND_ADB_PATH_ENV);
+        let original_mumu = std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+        unsafe {
+            std::env::set_var("PATH", &temp);
+            std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV);
+            std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV);
+        }
+
+        let resolved = resolve_adb_path(None).expect("PATH adb baseline");
+
+        unsafe {
+            match original_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+            match original_adb {
+                Some(value) => std::env::set_var(ACTINGCOMMAND_ADB_PATH_ENV, value),
+                None => std::env::remove_var(ACTINGCOMMAND_ADB_PATH_ENV),
+            }
+            match original_mumu {
+                Some(value) => std::env::set_var(ACTINGCOMMAND_NEMU_FOLDER_ENV, value),
+                None => std::env::remove_var(ACTINGCOMMAND_NEMU_FOLDER_ENV),
+            }
+        }
+        let _ = fs::remove_file(&adb);
+        let _ = fs::remove_dir(&temp);
+
+        assert_eq!(resolved.source, AdbPathSource::PathBaseline);
+        assert_eq!(Path::new(&resolved.path), adb.as_path());
+        assert!(
+            resolved
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("non-MuMu baseline"))
+        );
     }
 }

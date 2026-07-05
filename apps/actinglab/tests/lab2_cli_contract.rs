@@ -52,34 +52,31 @@ fn write_lab2_resource_root() -> TempDir {
     temp
 }
 
-fn run_actinglab(args: &[&str], local_app_data: Option<&Path>) -> Output {
+fn run_actinglab(args: &[&str], local_app_data: &Path) -> Output {
     let mut command = Command::new(actinglab_binary());
     command.args(args);
-    if let Some(path) = local_app_data {
-        command.env("LOCALAPPDATA", path);
-    }
+    command.env("LOCALAPPDATA", local_app_data);
+    command.env("APPDATA", local_app_data);
     command
         .output()
         .expect("actinglab child process should run")
 }
 
-fn run_actinglab_owned(args: &[String], local_app_data: Option<&Path>) -> Output {
+fn run_actinglab_owned(args: &[String], local_app_data: &Path) -> Output {
     let mut command = Command::new(actinglab_binary());
     command.args(args);
-    if let Some(path) = local_app_data {
-        command.env("LOCALAPPDATA", path);
-    }
+    command.env("LOCALAPPDATA", local_app_data);
+    command.env("APPDATA", local_app_data);
     command
         .output()
         .expect("actinglab child process should run")
 }
 
-fn spawn_actinglab(args: &[String], local_app_data: Option<&Path>) -> Child {
+fn spawn_actinglab(args: &[String], local_app_data: &Path) -> Child {
     let mut command = Command::new(actinglab_binary());
     command.args(args);
-    if let Some(path) = local_app_data {
-        command.env("LOCALAPPDATA", path);
-    }
+    command.env("LOCALAPPDATA", local_app_data);
+    command.env("APPDATA", local_app_data);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     command
         .spawn()
@@ -113,7 +110,7 @@ fn assert_receipt_has_dispatch_and_receipt(run_root: &Path, req_id: &str, local_
             "--req",
             req_id,
         ],
-        Some(local_app_data),
+        local_app_data,
     );
     assert!(
         receipt.status.success(),
@@ -207,6 +204,7 @@ fn crc32(data: &[u8]) -> u32 {
 
 #[test]
 fn lab2_child_process_stdout_starts_with_json_object() {
+    let local = TempDir::new().unwrap();
     let temp = write_lab2_resource_root();
     let scene = temp.path().join("home.png");
     fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
@@ -223,7 +221,7 @@ fn lab2_child_process_stdout_starts_with_json_object() {
             "--scene",
             scene.to_str().unwrap(),
         ],
-        None,
+        local.path(),
     );
 
     assert!(output.status.success());
@@ -235,7 +233,8 @@ fn lab2_child_process_stdout_starts_with_json_object() {
 
 #[test]
 fn lab2_vendor_stdio_selftest_keeps_child_stdout_json_clean() {
-    let output = run_actinglab(&["--json", "lab", "vendor-stdio-selftest"], None);
+    let local = TempDir::new().unwrap();
+    let output = run_actinglab(&["--json", "lab", "vendor-stdio-selftest"], local.path());
 
     assert!(output.status.success());
     assert_eq!(output.stdout.first(), Some(&b'{'));
@@ -285,7 +284,7 @@ fn lab2_arbitrator_defaults_to_persistent_local_app_data_path() {
             "--verb",
             "do",
         ],
-        Some(local.path()),
+        local.path(),
     );
     assert!(acquire.status.success());
     let acquire_json = parse_stdout_json(&acquire);
@@ -302,7 +301,7 @@ fn lab2_arbitrator_defaults_to_persistent_local_app_data_path() {
             "--instance",
             "ak",
         ],
-        Some(local.path()),
+        local.path(),
     );
     assert!(status.status.success());
     let status_json = parse_stdout_json(&status);
@@ -341,8 +340,8 @@ fn lab2_bare_do_uses_short_lease_without_self_locking_next_call() {
         scene.to_str().unwrap(),
     ];
 
-    let first = run_actinglab(&args, Some(local.path()));
-    let second = run_actinglab(&args, Some(local.path()));
+    let first = run_actinglab(&args, local.path());
+    let second = run_actinglab(&args, local.path());
 
     assert!(
         first.status.success(),
@@ -365,7 +364,7 @@ fn lab2_bare_do_uses_short_lease_without_self_locking_next_call() {
             "--instance",
             "ak",
         ],
-        Some(local.path()),
+        local.path(),
     );
     let status_json = parse_stdout_json(&status);
     assert!(
@@ -394,7 +393,7 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
             "--verb",
             "do",
         ],
-        Some(local.path()),
+        local.path(),
     );
     assert!(acquire.status.success());
     let acquire_json = parse_stdout_json(&acquire);
@@ -420,8 +419,8 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
         lease_id.as_str(),
     ];
 
-    let first = run_actinglab(&do_args, Some(local.path()));
-    let second = run_actinglab(&do_args, Some(local.path()));
+    let first = run_actinglab(&do_args, local.path());
+    let second = run_actinglab(&do_args, local.path());
     assert!(
         first.status.success(),
         "{}",
@@ -448,7 +447,7 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
             "--scene",
             scene.to_str().unwrap(),
         ],
-        Some(local.path()),
+        local.path(),
     );
     assert!(!blocked.status.success());
     let blocked_json = parse_stdout_json(&blocked);
@@ -479,9 +478,9 @@ fn lab2_concurrent_bare_do_blocks_same_instance_writer_during_short_lease() {
         "700".to_string(),
     ];
 
-    let first = spawn_actinglab(&args, Some(local.path()));
+    let first = spawn_actinglab(&args, local.path());
     std::thread::sleep(std::time::Duration::from_millis(100));
-    let second = run_actinglab_owned(&args, Some(local.path()));
+    let second = run_actinglab_owned(&args, local.path());
     let first = first.wait_with_output().expect("first output");
     let first_ok = first.status.success();
     let second_ok = second.status.success();
@@ -558,7 +557,66 @@ fn lab2_post_admit_failures_write_receipts_for_all_cli_verbs() {
     ];
 
     for args in cases {
-        let output = run_actinglab_owned(&args, Some(local.path()));
+        let output = run_actinglab_owned(&args, local.path());
+        assert!(
+            !output.status.success(),
+            "case unexpectedly succeeded: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value = parse_stdout_json(&output);
+        let req_id = error_req_id(&value);
+        assert_receipt_has_dispatch_and_receipt(&run_root, req_id, local.path());
+    }
+}
+
+#[test]
+fn lab2_admit_usage_validation_failures_write_dispatch_and_receipt() {
+    let local = TempDir::new().unwrap();
+    let temp = write_lab2_resource_root();
+    let run_root = temp.path().join("run");
+    let scene = temp.path().join("home.png");
+    fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+    let cases: Vec<Vec<String>> = vec![
+        vec![
+            "--json".into(),
+            "--run-root".into(),
+            run_root.display().to_string(),
+            "--resource-root".into(),
+            temp.path().display().to_string(),
+            "--game".into(),
+            "ark".into(),
+            "--instance".into(),
+            "ak".into(),
+            "do".into(),
+            "home_button".into(),
+            "--dry-run".into(),
+            "--scene".into(),
+            scene.display().to_string(),
+            "--priority".into(),
+            "urgent".into(),
+        ],
+        vec![
+            "--json".into(),
+            "--run-root".into(),
+            run_root.display().to_string(),
+            "--resource-root".into(),
+            temp.path().display().to_string(),
+            "--game".into(),
+            "ark".into(),
+            "--instance".into(),
+            "ak".into(),
+            "do".into(),
+            "home_button".into(),
+            "--dry-run".into(),
+            "--scene".into(),
+            scene.display().to_string(),
+            "--queue-deadline-ms".into(),
+            "not-a-number".into(),
+        ],
+    ];
+
+    for args in cases {
+        let output = run_actinglab_owned(&args, local.path());
         assert!(
             !output.status.success(),
             "case unexpectedly succeeded: {}",
@@ -600,7 +658,7 @@ fn lab2_admit_state_load_failure_writes_dispatch_and_receipt() {
             "--state-dir",
             state_dir.to_str().unwrap(),
         ],
-        Some(local.path()),
+        local.path(),
     );
 
     assert!(!output.status.success());
@@ -633,7 +691,7 @@ fn lab2_arbitrator_command_failure_writes_dispatch_and_receipt() {
             "--lease-id",
             "missing-lease",
         ],
-        Some(local.path()),
+        local.path(),
     );
 
     assert!(!output.status.success());

@@ -24131,7 +24131,8 @@ fn resolved_adb_json(config: &UserConfig) -> Value {
         Ok(resolved) => json!({
             "ok": true,
             "path": resolved.path,
-            "source": resolved.source.as_str()
+            "source": resolved.source.as_str(),
+            "warning": resolved.warning
         }),
         Err(err) => json!({
             "ok": false,
@@ -25605,6 +25606,15 @@ mod tests {
         unsafe {
             env::set_var(CONFIG_ENV, path);
         }
+    }
+
+    fn set_isolated_app_env() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("LOCALAPPDATA", temp.path());
+            env::set_var("APPDATA", temp.path());
+        }
+        temp
     }
 
     fn test_session_liveness_endpoint(daemon_id: &str) -> String {
@@ -52610,6 +52620,7 @@ mod tests {
     #[test]
     fn lab2_observe_reports_page_targets_actions_and_frame_path() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -52671,6 +52682,7 @@ mod tests {
     #[test]
     fn lab2_do_dry_run_reports_guard_and_actual_click() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -52716,6 +52728,7 @@ mod tests {
     #[test]
     fn lab2_do_guard_miss_returns_actionable_error_details() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -52759,6 +52772,7 @@ mod tests {
     #[test]
     fn lab2_ensure_is_idempotent_and_plans_routes() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -52828,6 +52842,7 @@ mod tests {
     #[test]
     fn lab2_wait_reports_page_and_stable_target() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -52907,6 +52922,7 @@ mod tests {
     #[test]
     fn lab2_capabilities_and_schema_report_compiled_contracts() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         let temp = tempfile::tempdir().unwrap();
         set_config_env(temp.path().join("config.json"));
         let mut config = UserConfig::default();
@@ -52991,6 +53007,7 @@ mod tests {
     #[test]
     fn lab2_receipt_reconstructs_do_request_chain_by_req_id() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53103,6 +53120,7 @@ mod tests {
     #[test]
     fn lab2_observe_reports_recovering_state_without_blocking() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53145,6 +53163,7 @@ mod tests {
     #[test]
     fn lab2_do_no_wait_reports_recovering_with_planned_action() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53193,6 +53212,7 @@ mod tests {
     #[test]
     fn lab2_do_waits_until_recovery_state_clears() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53247,6 +53267,7 @@ mod tests {
     #[test]
     fn lab2_chain_acceptance_min_projection_and_error_shape_are_actionable() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53322,6 +53343,7 @@ mod tests {
     #[test]
     fn lab2_chain_acceptance_do_receipt_is_one_response_reconstructable() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53392,6 +53414,7 @@ mod tests {
     #[test]
     fn lab2_arbitrator_state_persists_between_cli_invocations() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53462,6 +53485,7 @@ mod tests {
     #[test]
     fn lab2_do_blocks_destructive_overlap_and_writes_ledger() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53525,8 +53549,79 @@ mod tests {
     }
 
     #[test]
+    fn lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in() {
+        let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(true);
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let destructive_without_allow = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--destructive",
+            ],
+            true,
+        );
+        assert_eq!(destructive_without_allow.exit_code(), 3);
+        assert_eq!(
+            destructive_without_allow
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .code,
+            "destructive_action_requires_allow_destructive"
+        );
+
+        let allowed = run_cli(
+            [
+                "--json",
+                "--dry-run",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--destructive",
+                "--allow-destructive",
+            ],
+            true,
+        );
+
+        assert_eq!(allowed.exit_code(), 0, "{}", allowed.envelope_json());
+        assert_eq!(
+            allowed
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("executed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn lab2_evidence_lists_debug_evidence_refs() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53565,6 +53660,7 @@ mod tests {
     #[test]
     fn lab2_observe_unknown_reports_candidates() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53605,6 +53701,7 @@ mod tests {
     #[test]
     fn lab2_verbose_error_preserves_unprojected_details() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53651,6 +53748,7 @@ mod tests {
     #[test]
     fn lab2_do_click_rect_follows_live_template_match_delta() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53705,6 +53803,7 @@ mod tests {
     #[test]
     fn lab2_do_real_branch_requires_session_lease_before_touch() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53804,8 +53903,111 @@ mod tests {
     }
 
     #[test]
+    fn lab2_do_non_dry_run_resource_drift_stops_before_fake_touch() {
+        let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+        let temp = semantic_resource_root(false);
+        let config_path = temp.path().join("config.json");
+        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let adb_path = temp.path().join(adb_name);
+        fs::write(&adb_path, b"test adb placeholder").unwrap();
+        let mut config = UserConfig {
+            adb_path: Some(adb_path.display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "default".to_string(),
+            InstanceConfig {
+                serial: Some("fake-device".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn".to_string()),
+                capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: Some("adb_shell_input".to_string()),
+                ..Default::default()
+            },
+        );
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        set_config_env(&config_path);
+        let state_dir = temp.path().join("session");
+        fs::create_dir_all(&state_dir).unwrap();
+        let lab_lease = run_cli(
+            [
+                "--json",
+                "--game",
+                "ark",
+                "lab",
+                "arbitrator",
+                "acquire",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--instance",
+                "default",
+                "--verb",
+                "do",
+            ],
+            true,
+        );
+        assert_eq!(lab_lease.exit_code(), 0, "{}", lab_lease.envelope_json());
+        let lab_lease_id = lab_lease
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .pointer("/arbitration/details/lease/lease_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let scene = temp.path().join("target-drift.png");
+        let touch_log = temp.path().join("fake-touch.json");
+        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        unsafe {
+            env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
+        }
+
+        let result = run_cli(
+            [
+                "--json",
+                "--instance",
+                "default",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--game",
+                "ark",
+                "do",
+                "home_button",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--scene",
+                scene.to_str().unwrap(),
+                "--capture",
+                "--lease-id",
+                &lab_lease_id,
+                "--fields",
+                "executed,device,actual_click,guard_result",
+            ],
+            true,
+        );
+        unsafe {
+            env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
+        }
+
+        assert_eq!(result.exit_code(), 3, "{}", result.envelope_json());
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "target_not_visible"
+        );
+        assert!(!touch_log.exists());
+    }
+
+    #[test]
     fn lab2_do_real_branch_drives_fake_touch_after_dual_lease_checks() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -53921,6 +54123,7 @@ mod tests {
     #[test]
     fn lab2_synthetic_cross_game_pack_runs_core_verbs_without_game_flag() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -54031,6 +54234,7 @@ mod tests {
     #[test]
     fn lab2_arbitrator_cli_covers_queue_full_cancel_deadline_reclaim_and_preempt() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -54203,7 +54407,7 @@ mod tests {
         );
         assert_ne!(reclaim_alive.exit_code(), 0);
         assert!(
-            reclaim_alive.envelope_json().contains("holder_pid"),
+            reclaim_alive.envelope_json().contains("still alive"),
             "{}",
             reclaim_alive.envelope_json()
         );
@@ -54323,6 +54527,7 @@ mod tests {
     #[test]
     fn lab2_observe_uses_delayed_stub_capture_and_stays_under_budget() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);
@@ -54364,6 +54569,7 @@ mod tests {
     #[test]
     fn lab2_error_axes_include_state_hint_req_id_and_stop_loss_hint() {
         let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
         unsafe {
             set_missing_config_env();
             env::remove_var(SESSION_STATE_ENV);

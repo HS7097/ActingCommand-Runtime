@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-05 Lab-2 chain repair round 4 closeout
+
+### Current status
+
+- Implemented `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round4-ea3744e.md` against baseline `ea3744e`.
+- Sealed Lab-2 tests from real `%LOCALAPPDATA%` and `%APPDATA`; child-process helpers now require explicit local app data and set both environment variables.
+- Routed invalid `--priority` and `--queue-deadline-ms` admission validation errors through Lab-2 dispatch/receipt ledger writing.
+- Added PATH-ADB baseline resolution with an explicit non-MuMu warning when MuMu/user-config ADB discovery does not resolve an ADB path.
+- Added missing R6 tests for destructive tri-state opt-in, non-dry-run resource drift before fake touch, and 20-target projection `_more`/`_full`.
+- Added queued-request liveness checks before promotion; dead queued requesters are dropped, the instance stays free, and `queue_dropped_dead_requester` is ledgered.
+- Added Win32 FFI safety comments for vendor stdio handle writes.
+- No UI, OCR, SQLite, game logic, resource repository changes, live-device operation, or upstream code copying were done in this round.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `crates/arbitrator/src/lib.rs`
+- `crates/device/src/adb.rs`
+- `crates/device/src/vendor_stdio.rs`
+- `crates/ledger/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-Content -Raw "C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round4-ea3744e.md"`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-arbitrator -- --nocapture`
+- `cargo test -p actingcommand-ledger projection_summarizes_twenty_decision_targets_with_more_and_full_pointer -- --nocapture`
+- `cargo test -p actingcommand-device resolve_adb_path_uses_path_baseline_with_warning_when_mumu_and_config_are_absent -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_do_non_dry_run_resource_drift_stops_before_fake_touch -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test lab2_cli_contract lab2_admit_usage_validation_failures_write_dispatch_and_receipt -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Test results
+
+- Focused arbitrator tests passed after adding queued requester liveness and reclaim/drop coverage.
+- Focused PATH-ADB baseline warning test passed.
+- Focused ledger projection 20-target `_more`/`_full` test passed.
+- Focused Lab-2 tests passed: 26 unit tests and 10 child-process contract tests under the `lab2_` filter.
+- Final public five-command gate passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+
+### Current blocker
+
+- No code blocker is currently known.
+- True-device `do` execution remains disclosed as test-stub/fake-touch coverage, not live-device validation.
+- RAII panic/drop cleanup for short leases remains deferred; pid-aware reclaim is the current crash-residue recovery boundary.
+- PID reuse without a process creation-time key remains a registered low-frequency TOCTOU risk.
+- R8.6 remote-drive state warning remains a follow-up and is not marked exempt.
+
+### Next step
+
+1. Commit and push the round-4 closeout.
+2. Create a checkpoint tag for the pushed round-4 closeout.
+3. Use the next task to address any remaining external/live validation items separately.
+
 ## 2026-07-05 Lab-2 chain repair round 3
 
 ### Current status

@@ -680,6 +680,7 @@ fn run_arbitrator_inner(
                 current_unix_ms(),
             );
             request.allow_destructive = flags.bool("--allow-destructive");
+            request.holder_pid = Some(std::process::id());
             request.priority = match flags.optional("--priority").as_deref() {
                 Some("high") => RequestPriority::High,
                 Some("normal") | None => RequestPriority::Normal,
@@ -712,7 +713,12 @@ fn run_arbitrator_inner(
                     CliError::usage("lab arbitrator release requires --lease-id <id>")
                 })?;
             let outcome = arbitrator
-                .release(instance, &lease_id, current_unix_ms())
+                .release_with_liveness(
+                    instance,
+                    &lease_id,
+                    current_unix_ms(),
+                    platform_process_is_alive,
+                )
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
             let mut data = json!({
@@ -773,7 +779,11 @@ fn run_arbitrator_inner(
         "force-unlock" => {
             arbitrator.mark_holder_dead(instance);
             let outcome = arbitrator
-                .reclaim_dead_holder(instance, current_unix_ms())
+                .reclaim_dead_holder_with_liveness(
+                    instance,
+                    current_unix_ms(),
+                    platform_process_is_alive,
+                )
                 .map_err(|err| CliError::device(err.to_string()))?;
             records.extend(outcome.ledger_records.clone());
             let mut data = json!({
@@ -884,22 +894,72 @@ fn admit_lab2_request(
     if request.verb.requires_lease() && lab2_explicit_lease_id(flags).is_none() {
         request.holder_pid = Some(std::process::id());
     }
+    let request_record = LedgerRecord::new(
+        LedgerRecordKind::Dispatch,
+        Some(ids.req_id.clone()),
+        json!({
+            "stage": "request",
+            "request": request
+        }),
+    );
     request.priority = match flags.optional("--priority").as_deref() {
         Some("high") => RequestPriority::High,
         Some("normal") | None => RequestPriority::Normal,
         Some(other) => {
-            return Err(CliError::usage(format!(
+            let error = CliError::usage(format!(
                 "unsupported --priority '{other}', expected normal or high"
-            )));
+            ));
+            let details = lab2_error_details_for_flags(
+                flags,
+                &ids.req_id,
+                "validation_failed",
+                "admission_validation_failed",
+                "fix---priority-and-rerun",
+            )?;
+            return match return_lab2_error_with_ledger(
+                global,
+                flags,
+                &ids.req_id,
+                &instance,
+                details,
+                error,
+                vec![request_record],
+            ) {
+                Err(error) => Err(error),
+                Ok(_) => unreachable!("error ledger helper always returns Err"),
+            };
         }
     };
     if let Some(deadline) = flags
         .optional("--queue-deadline-ms")
         .filter(|value| value != "true")
     {
-        request.queue_deadline_ms = Some(deadline.parse::<u64>().map_err(|err| {
-            CliError::usage(format!("invalid --queue-deadline-ms '{deadline}': {err}"))
-        })?);
+        request.queue_deadline_ms = Some(match deadline.parse::<u64>() {
+            Ok(value) => value,
+            Err(err) => {
+                let error =
+                    CliError::usage(format!("invalid --queue-deadline-ms '{deadline}': {err}"));
+                let details = lab2_error_details_for_flags(
+                    flags,
+                    &ids.req_id,
+                    "validation_failed",
+                    "admission_validation_failed",
+                    "fix---queue-deadline-ms-and-rerun",
+                )?;
+                return match return_lab2_error_with_ledger(
+                    global,
+                    flags,
+                    &ids.req_id,
+                    &instance,
+                    details,
+                    error,
+                    vec![request_record],
+                ) {
+                    Err(error) => Err(error),
+                    Ok(_) => unreachable!("error ledger helper always returns Err"),
+                };
+            }
+        });
     }
     let request_record = LedgerRecord::new(
         LedgerRecordKind::Dispatch,

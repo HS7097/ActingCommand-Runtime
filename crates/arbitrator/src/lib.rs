@@ -486,6 +486,16 @@ impl DegradedArbitrator {
         lease_id: &str,
         now_ms: u64,
     ) -> ArbitrationResult<ArbitrationOutcome> {
+        self.release_with_liveness(instance, lease_id, now_ms, |_| true)
+    }
+
+    pub fn release_with_liveness(
+        &mut self,
+        instance: &str,
+        lease_id: &str,
+        now_ms: u64,
+        is_process_alive: impl FnMut(u32) -> bool,
+    ) -> ArbitrationResult<ArbitrationOutcome> {
         let state = self.instances.entry(instance.to_string()).or_default();
         let holder = state
             .holder
@@ -498,13 +508,16 @@ impl DegradedArbitrator {
                 holder.lease_id
             )));
         }
-        let next_lease = self.promote_queued(instance, now_ms);
-        Ok(Self::outcome(ArbitrationDecision::Released {
+        let (next_lease, dropped_records) =
+            self.promote_queued_with_liveness(instance, now_ms, is_process_alive);
+        let mut outcome = Self::outcome(ArbitrationDecision::Released {
             req_id: holder.req_id.clone(),
             instance: instance.to_string(),
             released_lease: holder,
             next_lease,
-        }))
+        });
+        outcome.ledger_records.extend(dropped_records);
+        Ok(outcome)
     }
 
     pub fn cancel_queued(
@@ -565,14 +578,17 @@ impl DegradedArbitrator {
         &mut self,
         instance: &str,
         now_ms: u64,
-        is_process_alive: impl FnMut(u32) -> bool,
+        mut is_process_alive: impl FnMut(u32) -> bool,
     ) -> ArbitrationResult<ArbitrationOutcome> {
         let state = self.instances.entry(instance.to_string()).or_default();
         let holder = state
             .holder
             .take()
             .ok_or_else(|| ArbitrationError::NotFound(format!("no lease for {instance}")))?;
-        let process_alive = holder.holder_pid.map(is_process_alive).unwrap_or(false);
+        let process_alive = holder
+            .holder_pid
+            .map(&mut is_process_alive)
+            .unwrap_or(false);
         if holder.alive && holder.holder_pid.is_none() {
             state.holder = Some(holder.clone());
             return Err(ArbitrationError::InvalidRequest(format!(
@@ -585,13 +601,16 @@ impl DegradedArbitrator {
                 "lease for {instance} is still alive"
             )));
         }
-        let next_lease = self.promote_queued(instance, now_ms);
-        Ok(Self::outcome(ArbitrationDecision::Reclaimed {
+        let (next_lease, dropped_records) =
+            self.promote_queued_with_liveness(instance, now_ms, is_process_alive);
+        let mut outcome = Self::outcome(ArbitrationDecision::Reclaimed {
             req_id: holder.req_id.clone(),
             instance: instance.to_string(),
             reclaimed_lease: holder,
             next_lease,
-        }))
+        });
+        outcome.ledger_records.extend(dropped_records);
+        Ok(outcome)
     }
 
     pub fn authorize_device_drive(
@@ -635,16 +654,51 @@ impl DegradedArbitrator {
         }
     }
 
-    fn promote_queued(&mut self, instance: &str, now_ms: u64) -> Option<LeaseGrant> {
-        let state = self.instances.get_mut(instance)?;
-        let queued = state.queued.take()?;
+    fn promote_queued_with_liveness(
+        &mut self,
+        instance: &str,
+        now_ms: u64,
+        mut is_process_alive: impl FnMut(u32) -> bool,
+    ) -> (Option<LeaseGrant>, Vec<LedgerRecord>) {
+        let Some(state) = self.instances.get_mut(instance) else {
+            return (None, Vec::new());
+        };
+        let Some(queued) = state.queued.take() else {
+            return (None, Vec::new());
+        };
+        let requester_alive = queued.request.holder_pid.is_some_and(&mut is_process_alive);
+        if !requester_alive {
+            let reason = if queued.request.holder_pid.is_some() {
+                "requester_pid_not_alive"
+            } else {
+                "requester_holder_pid_missing"
+            };
+            return (
+                None,
+                vec![LedgerRecord::new(
+                    LedgerRecordKind::Dispatch,
+                    Some(queued.request.req_id.clone()),
+                    json!({
+                        "schema_version": ARBITRATOR_SCHEMA_VERSION,
+                        "stage": "queue_dropped_dead_requester",
+                        "state": "queue_dropped_dead_requester",
+                        "reason": reason,
+                        "req_id": queued.request.req_id,
+                        "instance": queued.request.instance,
+                        "holder_pid": queued.request.holder_pid,
+                        "queued_at_ms": queued.queued_at_ms,
+                        "deadline_ms": queued.deadline_ms,
+                    }),
+                )],
+            );
+        }
         let lease = LeaseGrant::new(
             &queued.request,
             self.issuer.issue(IdKind::Lease).value,
             now_ms,
         );
         state.holder = Some(lease.clone());
-        Some(lease)
+        (Some(lease), Vec::new())
     }
 
     fn outcome(decision: ArbitrationDecision) -> ArbitrationOutcome {
@@ -720,6 +774,18 @@ mod tests {
         verb: RequestVerb,
     ) -> RequestEnvelope {
         RequestEnvelope::new(req_id, source, instance, verb, json!({}), 100)
+    }
+
+    fn request_with_pid(
+        req_id: &str,
+        source: RequestSource,
+        instance: &str,
+        verb: RequestVerb,
+        pid: u32,
+    ) -> RequestEnvelope {
+        let mut request = request(req_id, source, instance, verb);
+        request.holder_pid = Some(pid);
+        request
     }
 
     fn grant(outcome: ArbitrationOutcome) -> LeaseGrant {
@@ -890,7 +956,13 @@ mod tests {
             .expect("holder");
         arbitrator
             .admit(
-                request("queued", RequestSource::Scheduler, "ak", RequestVerb::Do),
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
                 200,
             )
             .expect("queued");
@@ -974,7 +1046,13 @@ mod tests {
             .expect("holder");
         arbitrator
             .admit(
-                request("queued", RequestSource::Scheduler, "ak", RequestVerb::Do),
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
                 200,
             )
             .expect("queued");
@@ -1003,7 +1081,13 @@ mod tests {
         );
         arbitrator
             .admit(
-                request("queued", RequestSource::Scheduler, "ak", RequestVerb::Do),
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
                 200,
             )
             .expect("queued");
@@ -1042,7 +1126,13 @@ mod tests {
             .expect("holder");
         arbitrator
             .admit(
-                request("queued", RequestSource::Scheduler, "ak", RequestVerb::Do),
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
                 200,
             )
             .expect("queued");
@@ -1059,6 +1149,129 @@ mod tests {
             }
             other => panic!("expected reclaim, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn release_drops_queued_request_when_requester_pid_is_dead() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let holder = grant(
+            arbitrator
+                .admit(
+                    request("holder", RequestSource::Cli, "ak", RequestVerb::Do).high_priority(),
+                    100,
+                )
+                .expect("holder"),
+        );
+        arbitrator
+            .admit(
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
+                200,
+            )
+            .expect("queued");
+
+        let outcome = arbitrator
+            .release_with_liveness("ak", &holder.lease_id, 300, |pid| pid != 222)
+            .expect("release");
+
+        match outcome.decision {
+            ArbitrationDecision::Released { next_lease, .. } => assert!(next_lease.is_none()),
+            other => panic!("expected release, got {other:?}"),
+        }
+        assert!(arbitrator.snapshot("ak").holder.is_none());
+        assert!(arbitrator.snapshot("ak").queued.is_none());
+        assert!(outcome.ledger_records.iter().any(|record| {
+            record.req_id.as_deref() == Some("queued")
+                && record.payload.get("stage").and_then(Value::as_str)
+                    == Some("queue_dropped_dead_requester")
+        }));
+    }
+
+    #[test]
+    fn release_promotes_queued_request_when_requester_pid_is_alive() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let holder = grant(
+            arbitrator
+                .admit(
+                    request("holder", RequestSource::Cli, "ak", RequestVerb::Do).high_priority(),
+                    100,
+                )
+                .expect("holder"),
+        );
+        arbitrator
+            .admit(
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
+                200,
+            )
+            .expect("queued");
+
+        let outcome = arbitrator
+            .release_with_liveness("ak", &holder.lease_id, 300, |pid| pid == 222)
+            .expect("release");
+
+        match outcome.decision {
+            ArbitrationDecision::Released { next_lease, .. } => {
+                let next_lease = next_lease.expect("queued lease should promote");
+                assert_eq!(next_lease.req_id, "queued");
+                assert_eq!(next_lease.holder_pid, Some(222));
+            }
+            other => panic!("expected release, got {other:?}"),
+        }
+        assert_eq!(
+            arbitrator
+                .snapshot("ak")
+                .holder
+                .and_then(|lease| lease.holder_pid),
+            Some(222)
+        );
+    }
+
+    #[test]
+    fn reclaim_dead_holder_drops_queued_request_when_requester_pid_is_dead() {
+        let mut arbitrator = DegradedArbitrator::new(issuer());
+        let mut holder =
+            request("holder", RequestSource::Cli, "ak", RequestVerb::Do).high_priority();
+        holder.holder_pid = Some(111);
+        arbitrator.admit(holder, 100).expect("holder");
+        arbitrator
+            .admit(
+                request_with_pid(
+                    "queued",
+                    RequestSource::Scheduler,
+                    "ak",
+                    RequestVerb::Do,
+                    222,
+                ),
+                200,
+            )
+            .expect("queued");
+
+        let outcome = arbitrator
+            .reclaim_dead_holder_with_liveness("ak", 300, |_| false)
+            .expect("reclaim");
+
+        match outcome.decision {
+            ArbitrationDecision::Reclaimed { next_lease, .. } => assert!(next_lease.is_none()),
+            other => panic!("expected reclaim, got {other:?}"),
+        }
+        assert!(arbitrator.snapshot("ak").holder.is_none());
+        assert!(arbitrator.snapshot("ak").queued.is_none());
+        assert!(outcome.ledger_records.iter().any(|record| {
+            record.req_id.as_deref() == Some("queued")
+                && record.payload.get("stage").and_then(Value::as_str)
+                    == Some("queue_dropped_dead_requester")
+        }));
     }
 
     #[test]
