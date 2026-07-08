@@ -8,6 +8,7 @@
 - Executed `lab run` operation steps now issue an `action_id` through the shared `IdIssuer`.
 - Tap, drag, and long-tap started/finished light events now include the `action_id`.
 - Step drive records now include the same `action_id` in the runtime-ledger `id_chain` and in the step payload projected into result.zip logs.
+- Implementation commit `4733304e925fa2a57a8c1f74ee9468560b3f91f1` was pushed to `main` and tagged `checkpoint/20260709-runtime-ledger-l7-action-ids`.
 - This node does not add new device behavior, capture behavior, OCR, template matching, UI, SQLite, scheduler, or game logic.
 - Resource repositories were not read or modified for this node.
 
@@ -44,8 +45,7 @@
 
 ### Next step
 
-1. Commit, tag, and push this L7 action id step traceability node.
-2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+1. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
 
 ## 2026-07-09 runtime-ledger L7 capture backend selection traceability
 
