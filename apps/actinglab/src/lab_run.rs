@@ -304,15 +304,10 @@ fn execute_lab_run(
     for attempt in ctx.capture_backend_attempts.clone() {
         ctx.event(
             "capture_backend_attempt",
-            json!({
-                "backend": attempt.backend.as_str(),
-                "ok": attempt.ok,
-                "severity": if attempt.ok { "info" } else { "warning" },
-                "channel_order_contract": attempt.channel_order_contract,
-                "message": attempt.message
-            }),
+            capture_backend_attempt_json(&attempt),
         )?;
     }
+    ctx.record_capture_backend_selection()?;
     let mut capture = selected_capture.backend;
     let mut input = None::<SelectedTouchBackend>;
     let started = Instant::now();
@@ -1504,6 +1499,19 @@ fn close_backend_after_error<T>(
         }
     }
     Err(err)
+}
+
+fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {
+    json!({
+        "backend": attempt.backend.as_str(),
+        "ok": attempt.ok,
+        "severity": if attempt.ok { "info" } else { "warning" },
+        "elapsed_ms": attempt.elapsed_ms,
+        "cached": attempt.cached,
+        "channel_order_contract": attempt.channel_order_contract,
+        "message": attempt.message.as_str(),
+        "vendor_stdio": &attempt.vendor_stdio
+    })
 }
 
 fn ensure_touch_backend<'a>(
@@ -2785,6 +2793,28 @@ impl LabRunContext {
         self.current_step_id = None;
         self.current_operation_id = None;
         self.expected_page = None;
+    }
+
+    fn record_capture_backend_selection(&mut self) -> CliOutcome<()> {
+        let attempts = self
+            .capture_backend_attempts
+            .iter()
+            .map(capture_backend_attempt_json)
+            .collect::<Vec<_>>();
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "capture_backend_selection",
+                    "phase": self.phase,
+                    "requested": self.capture_backend_requested.map(|backend| backend.as_str()),
+                    "used": self.capture_backend_used.map(|backend| backend.as_str()),
+                    "attempt_count": attempts.len(),
+                    "attempts": attempts
+                }),
+            ),
+            "ledger_capture_backend_selection",
+        )
     }
 
     fn ensure_ledger(&mut self) -> CliOutcome<()> {
@@ -5734,6 +5764,64 @@ mod tests {
                 .pointer("/recognition/reco_id")
                 .and_then(Value::as_str),
             Some(reco_id)
+        );
+    }
+
+    #[test]
+    fn capture_backend_selection_is_recorded_in_ledger() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        ctx.capture_backend_requested = Some(CaptureBackendChoice::Auto);
+        ctx.capture_backend_used = Some(CaptureBackendName::NemuIpc);
+        ctx.capture_backend_attempts = vec![CaptureBackendAttempt {
+            backend: CaptureBackendName::NemuIpc,
+            ok: true,
+            message: "selected nemu ipc".to_string(),
+            elapsed_ms: Some(12),
+            cached: false,
+            channel_order_contract: "test-order",
+            vendor_stdio: Vec::new(),
+        }];
+
+        ctx.record_capture_backend_selection()
+            .expect("record capture selection");
+
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        let record = ledger
+            .records
+            .iter()
+            .find(|record| {
+                record.kind == LedgerRecordKind::Drive
+                    && record.payload.get("record_type").and_then(Value::as_str)
+                        == Some("capture_backend_selection")
+            })
+            .expect("capture selection record");
+        assert_eq!(
+            record.payload.get("requested").and_then(Value::as_str),
+            Some("auto")
+        );
+        assert_eq!(
+            record.payload.get("used").and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            record.payload.get("attempt_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            record
+                .payload
+                .pointer("/attempts/0/backend")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+        assert_eq!(
+            record
+                .payload
+                .pointer("/attempts/0/message")
+                .and_then(Value::as_str),
+            Some("selected nemu ipc")
         );
     }
 

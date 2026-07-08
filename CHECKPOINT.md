@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L7 capture backend selection traceability
+
+### Current status
+
+- Continued Runtime issue #28 L7 after recognition id traceability.
+- `lab run` now writes a `capture_backend_selection` runtime-ledger drive record after capture backend selection.
+- The record includes requested backend, used backend, attempt count, and per-attempt diagnostics including backend, ok status, severity, elapsed time, cache status, channel-order contract, message, and captured vendor stdio diagnostics.
+- Existing `capture_backend_attempt` light events now use the same structured attempt payload shape.
+- This node does not add new capture backends, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "fake_touch|FAKE_TOUCH|touch backend|SelectedTouchBackend|create_touch_backend|lab run" apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs tests apps -g "*.rs"`
+- `rg -n "action_id" apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab capture_backend_selection_is_recorded_in_ledger -- --nocapture`
+- `cargo test -p actingcommand-actinglab recognition_projection_keeps_reco_id_from_ledger -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused capture backend selection ledger test passed.
+- Focused recognition projection test still passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L7 capture backend selection traceability subnode is known.
+- Full issue #28 remains incomplete: remaining Evidence / FrameStore convergence, L5 CLI projection, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L7 capture backend selection traceability node.
+2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+
 ## 2026-07-09 runtime-ledger L7 recognition traceability
 
 ### Current status
