@@ -3048,7 +3048,9 @@ impl LabRunContext {
                 "label": label
             }),
         )?;
+        let reco_id = self.id_issuer.issue(IdKind::Reco).value;
         let recognition = json!({
+            "reco_id": reco_id,
             "timestamp": timestamp_iso(SystemTime::now()),
             "frame_index": self.frame_index,
             "file": retained_file,
@@ -3068,13 +3070,14 @@ impl LabRunContext {
                     "phase": self.phase,
                     "recognition": recognition
                 }),
-            ),
+            )
+            .with_id("reco_id", reco_id.clone()),
             "ledger_recognition",
         )?;
         self.recognition.push(recognition);
         self.event(
             "recognition_recorded",
-            json!({"frame_index": self.frame_index, "matched_page": matched_page}),
+            json!({"frame_index": self.frame_index, "reco_id": reco_id, "matched_page": matched_page}),
         )?;
         if store_outcome.tier3_triggered && !store_outcome.pause_required {
             return self.tier3_resume_check(capture, evaluator, detector, candidate_pages);
@@ -5660,6 +5663,81 @@ mod tests {
     }
 
     #[test]
+    fn recognition_projection_keeps_reco_id_from_ledger() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        let frame = Frame::from_pixels(
+            1,
+            1,
+            vec![0, 0, 0, 255],
+            PixelFormat::Rgba8,
+            CaptureBackendName::NemuIpc,
+        )
+        .expect("frame");
+        let mut capture = StaticCapture { frame };
+        let evaluator = one_pixel_color_evaluator([0, 0, 0]);
+        let page_set = actingcommand_page_detector::load_page_set_from_json_str(
+            r#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"arknights/home","required":["target/button"],"optional":[],"forbidden":[]}
+                ]
+            }"#,
+        )
+        .expect("page set");
+        let detector = PageDetector::new(page_set).expect("detector");
+
+        let scene = ctx
+            .capture_scene_with_pages(
+                &mut capture,
+                &evaluator,
+                &detector,
+                "initial",
+                Some(&["arknights/home".to_string()]),
+            )
+            .expect("capture scene");
+        assert_eq!(scene.matched_page.as_deref(), Some("arknights/home"));
+        let out = temp.path().join("out.zip");
+        ctx.finish(&out, true, None, None).expect("finish");
+
+        let file = File::open(&out).expect("zip");
+        let mut archive = ZipArchive::new(file).expect("archive");
+        let recognition_text = zip_text(&mut archive, "logs/recognition.jsonl");
+        let recognition = recognition_text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("recognition line"))
+            .collect::<Vec<_>>();
+        let reco_id = recognition
+            .first()
+            .and_then(|item| item.get("reco_id"))
+            .and_then(Value::as_str)
+            .expect("reco_id");
+        assert!(reco_id.starts_with("reco-"));
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        let record = ledger
+            .records
+            .iter()
+            .find(|record| {
+                record.kind == LedgerRecordKind::Drive
+                    && record.payload.get("record_type").and_then(Value::as_str)
+                        == Some("recognition")
+            })
+            .expect("recognition record");
+        assert_eq!(
+            record.id_chain.get("reco_id").map(String::as_str),
+            Some(reco_id)
+        );
+        assert_eq!(
+            record
+                .payload
+                .pointer("/recognition/reco_id")
+                .and_then(Value::as_str),
+            Some(reco_id)
+        );
+    }
+
+    #[test]
     fn success_finish_cleans_run_dir_but_keeps_outside_zip() {
         let temp = TempDir::new().expect("temp");
         let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
@@ -5965,6 +6043,16 @@ mod tests {
         ))
         .expect("pack");
         RecognitionEvaluator::new(PathBuf::from("."), pack).expect("evaluator")
+    }
+
+    struct StaticCapture {
+        frame: Frame,
+    }
+
+    impl CaptureBackend for StaticCapture {
+        fn capture(&mut self) -> actingcommand_device::DeviceResult<Frame> {
+            Ok(self.frame.clone())
+        }
     }
 
     fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvaluation {

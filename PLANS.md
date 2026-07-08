@@ -50,6 +50,7 @@ Current node:
 - `ledger diagnose` reports incomplete/not-found/terminal status, receipt counts, finalizing counts, terminal receipt data when present, and missing-output diagnostics for `finish_ok` records.
 - L7 Evidence / FrameStore convergence has started: `lab run` now indexes materialized screenshot files into `EvidenceStore`, records an `evidence_index` ledger drive record, projects screenshot evidence refs into `summary.json`/`diagnostics.json`, and writes `logs/evidence.json` into result.zip from runtime-ledger projection data.
 - Screenshot evidence indexing is explicitly degraded, not silent, when a materialized screenshot file cannot be read or stored; the degradation reason is recorded in ledger-backed evidence metadata and emits an `evidence_index_degraded` event.
+- L7 recognition traceability has started: `lab run` now issues a `reco_id` for each recognition capture, stores it in the recognition drive record id chain, and projects the same id into result.zip `logs/recognition.jsonl`.
 
 Issue #28 remaining chain:
 
@@ -57,7 +58,7 @@ Issue #28 remaining chain:
 - L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
 - L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
 - L5: make CLI outputs ledger projections instead of independent facts.
-- L7: continue remaining Evidence / FrameStore convergence for recognition details, capture backend attempts, and record-step facts beyond the screenshot evidence index now in place.
+- L7: continue remaining Evidence / FrameStore convergence for recognition detail evidence payloads, capture backend attempts, and record-step facts beyond the screenshot evidence index and recognition id traceability now in place.
 - L8: run the full adversarial acceptance set and the 95 percent completion gate.
 
 Current boundary:
@@ -67,7 +68,7 @@ Current boundary:
 - The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
 - The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - The current L6 work adds read-only ledger/evidence inspection commands only; it does not trigger capture, touch, runtime daemon, or game-device work.
-- The current L7 work connects already-materialized `lab run` screenshots to `EvidenceStore` and runtime-ledger projection output only; it does not add new capture, OCR, matching, UI, database, scheduler, or game-device behavior.
+- The current L7 work connects already-materialized `lab run` screenshots and per-capture `reco_id` values to runtime-ledger projection output only; it does not add new capture, OCR, matching, UI, database, scheduler, or game-device behavior.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module

@@ -1,5 +1,60 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L7 recognition traceability
+
+### Current status
+
+- Continued Runtime issue #28 L7 after screenshot evidence indexing.
+- `lab run` now issues a `reco_id` for every recognition capture through the shared `IdIssuer`.
+- Recognition drive records now include the same `reco_id` in the runtime-ledger `id_chain` and in the projected recognition payload.
+- Result.zip `logs/recognition.jsonl` now exposes the `reco_id`, so recognition output can be traced back to the ledger record.
+- The `recognition_recorded` light event now also carries the `reco_id`.
+- This node does not add capture, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `gh issue view 28 --json number,title,state,labels,body,url`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md -Raw`
+- `Get-Content -LiteralPath AGENTS.md -Raw`
+- `Get-Content -LiteralPath C:\Users\Alice\.codex\plugins\cache\personal\ecc\2.0.0\skills\rust-patterns\SKILL.md -Raw`
+- `Get-Content -LiteralPath C:\Users\Alice\.codex\plugins\cache\personal\ecc\2.0.0\skills\rust-testing\SKILL.md -Raw`
+- `rg -n "reco_id|IdKind::Reco|recognition\.push|record_type.*recognition|recognition_result|capture_backend_attempt|CaptureBackendAttempt|steps\.push|step_" apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs crates/ledger/src/lib.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab recognition_projection_keeps_reco_id_from_ledger -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused recognition projection test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L7 recognition traceability subnode is known.
+- Full issue #28 remains incomplete: remaining Evidence / FrameStore convergence, L5 CLI projection, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L7 recognition traceability node.
+2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+
 ## 2026-07-09 runtime-ledger L7 screenshot evidence index
 
 ### Current status
