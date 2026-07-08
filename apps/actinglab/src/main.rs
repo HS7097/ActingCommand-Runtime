@@ -6444,6 +6444,11 @@ struct SemanticLedgerContext {
     records: Vec<LedgerRecord>,
 }
 
+struct SemanticLedgerWrite {
+    summary: Value,
+    receipt_payload: Option<Value>,
+}
+
 impl SemanticLedgerContext {
     fn new(command: &'static str, global: &GlobalOptions, args: &[String]) -> Self {
         let issuer = IdIssuer::new();
@@ -6518,8 +6523,12 @@ fn finish_semantic_payload_with_ledger(
         &payload,
         &mut ctx.records,
     )?;
-    payload["ledger"] = ledger;
-    Ok(payload)
+    if let Some(receipt_payload) = ledger.receipt_payload {
+        project_semantic_ledger_payload(&receipt_payload, ledger.summary)
+    } else {
+        payload["ledger"] = ledger.summary;
+        Ok(payload)
+    }
 }
 
 fn return_semantic_error_with_ledger(
@@ -6540,7 +6549,7 @@ fn return_semantic_error_with_ledger(
         },
         "details": error.details.as_deref().cloned().unwrap_or(Value::Null)
     });
-    payload["ledger"] = match write_semantic_ledger(
+    payload = match write_semantic_ledger(
         global,
         ctx.command,
         &ctx.instance,
@@ -6548,12 +6557,24 @@ fn return_semantic_error_with_ledger(
         &payload,
         &mut ctx.records,
     ) {
-        Ok(ledger) => ledger,
-        Err(ledger_error) => json!({
-            "written": false,
-            "reason": "ledger_write_failed",
-            "error": ledger_error.message
-        }),
+        Ok(ledger) => {
+            if let Some(receipt_payload) = ledger.receipt_payload {
+                project_semantic_ledger_payload(&receipt_payload, ledger.summary)?
+            } else {
+                let mut payload = payload;
+                payload["ledger"] = ledger.summary;
+                payload
+            }
+        }
+        Err(ledger_error) => {
+            let mut payload = payload;
+            payload["ledger"] = json!({
+                "written": false,
+                "reason": "ledger_write_failed",
+                "error": ledger_error.message
+            });
+            payload
+        }
     };
     Err(error.with_details(payload))
 }
@@ -6565,10 +6586,13 @@ fn write_semantic_ledger(
     req_id: &str,
     payload: &Value,
     records: &mut Vec<LedgerRecord>,
-) -> CliOutcome<Value> {
+) -> CliOutcome<SemanticLedgerWrite> {
     let config = read_user_config()?;
     let Some(run_root) = effective_run_root(global, &config) else {
-        return Ok(json!({"written": false, "reason": "run_root_not_configured"}));
+        return Ok(SemanticLedgerWrite {
+            summary: json!({"written": false, "reason": "run_root_not_configured"}),
+            receipt_payload: None,
+        });
     };
     let game = global.game.clone().unwrap_or_else(|| "unknown".to_string());
     let server = global
@@ -6598,10 +6622,53 @@ fn write_semantic_ledger(
     ledger
         .append(receipt)
         .map_err(|err| CliError::device(err.to_string()))?;
-    Ok(json!({
-        "written": true,
-        "path": ledger.ledger_path().display().to_string()
-    }))
+    let receipt_payload = read_semantic_receipt_payload_from_ledger(ledger.ledger_path(), req_id)?;
+    Ok(SemanticLedgerWrite {
+        summary: json!({
+            "written": true,
+            "path": ledger.ledger_path().display().to_string()
+        }),
+        receipt_payload: Some(receipt_payload),
+    })
+}
+
+fn read_semantic_receipt_payload_from_ledger(path: &Path, req_id: &str) -> CliOutcome<Value> {
+    let read = LabLedger::read(path).map_err(|err| CliError::device(err.to_string()))?;
+    read.records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.kind == LedgerRecordKind::Receipt && record.req_id.as_deref() == Some(req_id)
+        })
+        .map(|record| record.payload.clone())
+        .ok_or_else(|| {
+            CliError::device(format!(
+                "runtime ledger receipt for semantic req_id '{req_id}' was not readable after write"
+            ))
+        })
+}
+
+fn project_semantic_ledger_payload(
+    receipt_payload: &Value,
+    ledger_summary: Value,
+) -> CliOutcome<Value> {
+    let mut projected = receipt_payload.clone();
+    let Some(object) = projected.as_object_mut() else {
+        return Err(CliError::device(
+            "semantic ledger projection returned non-object",
+        ));
+    };
+    object.insert("ledger".to_string(), ledger_summary.clone());
+    object.insert(
+        "projection_source".to_string(),
+        json!({
+            "kind": "runtime_ledger",
+            "record_kind": "receipt",
+            "path": ledger_summary.get("path").cloned().unwrap_or(Value::Null),
+            "req_id": receipt_payload.get("req_id").cloned().unwrap_or(Value::Null)
+        }),
+    );
+    Ok(projected)
 }
 
 fn with_semantic_id_chain(
@@ -54682,6 +54749,18 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            detect_data
+                .pointer("/projection_source/kind")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
+        );
+        assert_eq!(
+            detect_data
+                .pointer("/projection_source/record_kind")
+                .and_then(Value::as_str),
+            Some("receipt")
+        );
         assert_lab_receipt_has_stages(
             &run_root,
             detect_data.get("req_id").and_then(Value::as_str).unwrap(),
@@ -54709,6 +54788,12 @@ mod tests {
         let tap_data = tap.envelope.data.as_ref().unwrap();
         assert!(tap_data.get("reco_id").and_then(Value::as_str).is_some());
         assert!(tap_data.get("action_id").and_then(Value::as_str).is_some());
+        assert_eq!(
+            tap_data
+                .pointer("/projection_source/kind")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
+        );
         assert_lab_receipt_has_stages(
             &run_root,
             tap_data.get("req_id").and_then(Value::as_str).unwrap(),
@@ -54740,6 +54825,12 @@ mod tests {
                 .pointer("/route/0/action_id")
                 .and_then(Value::as_str)
                 .is_some()
+        );
+        assert_eq!(
+            navigate_data
+                .pointer("/projection_source/kind")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
         );
         assert_lab_receipt_has_stages(
             &run_root,
