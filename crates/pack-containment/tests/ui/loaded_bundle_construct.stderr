@@ -1,0 +1,13 @@
+error: cannot construct `LoadedBundle` with struct literal syntax due to private fields
+ --> tests/ui/loaded_bundle_construct.rs:6:19
+  |
+6 |     let _bundle = LoadedBundle {
+  |                   ^^^^^^^^^^^^
+7 |         task_id: TaskId::new("task").unwrap(),
+  |         ------------------------------------- private field
+8 |         verified: Sha256Hash::digest(b"zip"),
+  |         ------------------------------------ private field
+9 |         layout: PackageLayout::Lab,
+  |         -------------------------- private field
+  |
+  = note: ...and other private fields that were not provided

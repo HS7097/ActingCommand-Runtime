@@ -6,6 +6,30 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current task-pack containment module
+
+The active approved issue is Runtime issue #26:
+
+- `[基础模块] 任务包收容模块:资源加载唯一咽喉(每实例一操作台 + 哈希校验 + capability)`
+- Technical source of truth: `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`
+
+Implementation direction:
+
+- Add `crates/pack-containment` as the resource loading chokepoint for single-task zip packages.
+- Keep one isolated bench per instance, with at most one resident loaded package per bench.
+- Verify the compressed zip hash before decompression.
+- Decompress into memory only, with compressed size, total decompressed size, per-entry size, entry count, and per-instance resident-byte limits.
+- Reject zip-slip paths, duplicate entries, executable/script entries, malformed zips, oversized packages, manifest hash mismatches, and invalid package structure as fatal containment errors.
+- Make `LoadedBundle` the capability returned only by `Containment::load`; fields stay private so downstream code cannot fabricate a verified bundle.
+- Extend `recognition-pack` with an asset resolver abstraction so contained packages can feed recognition from memory while existing filesystem-backed callers continue to work.
+- Route `package validate/inspect/run` and `lab validate/run` through containment before existing compatibility behavior.
+
+Current boundary:
+
+- The containment crate now owns the shared bomb/slip/manifest-hash guards for `package` validation.
+- `lab validate/run` now pass through containment first, then continue through the existing extraction-backed compatibility chain until a later task removes the remaining Lab-run temp extraction.
+- No scheduler, UI, OCR, SQLite, game logic, encryption, trusted channel, or upstream source import is part of this task.
+
 ## Current Lab-2 chain repair round 5 closeout
 
 The active repair task is `C:\合作工作区\ActingCommand\FIX-Lab-2-chain-round5-2a03180.md`.

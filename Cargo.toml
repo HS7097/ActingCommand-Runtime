@@ -11,6 +11,7 @@ members = [
     "crates/device",
     "crates/ledger",
     "crates/page-detector",
+    "crates/pack-containment",
     "crates/onnx-provider-support",
     "crates/recognition",
     "crates/recognition-pack",
@@ -34,6 +35,7 @@ actingcommand-device = { path = "crates/device" }
 actingcommand-ledger = { path = "crates/ledger" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
+actingcommand-pack-containment = { path = "crates/pack-containment" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }

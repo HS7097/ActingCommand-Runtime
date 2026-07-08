@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
 
@@ -198,10 +199,45 @@ pub struct ColorCheck {
 
 #[derive(Debug)]
 pub struct RecognitionEvaluator {
-    pack_root: PathBuf,
+    asset_resolver: Arc<dyn AssetResolver>,
     pack: RecognitionPack,
     target_indexes: HashMap<String, usize>,
     unsupported_targets: Vec<UnsupportedRecognitionTarget>,
+}
+
+pub trait AssetResolver: fmt::Debug + Send + Sync {
+    fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>>;
+
+    fn contains_asset(&self, path: &str) -> bool {
+        self.read_asset(path).is_ok()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FsAssetResolver {
+    root: PathBuf,
+}
+
+impl FsAssetResolver {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl AssetResolver for FsAssetResolver {
+    fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+        fs::read(self.root.join(path)).map_err(|err| {
+            RecognitionPackError::fatal(format!("failed to read asset '{path}': {err}"))
+        })
+    }
+
+    fn contains_asset(&self, path: &str) -> bool {
+        self.root.join(path).is_file()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,8 +290,15 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
 
 impl RecognitionEvaluator {
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
+        Self::with_asset_resolver(pack, Arc::new(FsAssetResolver::new(pack_root)))
+    }
+
+    pub fn with_asset_resolver(
+        pack: RecognitionPack,
+        asset_resolver: Arc<dyn AssetResolver>,
+    ) -> RecognitionPackResult<Self> {
         let mut errors = Vec::new();
-        validate_pack(&pack_root, &pack, &mut errors);
+        validate_pack(asset_resolver.as_ref(), &pack, &mut errors);
         if !errors.is_empty() {
             return Err(RecognitionPackError::fatal(errors.join("; ")));
         }
@@ -269,11 +312,15 @@ impl RecognitionEvaluator {
         let unsupported_targets = unsupported_recognition_targets(&pack);
 
         Ok(Self {
-            pack_root,
+            asset_resolver,
             pack,
             target_indexes,
             unsupported_targets,
         })
+    }
+
+    pub fn pack(&self) -> &RecognitionPack {
+        &self.pack
     }
 
     pub fn evaluate_target(
@@ -364,12 +411,17 @@ impl RecognitionEvaluator {
         scene: &Scene,
         target: &TemplateTarget,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let template_png = fs::read(self.pack_root.join(&target.template_path)).map_err(|err| {
-            RecognitionPackError::fatal(format!(
-                "failed to read template '{}' for target '{}': {err}",
-                target.template_path, target.id
-            ))
-        })?;
+        let template_png = self
+            .asset_resolver
+            .read_asset(&target.template_path)
+            .map_err(|err| {
+                RecognitionPackError::fatal(format!(
+                    "failed to read template '{}' for target '{}': {}",
+                    target.template_path,
+                    target.id,
+                    err.message()
+                ))
+            })?;
         let region = target_region(&target.id, &target.region)?;
         let matched = scene
             .match_template_with_metric(&template_png, region, self.default_match_metric())
@@ -506,7 +558,11 @@ impl RecognitionTarget {
     }
 }
 
-fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<String>) {
+fn validate_pack(
+    asset_resolver: &dyn AssetResolver,
+    pack: &RecognitionPack,
+    errors: &mut Vec<String>,
+) {
     if !matches!(pack.schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5") {
         errors.push(format!(
             "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5'",
@@ -562,14 +618,13 @@ fn validate_pack(pack_root: &Path, pack: &RecognitionPack, errors: &mut Vec<Stri
                     );
                 }
                 validate_template_path(&target.template_path, &format!("target[{index}]"), errors);
-                if is_template_path_safe(&target.template_path) {
-                    let template = pack_root.join(&target.template_path);
-                    if !template.is_file() {
-                        errors.push(format!(
-                            "target[{index}] template '{}' does not exist",
-                            target.template_path
-                        ));
-                    }
+                if is_template_path_safe(&target.template_path)
+                    && !asset_resolver.contains_asset(&target.template_path)
+                {
+                    errors.push(format!(
+                        "target[{index}] template '{}' does not exist",
+                        target.template_path
+                    ));
                 }
             }
             RecognitionTarget::Color(target) => {

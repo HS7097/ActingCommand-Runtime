@@ -1,24 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 [package]
-name = "actingcommand-actinglab"
+name = "actingcommand-pack-containment"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
 
-[[bin]]
-name = "actinglab"
-path = "src/main.rs"
-
 [dependencies]
-actingcommand-arbitrator = { workspace = true }
-actingcommand-device = { workspace = true }
-actingcommand-ledger = { workspace = true }
 actingcommand-page-detector = { workspace = true }
-actingcommand-pack-containment = { workspace = true }
-actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,4 +17,6 @@ sha2 = "0.10"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+actingcommand-recognition = { workspace = true }
 tempfile = "3"
+trybuild = "1"

@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-07-08 task-pack containment module
+
+### Current status
+
+- Implemented approved Runtime issue #26 from `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`.
+- Added `crates/pack-containment` as the single-task zip package containment module.
+- Added per-instance `Containment` benches and private-field `LoadedBundle` capability.
+- Added compressed-byte SHA-256 verification before decompression.
+- Added all-memory bounded extraction with compressed size, total decompressed size, per-entry size, entry count, and resident-byte limits.
+- Added fatal rejection for hash mismatch, zip-slip/path traversal, duplicate entries, executable/script entries, malformed zip, missing entries, manifest hash mismatch, unsafe manifest hash paths, and recognition/page parse failures.
+- Added `TrustSource` hook for future external hash source/trusted channel work.
+- Extended `recognition-pack` with `AssetResolver` and `FsAssetResolver`; existing filesystem evaluator construction remains compatible, while containment can provide in-memory assets.
+- Routed `package validate/inspect/run` through `Containment::load`.
+- Routed `lab validate/run` through containment before the existing compatibility extraction path.
+- No scheduler, UI, OCR, SQLite, game logic, encryption, trusted channel, or upstream source import was added in this task.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `crates/recognition-pack/src/lib.rs`
+- `crates/pack-containment/Cargo.toml`
+- `crates/pack-containment/src/lib.rs`
+- `crates/pack-containment/tests/compile_fail.rs`
+- `crates/pack-containment/tests/ui/loaded_bundle_construct.rs`
+- `crates/pack-containment/tests/ui/loaded_bundle_construct.stderr`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `gh issue view 26 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments,url,updatedAt`
+- `Get-Content -Path "C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md" -Raw`
+- `rg -n "ZipArchive|zip-slip|zip_slip|sha256|manifest|RecognitionPack|recognition[-_]pack|package validate|build-pack|load_pack|validate_package|package_validate|LoadedBundle" apps crates Cargo.toml`
+- `cargo test -p actingcommand-pack-containment`
+- `cargo test -p actingcommand-actinglab package_validate_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_package -- --nocapture`
+- `cargo test -p actingcommand-recognition-pack -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `rg -n "ZipArchive::new|read_zip_entry_limited|validate_manifest_hashes|normalize_zip_path|manifest_hashes|package must contain exactly one top-level" apps\actinglab\src\main.rs crates\pack-containment\src\lib.rs apps\actinglab\src\lab_run.rs`
+- `rg -n "LoadedBundle \{" apps crates --glob '!crates/pack-containment/src/lib.rs' --glob '!crates/pack-containment/tests/ui/loaded_bundle_construct.rs' --glob '!crates/pack-containment/tests/ui/loaded_bundle_construct.stderr'`
+
+### Test results
+
+- `actingcommand-pack-containment`: 7 unit tests passed and 1 trybuild compile-fail test passed.
+- `actingcommand-actinglab package_validate_`: 6/6 package validation tests passed through the new containment route.
+- `actingcommand-actinglab lab_`: 56 focused Lab tests passed after adding the containment preflight.
+- `actingcommand-recognition-pack`: 31 unit tests plus 1 disk fixture integration test passed after adding `AssetResolver`.
+- Final public gates passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+- Architecture scan found no external `LoadedBundle { ... }` construction outside the intentional trybuild failure fixture and expected stderr.
+
+### Current blocker
+
+- No code blocker is known.
+- Remaining Lab-run extraction is intentionally left as compatibility behavior for this task; full in-memory Lab execution should be handled by a later scoped follow-up.
+
+### Next step
+
+1. Commit and push the completed containment task with this checkpoint and `PLANS.md`.
+2. Let the next task decide whether to remove the remaining Lab-run compatibility extraction and convert execution to direct in-memory `LoadedBundle` consumption.
+
 ## 2026-07-06 Lab-2 chain repair round 5 closeout
 
 ### Current status

@@ -7,11 +7,14 @@ use actingcommand_device::{
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
     vendor_stdio_session_diagnostic,
 };
+use actingcommand_pack_containment::{
+    Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
+};
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, RecognitionPack, TargetEvaluation, TargetKind,
-    UnsupportedRecognitionTarget, load_pack_from_json_str, unsupported_recognition_targets,
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
+    load_pack_from_json_str,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,8 +31,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use zip::ZipWriter;
 use zip::write::FileOptions;
-use zip::{ZipArchive, ZipWriter};
 
 mod frame_store;
 mod lab2_cli;
@@ -92,8 +95,6 @@ const SESSION_REQUEST_BOOL_FLAGS: &[&str] = &["--via-daemon", "--local", "--no-w
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
-const MAX_PACKAGE_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_PACKAGE_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 static JSON_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn main() -> ExitCode {
@@ -24352,250 +24353,30 @@ struct PackageValidation {
     recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
 }
 
-#[derive(Debug)]
-struct RecognitionPackDiagnostics {
-    path: String,
-    unsupported_targets: Vec<UnsupportedRecognitionTarget>,
-}
-
 fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
-    let file = File::open(path).map_err(|err| {
+    let bytes = fs::read(path).map_err(|err| {
         CliError::package_invalid(format!("failed to open package {}: {err}", path.display()))
     })?;
-    let mut archive = ZipArchive::new(file).map_err(|err| {
-        CliError::package_invalid(format!("failed to read zip {}: {err}", path.display()))
-    })?;
-    let mut paths = BTreeSet::new();
-    let mut entries = BTreeMap::<String, Vec<u8>>::new();
-    let mut dangerous = Vec::new();
-    let mut module_roots = BTreeSet::new();
-    let mut total_uncompressed = 0u64;
-
-    for index in 0..archive.len() {
-        let mut file = archive
-            .by_index(index)
-            .map_err(|err| CliError::package_invalid(format!("failed to read zip entry: {err}")))?;
-        let Some(path_name) = normalize_zip_path(file.name())? else {
-            continue;
-        };
-        if !paths.insert(path_name.clone()) {
-            return Err(CliError::package_invalid(format!(
-                "duplicate zip entry: {path_name}"
-            )));
-        }
-        if let Some(root) = path_name.split('/').next() {
-            module_roots.insert(root.to_string());
-        }
-        if has_dangerous_extension(&path_name) {
-            dangerous.push(path_name.clone());
-        }
-        if file.size() > MAX_PACKAGE_ZIP_ENTRY_BYTES {
-            return Err(CliError::package_invalid(format!(
-                "zip entry {path_name} exceeds {} bytes",
-                MAX_PACKAGE_ZIP_ENTRY_BYTES
-            )));
-        }
-        let bytes = read_zip_entry_limited(&mut file, &path_name, MAX_PACKAGE_ZIP_ENTRY_BYTES)?;
-        total_uncompressed = total_uncompressed
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| CliError::package_invalid("package uncompressed size overflowed"))?;
-        if total_uncompressed > MAX_PACKAGE_ZIP_TOTAL_BYTES {
-            return Err(CliError::package_invalid(format!(
-                "package exceeds total uncompressed limit of {} bytes",
-                MAX_PACKAGE_ZIP_TOTAL_BYTES
-            )));
-        }
-        entries.insert(path_name, bytes);
-    }
-
-    if !dangerous.is_empty() {
-        return Err(CliError::package_invalid(format!(
-            "package contains executable/script entries: {}",
-            dangerous.join(", ")
-        )));
-    }
-    if module_roots.len() != 1 {
-        return Err(CliError::package_invalid(
-            "package must contain exactly one top-level module directory",
-        ));
-    }
-    let module = module_roots.into_iter().next().expect("one module root");
-    let manifest_path = format!("{module}/manifest.json");
-    let manifest_bytes = entries
-        .get(&manifest_path)
-        .ok_or_else(|| CliError::package_invalid(format!("missing {manifest_path}")))?;
-    let manifest: Value = serde_json::from_slice(manifest_bytes).map_err(|err| {
-        CliError::package_invalid(format!("failed to parse {manifest_path}: {err}"))
-    })?;
-    let task_count = entries
-        .keys()
-        .filter(|path| {
-            path.starts_with(&format!("{module}/operations/")) && path.ends_with("/task.json")
-        })
-        .count();
-    if task_count == 0 {
-        return Err(CliError::package_invalid(format!(
-            "missing {module}/operations/<task_id>/task.json"
-        )));
-    }
-    validate_manifest_hashes(&manifest, &entries, &module)?;
-    let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
+    let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;
+    let expected = Sha256Hash::digest(&bytes);
+    let mut containment = Containment::new();
+    let bundle = containment
+        .load(&instance, &bytes, &expected)
+        .map_err(containment_package_error)?;
     Ok(PackageValidation {
-        module,
-        manifest_path,
-        task_count,
-        entry_count: entries.len(),
-        dangerous_entries: dangerous,
-        entries: entries.keys().cloned().collect(),
-        manifest,
-        recognition_pack_diagnostics,
+        module: bundle.resource_root().to_string(),
+        manifest_path: bundle.manifest_path().to_string(),
+        task_count: bundle.task_count(),
+        entry_count: bundle.entry_count(),
+        dangerous_entries: Vec::new(),
+        entries: bundle.entry_paths().map(str::to_string).collect(),
+        manifest: bundle.manifest().clone(),
+        recognition_pack_diagnostics: bundle.recognition_pack_diagnostics().to_vec(),
     })
 }
 
-fn collect_recognition_pack_diagnostics(
-    entries: &BTreeMap<String, Vec<u8>>,
-) -> CliOutcome<Vec<RecognitionPackDiagnostics>> {
-    let mut diagnostics = Vec::new();
-    for (path, bytes) in entries {
-        if !path.ends_with(".pack.json") {
-            continue;
-        }
-        let pack: RecognitionPack =
-            load_pack_from_json_str(std::str::from_utf8(bytes).map_err(|err| {
-                CliError::package_invalid(format!("failed to decode {path} as UTF-8: {err}"))
-            })?)
-            .map_err(|err| {
-                CliError::package_invalid(format!("failed to parse recognition pack {path}: {err}"))
-            })?;
-        diagnostics.push(RecognitionPackDiagnostics {
-            path: path.clone(),
-            unsupported_targets: unsupported_recognition_targets(&pack),
-        });
-    }
-    Ok(diagnostics)
-}
-
-fn read_zip_entry_limited<R: Read>(
-    reader: &mut R,
-    path_name: &str,
-    limit: u64,
-) -> CliOutcome<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut limited = reader.take(limit.saturating_add(1));
-    limited.read_to_end(&mut bytes).map_err(|err| {
-        CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
-    })?;
-    if bytes.len() as u64 > limit {
-        return Err(CliError::package_invalid(format!(
-            "zip entry {path_name} exceeds {limit} bytes"
-        )));
-    }
-    Ok(bytes)
-}
-
-fn normalize_zip_path(name: &str) -> CliOutcome<Option<String>> {
-    if name.ends_with('/') {
-        return Ok(None);
-    }
-    if name.contains('\\') || name.contains(':') || name.starts_with('/') {
-        return Err(CliError::package_invalid(format!(
-            "unsafe zip path: {name}"
-        )));
-    }
-    let path = Path::new(name);
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(CliError::package_invalid(format!(
-            "zip-slip path is not allowed: {name}"
-        )));
-    }
-    Ok(Some(name.to_string()))
-}
-
-fn has_dangerous_extension(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            DANGEROUS_EXTENSIONS
-                .iter()
-                .any(|dangerous| extension.eq_ignore_ascii_case(dangerous))
-        })
-}
-
-fn validate_manifest_hashes(
-    manifest: &Value,
-    entries: &BTreeMap<String, Vec<u8>>,
-    module: &str,
-) -> CliOutcome<()> {
-    for (path, expected) in manifest_hashes(manifest)? {
-        let resolved = if entries.contains_key(&path) {
-            path
-        } else {
-            format!("{module}/{path}")
-        };
-        let bytes = entries.get(&resolved).ok_or_else(|| {
-            CliError::package_invalid(format!("manifest hash references missing path: {resolved}"))
-        })?;
-        let actual = hex_sha256(bytes);
-        let expected = expected
-            .strip_prefix("sha256:")
-            .unwrap_or(&expected)
-            .to_ascii_lowercase();
-        if actual != expected {
-            return Err(CliError::package_invalid(format!(
-                "hash mismatch for {resolved}: expected {expected}, actual {actual}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn manifest_hashes(manifest: &Value) -> CliOutcome<Vec<(String, String)>> {
-    let mut hashes = Vec::new();
-    if let Some(object) = manifest.get("hashes").and_then(Value::as_object) {
-        for (path, value) in object {
-            if let Some(hash) = value.as_str() {
-                hashes.push((normalize_manifest_hash_path(path)?, hash.to_string()));
-            }
-        }
-    }
-    if let Some(files) = manifest.get("files").and_then(Value::as_array) {
-        for file in files {
-            let Some(path) = file.get("path").and_then(Value::as_str) else {
-                continue;
-            };
-            let hash = file
-                .get("sha256")
-                .or_else(|| file.get("hash"))
-                .and_then(Value::as_str);
-            if let Some(hash) = hash {
-                hashes.push((normalize_manifest_hash_path(path)?, hash.to_string()));
-            }
-        }
-    }
-    Ok(hashes)
-}
-
-fn normalize_manifest_hash_path(path: &str) -> CliOutcome<String> {
-    if path.ends_with('/')
-        || path.contains('\\')
-        || path.contains(':')
-        || path.starts_with('/')
-        || Path::new(path).components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(CliError::package_invalid("manifest hash path is unsafe"));
-    }
-    Ok(path.to_string())
+fn containment_package_error(err: ContainmentError) -> CliError {
+    CliError::package_invalid(err.to_string())
 }
 
 fn package_validation_json(validation: &PackageValidation, include_entries: bool) -> Value {
@@ -52269,16 +52050,6 @@ mod tests {
         let message = &result.envelope.error.as_ref().unwrap().message;
         assert!(message.contains("manifest hash path is unsafe"));
         assert!(!message.contains(".."));
-    }
-
-    #[test]
-    fn read_package_zip_entry_limited_rejects_oversized_entry() {
-        let mut input = std::io::Cursor::new(vec![1, 2, 3]);
-
-        let err = read_zip_entry_limited(&mut input, "module/large.bin", 2).expect_err("oversized");
-
-        assert_eq!(err.code, "package_invalid");
-        assert!(err.message.contains("exceeds 2 bytes"));
     }
 
     #[test]

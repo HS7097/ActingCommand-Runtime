@@ -1,0 +1,1327 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
+use actingcommand_recognition_pack::{
+    AssetResolver, RecognitionEvaluator, UnsupportedRecognitionTarget, load_pack_from_json_str,
+    unsupported_recognition_targets,
+};
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt;
+use std::io::{Cursor, Read};
+use std::path::{Component, Path};
+use std::sync::Arc;
+use zip::ZipArchive;
+
+pub type ContainmentResult<T> = Result<T, ContainmentError>;
+
+pub const DEFAULT_MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_MAX_TOTAL_DECOMPRESSED_BYTES: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_MAX_ENTRY_COUNT: usize = 4096;
+pub const DEFAULT_MAX_RESIDENT_BYTES_PER_INSTANCE: u64 = 1024 * 1024 * 1024;
+
+const DANGEROUS_EXTENSIONS: &[&str] = &[
+    "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InstanceId(String);
+
+impl InstanceId {
+    pub fn new(value: impl Into<String>) -> ContainmentResult<Self> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ContainmentError::InvalidInstanceId);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<&str> for InstanceId {
+    type Error = ContainmentError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TaskId(String);
+
+impl TaskId {
+    pub fn new(value: impl Into<String>) -> ContainmentResult<Self> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ContainmentError::MissingTaskId);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sha256Hash([u8; 32]);
+
+impl Sha256Hash {
+    pub fn digest(bytes: &[u8]) -> Self {
+        let digest = Sha256::digest(bytes);
+        let mut hash = [0_u8; 32];
+        hash.copy_from_slice(&digest);
+        Self(hash)
+    }
+
+    pub fn parse_hex(value: &str) -> ContainmentResult<Self> {
+        let value = value.strip_prefix("sha256:").unwrap_or(value);
+        if value.len() != 64 {
+            return Err(ContainmentError::InvalidHash {
+                value: value.to_string(),
+            });
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            let offset = index * 2;
+            *byte = u8::from_str_radix(&value[offset..offset + 2], 16).map_err(|_| {
+                ContainmentError::InvalidHash {
+                    value: value.to_string(),
+                }
+            })?;
+        }
+        Ok(Self(bytes))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for Sha256Hash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+pub trait TrustSource {
+    fn expected_hash(&self, task_id: &TaskId) -> ContainmentResult<Sha256Hash>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ContainmentLimits {
+    pub max_compressed_bytes: u64,
+    pub max_total_decompressed_bytes: u64,
+    pub max_entry_bytes: u64,
+    pub max_entry_count: usize,
+    pub max_resident_bytes_per_instance: u64,
+}
+
+impl Default for ContainmentLimits {
+    fn default() -> Self {
+        Self {
+            max_compressed_bytes: DEFAULT_MAX_COMPRESSED_BYTES,
+            max_total_decompressed_bytes: DEFAULT_MAX_TOTAL_DECOMPRESSED_BYTES,
+            max_entry_bytes: DEFAULT_MAX_ENTRY_BYTES,
+            max_entry_count: DEFAULT_MAX_ENTRY_COUNT,
+            max_resident_bytes_per_instance: DEFAULT_MAX_RESIDENT_BYTES_PER_INSTANCE,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Containment {
+    limits: ContainmentLimits,
+    benches: BTreeMap<InstanceId, Bench>,
+}
+
+impl Containment {
+    pub fn new() -> Self {
+        Self::with_limits(ContainmentLimits::default())
+    }
+
+    pub fn with_limits(limits: ContainmentLimits) -> Self {
+        Self {
+            limits,
+            benches: BTreeMap::new(),
+        }
+    }
+
+    pub fn load(
+        &mut self,
+        instance: &InstanceId,
+        task_zip_bytes: &[u8],
+        expected: &Sha256Hash,
+    ) -> ContainmentResult<&LoadedBundle> {
+        if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
+            return Err(ContainmentError::CompressedTooLarge {
+                instance: instance.clone(),
+                size: task_zip_bytes.len() as u64,
+                limit: self.limits.max_compressed_bytes,
+            });
+        }
+        let actual = Sha256Hash::digest(task_zip_bytes);
+        if !constant_time_hash_eq(&actual, expected) {
+            return Err(ContainmentError::HashMismatch {
+                instance: instance.clone(),
+                expected: *expected,
+                actual,
+            });
+        }
+        let package = MemoryPackage::from_zip(task_zip_bytes, self.limits, instance)?;
+        let bundle = LoadedBundle::from_memory_package(package, actual)?;
+        let bench = self
+            .benches
+            .entry(instance.clone())
+            .or_insert_with(|| Bench::new(instance.clone()));
+        bench.loaded = Some(bundle);
+        Ok(bench
+            .loaded
+            .as_ref()
+            .expect("loaded bundle was inserted before returning"))
+    }
+
+    pub fn get(&self, instance: &InstanceId) -> Option<&LoadedBundle> {
+        self.benches
+            .get(instance)
+            .and_then(|bench| bench.loaded.as_ref())
+    }
+
+    pub fn unload(&mut self, instance: &InstanceId) {
+        if let Some(bench) = self.benches.get_mut(instance) {
+            bench.loaded = None;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Bench {
+    #[allow(dead_code)]
+    instance: InstanceId,
+    loaded: Option<LoadedBundle>,
+}
+
+impl Bench {
+    fn new(instance: InstanceId) -> Self {
+        Self {
+            instance,
+            loaded: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageLayout {
+    Lab,
+    Module,
+}
+
+#[derive(Debug)]
+pub struct LoadedBundle {
+    task_id: TaskId,
+    verified: Sha256Hash,
+    layout: PackageLayout,
+    entries: Arc<BTreeMap<String, Vec<u8>>>,
+    entry_count: usize,
+    resident_bytes: u64,
+    resource_root: String,
+    manifest_path: String,
+    manifest: Value,
+    operation_path: String,
+    operation: Value,
+    control: Option<Value>,
+    recognition_pack_path: Option<String>,
+    pages_path: Option<String>,
+    navigation_path: Option<String>,
+    navigation: Option<Value>,
+    evaluator: Option<RecognitionEvaluator>,
+    detector: Option<PageDetector>,
+    recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
+}
+
+impl LoadedBundle {
+    fn from_memory_package(
+        package: MemoryPackage,
+        verified: Sha256Hash,
+    ) -> ContainmentResult<Self> {
+        let entries = Arc::new(package.entries);
+        let metadata = PackageMetadata::from_entries(&entries)?;
+        validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
+        let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
+        let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
+
+        Ok(Self {
+            task_id: metadata.task_id,
+            verified,
+            layout: metadata.layout,
+            entries,
+            entry_count: package.entry_count,
+            resident_bytes: package.resident_bytes,
+            resource_root: metadata.resource_root,
+            manifest_path: metadata.manifest_path,
+            manifest: metadata.manifest,
+            operation_path: metadata.operation_path,
+            operation: metadata.operation,
+            control: metadata.control,
+            recognition_pack_path: metadata.recognition_pack_path,
+            pages_path: metadata.pages_path,
+            navigation_path: metadata.navigation_path,
+            navigation: metadata.navigation,
+            evaluator,
+            detector,
+            recognition_pack_diagnostics,
+        })
+    }
+
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+
+    pub fn verified_hash(&self) -> Sha256Hash {
+        self.verified
+    }
+
+    pub fn layout(&self) -> PackageLayout {
+        self.layout
+    }
+
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    pub fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    pub fn resource_root(&self) -> &str {
+        &self.resource_root
+    }
+
+    pub fn manifest_path(&self) -> &str {
+        &self.manifest_path
+    }
+
+    pub fn manifest(&self) -> &Value {
+        &self.manifest
+    }
+
+    pub fn operation_path(&self) -> &str {
+        &self.operation_path
+    }
+
+    pub fn operation(&self) -> &Value {
+        &self.operation
+    }
+
+    pub fn control(&self) -> Option<&Value> {
+        self.control.as_ref()
+    }
+
+    pub fn recognition_pack_path(&self) -> Option<&str> {
+        self.recognition_pack_path.as_deref()
+    }
+
+    pub fn pages_path(&self) -> Option<&str> {
+        self.pages_path.as_deref()
+    }
+
+    pub fn navigation_path(&self) -> Option<&str> {
+        self.navigation_path.as_deref()
+    }
+
+    pub fn navigation(&self) -> Option<&Value> {
+        self.navigation.as_ref()
+    }
+
+    pub fn evaluator(&self) -> Option<&RecognitionEvaluator> {
+        self.evaluator.as_ref()
+    }
+
+    pub fn detector(&self) -> Option<&PageDetector> {
+        self.detector.as_ref()
+    }
+
+    pub fn recognition_pack_diagnostics(&self) -> &[RecognitionPackDiagnostics] {
+        &self.recognition_pack_diagnostics
+    }
+
+    pub fn entry(&self, path: &str) -> Option<&[u8]> {
+        self.entries.get(path).map(Vec::as_slice)
+    }
+
+    pub fn entry_paths(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
+    pub fn task_count(&self) -> usize {
+        let prefix = prefixed_path(&self.resource_root, "operations/");
+        self.entries
+            .keys()
+            .filter(|path| path.starts_with(&prefix) && path.ends_with("/task.json"))
+            .count()
+    }
+
+    pub fn resource_entry(&self, relative_path: &str) -> ContainmentResult<&[u8]> {
+        validate_relative_ref(relative_path)?;
+        let path = prefixed_path(&self.resource_root, relative_path);
+        self.entry(&path)
+            .ok_or(ContainmentError::MissingEntry { path })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecognitionPackDiagnostics {
+    pub path: String,
+    pub unsupported_targets: Vec<UnsupportedRecognitionTarget>,
+}
+
+#[derive(Debug)]
+struct MemoryPackage {
+    entries: BTreeMap<String, Vec<u8>>,
+    entry_count: usize,
+    resident_bytes: u64,
+}
+
+impl MemoryPackage {
+    fn from_zip(
+        zip_bytes: &[u8],
+        limits: ContainmentLimits,
+        instance: &InstanceId,
+    ) -> ContainmentResult<Self> {
+        let cursor = Cursor::new(zip_bytes);
+        let mut archive =
+            ZipArchive::new(cursor).map_err(|err| ContainmentError::MalformedZip {
+                message: err.to_string(),
+            })?;
+        if archive.len() > limits.max_entry_count {
+            return Err(ContainmentError::EntryCountTooLarge {
+                instance: instance.clone(),
+                count: archive.len(),
+                limit: limits.max_entry_count,
+            });
+        }
+
+        let mut entries = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+        let mut resident_bytes = 0_u64;
+
+        for index in 0..archive.len() {
+            let mut entry =
+                archive
+                    .by_index(index)
+                    .map_err(|err| ContainmentError::MalformedZip {
+                        message: err.to_string(),
+                    })?;
+            let Some(path) = normalize_zip_path(entry.name())? else {
+                continue;
+            };
+            let duplicate_key = path.to_ascii_lowercase();
+            if !seen.insert(duplicate_key) {
+                return Err(ContainmentError::DuplicateEntry { path });
+            }
+            if has_dangerous_extension(&path) {
+                return Err(ContainmentError::ForbiddenEntry { path });
+            }
+            if entry.size() > limits.max_entry_bytes {
+                return Err(ContainmentError::DecompressTooLarge {
+                    instance: instance.clone(),
+                    path,
+                    size: entry.size(),
+                    limit: limits.max_entry_bytes,
+                });
+            }
+            let bytes = read_entry_limited(&mut entry, &path, limits.max_entry_bytes)?;
+            resident_bytes = resident_bytes.checked_add(bytes.len() as u64).ok_or(
+                ContainmentError::DecompressTooLarge {
+                    instance: instance.clone(),
+                    path: path.clone(),
+                    size: u64::MAX,
+                    limit: limits.max_total_decompressed_bytes,
+                },
+            )?;
+            if resident_bytes > limits.max_total_decompressed_bytes
+                || resident_bytes > limits.max_resident_bytes_per_instance
+            {
+                return Err(ContainmentError::DecompressTooLarge {
+                    instance: instance.clone(),
+                    path,
+                    size: resident_bytes,
+                    limit: limits
+                        .max_total_decompressed_bytes
+                        .min(limits.max_resident_bytes_per_instance),
+                });
+            }
+            entries.insert(path, bytes);
+        }
+
+        Ok(Self {
+            entry_count: entries.len(),
+            entries,
+            resident_bytes,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PackageMetadata {
+    layout: PackageLayout,
+    task_id: TaskId,
+    resource_root: String,
+    manifest_path: String,
+    manifest: Value,
+    operation_path: String,
+    operation: Value,
+    control: Option<Value>,
+    recognition_pack_path: Option<String>,
+    pages_path: Option<String>,
+    navigation_path: Option<String>,
+    navigation: Option<Value>,
+}
+
+impl PackageMetadata {
+    fn from_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        if entries.contains_key("control.json") {
+            return Self::from_lab_entries(entries);
+        }
+        Self::from_module_entries(entries)
+    }
+
+    fn from_lab_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        let control: LabControl = read_json_entry(entries, "control.json")?;
+        let control_value = read_json_value_entry(entries, "control.json")?;
+        let resource_root = control
+            .resource_root
+            .unwrap_or_else(|| "resources".to_string());
+        if resource_root != "resources" {
+            validate_relative_ref(&resource_root)?;
+        }
+        let manifest_path = prefixed_path(&resource_root, "manifest.json");
+        let manifest = read_json_value_entry(entries, &manifest_path)?;
+        if let Some(manifest_task_id) = manifest.get("entry_task_id").and_then(Value::as_str)
+            && manifest_task_id != control.entry_task_id
+        {
+            return Err(ContainmentError::ManifestTaskConflict {
+                manifest_path: manifest_path.clone(),
+                manifest_task_id: manifest_task_id.to_string(),
+                control_task_id: control.entry_task_id,
+            });
+        }
+        let task_id = TaskId::new(control.entry_task_id)?;
+        let operation_path =
+            prefixed_path(&resource_root, &format!("operations/{task_id}/task.json"));
+        let operation = read_json_value_entry(entries, &operation_path)?;
+        let stem = format!("{}.{}", control.game, control.server);
+        let recognition_pack_path =
+            prefixed_path(&resource_root, &format!("recognition/{stem}.pack.json"));
+        let pages_path = prefixed_path(&resource_root, &format!("recognition/{stem}.pages.json"));
+        let navigation_path = prefixed_path(
+            &resource_root,
+            &format!("navigation/{stem}.navigation.json"),
+        );
+        let navigation = entries
+            .contains_key(&navigation_path)
+            .then(|| read_json_value_entry(entries, &navigation_path))
+            .transpose()?;
+        Ok(Self {
+            layout: PackageLayout::Lab,
+            task_id,
+            resource_root,
+            manifest_path,
+            manifest,
+            operation_path,
+            operation,
+            control: Some(control_value),
+            recognition_pack_path: entries
+                .contains_key(&recognition_pack_path)
+                .then_some(recognition_pack_path),
+            pages_path: entries.contains_key(&pages_path).then_some(pages_path),
+            navigation_path: entries
+                .contains_key(&navigation_path)
+                .then_some(navigation_path),
+            navigation,
+        })
+    }
+
+    fn from_module_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
+        let module = single_top_level_module(entries)?;
+        let manifest_path = prefixed_path(&module, "manifest.json");
+        let manifest = read_json_value_entry(entries, &manifest_path)?;
+        let task_id = task_id_from_manifest_or_operations(&manifest, entries, &module)?;
+        let operation_path = prefixed_path(&module, &format!("operations/{task_id}/task.json"));
+        let operation = read_json_value_entry(entries, &operation_path)?;
+        Ok(Self {
+            layout: PackageLayout::Module,
+            task_id,
+            resource_root: module,
+            manifest_path,
+            manifest,
+            operation_path,
+            operation,
+            control: None,
+            recognition_pack_path: None,
+            pages_path: None,
+            navigation_path: None,
+            navigation: None,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LabControl {
+    game: String,
+    server: String,
+    entry_task_id: String,
+    #[serde(default)]
+    resource_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestFile {
+    path: String,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestHashes {
+    #[serde(default)]
+    hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    files: Vec<ManifestFile>,
+}
+
+#[derive(Debug)]
+struct MemoryAssetResolver {
+    entries: Arc<BTreeMap<String, Vec<u8>>>,
+    resource_root: String,
+}
+
+impl AssetResolver for MemoryAssetResolver {
+    fn read_asset(
+        &self,
+        path: &str,
+    ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+        validate_relative_ref(path).map_err(|err| {
+            actingcommand_recognition_pack::RecognitionPackError::fatal(err.to_string())
+        })?;
+        let candidates = [path.to_string(), prefixed_path(&self.resource_root, path)];
+        for candidate in candidates {
+            if let Some(bytes) = self.entries.get(&candidate) {
+                return Ok(bytes.clone());
+            }
+        }
+        Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
+            format!("memory asset '{path}' does not exist"),
+        ))
+    }
+
+    fn contains_asset(&self, path: &str) -> bool {
+        validate_relative_ref(path).is_ok()
+            && (self.entries.contains_key(path)
+                || self
+                    .entries
+                    .contains_key(&prefixed_path(&self.resource_root, path)))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainmentError {
+    InvalidInstanceId,
+    MissingTaskId,
+    InvalidHash {
+        value: String,
+    },
+    HashMismatch {
+        instance: InstanceId,
+        expected: Sha256Hash,
+        actual: Sha256Hash,
+    },
+    CompressedTooLarge {
+        instance: InstanceId,
+        size: u64,
+        limit: u64,
+    },
+    EntryCountTooLarge {
+        instance: InstanceId,
+        count: usize,
+        limit: usize,
+    },
+    DecompressTooLarge {
+        instance: InstanceId,
+        path: String,
+        size: u64,
+        limit: u64,
+    },
+    PathTraversal {
+        path: String,
+    },
+    DuplicateEntry {
+        path: String,
+    },
+    ForbiddenEntry {
+        path: String,
+    },
+    MalformedZip {
+        message: String,
+    },
+    MissingEntry {
+        path: String,
+    },
+    JsonParse {
+        path: String,
+        message: String,
+    },
+    ManifestHashMismatch {
+        path: String,
+        expected: Sha256Hash,
+        actual: Sha256Hash,
+    },
+    UnsafeManifestHashPath,
+    ManifestTaskConflict {
+        manifest_path: String,
+        manifest_task_id: String,
+        control_task_id: String,
+    },
+    PackParse {
+        path: String,
+        message: String,
+    },
+}
+
+impl fmt::Display for ContainmentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
+            Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
+            Self::InvalidHash { value } => write!(
+                f,
+                "fatal containment error: invalid sha256 hash '{value}'; hash mismatch cannot be evaluated"
+            ),
+            Self::HashMismatch {
+                instance,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "fatal containment error: hash mismatch for instance {instance}: expected {expected}, actual {actual}"
+            ),
+            Self::CompressedTooLarge {
+                instance,
+                size,
+                limit,
+            } => write!(
+                f,
+                "fatal containment error: compressed package for instance {instance} is {size} bytes, limit {limit}"
+            ),
+            Self::EntryCountTooLarge {
+                instance,
+                count,
+                limit,
+            } => write!(
+                f,
+                "fatal containment error: package for instance {instance} has {count} entries, limit {limit}"
+            ),
+            Self::DecompressTooLarge {
+                instance,
+                path,
+                size,
+                limit,
+            } => write!(
+                f,
+                "fatal containment error: package for instance {instance} exceeds decompression limit at {path}: {size} > {limit}"
+            ),
+            Self::PathTraversal { path } => write!(
+                f,
+                "fatal containment error: package path escapes containment: {path}"
+            ),
+            Self::DuplicateEntry { path } => {
+                write!(
+                    f,
+                    "fatal containment error: duplicate package entry: {path}"
+                )
+            }
+            Self::ForbiddenEntry { path } => {
+                write!(
+                    f,
+                    "fatal containment error: executable/script entry is forbidden: {path}"
+                )
+            }
+            Self::MalformedZip { message } => {
+                write!(f, "fatal containment error: malformed zip: {message}")
+            }
+            Self::MissingEntry { path } => {
+                write!(f, "fatal containment error: missing package entry: {path}")
+            }
+            Self::JsonParse { path, message } => {
+                write!(
+                    f,
+                    "fatal containment error: failed to parse {path}: {message}"
+                )
+            }
+            Self::ManifestHashMismatch {
+                path,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "fatal containment error: manifest hash mismatch for {path}: expected {expected}, actual {actual}"
+            ),
+            Self::UnsafeManifestHashPath => {
+                f.write_str("fatal containment error: manifest hash path is unsafe")
+            }
+            Self::ManifestTaskConflict {
+                manifest_path,
+                manifest_task_id,
+                control_task_id,
+            } => write!(
+                f,
+                "fatal containment error: {manifest_path} entry_task_id '{manifest_task_id}' conflicts with control entry_task_id '{control_task_id}'"
+            ),
+            Self::PackParse { path, message } => {
+                write!(
+                    f,
+                    "fatal containment error: failed to parse {path}: {message}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ContainmentError {}
+
+fn load_recognition_pipeline(
+    entries: &Arc<BTreeMap<String, Vec<u8>>>,
+    metadata: &PackageMetadata,
+) -> ContainmentResult<(Option<RecognitionEvaluator>, Option<PageDetector>)> {
+    let Some(pack_path) = &metadata.recognition_pack_path else {
+        return Ok((None, None));
+    };
+    let pack_json = decode_utf8_entry(entries, pack_path)?;
+    let pack =
+        load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
+            ContainmentError::PackParse {
+                path: pack_path.clone(),
+                message: err.to_string(),
+            }
+        })?;
+    let resolver = Arc::new(MemoryAssetResolver {
+        entries: Arc::clone(entries),
+        resource_root: metadata.resource_root.clone(),
+    });
+    let evaluator = RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
+        ContainmentError::PackParse {
+            path: pack_path.clone(),
+            message: err.to_string(),
+        }
+    })?;
+    let Some(pages_path) = &metadata.pages_path else {
+        return Ok((Some(evaluator), None));
+    };
+    let pages_json = decode_utf8_entry(entries, pages_path)?;
+    let page_set =
+        load_page_set_from_json_str(pages_json.trim_start_matches('\u{feff}')).map_err(|err| {
+            ContainmentError::PackParse {
+                path: pages_path.clone(),
+                message: err.to_string(),
+            }
+        })?;
+    let detector = PageDetector::new(page_set).map_err(|err| ContainmentError::PackParse {
+        path: pages_path.clone(),
+        message: err.to_string(),
+    })?;
+    detector
+        .validate(&evaluator)
+        .map_err(|err| ContainmentError::PackParse {
+            path: pages_path.clone(),
+            message: err.to_string(),
+        })?;
+    Ok((Some(evaluator), Some(detector)))
+}
+
+fn collect_recognition_pack_diagnostics(
+    entries: &BTreeMap<String, Vec<u8>>,
+) -> ContainmentResult<Vec<RecognitionPackDiagnostics>> {
+    let mut diagnostics = Vec::new();
+    for (path, bytes) in entries {
+        if !path.ends_with(".pack.json") {
+            continue;
+        }
+        let text = std::str::from_utf8(bytes).map_err(|err| ContainmentError::PackParse {
+            path: path.clone(),
+            message: err.to_string(),
+        })?;
+        let pack = load_pack_from_json_str(text).map_err(|err| ContainmentError::PackParse {
+            path: path.clone(),
+            message: err.to_string(),
+        })?;
+        diagnostics.push(RecognitionPackDiagnostics {
+            path: path.clone(),
+            unsupported_targets: unsupported_recognition_targets(&pack),
+        });
+    }
+    Ok(diagnostics)
+}
+
+fn validate_manifest_hashes(
+    manifest: &Value,
+    entries: &BTreeMap<String, Vec<u8>>,
+    resource_root: &str,
+) -> ContainmentResult<()> {
+    let hashes: ManifestHashes =
+        serde_json::from_value(manifest.clone()).map_err(|err| ContainmentError::JsonParse {
+            path: prefixed_path(resource_root, "manifest.json"),
+            message: err.to_string(),
+        })?;
+    for (path, expected) in hashes
+        .hashes
+        .iter()
+        .map(|(path, hash)| (path.as_str(), hash.as_str()))
+        .chain(hashes.files.iter().filter_map(|file| {
+            file.sha256
+                .as_deref()
+                .or(file.hash.as_deref())
+                .map(|hash| (file.path.as_str(), hash))
+        }))
+    {
+        validate_manifest_hash_entry(entries, resource_root, path, expected)?;
+    }
+    Ok(())
+}
+
+fn validate_manifest_hash_entry(
+    entries: &BTreeMap<String, Vec<u8>>,
+    resource_root: &str,
+    path: &str,
+    expected: &str,
+) -> ContainmentResult<()> {
+    validate_manifest_hash_path(path)?;
+    let resolved = if entries.contains_key(path) {
+        path.to_string()
+    } else {
+        prefixed_path(resource_root, path)
+    };
+    let bytes = entries
+        .get(&resolved)
+        .ok_or_else(|| ContainmentError::MissingEntry {
+            path: resolved.clone(),
+        })?;
+    let expected = Sha256Hash::parse_hex(expected)?;
+    let actual = Sha256Hash::digest(bytes);
+    if !constant_time_hash_eq(&actual, &expected) {
+        return Err(ContainmentError::ManifestHashMismatch {
+            path: resolved,
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+fn validate_manifest_hash_path(path: &str) -> ContainmentResult<()> {
+    if path.ends_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.starts_with('/')
+        || Path::new(path).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(ContainmentError::UnsafeManifestHashPath);
+    }
+    Ok(())
+}
+
+fn task_id_from_manifest_or_operations(
+    manifest: &Value,
+    entries: &BTreeMap<String, Vec<u8>>,
+    resource_root: &str,
+) -> ContainmentResult<TaskId> {
+    if let Some(entry_task_id) = manifest.get("entry_task_id").and_then(Value::as_str) {
+        return TaskId::new(entry_task_id);
+    }
+    let prefix = prefixed_path(resource_root, "operations/");
+    let task = entries
+        .keys()
+        .filter_map(|path| {
+            path.strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix("/task.json"))
+        })
+        .next()
+        .ok_or(ContainmentError::MissingTaskId)?;
+    TaskId::new(task)
+}
+
+fn single_top_level_module(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<String> {
+    let roots = entries
+        .keys()
+        .filter_map(|path| path.split('/').next())
+        .collect::<BTreeSet<_>>();
+    if roots.len() != 1 {
+        return Err(ContainmentError::MalformedZip {
+            message: "package must contain exactly one top-level module directory".to_string(),
+        });
+    }
+    Ok(roots.into_iter().next().expect("single root").to_string())
+}
+
+fn read_json_value_entry(
+    entries: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> ContainmentResult<Value> {
+    let bytes = entries
+        .get(path)
+        .ok_or_else(|| ContainmentError::MissingEntry {
+            path: path.to_string(),
+        })?;
+    serde_json::from_slice(bytes).map_err(|err| ContainmentError::JsonParse {
+        path: path.to_string(),
+        message: err.to_string(),
+    })
+}
+
+fn read_json_entry<T: for<'de> Deserialize<'de>>(
+    entries: &BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> ContainmentResult<T> {
+    let bytes = entries
+        .get(path)
+        .ok_or_else(|| ContainmentError::MissingEntry {
+            path: path.to_string(),
+        })?;
+    serde_json::from_slice(bytes).map_err(|err| ContainmentError::JsonParse {
+        path: path.to_string(),
+        message: err.to_string(),
+    })
+}
+
+fn decode_utf8_entry<'a>(
+    entries: &'a BTreeMap<String, Vec<u8>>,
+    path: &str,
+) -> ContainmentResult<&'a str> {
+    let bytes = entries
+        .get(path)
+        .ok_or_else(|| ContainmentError::MissingEntry {
+            path: path.to_string(),
+        })?;
+    std::str::from_utf8(bytes).map_err(|err| ContainmentError::JsonParse {
+        path: path.to_string(),
+        message: err.to_string(),
+    })
+}
+
+fn read_entry_limited<R: Read>(
+    reader: &mut R,
+    path: &str,
+    limit: u64,
+) -> ContainmentResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut limited = reader.take(limit.saturating_add(1));
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| ContainmentError::MalformedZip {
+            message: format!("failed to read zip entry {path}: {err}"),
+        })?;
+    if bytes.len() as u64 > limit {
+        return Err(ContainmentError::DecompressTooLarge {
+            instance: InstanceId("<unknown>".to_string()),
+            path: path.to_string(),
+            size: bytes.len() as u64,
+            limit,
+        });
+    }
+    Ok(bytes)
+}
+
+fn normalize_zip_path(name: &str) -> ContainmentResult<Option<String>> {
+    if name.ends_with('/') {
+        return Ok(None);
+    }
+    validate_relative_ref(name)?;
+    Ok(Some(name.to_string()))
+}
+
+fn validate_relative_ref(path: &str) -> ContainmentResult<()> {
+    if path.ends_with('/') || path.contains('\\') || path.contains(':') || path.starts_with('/') {
+        return Err(ContainmentError::PathTraversal {
+            path: path.to_string(),
+        });
+    }
+    if Path::new(path).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(ContainmentError::PathTraversal {
+            path: path.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn prefixed_path(prefix: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        prefix.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn has_dangerous_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            DANGEROUS_EXTENSIONS
+                .iter()
+                .any(|dangerous| extension.eq_ignore_ascii_case(dangerous))
+        })
+}
+
+fn constant_time_hash_eq(actual: &Sha256Hash, expected: &Sha256Hash) -> bool {
+    let mut diff = 0_u8;
+    for (actual, expected) in actual.as_bytes().iter().zip(expected.as_bytes()) {
+        diff |= actual ^ expected;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_recognition::{Scene, ScenePixelFormat};
+    use std::io::Write;
+    use zip::write::FileOptions;
+
+    #[test]
+    fn load_single_lab_package_and_evaluate_from_capability() {
+        let zip = lab_package_zip("task_a", [255, 0, 0]);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("127.0.0.1:16384").expect("instance");
+        let mut containment = Containment::new();
+
+        let bundle = containment
+            .load(&instance, &zip, &expected)
+            .expect("bundle loaded");
+
+        assert_eq!(bundle.task_id().as_str(), "task_a");
+        assert_eq!(bundle.verified_hash(), expected);
+        let evaluator = bundle.evaluator().expect("evaluator");
+        let scene = Scene::from_pixels(1, 1, &[255, 0, 0], ScenePixelFormat::Rgb8).expect("scene");
+        let result = evaluator
+            .evaluate_target(&scene, "home_color")
+            .expect("target evaluated");
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn benches_are_isolated_by_instance() {
+        let zip_a = lab_package_zip("task_a", [255, 0, 0]);
+        let zip_b = lab_package_zip("task_b", [0, 255, 0]);
+        let a = InstanceId::new("a").expect("a");
+        let b = InstanceId::new("b").expect("b");
+        let mut containment = Containment::new();
+
+        containment
+            .load(&a, &zip_a, &Sha256Hash::digest(&zip_a))
+            .expect("a loaded");
+        containment
+            .load(&b, &zip_b, &Sha256Hash::digest(&zip_b))
+            .expect("b loaded");
+
+        assert_eq!(
+            containment.get(&a).expect("a bundle").task_id().as_str(),
+            "task_a"
+        );
+        assert_eq!(
+            containment.get(&b).expect("b bundle").task_id().as_str(),
+            "task_b"
+        );
+    }
+
+    #[test]
+    fn rejects_hash_mismatch_before_decompress() {
+        let zip = lab_package_zip("task_a", [255, 0, 0]);
+        let wrong = Sha256Hash::digest(b"wrong bytes");
+        let instance = InstanceId::new("inst").expect("instance");
+        let mut containment = Containment::new();
+
+        let err = containment
+            .load(&instance, &zip, &wrong)
+            .expect_err("hash mismatch rejected");
+
+        assert!(matches!(err, ContainmentError::HashMismatch { .. }));
+    }
+
+    #[test]
+    fn rejects_decompression_limit_without_oom() {
+        let zip = zip_with_entries(&[("module/manifest.json", br#"{}"#.as_slice())]);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("inst").expect("instance");
+        let mut containment = Containment::with_limits(ContainmentLimits {
+            max_total_decompressed_bytes: 1,
+            max_resident_bytes_per_instance: 1,
+            ..ContainmentLimits::default()
+        });
+
+        let err = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("limit rejected");
+
+        assert!(matches!(err, ContainmentError::DecompressTooLarge { .. }));
+    }
+
+    #[test]
+    fn rejects_zip_slip_path() {
+        let zip = zip_with_entries(&[
+            ("module/manifest.json", br#"{}"#.as_slice()),
+            ("../outside", b"x".as_slice()),
+        ]);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("inst").expect("instance");
+        let mut containment = Containment::new();
+
+        let err = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("zip slip rejected");
+
+        assert!(matches!(err, ContainmentError::PathTraversal { .. }));
+    }
+
+    #[test]
+    fn same_instance_second_load_replaces_and_unload_clears() {
+        let zip_a = lab_package_zip("task_a", [255, 0, 0]);
+        let zip_b = lab_package_zip("task_b", [0, 255, 0]);
+        let instance = InstanceId::new("inst").expect("instance");
+        let mut containment = Containment::new();
+
+        containment
+            .load(&instance, &zip_a, &Sha256Hash::digest(&zip_a))
+            .expect("first load");
+        containment
+            .load(&instance, &zip_b, &Sha256Hash::digest(&zip_b))
+            .expect("second load");
+
+        assert_eq!(
+            containment
+                .get(&instance)
+                .expect("replacement")
+                .task_id()
+                .as_str(),
+            "task_b"
+        );
+        containment.unload(&instance);
+        assert!(containment.get(&instance).is_none());
+    }
+
+    #[test]
+    fn rejects_manifest_hash_mismatch() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "resources/manifest.json".to_string(),
+            br#"{"entry_task_id":"task_a","files":[{"path":"operations/task_a/task.json","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}"#.to_vec(),
+        );
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("inst").expect("instance");
+        let mut containment = Containment::new();
+
+        let err = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("manifest mismatch rejected");
+
+        assert!(matches!(err, ContainmentError::ManifestHashMismatch { .. }));
+    }
+
+    fn lab_package_zip(task_id: &str, expected: [u8; 3]) -> Vec<u8> {
+        zip_from_map(lab_package_entries(task_id, expected))
+    }
+
+    fn lab_package_entries(task_id: &str, expected: [u8; 3]) -> BTreeMap<String, Vec<u8>> {
+        let operation = format!(
+            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"azurlane","server_scope":["jp"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
+        )
+        .into_bytes();
+        let pack = format!(
+            r#"{{"schema_version":"0.5","game":"azurlane","server":"jp","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
+            expected[0], expected[1], expected[2]
+        )
+        .into_bytes();
+        let pages = br#"{"schema_version":"0.5","pages":[{"id":"azurlane/home","required":["home_color"]}]}"#.to_vec();
+        let operation_hash = Sha256Hash::digest(&operation);
+        let pack_hash = Sha256Hash::digest(&pack);
+        let pages_hash = Sha256Hash::digest(&pages);
+        let manifest = format!(
+            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/azurlane.jp.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/azurlane.jp.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
+        )
+        .into_bytes();
+
+        BTreeMap::from([
+            (
+                "control.json".to_string(),
+                format!(r#"{{"game":"azurlane","server":"jp","entry_task_id":"{task_id}"}}"#)
+                    .into_bytes(),
+            ),
+            ("resources/manifest.json".to_string(), manifest),
+            (
+                format!("resources/operations/{task_id}/task.json"),
+                operation,
+            ),
+            (
+                "resources/recognition/azurlane.jp.pack.json".to_string(),
+                pack,
+            ),
+            (
+                "resources/recognition/azurlane.jp.pages.json".to_string(),
+                pages,
+            ),
+        ])
+    }
+
+    fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        zip_from_map(
+            entries
+                .iter()
+                .map(|(path, bytes)| ((*path).to_string(), (*bytes).to_vec()))
+                .collect(),
+        )
+    }
+
+    fn zip_from_map(entries: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (path, bytes) in entries {
+            writer.start_file(path, options).expect("start file");
+            writer.write_all(&bytes).expect("write file");
+        }
+        writer.finish().expect("finish zip").into_inner()
+    }
+}

@@ -14,6 +14,7 @@ use actingcommand_device::{
     CaptureBackendName, DeviceTarget, Frame, InputBackend, PixelFormat, SelectedTouchBackend,
     TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
+use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
@@ -135,6 +136,7 @@ pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
 }
 
 pub(super) fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<Value> {
+    let _contained = load_lab_package_through_containment(zip_path, "lab-validate")?;
     let temp = LabValidateTemp::create()?;
     let result = validate_lab_package_zip_inner(zip_path, &temp.input_dir);
     let cleanup = temp.cleanup();
@@ -197,8 +199,8 @@ fn execute_lab_run(
     frame_store_cli: FrameStoreControl,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
-    let input_sha256 = file_sha256(zip_path)?;
-    ctx.input_zip_sha256 = Some(input_sha256);
+    let contained = load_lab_package_through_containment(zip_path, "lab-run")?;
+    ctx.input_zip_sha256 = Some(contained.sha256);
     let unpacked = unpack_lab_input(zip_path, &ctx.input_dir)?;
     ctx.input_entries = unpacked.entries;
     ctx.event(
@@ -725,6 +727,35 @@ fn execute_lab_run(
     ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
     ctx.lease_released = true;
     Ok(state)
+}
+
+struct ContainedLabInput {
+    sha256: String,
+}
+
+fn load_lab_package_through_containment(
+    zip_path: &Path,
+    instance_label: &str,
+) -> CliOutcome<ContainedLabInput> {
+    let bytes = fs::read(zip_path).map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to read Lab package {}: {err}",
+            zip_path.display()
+        ))
+    })?;
+    let expected = Sha256Hash::digest(&bytes);
+    let instance = InstanceId::new(instance_label).map_err(containment_error)?;
+    let mut containment = Containment::new();
+    containment
+        .load(&instance, &bytes, &expected)
+        .map_err(containment_error)?;
+    Ok(ContainedLabInput {
+        sha256: expected.to_string(),
+    })
+}
+
+fn containment_error(err: ContainmentError) -> CliError {
+    CliError::package_invalid(err.to_string())
 }
 
 fn capture_until_matched_page(
