@@ -16364,6 +16364,18 @@ fn submit_session_command_request_with_lease_admission(
     let request_path = session_requests_dir(&state_dir).join(format!("{request_id}.json"));
     let response_path = session_responses_dir(&state_dir).join(format!("{request_id}.json"));
     write_json_file_atomic(&request_path, &request)?;
+    if let Err(err) =
+        append_session_request_ledger_dispatch(&state_dir, &request, &request_path, &response_path)
+    {
+        if let Err(remove_err) = fs::remove_file(&request_path) {
+            return Err(CliError::runtime_not_running(format!(
+                "{}; also failed to remove queued request {} after dispatch ledger failure: {remove_err}",
+                err.message,
+                request_path.display()
+            )));
+        }
+        return Err(err);
+    }
     let ack_timeout = parse_optional_duration_ms(
         flags,
         "--request-ack-timeout-ms",
@@ -16371,7 +16383,7 @@ fn submit_session_command_request_with_lease_admission(
     )?;
     let ack = wait_for_session_request_ack(
         &state_dir,
-        &request_id,
+        &request,
         &request_path,
         &response_path,
         ack_timeout,
@@ -16400,6 +16412,19 @@ fn submit_session_command_request_with_lease_admission(
     let started = Instant::now();
     while started.elapsed() <= timeout {
         if let Some(response) = read_json_file::<SessionCommandResponse>(&response_path)? {
+            let ledger_receipt = wait_for_session_request_ledger_receipt(
+                &state_dir,
+                &response.request_id,
+                Duration::from_millis(SESSION_DAEMON_REQUEST_ACK_TIMEOUT_MS),
+            )?;
+            let ledger_status = session_request_ledger_status(&ledger_receipt)?;
+            let expected_status = if response.ok { "completed" } else { "failed" };
+            if ledger_status != expected_status {
+                return Err(CliError::runtime_not_running(format!(
+                    "session daemon request {} response status conflicts with runtime ledger receipt status {ledger_status}",
+                    response.request_id
+                )));
+            }
             let _ = fs::remove_file(&response_path);
             if response.ok {
                 return Ok(json!({
@@ -16409,6 +16434,7 @@ fn submit_session_command_request_with_lease_admission(
                     "daemon_pid": info.pid,
                     "request_id": response.request_id,
                     "daemon_command": response.command,
+                    "ledger_receipt": ledger_receipt,
                     "response": response.data
                 }));
             }
@@ -16427,11 +16453,12 @@ fn submit_session_command_request_with_lease_admission(
 
 fn wait_for_session_request_ack(
     state_dir: &Path,
-    request_id: &str,
+    request: &SessionCommandRequest,
     request_path: &Path,
     response_path: &Path,
     timeout: Duration,
 ) -> CliOutcome<Value> {
+    let request_id = &request.request_id;
     if timeout.is_zero() || timeout > Duration::from_millis(5_000) {
         return Err(CliError::usage(
             "--request-ack-timeout-ms must be between 1 and 5000",
@@ -16464,6 +16491,25 @@ fn wait_for_session_request_ack(
                     ))
                 })?;
             }
+            let completed_at = current_unix_ms();
+            let response = SessionCommandResponse {
+                request_id: request.request_id.clone(),
+                command: request.command.clone(),
+                ok: false,
+                data: None,
+                error: Some(EnvelopeError {
+                    code: "request_ack_timeout".to_string(),
+                    message: format!(
+                        "session daemon request {request_id} was not acknowledged within {} ms",
+                        timeout.as_millis()
+                    ),
+                    blocked_by: vec!["request_queue".to_string()],
+                    details: None,
+                }),
+                started_at_unix_ms: completed_at,
+                completed_at_unix_ms: completed_at,
+            };
+            append_session_request_ledger_receipt(state_dir, request, &response)?;
             return Err(CliError::runtime_not_running(format!(
                 "session daemon request {request_id} was not acknowledged within {} ms; daemon may be stale, blocked, or not processing the request queue",
                 timeout.as_millis()
@@ -17276,8 +17322,78 @@ fn append_session_request_ledger_receipt(
     })
 }
 
+fn append_session_request_ledger_dispatch(
+    state_dir: &Path,
+    request: &SessionCommandRequest,
+    request_path: &Path,
+    response_path: &Path,
+) -> CliOutcome<()> {
+    if session_request_ledger_contains_record_type(
+        state_dir,
+        &request.request_id,
+        "session_request_dispatch",
+    )? {
+        return Ok(());
+    }
+    let root = session_request_ledger_root(state_dir);
+    let ledger_path = session_request_ledger_path(state_dir);
+    let header = SessionHeader::new(RUNTIME_VERSION, "session", "session", "session");
+    let mut ledger =
+        LabLedger::open_or_create(&root, "session-requests", header).map_err(|err| {
+            session_request_ledger_error("open_or_create", &ledger_path, err.to_string())
+        })?;
+    let mut record = LedgerRecord::new(
+        LedgerRecordKind::Dispatch,
+        Some(request.request_id.clone()),
+        json!({
+            "record_type": "session_request_dispatch",
+            "source": "session_request_submit",
+            "status": "queued",
+            "command": request.command,
+            "request": {
+                "request_id": request.request_id,
+                "command": request.command,
+                "global": request.global,
+                "lease": request.lease,
+                "args": request.args,
+                "args_count": request.args.len(),
+                "created_at_unix_ms": request.created_at_unix_ms
+            },
+            "paths": {
+                "request": request_path.display().to_string(),
+                "response": response_path.display().to_string()
+            }
+        }),
+    )
+    .with_id("req_id", request.request_id.clone());
+    if let Some(instance) = request
+        .global
+        .instance
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        record = record.with_id("instance_id", instance.clone());
+    }
+    ledger.append(record).map_err(|err| {
+        session_request_ledger_error("append_dispatch", &ledger_path, err.to_string())
+    })
+}
+
 fn session_request_ledger_contains_receipt(state_dir: &Path, request_id: &str) -> CliOutcome<bool> {
     Ok(read_session_request_ledger_receipt(state_dir, request_id)?.is_some())
+}
+
+fn session_request_ledger_contains_record_type(
+    state_dir: &Path,
+    request_id: &str,
+    record_type: &str,
+) -> CliOutcome<bool> {
+    Ok(read_session_request_ledger_records(state_dir)?
+        .iter()
+        .any(|record| {
+            session_request_ledger_record_matches_request_id(record, request_id)
+                && record.payload.get("record_type").and_then(Value::as_str) == Some(record_type)
+        }))
 }
 
 fn read_session_request_ledger_receipt(
@@ -17287,26 +17403,41 @@ fn read_session_request_ledger_receipt(
     Ok(read_session_request_ledger_receipts(state_dir)?
         .into_iter()
         .rev()
-        .find(|record| {
-            record.req_id.as_deref() == Some(request_id)
-                || record
-                    .payload
-                    .pointer("/request/request_id")
-                    .and_then(Value::as_str)
-                    == Some(request_id)
-        }))
+        .find(|record| session_request_ledger_record_matches_request_id(record, request_id)))
 }
 
-fn read_session_request_ledger_receipts(state_dir: &Path) -> CliOutcome<Vec<LedgerRecord>> {
+fn wait_for_session_request_ledger_receipt(
+    state_dir: &Path,
+    request_id: &str,
+    timeout: Duration,
+) -> CliOutcome<LedgerRecord> {
+    let started = Instant::now();
+    loop {
+        if let Some(receipt) = read_session_request_ledger_receipt(state_dir, request_id)? {
+            return Ok(receipt);
+        }
+        if started.elapsed() >= timeout {
+            return Err(CliError::runtime_not_running(format!(
+                "session daemon request {request_id} completed without a runtime ledger receipt"
+            )));
+        }
+        thread::sleep(Duration::from_millis(25).min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn read_session_request_ledger_records(state_dir: &Path) -> CliOutcome<Vec<LedgerRecord>> {
     let path = session_request_ledger_path(state_dir);
     if !path.exists() {
         return Ok(Vec::new());
     }
     let read = LabLedger::read(&path)
         .map_err(|err| session_request_ledger_error("read", &path, err.to_string()))?;
+    Ok(read.records)
+}
+
+fn read_session_request_ledger_receipts(state_dir: &Path) -> CliOutcome<Vec<LedgerRecord>> {
     let mut latest_by_id = BTreeMap::new();
-    for record in read
-        .records
+    for record in read_session_request_ledger_records(state_dir)?
         .into_iter()
         .filter(is_session_request_ledger_receipt)
     {
@@ -17318,6 +17449,18 @@ fn read_session_request_ledger_receipts(state_dir: &Path) -> CliOutcome<Vec<Ledg
 
 fn is_session_request_ledger_receipt(record: &LedgerRecord) -> bool {
     record.payload.get("record_type").and_then(Value::as_str) == Some("session_request_receipt")
+}
+
+fn session_request_ledger_record_matches_request_id(
+    record: &LedgerRecord,
+    request_id: &str,
+) -> bool {
+    record.req_id.as_deref() == Some(request_id)
+        || record
+            .payload
+            .pointer("/request/request_id")
+            .and_then(Value::as_str)
+            == Some(request_id)
 }
 
 fn session_request_ledger_record_request_id(record: &LedgerRecord) -> CliOutcome<String> {
@@ -46758,6 +46901,22 @@ mod tests {
             count_files_with_extension(&session_requests_dir(temp.path()), "json").unwrap(),
             0
         );
+        let ledger = LabLedger::read(session_request_ledger_path(temp.path())).unwrap();
+        assert!(ledger.records.iter().any(|record| {
+            record.payload.get("record_type").and_then(Value::as_str)
+                == Some("session_request_dispatch")
+                && record.payload.get("status").and_then(Value::as_str) == Some("queued")
+        }));
+        assert!(ledger.records.iter().any(|record| {
+            record.payload.get("record_type").and_then(Value::as_str)
+                == Some("session_request_receipt")
+                && record.payload.get("status").and_then(Value::as_str) == Some("failed")
+                && record
+                    .payload
+                    .pointer("/error/code")
+                    .and_then(Value::as_str)
+                    == Some("request_ack_timeout")
+        }));
     }
 
     #[test]

@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session request dispatch receipts
+
+### Current status
+
+- Continued Runtime issue #28 L3 after session journal/events projection.
+- Session request submit now writes a `session_request_dispatch` runtime-ledger fact after the request file is durably published.
+- If dispatch ledger writing fails, the just-published request file is removed; if that cleanup also fails, the failure is surfaced instead of leaving a silent queued request.
+- Session request acknowledgement timeout now removes the unacknowledged request and records a failed `session_request_receipt` with `request_ack_timeout`.
+- Synchronous daemon-routed request output now waits for the runtime-ledger receipt before returning to the caller.
+- Response status and ledger receipt status must agree; conflicts fail loudly.
+- Successful synchronous output includes the `ledger_receipt` so callers can trace the result to the unified fact source.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "runtime-ledger|Issue #28|ActingCommand-Runtime|TASK-runtime-ledger" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments --jq "{number,title,state,labels:[.labels[].name],body,comments:[.comments[].body]}"`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -Raw`
+- `git status --short --branch`
+- `git diff --stat`
+- `git diff -- apps/actinglab/src/main.rs`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 session request dispatch receipt subnode is known.
+- Full issue #28 remains incomplete: remaining L3 surfaces and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 session request dispatch receipt node.
+2. Continue issue #28 with the remaining L3 Session convergence surfaces.
+
 ## 2026-07-08 runtime-ledger L3 session journal/events projection
 
 ### Current status

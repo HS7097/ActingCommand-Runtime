@@ -35,11 +35,14 @@ Current node:
 - `session journal`, `session events`, and `session request-state list` now read a runtime-ledger-backed compatibility projection for completed/failed request facts.
 - Ledger-only Session request receipts now appear in journal/events/list outputs without requiring the legacy journal file.
 - The legacy Session request journal remains readable for compatibility, but if it conflicts with the runtime-ledger receipt for the same request id the projection fails loudly.
+- Session request submit now records a `session_request_dispatch` ledger fact after publishing the request file; if the dispatch ledger append fails, the just-published request is removed or the cleanup failure is surfaced.
+- Session request acknowledgement timeout now removes the unacknowledged request and records a failed `session_request_receipt` with `request_ack_timeout`.
+- Synchronous daemon-routed request output now waits for the runtime-ledger receipt, rejects response/ledger status conflicts, and includes the ledger receipt in successful command output.
 
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L3: continue Session convergence for remaining wait/list daemon-routed request surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
+- L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
 - L4: route Lab-2 and Lab-1 existing entrances into the unified ledger.
 - L5: make CLI outputs ledger projections instead of independent facts.
 - L6: add read-only ledger query and diagnosis commands.
@@ -50,7 +53,7 @@ Current boundary:
 
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
-- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, and makes `request-state get`, `session journal`, `session events`, and `request-state list` consume ledger receipts with conflict detection; full Session convergence remains unfinished.
+- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, and makes `request-state get`, `session journal`, `session events`, `request-state list`, and synchronous daemon-routed request output consume ledger receipts with conflict detection; full Session convergence remains unfinished.
 - Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 
