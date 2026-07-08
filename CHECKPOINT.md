@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L5 Lab-2 CLI receipt projection
+
+### Current status
+
+- Continued Runtime issue #28 into L5 after the L7 recognition evidence-ref subnode.
+- Lab-2 success output now writes the runtime-ledger records, reads back the durable receipt from the just-written ledger, and projects the CLI response from that receipt instead of directly returning the pre-ledger payload.
+- Lab-2 error details now use the same receipt-backed projection path when the ledger write succeeds; if the ledger write itself fails, the original error details remain visible with an explicit `ledger_write_failed` marker.
+- Lab-2 arbitrator outputs that write ledger records now expose `projection_source.kind=runtime_ledger` metadata when a runtime-ledger receipt is available.
+- The Lab-2 receipt reconstruction test now asserts that the `do` command output declares `projection_source.kind=runtime_ledger`, points at the ledger path, and matches the persisted receipt payload for the same `req_id`.
+- Implementation commit `1f7d8f7ad3e5f7cb5c5468f5d4a3f9d56b1f895b` was created and tagged `checkpoint/20260709-runtime-ledger-l5-lab2-cli-projection`.
+- This node does not add new device behavior, capture behavior, OCR, template matching, UI, SQLite, scheduler, game logic, or resource repository reads.
+
+### Files changed
+
+- `apps/actinglab/src/lab2_cli.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`
+- `rg -n "runtime_ledger|projection_source|ledger receipt|session_request_receipt|fn run_.*receipt|lab receipt|fn run_lab2|fn run_observe|fn run_do|fn run_ensure|fn run_wait|struct.*Completed|project_.*ledger|project_completed_run" apps/actinglab/src/main.rs apps/actinglab/src/lab2_cli.rs apps/actinglab/src/lab_run.rs crates/ledger/src/lib.rs`
+- `cargo test -p actingcommand-actinglab lab2_receipt_reconstructs_do_request_chain_by_req_id -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_ledger_write_failure_preserves_original_usage_error -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused Lab-2 receipt reconstruction test passed and verifies receipt-backed projection metadata.
+- Focused Lab-2 suite passed.
+- Focused Lab-2 ledger-write failure test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L5 Lab-2 CLI projection subnode is known.
+- Full issue #28 remains incomplete: remaining CLI projection surfaces, any remaining L7 evidence surfaces, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Push implementation commit `1f7d8f7ad3e5f7cb5c5468f5d4a3f9d56b1f895b`, tag `checkpoint/20260709-runtime-ledger-l5-lab2-cli-projection`, and this planning/checkpoint update.
+2. Continue issue #28 with remaining L5 CLI projection surfaces or L8 preparation after the remaining evidence surfaces are confirmed.
+
 ## 2026-07-09 runtime-ledger L7 recognition evidence refs
 
 ### Current status
