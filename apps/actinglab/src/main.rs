@@ -13306,6 +13306,18 @@ fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutco
         .into_iter()
         .rev()
         .find(|entry| entry.request_id == request_id);
+    let ledger_receipt = read_session_request_ledger_receipt(state_dir, request_id)?;
+    let ledger_status = ledger_receipt
+        .as_ref()
+        .map(session_request_ledger_status)
+        .transpose()?;
+    if let (Some(journal), Some(ledger_status)) = (journal_entry.as_ref(), ledger_status)
+        && session_request_event_status(journal) != ledger_status
+    {
+        return Err(CliError::runtime_not_running(format!(
+            "session request {request_id} has conflicting journal and runtime ledger statuses"
+        )));
+    }
     let status = if pending_response.is_some() {
         "response_available"
     } else if running_request.is_some() {
@@ -13315,7 +13327,7 @@ fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutco
     } else if let Some(entry) = journal_entry.as_ref() {
         session_request_event_status(entry)
     } else {
-        "unknown"
+        ledger_status.unwrap_or("unknown")
     };
     let known = status != "unknown";
     let response_summary = pending_response
@@ -13339,6 +13351,7 @@ fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutco
         "running_request": running_request,
         "pending_response": pending_response,
         "response_data_summary": response_summary,
+        "ledger_receipt": ledger_receipt,
         "journal_entry": journal_entry,
         "journal_event": journal_event
     }))
@@ -17236,17 +17249,37 @@ fn append_session_request_ledger_receipt(
 }
 
 fn session_request_ledger_contains_receipt(state_dir: &Path, request_id: &str) -> CliOutcome<bool> {
+    Ok(read_session_request_ledger_receipt(state_dir, request_id)?.is_some())
+}
+
+fn read_session_request_ledger_receipt(
+    state_dir: &Path,
+    request_id: &str,
+) -> CliOutcome<Option<LedgerRecord>> {
     let path = session_request_ledger_path(state_dir);
     if !path.exists() {
-        return Ok(false);
+        return Ok(None);
     }
     let read = LabLedger::read(&path)
         .map_err(|err| session_request_ledger_error("read", &path, err.to_string()))?;
-    Ok(read.records.iter().any(|record| {
+    Ok(read.records.into_iter().rev().find(|record| {
         record.req_id.as_deref() == Some(request_id)
             && record.payload.get("record_type").and_then(Value::as_str)
                 == Some("session_request_receipt")
     }))
+}
+
+fn session_request_ledger_status(record: &LedgerRecord) -> CliOutcome<&'static str> {
+    match record.payload.get("status").and_then(Value::as_str) {
+        Some("completed") => Ok("completed"),
+        Some("failed") => Ok("failed"),
+        Some(other) => Err(CliError::runtime_not_running(format!(
+            "session request runtime ledger has unsupported receipt status: {other}"
+        ))),
+        None => Err(CliError::runtime_not_running(
+            "session request runtime ledger receipt is missing status",
+        )),
+    }
 }
 
 fn session_request_ledger_root(state_dir: &Path) -> PathBuf {
@@ -47429,6 +47462,133 @@ mod tests {
                 .and_then(Value::as_str),
             Some("lab_lease_required")
         );
+    }
+
+    #[test]
+    fn session_request_state_reports_ledger_receipt_without_journal() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "ledger-only".to_string(),
+            command: "tap".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 40,
+        };
+        let response = SessionCommandResponse {
+            request_id: "ledger-only".to_string(),
+            command: "tap".to_string(),
+            ok: false,
+            data: None,
+            error: Some(EnvelopeError {
+                code: "lab_lease_required".to_string(),
+                message: "lease required".to_string(),
+                blocked_by: vec!["lab_lease".to_string()],
+                details: None,
+            }),
+            started_at_unix_ms: 41,
+            completed_at_unix_ms: 42,
+        };
+        append_session_request_ledger_receipt(temp.path(), &request, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "ledger-only",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(data.get("status").and_then(Value::as_str), Some("failed"));
+        assert!(data.get("journal_entry").is_some_and(Value::is_null));
+        assert_eq!(
+            data.pointer("/ledger_receipt/payload/error/code")
+                .and_then(Value::as_str),
+            Some("lab_lease_required")
+        );
+    }
+
+    #[test]
+    fn session_request_state_rejects_journal_ledger_status_conflict() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "status-conflict".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let journal = SessionRequestJournalEntry {
+            request_id: "status-conflict".to_string(),
+            command: "status".to_string(),
+            global: Some(request.global.clone()),
+            args: Vec::new(),
+            lease: None,
+            ok: true,
+            error: None,
+            data_summary: Some(json!({"kind": "status"})),
+            created_at_unix_ms: 10,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        write_json_line(&session_request_journal_path(temp.path()), &journal).unwrap();
+        let response = SessionCommandResponse {
+            request_id: "status-conflict".to_string(),
+            command: "status".to_string(),
+            ok: false,
+            data: None,
+            error: Some(EnvelopeError {
+                code: "runtime_not_running".to_string(),
+                message: "conflict".to_string(),
+                blocked_by: vec!["request_queue".to_string()],
+                details: None,
+            }),
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        append_session_request_ledger_receipt(temp.path(), &request, &response).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "get",
+                "status-conflict",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(error.message.contains("conflicting journal"));
     }
 
     #[test]

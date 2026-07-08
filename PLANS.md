@@ -31,11 +31,12 @@ Current node:
 - Cancellation journal append failure now fails visibly after the request has been removed and the cancellation response is available, preventing a durable "cancelled" journal from being the only fact while the request remains executable.
 - L3 Session journal bridging has started: `append_session_request_journal` now writes a `session_request_receipt` into the shared runtime-ledger crate before writing the legacy request journal.
 - `actingcommand-ledger` now has `LabLedger::open_or_create` so long-lived Session ledgers can append without duplicating headers.
+- `session request-state get` now includes the ledger receipt, can report a ledger-only completed/failed state when the legacy journal is missing, and fails loudly if legacy journal and runtime-ledger statuses conflict.
 
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L3: continue Session journal convergence until legacy journal output becomes a compatibility projection and ledger conflicts cannot silently succeed.
+- L3: continue Session journal convergence until `session events`, `session journal`, list/wait surfaces, and daemon-routed request outputs are ledger-backed compatibility projections.
 - L4: route Lab-2 and Lab-1 existing entrances into the unified ledger.
 - L5: make CLI outputs ledger projections instead of independent facts.
 - L6: add read-only ledger query and diagnosis commands.
@@ -46,7 +47,7 @@ Current boundary:
 
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
-- The current L3 work repairs session cancellation ordering and adds a first Session request receipt bridge into runtime-ledger; full journal projection/convergence remains unfinished.
+- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, and makes `request-state get` consume ledger receipts with conflict detection; full journal projection/convergence remains unfinished.
 - Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 

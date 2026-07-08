@@ -1,5 +1,55 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 request-state ledger projection
+
+### Current status
+
+- Continued Runtime issue #28 L3 after the Session receipt bridge.
+- `session request-state get` now reads matching `session_request_receipt` records from runtime-ledger.
+- When no pending request, running request, response, or legacy journal exists, `request-state get` can report a ledger-only `completed` or `failed` state.
+- The `request-state get` JSON now includes `ledger_receipt` alongside existing pending/running/response/journal fields.
+- If legacy Session journal and runtime-ledger receipt statuses disagree, `request-state get` fails loudly instead of silently choosing one fact source.
+- Added focused tests for ledger-only request-state projection and journal/ledger status conflict rejection.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused request-state suite passed: 21/21 `session_request_state` tests.
+- Focused cancellation suite passed: 11/11 `session_request_cancel` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 request-state projection subnode is known.
+- Full L3 convergence remains incomplete: `session events`, `session journal`, list/wait surfaces, and daemon-routed request outputs are not yet fully ledger-backed projections.
+
+### Next step
+
+1. Commit, tag, and push this L3 request-state projection.
+2. Continue L3 with `session events`/`session journal` projection and conflict handling.
+
 ## 2026-07-08 runtime-ledger L3 session journal receipt bridge
 
 ### Current status
