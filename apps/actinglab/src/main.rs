@@ -792,6 +792,11 @@ struct SessionRequestJournalEntry {
 struct SessionRequestJournalRead {
     entries: Vec<SessionRequestJournalEntry>,
     skipped_corrupt_lines: usize,
+    legacy_entries_scanned: usize,
+    ledger_receipts_scanned: usize,
+    projected_from_ledger: usize,
+    projected_from_legacy: usize,
+    ledger_projected_request_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13150,12 +13155,19 @@ fn session_request_state_list_payload(
         );
     }
 
-    let journal_entries = read_session_request_journal(state_dir, 1_000)?;
-    let journal_entries_scanned = journal_entries.len();
-    for entry in journal_entries.into_iter().rev() {
+    let journal_projection =
+        read_session_request_projected_journal_with_diagnostics(state_dir, 1_000)?;
+    let journal_entries_scanned = journal_projection.entries.len();
+    let ledger_projected_request_ids = journal_projection.ledger_projected_request_ids;
+    for entry in journal_projection.entries.into_iter().rev() {
         let event = session_request_event_json(&entry);
         let request_id = entry.request_id.clone();
         let status = session_request_event_status(&entry);
+        let source = if ledger_projected_request_ids.contains(&request_id) {
+            "runtime_ledger"
+        } else {
+            "request_journal_compat"
+        };
         insert_request_state_list_item(
             &mut items_by_id,
             SessionRequestStateListItem {
@@ -13169,7 +13181,7 @@ fn session_request_state_list_payload(
                     "request_id": request_id,
                     "status": status,
                     "known": true,
-                    "source": "request_journal",
+                    "source": source,
                     "command": entry.command,
                     "global": entry.global,
                     "lease": entry.lease,
@@ -13182,7 +13194,8 @@ fn session_request_state_list_payload(
                     "completed_at_unix_ms": entry.completed_at_unix_ms,
                     "journal_event": event,
                     "paths": {
-                        "journal": session_request_journal_path(state_dir).display().to_string()
+                        "journal": session_request_journal_path(state_dir).display().to_string(),
+                        "ledger": session_request_ledger_path(state_dir).display().to_string()
                     }
                 }),
             },
@@ -13238,7 +13251,11 @@ fn session_request_state_list_payload(
             "running_dir": running_dir.display().to_string(),
             "responses_dir": responses_dir.display().to_string(),
             "journal": session_request_journal_path(state_dir).display().to_string(),
+            "ledger": session_request_ledger_path(state_dir).display().to_string(),
             "journal_entries_scanned": journal_entries_scanned,
+            "ledger_receipts_scanned": journal_projection.ledger_receipts_scanned,
+            "projected_from_ledger": journal_projection.projected_from_ledger,
+            "projected_from_legacy": journal_projection.projected_from_legacy,
             "disappeared_requests_during_read": disappeared_requests,
             "disappeared_running_during_read": disappeared_running,
             "disappeared_responses_during_read": disappeared_responses
@@ -13373,7 +13390,8 @@ fn session_events_payload(
     } else {
         limit
     };
-    let mut entries = read_session_request_journal(state_dir, read_limit)?;
+    let mut entries =
+        read_session_request_projected_journal_with_diagnostics(state_dir, read_limit)?.entries;
     if let Some(cursor_request_id) = after_request_id {
         let Some(position) = entries
             .iter()
@@ -13383,9 +13401,9 @@ fn session_events_payload(
                 ErrorKind::UsageValidation,
                 "event_cursor_not_found",
                 format!(
-                    "request cursor '{cursor_request_id}' was not found in the recent request journal"
+                    "request cursor '{cursor_request_id}' was not found in the recent session event projection"
                 ),
-                &["request_journal"],
+                &["runtime_ledger", "request_journal"],
             ));
         };
         entries.drain(0..=position);
@@ -13412,8 +13430,9 @@ fn session_events_payload(
     Ok(json!({
         "schema_version": "session.events.v0.1",
         "state_dir": state_dir.display().to_string(),
-        "source": "request_journal",
+        "source": "runtime_ledger_projection",
         "journal": session_request_journal_path(state_dir).display().to_string(),
+        "ledger": session_request_ledger_path(state_dir).display().to_string(),
         "limit": limit,
         "after_unix_ms": after_unix_ms,
         "after_request_id": after_request_id,
@@ -13677,8 +13696,10 @@ fn session_journal_payload(
     if limit == 0 || limit > 1_000 {
         return Err(CliError::usage("--limit must be between 1 and 1000"));
     }
-    let read_result =
-        read_session_request_journal_with_diagnostics(state_dir, filters.read_limit(limit))?;
+    let read_result = read_session_request_projected_journal_with_diagnostics(
+        state_dir,
+        filters.read_limit(limit),
+    )?;
     let mut entries = read_result
         .entries
         .into_iter()
@@ -13690,7 +13711,9 @@ fn session_journal_payload(
     }
     Ok(json!({
         "state_dir": state_dir.display().to_string(),
+        "source": "runtime_ledger_projection",
         "journal": session_request_journal_path(state_dir).display().to_string(),
+        "ledger": session_request_ledger_path(state_dir).display().to_string(),
         "limit": limit,
         "command_filter": if filters.commands.is_empty() {
             Value::Null
@@ -13709,6 +13732,10 @@ fn session_journal_payload(
         },
         "target_filter": filters.target.to_json(),
         "skipped_corrupt_lines": read_result.skipped_corrupt_lines,
+        "legacy_entries_scanned": read_result.legacy_entries_scanned,
+        "ledger_receipts_scanned": read_result.ledger_receipts_scanned,
+        "projected_from_ledger": read_result.projected_from_ledger,
+        "projected_from_legacy": read_result.projected_from_legacy,
         "entries": entries
     }))
 }
@@ -17225,6 +17252,7 @@ fn append_session_request_ledger_receipt(
                 "command": request.command,
                 "global": request.global,
                 "lease": request.lease,
+                "args": request.args,
                 "args_count": request.args.len(),
                 "created_at_unix_ms": request.created_at_unix_ms
             },
@@ -17256,17 +17284,58 @@ fn read_session_request_ledger_receipt(
     state_dir: &Path,
     request_id: &str,
 ) -> CliOutcome<Option<LedgerRecord>> {
+    Ok(read_session_request_ledger_receipts(state_dir)?
+        .into_iter()
+        .rev()
+        .find(|record| {
+            record.req_id.as_deref() == Some(request_id)
+                || record
+                    .payload
+                    .pointer("/request/request_id")
+                    .and_then(Value::as_str)
+                    == Some(request_id)
+        }))
+}
+
+fn read_session_request_ledger_receipts(state_dir: &Path) -> CliOutcome<Vec<LedgerRecord>> {
     let path = session_request_ledger_path(state_dir);
     if !path.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let read = LabLedger::read(&path)
         .map_err(|err| session_request_ledger_error("read", &path, err.to_string()))?;
-    Ok(read.records.into_iter().rev().find(|record| {
-        record.req_id.as_deref() == Some(request_id)
-            && record.payload.get("record_type").and_then(Value::as_str)
-                == Some("session_request_receipt")
-    }))
+    let mut latest_by_id = BTreeMap::new();
+    for record in read
+        .records
+        .into_iter()
+        .filter(is_session_request_ledger_receipt)
+    {
+        let request_id = session_request_ledger_record_request_id(&record)?;
+        latest_by_id.insert(request_id, record);
+    }
+    Ok(latest_by_id.into_values().collect())
+}
+
+fn is_session_request_ledger_receipt(record: &LedgerRecord) -> bool {
+    record.payload.get("record_type").and_then(Value::as_str) == Some("session_request_receipt")
+}
+
+fn session_request_ledger_record_request_id(record: &LedgerRecord) -> CliOutcome<String> {
+    record
+        .req_id
+        .clone()
+        .or_else(|| {
+            record
+                .payload
+                .pointer("/request/request_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing request id",
+            )
+        })
 }
 
 fn session_request_ledger_status(record: &LedgerRecord) -> CliOutcome<&'static str> {
@@ -17295,7 +17364,7 @@ fn session_request_ledger_path(state_dir: &Path) -> PathBuf {
 
 fn session_request_ledger_error(phase: &str, path: &Path, message: String) -> CliError {
     CliError::runtime_not_running(format!(
-        "failed to write session request runtime ledger during {phase} at {}: {message}",
+        "failed to access session request runtime ledger during {phase} at {}: {message}",
         path.display()
     ))
 }
@@ -23446,6 +23515,11 @@ fn read_session_request_journal_with_diagnostics(
         return Ok(SessionRequestJournalRead {
             entries: Vec::new(),
             skipped_corrupt_lines: 0,
+            legacy_entries_scanned: 0,
+            ledger_receipts_scanned: 0,
+            projected_from_ledger: 0,
+            projected_from_legacy: 0,
+            ledger_projected_request_ids: BTreeSet::new(),
         });
     }
     let text = fs::read_to_string(&path).map_err(|err| {
@@ -23460,9 +23534,206 @@ fn read_session_request_journal_with_diagnostics(
         }
     }
     let skip = entries.len().saturating_sub(limit);
+    let legacy_entries_scanned = entries.len();
     Ok(SessionRequestJournalRead {
         entries: entries.into_iter().skip(skip).collect(),
         skipped_corrupt_lines,
+        legacy_entries_scanned,
+        ledger_receipts_scanned: 0,
+        projected_from_ledger: 0,
+        projected_from_legacy: legacy_entries_scanned,
+        ledger_projected_request_ids: BTreeSet::new(),
+    })
+}
+
+fn read_session_request_projected_journal_with_diagnostics(
+    state_dir: &Path,
+    limit: usize,
+) -> CliOutcome<SessionRequestJournalRead> {
+    let legacy = read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?;
+    let ledger_records = read_session_request_ledger_receipts(state_dir)?;
+    let mut legacy_by_id = BTreeMap::new();
+    for entry in legacy.entries {
+        legacy_by_id.insert(entry.request_id.clone(), entry);
+    }
+
+    let mut projected_by_id = BTreeMap::new();
+    let mut ledger_projected_request_ids = BTreeSet::new();
+    for record in ledger_records {
+        let projected = session_request_journal_entry_from_ledger_receipt(&record)?;
+        if let Some(legacy_entry) = legacy_by_id.get(&projected.request_id) {
+            ensure_session_request_legacy_ledger_match(legacy_entry, &projected)?;
+        }
+        ledger_projected_request_ids.insert(projected.request_id.clone());
+        projected_by_id.insert(projected.request_id.clone(), projected);
+    }
+
+    let projected_from_ledger = projected_by_id.len();
+    let mut projected_from_legacy = 0usize;
+    for (request_id, legacy_entry) in legacy_by_id {
+        if let std::collections::btree_map::Entry::Vacant(entry) = projected_by_id.entry(request_id)
+        {
+            projected_from_legacy += 1;
+            entry.insert(legacy_entry);
+        }
+    }
+
+    let mut entries = projected_by_id.into_values().collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.completed_at_unix_ms
+            .cmp(&right.completed_at_unix_ms)
+            .then_with(|| left.request_id.cmp(&right.request_id))
+    });
+    let skip = entries.len().saturating_sub(limit);
+    Ok(SessionRequestJournalRead {
+        entries: entries.into_iter().skip(skip).collect(),
+        skipped_corrupt_lines: legacy.skipped_corrupt_lines,
+        legacy_entries_scanned: legacy.legacy_entries_scanned,
+        ledger_receipts_scanned: projected_from_ledger,
+        projected_from_ledger,
+        projected_from_legacy,
+        ledger_projected_request_ids,
+    })
+}
+
+fn ensure_session_request_legacy_ledger_match(
+    legacy: &SessionRequestJournalEntry,
+    ledger: &SessionRequestJournalEntry,
+) -> CliOutcome<()> {
+    if session_request_event_status(legacy) != session_request_event_status(ledger)
+        || legacy.command != ledger.command
+    {
+        return Err(CliError::runtime_not_running(format!(
+            "session request {} has conflicting journal and runtime ledger facts",
+            legacy.request_id
+        )));
+    }
+    Ok(())
+}
+
+fn session_request_journal_entry_from_ledger_receipt(
+    record: &LedgerRecord,
+) -> CliOutcome<SessionRequestJournalEntry> {
+    let payload = &record.payload;
+    if !is_session_request_ledger_receipt(record) {
+        return Err(CliError::runtime_not_running(
+            "runtime ledger record is not a session request receipt",
+        ));
+    }
+    let request = payload
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing request metadata",
+            )
+        })?;
+    let response = payload
+        .get("response")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing response metadata",
+            )
+        })?;
+    let request_id = session_request_ledger_record_request_id(record)?;
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .or_else(|| request.get("command").and_then(Value::as_str))
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing command",
+            )
+        })?
+        .to_string();
+    let ledger_status = session_request_ledger_status(record)?;
+    let ok = payload
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(ledger_status == "completed");
+    if ok != (ledger_status == "completed") {
+        return Err(CliError::runtime_not_running(format!(
+            "session request {request_id} has conflicting ok and status fields in runtime ledger receipt"
+        )));
+    }
+    let started_at_unix_ms = response
+        .get("started_at_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing started_at_unix_ms",
+            )
+        })?;
+    let completed_at_unix_ms = response
+        .get("completed_at_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            CliError::runtime_not_running(
+                "session request runtime ledger receipt is missing completed_at_unix_ms",
+            )
+        })?;
+    let created_at_unix_ms = request
+        .get("created_at_unix_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(started_at_unix_ms);
+    let global = request
+        .get("global")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<SessionCommandGlobal>(value.clone()))
+        .transpose()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "session request runtime ledger receipt has invalid global metadata: {err}"
+            ))
+        })?;
+    let lease = request
+        .get("lease")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<SessionCommandLease>(value.clone()))
+        .transpose()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "session request runtime ledger receipt has invalid lease metadata: {err}"
+            ))
+        })?;
+    let args = request
+        .get("args")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()))
+        .transpose()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "session request runtime ledger receipt has invalid args metadata: {err}"
+            ))
+        })?
+        .unwrap_or_default();
+    let error = payload
+        .get("error")
+        .filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<EnvelopeError>(value.clone()))
+        .transpose()
+        .map_err(|err| {
+            CliError::runtime_not_running(format!(
+                "session request runtime ledger receipt has invalid error metadata: {err}"
+            ))
+        })?;
+
+    Ok(SessionRequestJournalEntry {
+        request_id,
+        command,
+        global,
+        args,
+        lease,
+        ok,
+        error,
+        data_summary: payload
+            .get("data_summary")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        created_at_unix_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
     })
 }
 
@@ -47966,6 +48237,210 @@ mod tests {
             payload.get("status").and_then(Value::as_str),
             Some("queued")
         );
+    }
+
+    #[test]
+    fn session_journal_events_and_state_list_project_ledger_only_receipt() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let request = SessionCommandRequest {
+            request_id: "ledger-only-session".to_string(),
+            command: "capture_diagnose".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: vec!["--freshness-ms".to_string(), "1000".to_string()],
+            lease: Some(SessionCommandLease {
+                holder: "scheduler".to_string(),
+                lease_id: Some("lease-1".to_string()),
+            }),
+            created_at_unix_ms: 10,
+        };
+        let response = SessionCommandResponse {
+            request_id: "ledger-only-session".to_string(),
+            command: "capture_diagnose".to_string(),
+            ok: true,
+            data: Some(json!({"mode": "capture_diagnose", "status": "fresh"})),
+            error: None,
+            started_at_unix_ms: 12,
+            completed_at_unix_ms: 30,
+        };
+        append_session_request_ledger_receipt(state_dir, &request, &response).unwrap();
+
+        let journal = run_cli(
+            [
+                "--json",
+                "session",
+                "journal",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(journal.exit_code(), 0);
+        let journal_data = journal.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            journal_data.get("source").and_then(Value::as_str),
+            Some("runtime_ledger_projection")
+        );
+        assert_eq!(
+            journal_data
+                .get("projected_from_ledger")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            journal_data
+                .pointer("/entries/0/request_id")
+                .and_then(Value::as_str),
+            Some("ledger-only-session")
+        );
+
+        let events = run_cli(
+            [
+                "--json",
+                "session",
+                "events",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(events.exit_code(), 0);
+        let events_data = events.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            events_data.get("event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            events_data
+                .pointer("/events/0/request_id")
+                .and_then(Value::as_str),
+            Some("ledger-only-session")
+        );
+        assert_eq!(
+            events_data
+                .pointer("/events/0/args_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+
+        let state_list = run_cli(
+            [
+                "--json",
+                "session",
+                "request-state",
+                "list",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(state_list.exit_code(), 0);
+        let state_list_data = state_list.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            state_list_data
+                .pointer("/items/0/request_id")
+                .and_then(Value::as_str),
+            Some("ledger-only-session")
+        );
+        assert_eq!(
+            state_list_data
+                .pointer("/items/0/source")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
+        );
+    }
+
+    #[test]
+    fn session_journal_and_events_reject_legacy_ledger_status_conflict() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let request = SessionCommandRequest {
+            request_id: "conflicting-session".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let legacy_response = SessionCommandResponse {
+            request_id: "conflicting-session".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ok"})),
+            error: None,
+            started_at_unix_ms: 11,
+            completed_at_unix_ms: 12,
+        };
+        let legacy_entry = SessionRequestJournalEntry {
+            request_id: request.request_id.clone(),
+            command: request.command.clone(),
+            global: Some(request.global.clone()),
+            args: request.args.clone(),
+            lease: request.lease.clone(),
+            ok: legacy_response.ok,
+            error: legacy_response.error.clone(),
+            data_summary: session_request_data_summary(&legacy_response),
+            created_at_unix_ms: request.created_at_unix_ms,
+            started_at_unix_ms: legacy_response.started_at_unix_ms,
+            completed_at_unix_ms: legacy_response.completed_at_unix_ms,
+        };
+        write_json_line(&session_request_journal_path(state_dir), &legacy_entry).unwrap();
+        let ledger_response = SessionCommandResponse {
+            request_id: "conflicting-session".to_string(),
+            command: "status".to_string(),
+            ok: false,
+            data: None,
+            error: Some(EnvelopeError {
+                code: "status_failed".to_string(),
+                message: "status failed".to_string(),
+                blocked_by: vec!["status".to_string()],
+                details: None,
+            }),
+            started_at_unix_ms: 13,
+            completed_at_unix_ms: 14,
+        };
+        append_session_request_ledger_receipt(state_dir, &request, &ledger_response).unwrap();
+
+        for command in ["journal", "events"] {
+            let result = run_cli(
+                [
+                    "--json",
+                    "session",
+                    command,
+                    "--state-dir",
+                    state_dir.to_str().unwrap(),
+                ],
+                true,
+            );
+
+            assert_ne!(result.exit_code(), 0);
+            let error = result.envelope.error.as_ref().unwrap();
+            assert_eq!(error.code, "runtime_not_running");
+            assert!(
+                error
+                    .message
+                    .contains("conflicting journal and runtime ledger facts")
+            );
+        }
     }
 
     #[test]

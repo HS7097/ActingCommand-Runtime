@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session journal/events projection
+
+### Current status
+
+- Continued Runtime issue #28 L3 after request-state ledger projection.
+- `session journal`, `session events`, and `session request-state list` now read from a merged runtime-ledger compatibility projection.
+- Ledger-only `session_request_receipt` records now project back into journal entries, events, and completed/failed request-state list items.
+- New Session request ledger receipts include the original request args so event projections keep `args_count` without depending on the legacy journal.
+- If the legacy Session request journal and runtime-ledger receipt disagree on status or command for the same request id, journal/events projection fails loudly.
+- The legacy journal file remains as compatibility input; full L3 elimination of independent journal behavior is not complete yet.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,body,labels,updatedAt,comments`
+- `Get-ChildItem -LiteralPath "C:\合作工作区\ActingCommand" -Filter "*ledger*"`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -TotalCount 220`
+- `rg -n "fn run_session_journal|fn session_events_payload|fn run_session_events|fn session_request_event_json|struct SessionRequestJournalRead|fn read_session_request_journal_with_diagnostics|fn read_session_request_journal|fn session_request_ledger|session_journal|session events|session_events" apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_journal -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_events -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused journal suite passed: 6/6 `session_journal` tests.
+- Focused events suite passed: 24/24 `session_events` tests.
+- Focused request-state suite passed: 21/21 `session_request_state` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 session journal/events projection subnode is known.
+- Full issue #28 remains incomplete: remaining L3 surfaces and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 session journal/events projection.
+2. Continue issue #28 with the remaining L3 Session convergence surfaces or proceed to L4 after L3 is accepted.
+
 ## 2026-07-08 runtime-ledger L3 request-state ledger projection
 
 ### Current status
