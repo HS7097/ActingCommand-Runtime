@@ -5,8 +5,9 @@
 ### Current status
 
 - Implemented approved Runtime issue #26 from `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`, including the later full-memory `LoadedBundle` revision.
-- Runtime source commit: `778cda54c552a45ce0d92da8d031043dd1ad2cd0`.
-- Checkpoint tag: `checkpoint/20260708-task-pack-containment`.
+- Runtime source commit: `d46c9f64266c3bc6c14454be2683d86c358b4d56`.
+- Initial containment source commit: `778cda54c552a45ce0d92da8d031043dd1ad2cd0`.
+- Checkpoint tag: `checkpoint/20260708-task-pack-containment-full-memory`.
 - Added `crates/pack-containment` as the single-task zip package containment module.
 - Added per-instance `Containment` benches and private-field `LoadedBundle` capability.
 - Added compressed-byte SHA-256 verification before decompression.
