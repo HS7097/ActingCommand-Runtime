@@ -8,6 +8,7 @@
 - `lab run` now writes a `capture_backend_selection` runtime-ledger drive record after capture backend selection.
 - The record includes requested backend, used backend, attempt count, and per-attempt diagnostics including backend, ok status, severity, elapsed time, cache status, channel-order contract, message, and captured vendor stdio diagnostics.
 - Existing `capture_backend_attempt` light events now use the same structured attempt payload shape.
+- Implementation commit `c645671ff668265cac3939024a541de1bd6f15d9` was pushed to `main` and tagged `checkpoint/20260709-runtime-ledger-l7-capture-selection`.
 - This node does not add new capture backends, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
 - Resource repositories were not read or modified for this node.
 
@@ -48,8 +49,7 @@
 
 ### Next step
 
-1. Commit, tag, and push this L7 capture backend selection traceability node.
-2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+1. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
 
 ## 2026-07-09 runtime-ledger L7 recognition traceability
 
