@@ -9,6 +9,7 @@
 - Recognition drive records now include the same `reco_id` in the runtime-ledger `id_chain` and in the projected recognition payload.
 - Result.zip `logs/recognition.jsonl` now exposes the `reco_id`, so recognition output can be traced back to the ledger record.
 - The `recognition_recorded` light event now also carries the `reco_id`.
+- Implementation commit `5385bc16a0adfbff0499a4a369354519b6bbc3e7` was pushed to `main` and tagged `checkpoint/20260709-runtime-ledger-l7-recognition-ids`.
 - This node does not add capture, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
 - Resource repositories were not read or modified for this node.
 
@@ -52,8 +53,7 @@
 
 ### Next step
 
-1. Commit, tag, and push this L7 recognition traceability node.
-2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+1. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
 
 ## 2026-07-09 runtime-ledger L7 screenshot evidence index
 
