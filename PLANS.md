@@ -26,11 +26,14 @@ Current node:
 - `actingcommand-ledger` now exposes the lightweight `commit_then_record` / `CommitProof` guard used by this terminal recording path.
 - L2 `lab run` completed-run projection is implemented locally: post-finish result output reads run id, status, terminal receipt type, output zip path, SHA-256, and ledger path from the runtime ledger terminal projection.
 - Completed-run projection fails loudly when `finalizing` is missing or when terminal `finish_ok`/`finish_error` receipt is missing.
+- L3 has started with the known `run_session_request_cancel` record-before-act repair: cancellation now publishes a cancellation response as the queue execution guard, removes the queued request, and only then appends the session journal entry.
+- `session request cancel` dry-run output now declares that a real cancellation would write a response, remove the request, and record the journal.
+- Cancellation journal append failure now fails visibly after the request has been removed and the cancellation response is available, preventing a durable "cancelled" journal from being the only fact while the request remains executable.
 
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L3: bridge Session journal and fix the known `run_session_request_cancel` record-before-act issue.
+- L3: continue Session journal bridge/convergence beyond the repaired cancel ordering.
 - L4: route Lab-2 and Lab-1 existing entrances into the unified ledger.
 - L5: make CLI outputs ledger projections instead of independent facts.
 - L6: add read-only ledger query and diagnosis commands.
@@ -41,7 +44,8 @@ Current boundary:
 
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
-- Session journal, Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
+- The current L3 subnode only repairs session cancellation ordering and cancellation response visibility; the full Session journal-to-ledger bridge remains unfinished.
+- Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module

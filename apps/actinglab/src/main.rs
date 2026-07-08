@@ -16017,6 +16017,7 @@ fn session_request_cancel_payload(
             "command": request.command,
             "reason": reason,
             "lease_authorization": lease_authorization,
+            "would_write_response": true,
             "would_remove_request": true,
             "would_record_journal": true,
             "does_not_touch_device": true,
@@ -16043,7 +16044,8 @@ fn session_request_cancel_payload(
         started_at_unix_ms: cancelled_at,
         completed_at_unix_ms: cancelled_at,
     };
-    append_session_request_journal(state_dir, &request, &response)?;
+    write_json_file_atomic(&response_path, &response)?;
+    maybe_exit_for_session_crash_test("after_cancel_response_write");
     fs::remove_file(&request_path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             CliError::new(
@@ -16059,6 +16061,9 @@ fn session_request_cancel_payload(
             ))
         }
     })?;
+    maybe_exit_for_session_crash_test("after_cancel_request_remove");
+    append_session_request_journal(state_dir, &request, &response)?;
+    maybe_exit_for_session_crash_test("after_cancel_journal_append");
     Ok(json!({
         "schema_version": "session.request_cancel.v0.1",
         "state_dir": state_dir.display().to_string(),
@@ -46566,6 +46571,7 @@ mod tests {
             created_at_unix_ms: 10,
         };
         let request_path = session_requests_dir(temp.path()).join("cancel-me.json");
+        let response_path = session_responses_dir(temp.path()).join("cancel-me.json");
         write_json_file_atomic(&request_path, &request).unwrap();
 
         let result = run_cli(
@@ -46585,6 +46591,12 @@ mod tests {
 
         assert_eq!(result.exit_code(), 0);
         assert!(!request_path.exists());
+        assert!(response_path.exists());
+        let response = read_pending_session_response(&response_path)
+            .unwrap()
+            .unwrap();
+        assert!(!response.ok);
+        assert_eq!(response.error.as_ref().unwrap().code, "request_cancelled");
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(
             data.get("schema_version").and_then(Value::as_str),
@@ -46612,7 +46624,13 @@ mod tests {
         let state_data = state.envelope.data.as_ref().unwrap();
         assert_eq!(
             state_data.get("status").and_then(Value::as_str),
-            Some("failed")
+            Some("response_available")
+        );
+        assert_eq!(
+            state_data
+                .pointer("/pending_response/error/code")
+                .and_then(Value::as_str),
+            Some("request_cancelled")
         );
         assert_eq!(
             state_data
@@ -46711,6 +46729,56 @@ mod tests {
                 .and_then(Value::as_str),
             Some("not_required")
         );
+        assert_eq!(
+            data.get("would_write_response").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn session_request_cancel_removes_request_before_journal_append_failure() {
+        let temp = TempDir::new().unwrap();
+        let request = SessionCommandRequest {
+            request_id: "cancel-journal-fails".to_string(),
+            command: "status".to_string(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 10,
+        };
+        let request_path = session_requests_dir(temp.path()).join("cancel-journal-fails.json");
+        let response_path = session_responses_dir(temp.path()).join("cancel-journal-fails.json");
+        write_json_file_atomic(&request_path, &request).unwrap();
+        fs::create_dir_all(session_request_journal_path(temp.path())).unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "request",
+                "cancel",
+                "cancel-journal-fails",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_ne!(result.exit_code(), 0);
+        assert!(!request_path.exists());
+        assert!(response_path.exists());
+        let response = read_pending_session_response(&response_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.error.as_ref().unwrap().code, "request_cancelled");
     }
 
     #[test]

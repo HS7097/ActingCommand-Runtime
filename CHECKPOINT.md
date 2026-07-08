@@ -1,5 +1,59 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session cancel ordering
+
+### Current status
+
+- Implemented the first L3 repair from Runtime issue #28: `session request cancel` no longer appends the durable session journal before making the queued request non-executable.
+- Cancellation now writes a cancellation response first, removes the queued request, then appends the session request journal entry.
+- The cancellation response acts as the queue guard if a process exits between response publication and request removal; the existing request processor sees the response and will not execute the original request.
+- `session request cancel --dry-run` now reports `would_write_response=true` alongside the existing planned request removal and journal recording fields.
+- A new adversarial test forces journal append failure and confirms the request has already been removed and the cancellation response exists.
+- This subnode does not complete the full L3 Session journal-to-ledger bridge; it only closes the known record-before-act cancellation bug.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -Raw`
+- `rg -n "fn append_session_request_journal|fn read_session_request_journal|fn write_json_file_atomic|struct SessionCommandRequest|struct SessionCommandResponse|maybe_exit_for_session_crash_test|session_request_cancel_" apps/actinglab/src/main.rs`
+- `rg -n "fn session_request_journal_contains|fn run_session_request_state|request-state|get|response_available|journal_event" apps/actinglab/src/main.rs`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused cancellation suite passed: 11/11 `session_request_cancel` tests.
+- Focused request-state suite passed: 19/19 `session_request_state` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 cancellation-ordering subnode is known.
+- Full issue #28 remains active: the broader Session journal bridge/convergence and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 cancellation-ordering repair.
+2. Continue issue #28 L3 by bridging Session journal/query output toward runtime-ledger facts.
+
 ## 2026-07-08 runtime-ledger L2 Lab run completed projection
 
 ### Current status
