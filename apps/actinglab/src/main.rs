@@ -55445,15 +55445,35 @@ mod tests {
         );
 
         assert_eq!(action.exit_code(), 0);
-        let req_id = action
-            .envelope
-            .data
-            .as_ref()
-            .unwrap()
+        let action_data = action.envelope.data.as_ref().unwrap();
+        let req_id = action_data
             .get("req_id")
             .and_then(Value::as_str)
             .unwrap()
             .to_string();
+        let action_ledger_path = action_data
+            .pointer("/ledger/path")
+            .and_then(Value::as_str)
+            .expect("ledger path")
+            .to_string();
+        assert_eq!(
+            action_data
+                .pointer("/projection_source/kind")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
+        );
+        assert_eq!(
+            action_data
+                .pointer("/projection_source/record_kind")
+                .and_then(Value::as_str),
+            Some("receipt")
+        );
+        assert_eq!(
+            action_data
+                .pointer("/projection_source/path")
+                .and_then(Value::as_str),
+            Some(action_ledger_path.as_str())
+        );
 
         let receipt = run_cli(
             [
@@ -55524,6 +55544,32 @@ mod tests {
                     .and_then(Value::as_str)
                     .is_some()
         }));
+        let receipt_record = records
+            .iter()
+            .find(|item| {
+                item.get("kind").and_then(Value::as_str) == Some("receipt")
+                    && item
+                        .pointer("/record/payload/state")
+                        .and_then(Value::as_str)
+                        == action_data.get("state").and_then(Value::as_str)
+                    && item
+                        .pointer("/record/id_chain/action_id")
+                        .and_then(Value::as_str)
+                        .is_some()
+            })
+            .expect("receipt record");
+        assert_eq!(
+            receipt_record
+                .pointer("/record/payload/req_id")
+                .and_then(Value::as_str),
+            Some(req_id.as_str())
+        );
+        assert_eq!(
+            receipt_record
+                .pointer("/record/payload/state")
+                .and_then(Value::as_str),
+            action_data.get("state").and_then(Value::as_str)
+        );
     }
 
     #[test]

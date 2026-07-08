@@ -24,6 +24,11 @@ struct Lab2Ids {
     req_id: String,
 }
 
+struct Lab2LedgerWrite {
+    summary: Value,
+    receipt_payload: Option<Value>,
+}
+
 impl Lab2Ids {
     fn new() -> Self {
         let issuer = IdIssuer::new();
@@ -855,7 +860,16 @@ fn run_arbitrator_inner(
         .find_map(|record| record.req_id.clone())
         .unwrap_or_else(|| "lab2-arbitrator".to_string());
     let mut data = data;
-    data["ledger"] = write_lab2_ledger(global, instance, &req_id, &data, &mut records)?;
+    let ledger = write_lab2_ledger(global, instance, &req_id, &data, &mut records)?;
+    if ledger.receipt_payload.is_some() {
+        data["projection_source"] = json!({
+            "kind": "runtime_ledger",
+            "record_kind": "receipt",
+            "path": ledger.summary.get("path").cloned().unwrap_or(Value::Null),
+            "req_id": req_id
+        });
+    }
+    data["ledger"] = ledger.summary;
     Ok(data)
 }
 
@@ -1462,8 +1476,13 @@ fn finish_lab2_response(
     mut records: Vec<LedgerRecord>,
 ) -> CliOutcome<Value> {
     let mut payload = payload;
-    payload["ledger"] = write_lab2_ledger(global, instance, req_id, &payload, &mut records)?;
-    project_lab2_payload(&payload, flags)
+    let ledger = write_lab2_ledger(global, instance, req_id, &payload, &mut records)?;
+    if let Some(receipt_payload) = ledger.receipt_payload {
+        project_lab2_ledger_payload(&receipt_payload, ledger.summary, flags)
+    } else {
+        payload["ledger"] = ledger.summary;
+        project_lab2_payload(&payload, flags)
+    }
 }
 
 fn finish_lab2_result_with_ledger(
@@ -1495,10 +1514,13 @@ fn write_lab2_ledger(
     req_id: &str,
     payload: &Value,
     records: &mut Vec<LedgerRecord>,
-) -> CliOutcome<Value> {
+) -> CliOutcome<Lab2LedgerWrite> {
     let config = read_user_config()?;
     let Some(run_root) = effective_run_root(global, &config) else {
-        return Ok(json!({"written": false, "reason": "run_root_not_configured"}));
+        return Ok(Lab2LedgerWrite {
+            summary: json!({"written": false, "reason": "run_root_not_configured"}),
+            receipt_payload: None,
+        });
     };
     let game = global.game.clone().unwrap_or_else(|| "unknown".to_string());
     let server = global
@@ -1530,22 +1552,26 @@ fn write_lab2_ledger(
     ledger
         .append(receipt)
         .map_err(|err| CliError::device(err.to_string()))?;
+    let receipt_payload = read_lab2_receipt_payload_from_ledger(ledger.ledger_path(), req_id)?;
     let retention = enforce_retention(
         run_root.join("sessions"),
         LAB2_LEDGER_MAX_BYTES,
         Duration::from_secs(LAB2_LEDGER_PROTECTED_DAYS * 24 * 60 * 60),
     )
     .map_err(|err| CliError::device(err.to_string()))?;
-    Ok(json!({
-        "written": true,
-        "path": ledger.ledger_path().display().to_string(),
-        "retention": retention
-    }))
+    Ok(Lab2LedgerWrite {
+        summary: json!({
+            "written": true,
+            "path": ledger.ledger_path().display().to_string(),
+            "retention": retention
+        }),
+        receipt_payload: Some(receipt_payload),
+    })
 }
 
 fn return_lab2_error_with_ledger(
     global: &GlobalOptions,
-    _flags: &FlagArgs,
+    flags: &FlagArgs,
     req_id: &str,
     instance: &str,
     details: Value,
@@ -1565,13 +1591,25 @@ fn return_lab2_error_with_ledger(
         },
         "details": details
     });
-    payload["ledger"] = match write_lab2_ledger(global, instance, req_id, &payload, &mut records) {
-        Ok(ledger) => ledger,
-        Err(ledger_error) => json!({
-            "written": false,
-            "reason": "ledger_write_failed",
-            "error": ledger_error.message
-        }),
+    payload = match write_lab2_ledger(global, instance, req_id, &payload, &mut records) {
+        Ok(ledger) => {
+            if let Some(receipt_payload) = ledger.receipt_payload {
+                project_lab2_ledger_payload(&receipt_payload, ledger.summary, flags)?
+            } else {
+                let mut payload = payload;
+                payload["ledger"] = ledger.summary;
+                payload
+            }
+        }
+        Err(ledger_error) => {
+            let mut payload = payload;
+            payload["ledger"] = json!({
+                "written": false,
+                "reason": "ledger_write_failed",
+                "error": ledger_error.message
+            });
+            payload
+        }
     };
     Err(error.with_details(payload))
 }
@@ -1750,6 +1788,22 @@ fn distinct_ledger_count(records: &[Value]) -> usize {
         .len()
 }
 
+fn read_lab2_receipt_payload_from_ledger(path: &Path, req_id: &str) -> CliOutcome<Value> {
+    let read = LabLedger::read(path).map_err(|err| CliError::device(err.to_string()))?;
+    read.records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.kind == LedgerRecordKind::Receipt && record.req_id.as_deref() == Some(req_id)
+        })
+        .map(|record| record.payload.clone())
+        .ok_or_else(|| {
+            CliError::device(format!(
+                "runtime ledger receipt for Lab-2 req_id '{req_id}' was not readable after write"
+            ))
+        })
+}
+
 fn project_lab2_payload(payload: &Value, flags: &FlagArgs) -> CliOutcome<Value> {
     let request = lab2_projection_request(
         flags,
@@ -1759,6 +1813,30 @@ fn project_lab2_payload(payload: &Value, flags: &FlagArgs) -> CliOutcome<Value> 
             .map(str::to_string),
     );
     project_record(payload, &request).map_err(|err| CliError::device(err.to_string()))
+}
+
+fn project_lab2_ledger_payload(
+    receipt_payload: &Value,
+    ledger_summary: Value,
+    flags: &FlagArgs,
+) -> CliOutcome<Value> {
+    let mut projected = project_lab2_payload(receipt_payload, flags)?;
+    let Some(object) = projected.as_object_mut() else {
+        return Err(CliError::device(
+            "lab2 ledger projection returned non-object",
+        ));
+    };
+    object.insert("ledger".to_string(), ledger_summary.clone());
+    object.insert(
+        "projection_source".to_string(),
+        json!({
+            "kind": "runtime_ledger",
+            "record_kind": "receipt",
+            "path": ledger_summary.get("path").cloned().unwrap_or(Value::Null),
+            "req_id": receipt_payload.get("req_id").cloned().unwrap_or(Value::Null)
+        }),
+    );
+    Ok(projected)
 }
 
 fn lab2_projection_request(flags: &FlagArgs, evidence_id: Option<String>) -> ProjectionRequest {
