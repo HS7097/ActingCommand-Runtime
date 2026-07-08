@@ -11,6 +11,8 @@
 - The report records the issue #28 implemented-module gate as 23/23 current fact surfaces covered by runtime-ledger writes, projections, or explicit compatibility boundaries.
 - The Session `request-journal.jsonl` compatibility sidecar remains physically present, but covered read/status/event paths now consume or cross-check runtime-ledger receipt projections and fail loudly on conflicts.
 - Implementation commit `3c4f3d9ccf92515f8fb94897e96ab6bdaed94729` was created and tagged `checkpoint/20260709-runtime-ledger-l8-output-zip-receipt-validation`.
+- Final acceptance commit `a8d7ca2` was pushed and tagged `checkpoint/20260709-runtime-ledger-issue28-accepted`.
+- GitHub issue #28 was updated with the closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/28#issuecomment-4917795688`.
 - This closeout does not add live-device work, UI, scheduler, SQLite, encrypted log service, new game logic, or resource repository reads.
 
 ### Files changed
@@ -39,6 +41,8 @@
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
 - `cargo build --release`
+- `git push origin main --tags`
+- `gh issue comment 28 --repo HS7097/ActingCommand-Runtime --body "..."`
 
 ### Test results
 
