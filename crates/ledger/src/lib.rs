@@ -509,6 +509,29 @@ impl LightEvent {
     }
 }
 
+#[must_use = "CommitProof must be consumed by the terminal fact recording path"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitProof<T> {
+    value: T,
+}
+
+impl<T> CommitProof<T> {
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+/// Runs the side effect before producing the proof required to record its terminal fact.
+pub fn commit_then_record<T, E>(
+    commit: impl FnOnce() -> Result<T, E>,
+) -> Result<CommitProof<T>, E> {
+    commit().map(|value| CommitProof { value })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceRef {
     pub schema_version: String,
@@ -1305,6 +1328,18 @@ mod tests {
         assert_eq!(read.records[0].kind, LedgerRecordKind::Drive);
         assert_eq!(read.records[1].kind, LedgerRecordKind::Receipt);
         assert_eq!(read.skipped_corrupt_lines, 1);
+    }
+
+    #[test]
+    fn commit_then_record_yields_proof_only_after_successful_commit() {
+        let proof = commit_then_record(|| -> Result<_, LabLogError> { Ok("artifact.zip") })
+            .expect("commit proof");
+        assert_eq!(proof.value(), &"artifact.zip");
+
+        let failed = commit_then_record(|| -> Result<&str, LabLogError> {
+            Err(LabLogError::InvalidInput("commit failed".to_string()))
+        });
+        assert!(failed.is_err());
     }
 
     #[test]

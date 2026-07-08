@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L0 record-before-act repair
+
+### Current status
+
+- Implemented L0 from Runtime issue #28 using `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md` and `C:\合作工作区\ActingCommand\FIX-runtime-ledger-record-before-act-1d9e181.md`.
+- Previous runtime-ledger baseline `1d9e181` remains a revoked baseline for the `LabRunContext::finish` record-before-act blocker.
+- `LabRunContext::finish` now writes non-terminal `finalizing` facts before packaging and records terminal completion only after logs, zip write, zip `sync_all`, and SHA-256 calculation succeed.
+- `output_zip_written` now appears only after the output zip exists and has a real SHA-256.
+- Terminal output failure writes last-resort error evidence and then records terminal `finish_error`; it does not leave `finish_ok` or fake `output_zip_written`.
+- `result.zip` log projection now reads summary, diagnostics, and environment from the non-terminal `finalizing` record.
+- `actingcommand-ledger` now provides the lightweight `commit_then_record` / `CommitProof` guard for act-before-terminal-record paths.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `crates/ledger/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log --oneline -5`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -Raw`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\FIX-runtime-ledger-record-before-act-1d9e181.md" -Raw`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-ledger`
+- `cargo test -p actingcommand-actinglab lab_run::tests::zip_failure_after_success_does_not_record_finish_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::write_logs_failure_does_not_record_finish_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::success_finish_cleans_run_dir_but_keeps_outside_zip -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::failure_zip_materializes_frame_store_screenshots -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `Get-ChildItem crates -Directory | Where-Object { $_.Name -match 'ledger' } | Select-Object -ExpandProperty Name`
+- `git diff -U0 -- apps/actinglab/src/lab_run.rs crates/ledger/src/lib.rs | Select-String -Pattern 'output_zip_written','finish_ok','finish_error','finalizing','commit_then_record','sync output zip'`
+
+### Test results
+
+- `actingcommand-ledger`: 18/18 tests passed, including the new `commit_then_record` guard test.
+- Focused L0 adversarial tests passed:
+  - zip write failure after a success-state run records `finish_error`, last-resort evidence, no `finish_ok`, and no `output_zip_written`.
+  - log projection/write failure records `finish_error`, last-resort evidence, no `finish_ok`, and no `output_zip_written`.
+  - success ordering is `finalizing` -> `output_zip_written` -> `finish_ok`.
+  - failure archive path still materializes frame-store screenshots and terminal `finish_error`.
+- Focused Lab suite passed: 58/58 tests under the `lab_` filter.
+- Public gates passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+- `git diff --check` passed after this planning/checkpoint edit.
+- Ledger crate scan returned only `ledger`; no second ledger crate was added.
+- Diff invariant scan shows `finalizing`, delayed `output_zip_written`, terminal `finish_ok`/`finish_error`, `commit_then_record`, and zip `sync_all` paths in the touched code.
+
+### Current blocker
+
+- No blocker for L0 is known.
+- Full issue #28 remains active: L1-L8 are not complete yet.
+
+### Next step
+
+1. Commit and push this L0 Runtime node with a checkpoint tag.
+2. Continue issue #28 at L2 or L3 according to the task chain priority.
+
 ## 2026-07-08 runtime-ledger unified fact source
 
 ### Current status

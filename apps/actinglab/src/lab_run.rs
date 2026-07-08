@@ -15,8 +15,9 @@ use actingcommand_device::{
     TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
 use actingcommand_ledger::{
-    IdIssuer, IdKind, LabLedger, LabLogError, LastResortError, LedgerRecord, LedgerRecordKind,
-    LightEvent, SessionHeader, project_light_events, write_last_resort_error,
+    CommitProof, IdIssuer, IdKind, LabLedger, LabLogError, LastResortError, LedgerRecord,
+    LedgerRecordKind, LightEvent, SessionHeader, commit_then_record, project_light_events,
+    write_last_resort_error,
 };
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
@@ -3217,10 +3218,74 @@ impl LabRunContext {
                 json!({"severity": "warning", "message": warning}),
             )?;
         }
-        self.event("output_zip_written", json!({"out": out_path}))?;
         let summary = self.summary_json(ok, failure_reason, state);
         let diagnostics = self.diagnostics_json(failure_reason, state);
         let environment = self.environment_json(state);
+        self.append_finalizing_record(ok, failure_reason, summary, diagnostics, environment)?;
+        let committed = match commit_then_record(|| {
+            self.write_logs(ok, failure_reason, state)?;
+            write_output_zip(&self.output_dir, out_path)?;
+            let sha256 = file_sha256(out_path)?;
+            Ok(ArchiveResult {
+                path: out_path.to_path_buf(),
+                sha256,
+            })
+        }) {
+            Ok(proof) => proof,
+            Err(err) => return self.record_terminal_output_failure(out_path, err),
+        };
+        self.event(
+            "output_zip_written",
+            json!({"out": out_path, "sha256": committed.value().sha256.clone()}),
+        )?;
+        self.append_terminal_receipt(ok, failure_reason, state, Some(&committed))?;
+        let archive = committed.into_inner();
+        if ok {
+            self.cleanup_run_dir();
+        }
+        Ok(archive)
+    }
+
+    fn append_finalizing_record(
+        &mut self,
+        ok: bool,
+        failure_reason: Option<&str>,
+        summary: Value,
+        diagnostics: Value,
+        environment: Value,
+    ) -> CliOutcome<()> {
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "finalizing",
+                    "status": if ok { "ok" } else { "failed" },
+                    "sealed": false,
+                    "phase": self.phase,
+                    "failure_reason": failure_reason,
+                    "input_summary": self.input_summary(),
+                    "summary": summary,
+                    "diagnostics": diagnostics,
+                    "environment": environment
+                }),
+            ),
+            "ledger_finalizing",
+        )
+    }
+
+    fn append_terminal_receipt(
+        &mut self,
+        ok: bool,
+        failure_reason: Option<&str>,
+        state: Option<&RunState>,
+        archive: Option<&CommitProof<ArchiveResult>>,
+    ) -> CliOutcome<()> {
+        let output_zip = archive.map(|proof| {
+            json!({
+                "path": proof.value().path.display().to_string(),
+                "sha256": proof.value().sha256.clone()
+            })
+        });
         self.append_ledger_record(
             self.ledger_record(
                 LedgerRecordKind::Receipt,
@@ -3230,23 +3295,50 @@ impl LabRunContext {
                     "phase": self.phase,
                     "failure_reason": failure_reason,
                     "input_summary": self.input_summary(),
-                    "summary": summary,
-                    "diagnostics": diagnostics,
-                    "environment": environment
+                    "summary": self.summary_json(ok, failure_reason, state),
+                    "diagnostics": self.diagnostics_json(failure_reason, state),
+                    "environment": self.environment_json(state),
+                    "output_zip": output_zip
                 }),
             ),
-            "ledger_finish_receipt",
-        )?;
-        self.write_logs(ok, failure_reason, state)?;
-        write_output_zip(&self.output_dir, out_path)?;
-        let sha256 = file_sha256(out_path)?;
-        if ok {
-            self.cleanup_run_dir();
-        }
-        Ok(ArchiveResult {
-            path: out_path.to_path_buf(),
-            sha256,
-        })
+            "ledger_terminal_receipt",
+        )
+    }
+
+    fn record_terminal_output_failure(
+        &mut self,
+        out_path: &Path,
+        err: CliError,
+    ) -> CliOutcome<ArchiveResult> {
+        let message = err.message.clone();
+        let failure_reason = format!("terminal output failed: {message}");
+        let last_resort = LastResortError::new(
+            "lab run",
+            "terminal_output",
+            &err.code,
+            &message,
+            json!({
+                "run_id": self.run_id,
+                "instance": self.instance,
+                "phase": self.phase,
+                "out": out_path.display().to_string(),
+                "input_summary": self.input_summary()
+            }),
+            self.ledger_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        );
+        let last_resort_result = write_last_resort_error(Some(&self.run_root), &last_resort);
+        self.append_terminal_receipt(false, Some(&failure_reason), None, None)?;
+        let suffix = match last_resort_result {
+            Ok(path) => format!("; last-resort error file written to {}", path.display()),
+            Err(last_resort_err) => {
+                format!("; additionally failed to write last-resort error file: {last_resort_err}")
+            }
+        };
+        Err(CliError::package_invalid(format!(
+            "{failure_reason}{suffix}"
+        )))
     }
 
     fn cleanup_run_dir(&self) {
@@ -3311,9 +3403,9 @@ impl LabRunContext {
         }
         let mut recognition = Vec::new();
         let mut steps = Vec::new();
-        let mut finish_summary = None;
-        let mut finish_diagnostics = None;
-        let mut finish_environment = None;
+        let mut finalizing_summary = None;
+        let mut finalizing_diagnostics = None;
+        let mut finalizing_environment = None;
         for record in &read.records {
             match record.payload.get("record_type").and_then(Value::as_str) {
                 Some("recognition") => {
@@ -3326,10 +3418,10 @@ impl LabRunContext {
                         steps.push(value.clone());
                     }
                 }
-                Some("finish_ok") | Some("finish_error") => {
-                    finish_summary = record.payload.get("summary").cloned();
-                    finish_diagnostics = record.payload.get("diagnostics").cloned();
-                    finish_environment = record.payload.get("environment").cloned();
+                Some("finalizing") => {
+                    finalizing_summary = record.payload.get("summary").cloned();
+                    finalizing_diagnostics = record.payload.get("diagnostics").cloned();
+                    finalizing_environment = record.payload.get("environment").cloned();
                 }
                 _ => {}
             }
@@ -3341,20 +3433,20 @@ impl LabRunContext {
             "record_count": read.records.len(),
             "skipped_corrupt_lines": read.skipped_corrupt_lines
         });
-        let mut summary = finish_summary.ok_or_else(|| {
-            CliError::package_invalid("runtime ledger projection missing finish summary")
+        let mut summary = finalizing_summary.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finalizing summary")
         })?;
         summary["projection_source"] = projection_source.clone();
         summary["steps"] = Value::Array(steps.clone());
-        let mut diagnostics = finish_diagnostics.ok_or_else(|| {
-            CliError::package_invalid("runtime ledger projection missing finish diagnostics")
+        let mut diagnostics = finalizing_diagnostics.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finalizing diagnostics")
         })?;
         diagnostics["projection_source"] = projection_source.clone();
         diagnostics["command"] = json!("lab run");
         diagnostics["phase"] = json!(self.phase);
         diagnostics["input_summary"] = self.input_summary();
-        let mut environment = finish_environment.ok_or_else(|| {
-            CliError::package_invalid("runtime ledger projection missing finish environment")
+        let mut environment = finalizing_environment.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finalizing environment")
         })?;
         environment["projection_source"] = projection_source;
         Ok(LabLogProjection {
@@ -3578,6 +3670,7 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
         .map_err(|err| CliError::device(err.to_string()))
 }
 
+#[derive(Debug)]
 struct ArchiveResult {
     path: PathBuf,
     sha256: String,
@@ -3753,8 +3846,15 @@ fn write_output_zip_inner(output_dir: &Path, out_path: &Path) -> CliOutcome<()> 
         &output_dir.join("screenshots"),
         options,
     )?;
-    zip.finish()
+    let file = zip
+        .finish()
         .map_err(|err| CliError::package_invalid(format!("failed to finish output zip: {err}")))?;
+    file.sync_all().map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to sync output zip {}: {err}",
+            out_path.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -5240,6 +5340,10 @@ mod tests {
         let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
         assert!(!ledger.events.is_empty());
         assert!(ledger.records.iter().any(|record| {
+            record.kind == LedgerRecordKind::Drive
+                && record.payload.get("record_type").and_then(Value::as_str) == Some("finalizing")
+        }));
+        assert!(ledger.records.iter().any(|record| {
             record.kind == LedgerRecordKind::Receipt
                 && record.payload.get("record_type").and_then(Value::as_str) == Some("finish_error")
         }));
@@ -5257,6 +5361,58 @@ mod tests {
         assert!(out.is_file());
         assert!(!ctx.run_dir.exists());
         assert!(ctx.ledger_path.as_ref().expect("ledger path").is_file());
+        let ledger_text =
+            fs::read_to_string(ctx.ledger_path.as_ref().unwrap()).expect("ledger text");
+        assert_ordered(
+            &ledger_text,
+            &[
+                "\"record_type\":\"finalizing\"",
+                "\"event\":\"output_zip_written\"",
+                "\"record_type\":\"finish_ok\"",
+            ],
+        );
+    }
+
+    #[test]
+    fn zip_failure_after_success_does_not_record_finish_ok() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let blocked_parent = temp.path().join("blocked-parent");
+        fs::write(&blocked_parent, b"not a directory").expect("blocker");
+        let out = blocked_parent.join("out.zip");
+
+        let err = ctx
+            .finish(&out, true, None, None)
+            .expect_err("zip write failure");
+
+        assert!(err.message.contains("terminal output failed"));
+        assert!(temp.path().join("last-error.json").is_file());
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        assert!(has_record_type(&ledger, "finalizing"));
+        assert!(has_record_type(&ledger, "finish_error"));
+        assert!(!has_record_type(&ledger, "finish_ok"));
+        assert!(!has_event(&ledger, "output_zip_written"));
+    }
+
+    #[test]
+    fn write_logs_failure_does_not_record_finish_ok() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        fs::remove_dir_all(&ctx.logs_dir).expect("remove logs dir");
+        fs::write(&ctx.logs_dir, b"not a directory").expect("logs blocker");
+        let out = temp.path().join("out.zip");
+
+        let err = ctx
+            .finish(&out, true, None, None)
+            .expect_err("write_logs failure");
+
+        assert!(err.message.contains("terminal output failed"));
+        assert!(temp.path().join("last-error.json").is_file());
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        assert!(has_record_type(&ledger, "finalizing"));
+        assert!(has_record_type(&ledger, "finish_error"));
+        assert!(!has_record_type(&ledger, "finish_ok"));
+        assert!(!has_event(&ledger, "output_zip_written"));
     }
 
     #[test]
@@ -5508,6 +5664,27 @@ mod tests {
         let mut text = String::new();
         entry.read_to_string(&mut text).expect("zip text");
         text
+    }
+
+    fn has_record_type(ledger: &actingcommand_ledger::LedgerRead, record_type: &str) -> bool {
+        ledger.records.iter().any(|record| {
+            record.payload.get("record_type").and_then(Value::as_str) == Some(record_type)
+        })
+    }
+
+    fn has_event(ledger: &actingcommand_ledger::LedgerRead, event: &str) -> bool {
+        ledger
+            .events
+            .iter()
+            .any(|entry| entry.payload.get("event").and_then(Value::as_str) == Some(event))
+    }
+
+    fn assert_ordered(text: &str, needles: &[&str]) {
+        let mut previous = 0;
+        for needle in needles {
+            let offset = text[previous..].find(needle).expect("needle order");
+            previous += offset + needle.len();
+        }
     }
 
     fn write_minimal_lab_package(path: &Path) {

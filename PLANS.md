@@ -6,28 +6,41 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
-## Current runtime-ledger unified fact source
+## Current runtime-ledger unified fact source chain
 
 The active approved issue is Runtime issue #28:
 
 - `[主任务] runtime-ledger 统一事实源:泛化现有 ledger,一切输出改投影(本轮基础可用)`
-- Technical source of truth: `C:\合作工作区\ActingCommand\TASK-runtime-ledger-unified-fact-source.md`
+- Technical source of truth: `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`
+- L0 repair source: `C:\合作工作区\ActingCommand\FIX-runtime-ledger-record-before-act-1d9e181.md`
+- Previous baseline `1d9e181` was revoked for the record-before-act blocker in `LabRunContext::finish`.
 
-Implementation direction for this round:
+Current node:
 
-- Generalize the existing `crates/ledger` crate as the runtime fact source; do not create a second ledger crate.
-- Add `run` and `evidence` IDs to the existing unified ID issuer.
-- Add event-line support, runtime per-instance/per-run ledger shards, receipt/header durability, projection helpers, and the last-resort stderr plus error-file channel to `actingcommand-ledger`.
-- Route `lab run` record writes through the generalized ledger while keeping `LabRunContext` as the execution context.
-- Generate `lab run` IDs through `IdIssuer`.
-- Project `result.zip/logs/events.jsonl`, `summary.json`, and `diagnostics.json` from the ledger instead of old ad hoc in-memory output builders.
-- Keep this round to P0/P1 only: no UI, database, encryption log service, scheduler projection, complete CLI migration, or full Session/Lab-2 journal removal.
+- L0 `record-before-act` repair is implemented and verified in this working tree.
+- `output_zip_written` is no longer recorded before terminal output work.
+- `finalizing` is recorded as a non-terminal `Drive` record for summary, diagnostics, and environment projection.
+- `write_logs`, `write_output_zip`, output zip `sync_all`, and `file_sha256` now form the terminal artifact stage.
+- `output_zip_written` with real SHA-256 and terminal `finish_ok`/`finish_error` receipts are recorded only after the terminal artifact stage succeeds.
+- Terminal artifact failure writes last-resort error evidence and records `finish_error`; it must not leave `finish_ok` or a fake `output_zip_written`.
+- `actingcommand-ledger` now exposes the lightweight `commit_then_record` / `CommitProof` guard used by this terminal recording path.
+
+Issue #28 remaining chain:
+
+- L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
+- L2: complete `lab run` projection semantics, including fail-loud consumer handling for missing `finalizing` or terminal receipt.
+- L3: bridge Session journal and fix the known `run_session_request_cancel` record-before-act issue.
+- L4: route Lab-2 and Lab-1 existing entrances into the unified ledger.
+- L5: make CLI outputs ledger projections instead of independent facts.
+- L6: add read-only ledger query and diagnosis commands.
+- L7: connect Evidence and FrameStore references.
+- L8: run the full adversarial acceptance set and the 95 percent completion gate.
 
 Current boundary:
 
-- `LabRunContext` remains the owner of Lab execution state, frame store paths, screenshots, and archive assembly.
-- `LabRunContext` no longer acts as the authoritative result fact source for Lab output logs; it writes facts to the runtime ledger and packages projected logs.
-- Existing Session journal and Lab-2 ledger migration is deferred to the repair phase named in issue #28.
+- This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
+- `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
+- Session journal, Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module
