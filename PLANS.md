@@ -53,6 +53,7 @@ Current node:
 - L7 recognition traceability has started: `lab run` now issues a `reco_id` for each recognition capture, stores it in the recognition drive record id chain, and projects the same id into result.zip `logs/recognition.jsonl`.
 - L7 capture backend attempt traceability has started: `lab run` now records the requested/used capture backend and backend attempt diagnostics as a runtime-ledger drive record after backend selection.
 - L7 action/step traceability has started: executed `lab run` operation steps now receive an `action_id`, carry it through started/finished input events, and store it in both the step drive record id chain and projected step payload.
+- L7 recognition evidence traceability has started: `lab run` now stores per-recognition detail payloads in `EvidenceStore`, projects the evidence ref into `logs/recognition.jsonl`, and records the `evidence_id` in the recognition drive record id chain.
 
 Issue #28 remaining chain:
 
@@ -60,7 +61,7 @@ Issue #28 remaining chain:
 - L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
 - L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
 - L5: make CLI outputs ledger projections instead of independent facts.
-- L7: continue remaining Evidence / FrameStore convergence for recognition detail evidence payloads and any remaining record-step surfaces beyond the screenshot evidence index, recognition id traceability, capture backend selection record, and action-id step traceability now in place.
+- L7: continue remaining Evidence / FrameStore convergence for any remaining record-step or evidence surfaces beyond the screenshot evidence index, recognition id/evidence traceability, capture backend selection record, and action-id step traceability now in place.
 - L8: run the full adversarial acceptance set and the 95 percent completion gate.
 
 Current boundary:
@@ -70,7 +71,7 @@ Current boundary:
 - The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
 - The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - The current L6 work adds read-only ledger/evidence inspection commands only; it does not trigger capture, touch, runtime daemon, or game-device work.
-- The current L7 work connects already-materialized `lab run` screenshots, per-capture `reco_id` values, capture-backend selection attempts, and per-step `action_id` values to runtime-ledger projection output only; it does not add new capture, OCR, matching, UI, database, scheduler, or game-device behavior.
+- The current L7 work connects already-materialized `lab run` screenshots, per-capture `reco_id` values, per-recognition detail evidence refs, capture-backend selection attempts, and per-step `action_id` values to runtime-ledger projection output only; it does not add new capture, OCR, matching, UI, database, scheduler, or game-device behavior.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module

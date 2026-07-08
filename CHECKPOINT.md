@@ -1,5 +1,59 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L7 recognition evidence refs
+
+### Current status
+
+- Re-read Runtime issue #28 and `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`.
+- Continued Runtime issue #28 L7 after action id step traceability.
+- `lab run` now stores per-recognition detail payloads in `EvidenceStore`.
+- Projected result.zip `logs/recognition.jsonl` entries now include the recognition `evidence_id`, indexed evidence metadata, and the same `reco_id` used by the runtime-ledger recognition drive record.
+- Recognition drive records now include both `reco_id` and `evidence_id` in the runtime-ledger `id_chain`.
+- Evidence storage degradation is explicit: failed recognition evidence storage emits a `recognition_evidence_degraded` event and records degraded evidence metadata instead of silently pretending the evidence is complete.
+- Implementation commit `93b0cd02ec4406f9b49d2c724f7214080d1b29c6` was created and tagged `checkpoint/20260709-runtime-ledger-l7-recognition-evidence`.
+- This node does not add new capture, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`
+- `rg -n "store_json_evidence|recognition_evidence|recognition_detail|evidence_id|recognition_projection_keeps_reco_id" apps/actinglab/src/lab_run.rs`
+- `cargo test -p actingcommand-actinglab recognition_projection_keeps_reco_id_from_ledger -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused recognition projection test passed and now verifies `reco_id`, `evidence_id`, the indexed evidence ref, and the stored recognition evidence JSON.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L7 recognition evidence-ref subnode is known.
+- Full issue #28 remains incomplete: remaining L7 evidence surfaces if any, L5 CLI projection, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Push implementation commit `93b0cd02ec4406f9b49d2c724f7214080d1b29c6`, tag `checkpoint/20260709-runtime-ledger-l7-recognition-evidence`, and this planning/checkpoint update.
+2. Continue issue #28 with remaining L7/L5 work, then L8 adversarial acceptance.
+
 ## 2026-07-09 runtime-ledger L7 action id step traceability
 
 ### Current status
