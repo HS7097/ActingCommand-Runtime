@@ -4,7 +4,7 @@
 
 ### Current status
 
-- Implemented approved Runtime issue #26 from `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`.
+- Implemented approved Runtime issue #26 from `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`, including the later full-memory `LoadedBundle` revision.
 - Runtime source commit: `778cda54c552a45ce0d92da8d031043dd1ad2cd0`.
 - Checkpoint tag: `checkpoint/20260708-task-pack-containment`.
 - Added `crates/pack-containment` as the single-task zip package containment module.
@@ -15,7 +15,9 @@
 - Added `TrustSource` hook for future external hash source/trusted channel work.
 - Extended `recognition-pack` with `AssetResolver` and `FsAssetResolver`; existing filesystem evaluator construction remains compatible, while containment can provide in-memory assets.
 - Routed `package validate/inspect/run` through `Containment::load`.
-- Routed `lab validate/run` through containment before the existing compatibility extraction path.
+- Routed `lab validate/run` through containment and direct in-memory `LoadedBundle` consumption for control, manifest, operation, recognition pack, pages, navigation, and operation assets.
+- Added `--expected-sha256` support to Lab zip validation/run so callers can supply an external expected compressed-package hash; local validation still computes the expected hash when no external channel is provided.
+- Removed Lab zip temp extraction from the Lab validate/run path.
 - No scheduler, UI, OCR, SQLite, game logic, encryption, trusted channel, or upstream source import was added in this task.
 
 ### Files changed
@@ -45,12 +47,16 @@
 - `cargo test -p actingcommand-actinglab lab_package -- --nocapture`
 - `cargo test -p actingcommand-recognition-pack -- --nocapture`
 - `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
+- `cargo test -p actingcommand-pack-containment`
+- `cargo test -p actingcommand-recognition-pack`
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
 - `cargo fmt --all`
 - `cargo fmt --all -- --check`
 - `cargo build --release`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
 - `git diff --check`
+- `rg -n -e LabValidateTemp -e unpack_lab_input -e read_zip_entry_limited -e normalize_lab_zip_path -e input_dir -e "run_dir\.join" apps/actinglab/src/lab_run.rs`
 - `rg -n "ZipArchive::new|read_zip_entry_limited|validate_manifest_hashes|normalize_zip_path|manifest_hashes|package must contain exactly one top-level" apps\actinglab\src\main.rs crates\pack-containment\src\lib.rs apps\actinglab\src\lab_run.rs`
 - `rg -n "LoadedBundle \{" apps crates --glob '!crates/pack-containment/src/lib.rs' --glob '!crates/pack-containment/tests/ui/loaded_bundle_construct.rs' --glob '!crates/pack-containment/tests/ui/loaded_bundle_construct.stderr'`
 
@@ -58,7 +64,7 @@
 
 - `actingcommand-pack-containment`: 7 unit tests passed and 1 trybuild compile-fail test passed.
 - `actingcommand-actinglab package_validate_`: 6/6 package validation tests passed through the new containment route.
-- `actingcommand-actinglab lab_`: 56 focused Lab tests passed after adding the containment preflight.
+- `actingcommand-actinglab lab_`: 56 focused Lab tests passed after converting Lab validate/run to in-memory `LoadedBundle` consumption and adding expected-hash mismatch coverage.
 - `actingcommand-recognition-pack`: 31 unit tests plus 1 disk fixture integration test passed after adding `AssetResolver`.
 - Final public gates passed:
   - `cargo fmt --all -- --check`
@@ -67,16 +73,17 @@
   - `cargo test --workspace`
   - `git diff --check`
 - Architecture scan found no external `LoadedBundle { ... }` construction outside the intentional trybuild failure fixture and expected stderr.
+- Lab temp-extraction scan found no old `LabValidateTemp`, `unpack_lab_input`, entry-limited Lab extraction helper, or `input_dir` path in `apps/actinglab/src/lab_run.rs`; remaining `run_dir.join(...)` hits are output/frame-store/test paths, not Lab input extraction.
 
 ### Current blocker
 
 - No code blocker is known.
-- Remaining Lab-run extraction is intentionally left as compatibility behavior for this task; full in-memory Lab execution should be handled by a later scoped follow-up.
+- Full trusted-channel/scheduler hash sourcing is not implemented; the CLI now has `--expected-sha256`, and scheduler/trusted-channel integration remains a later scoped task.
 
 ### Next step
 
-1. Commit and push the completed containment task with this checkpoint and `PLANS.md`.
-2. Let the next task decide whether to remove the remaining Lab-run compatibility extraction and convert execution to direct in-memory `LoadedBundle` consumption.
+1. Commit and push the full-memory containment revision with this checkpoint and `PLANS.md`.
+2. Let the next task decide whether to wire scheduler/trusted-channel hash sourcing into the same containment API.
 
 ## 2026-07-06 Lab-2 chain repair round 5 closeout
 

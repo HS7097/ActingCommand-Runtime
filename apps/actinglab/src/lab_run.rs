@@ -14,12 +14,13 @@ use actingcommand_device::{
     CaptureBackendName, DeviceTarget, Frame, InputBackend, PixelFormat, SelectedTouchBackend,
     TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
-use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
-use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
+use actingcommand_pack_containment::{
+    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
+};
+use actingcommand_page_detector::{PageDetector, PageEvaluation};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
-    load_pack_from_json_str,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,8 +33,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use zip::ZipWriter;
 use zip::write::FileOptions;
-use zip::{ZipArchive, ZipWriter};
 
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
 const SUMMARY_SCHEMA: &str = "Lab-1y.summary.v1";
@@ -49,8 +50,6 @@ const ROI_TEMPLATE_SCORE_EPSILON: f32 = 0.01;
 const ROI_TEMPLATE_POSITION_EPSILON: i32 = 1;
 const ROI_COLOR_DISTANCE_EPSILON: f32 = 2.0;
 const ROI_COLOR_MEAN_EPSILON: u8 = 2;
-const MAX_LAB_ZIP_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_LAB_ZIP_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -68,6 +67,13 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let capture_interval_override = parse_optional_u64(&flags, "--capture-interval-ms")?;
     let capture_backend_override = parse_optional_capture_backend(&flags, "--capture-backend")?;
     let frame_store_cli = parse_frame_store_control_from_flags(&flags)?;
+    let expected_input_sha256 = parse_optional_sha256(&flags, "--expected-sha256")?;
+    let options = LabRunOptions {
+        capture_interval_override,
+        capture_backend_override,
+        frame_store_cli,
+        expected_input_sha256,
+    };
 
     let mut ctx = LabRunContext::create(&run_root, &zip_path)?;
     let run_dir = ctx.run_dir.clone();
@@ -83,15 +89,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         json!({"input_zip": zip_path, "out": out_path}),
     )?;
 
-    let result = execute_lab_run(
-        &mut ctx,
-        global,
-        &config,
-        &zip_path,
-        capture_interval_override,
-        capture_backend_override,
-        frame_store_cli,
-    );
+    let result = execute_lab_run(&mut ctx, global, &config, &zip_path, options);
     match result {
         Ok(run_state) => {
             let archive = ctx.finish(&out_path, true, None, Some(&run_state))?;
@@ -132,38 +130,28 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
 pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let zip_path = flags.required_path("--zip")?;
-    validate_lab_package_zip(&zip_path)
+    let expected_input_sha256 = parse_optional_sha256(&flags, "--expected-sha256")?;
+    validate_lab_package_zip_with_expected(&zip_path, expected_input_sha256)
 }
 
 pub(super) fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<Value> {
-    let _contained = load_lab_package_through_containment(zip_path, "lab-validate")?;
-    let temp = LabValidateTemp::create()?;
-    let result = validate_lab_package_zip_inner(zip_path, &temp.input_dir);
-    let cleanup = temp.cleanup();
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(err), Ok(())) => Err(err),
-        (Ok(_), Err(cleanup_err)) => Err(cleanup_err),
-        (Err(mut err), Err(cleanup_err)) => {
-            err.message = format!(
-                "{}; additionally failed to clean validation temp directory: {}",
-                err.message, cleanup_err.message
-            );
-            Err(err)
-        }
-    }
+    validate_lab_package_zip_with_expected(zip_path, None)
 }
 
-fn validate_lab_package_zip_inner(zip_path: &Path, input_dir: &Path) -> CliOutcome<Value> {
-    let unpacked = unpack_lab_input(zip_path, input_dir)?;
-    let control_path = input_dir.join("control.json");
-    let control = read_json_file::<LabControl>(&control_path)?;
+fn validate_lab_package_zip_with_expected(
+    zip_path: &Path,
+    expected_input_sha256: Option<Sha256Hash>,
+) -> CliOutcome<Value> {
+    let contained =
+        load_lab_package_through_containment(zip_path, "lab-validate", expected_input_sha256)?;
+    let entry_count = contained.bundle.entry_count();
+    let control = lab_control_from_bundle(&contained.bundle)?;
     control.validate()?;
-    let resources = load_lab_resources_from_input(input_dir, &control)?;
+    let resources = load_lab_resources_from_bundle(contained.bundle, &control)?;
     Ok(json!({
         "zip": zip_path.display().to_string(),
         "status": "valid",
-        "entry_count": unpacked.entries.len(),
+        "entry_count": entry_count,
         "control": {
             "package_id": control.package_id,
             "execution_mode": control.execution_mode,
@@ -189,33 +177,37 @@ fn validate_lab_package_zip_inner(zip_path: &Path, input_dir: &Path) -> CliOutco
     }))
 }
 
+struct LabRunOptions {
+    capture_interval_override: Option<u64>,
+    capture_backend_override: Option<CaptureBackendChoice>,
+    frame_store_cli: FrameStoreControl,
+    expected_input_sha256: Option<Sha256Hash>,
+}
+
 fn execute_lab_run(
     ctx: &mut LabRunContext,
     global: &GlobalOptions,
     config: &super::UserConfig,
     zip_path: &Path,
-    capture_interval_override: Option<u64>,
-    capture_backend_override: Option<CaptureBackendChoice>,
-    frame_store_cli: FrameStoreControl,
+    options: LabRunOptions,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
-    let contained = load_lab_package_through_containment(zip_path, "lab-run")?;
-    ctx.input_zip_sha256 = Some(contained.sha256);
-    let unpacked = unpack_lab_input(zip_path, &ctx.input_dir)?;
-    ctx.input_entries = unpacked.entries;
+    let contained =
+        load_lab_package_through_containment(zip_path, "lab-run", options.expected_input_sha256)?;
+    ctx.input_zip_sha256 = Some(contained.sha256.clone());
+    ctx.input_entries = contained.bundle.entry_paths().map(str::to_string).collect();
     ctx.event(
         "input_unpacked",
-        json!({"entry_count": ctx.input_entries.len(), "input_dir": ctx.input_dir}),
+        json!({"entry_count": ctx.input_entries.len(), "containment": "memory", "input_sha256": contained.sha256}),
     )?;
 
     ctx.set_phase("control_loaded");
-    let control_path = ctx.input_dir.join("control.json");
-    let control = read_json_file::<LabControl>(&control_path)?;
+    let control = lab_control_from_bundle(&contained.bundle)?;
     control.validate()?;
     ctx.control = Some(control.clone());
     let mut frame_store_config = FrameStoreConfig::default();
     control.frame_store.apply_to(&mut frame_store_config);
-    frame_store_cli.apply_to(&mut frame_store_config);
+    options.frame_store_cli.apply_to(&mut frame_store_config);
     ctx.set_frame_store_config(frame_store_config)?;
     if control.producer.is_none() {
         ctx.event(
@@ -235,7 +227,7 @@ fn execute_lab_run(
         }),
     )?;
 
-    ctx.requested_capture_interval_ms = capture_interval_override.unwrap_or(
+    ctx.requested_capture_interval_ms = options.capture_interval_override.unwrap_or(
         control
             .capture_interval_ms
             .unwrap_or(DEFAULT_CAPTURE_INTERVAL_MS),
@@ -245,7 +237,7 @@ fn execute_lab_run(
     let max_steps = control.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
 
     ctx.set_phase("resources_loaded");
-    let resources = load_lab_resources(ctx, &control)?;
+    let resources = load_lab_resources_from_bundle(contained.bundle, &control)?;
     ctx.event(
         "resources_loaded",
         json!({
@@ -282,7 +274,7 @@ fn execute_lab_run(
 
     let requested_capture_backend = global
         .capture_backend
-        .or(capture_backend_override)
+        .or(options.capture_backend_override)
         .or(control.capture_backend_choice()?)
         .unwrap_or_default();
     let selected_capture = create_capture_backend(
@@ -731,11 +723,13 @@ fn execute_lab_run(
 
 struct ContainedLabInput {
     sha256: String,
+    bundle: LoadedBundle,
 }
 
 fn load_lab_package_through_containment(
     zip_path: &Path,
     instance_label: &str,
+    expected_input_sha256: Option<Sha256Hash>,
 ) -> CliOutcome<ContainedLabInput> {
     let bytes = fs::read(zip_path).map_err(|err| {
         CliError::package_invalid(format!(
@@ -743,14 +737,18 @@ fn load_lab_package_through_containment(
             zip_path.display()
         ))
     })?;
-    let expected = Sha256Hash::digest(&bytes);
+    let expected = expected_input_sha256.unwrap_or_else(|| Sha256Hash::digest(&bytes));
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
     let mut containment = Containment::new();
     containment
         .load(&instance, &bytes, &expected)
         .map_err(containment_error)?;
+    let bundle = containment
+        .take_loaded(&instance)
+        .ok_or_else(|| CliError::package_invalid("containment did not retain loaded Lab bundle"))?;
     Ok(ContainedLabInput {
         sha256: expected.to_string(),
+        bundle,
     })
 }
 
@@ -1525,7 +1523,7 @@ fn poll_after_operation(
         if let Some(template) = &operation.verify_template {
             scene.verify_template_matched = verify_template(
                 &scene.scene,
-                &resources.operation_dir,
+                resources,
                 template,
                 resources.operation_bundle.defaults.template_threshold,
             )?;
@@ -1546,70 +1544,78 @@ fn poll_after_operation(
 
 fn verify_template(
     scene: &Scene,
-    operation_dir: &Path,
+    resources: &LabResources,
     template: &str,
     threshold: f32,
 ) -> CliOutcome<bool> {
-    let path = safe_join(operation_dir, template)?;
-    let bytes = fs::read(&path).map_err(|err| {
-        CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
-    })?;
+    let bytes = resources.operation_asset(template)?;
     let matched = scene
-        .match_template(&bytes, None)
+        .match_template(bytes, None)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(matched.score >= threshold)
 }
 
-fn load_lab_resources(ctx: &LabRunContext, control: &LabControl) -> CliOutcome<LabResources> {
-    load_lab_resources_from_input(&ctx.input_dir, control)
+fn lab_control_from_bundle(bundle: &LoadedBundle) -> CliOutcome<LabControl> {
+    let Some(control) = bundle.control() else {
+        return Err(CliError::package_invalid(
+            "Lab package must include control.json",
+        ));
+    };
+    serde_json::from_value(control.clone())
+        .map_err(|err| CliError::package_invalid(format!("failed to parse control.json: {err}")))
 }
 
-fn load_lab_resources_from_input(
-    input_dir: &Path,
+fn load_lab_resources_from_bundle(
+    bundle: LoadedBundle,
     control: &LabControl,
 ) -> CliOutcome<LabResources> {
-    let resource_root_name = control.resource_root.as_deref().unwrap_or("resources");
-    if resource_root_name != "resources" {
-        validate_relative_path(resource_root_name)?;
-    }
-    let resource_root = input_dir.join(resource_root_name);
-    if !resource_root.is_dir() {
-        return Err(CliError::package_invalid(format!(
-            "missing resource root {}",
-            resource_root.display()
-        )));
-    }
-    let manifest_path = resource_root.join("manifest.json");
-    let manifest = read_json_value(&manifest_path)?;
+    let resource_root = PathBuf::from(bundle.resource_root());
+    let manifest_path = PathBuf::from(bundle.manifest_path());
+    let manifest = bundle.manifest().clone();
     validate_manifest_entry_task_id(&manifest_path, &manifest, control)?;
-    let operation_dir = resource_root
-        .join("operations")
-        .join(&control.entry_task_id);
-    let operation_path = operation_dir.join("task.json");
-    let operation_bundle = read_json_file::<OperationBundle>(&operation_path)?;
-    operation_bundle.validate(control, &operation_dir)?;
-
-    let stem = format!("{}.{}", control.game, control.server);
-    let recognition_dir = resource_root.join("recognition");
-    let pack_path = recognition_dir.join(format!("{stem}.pack.json"));
-    let pages_path = recognition_dir.join(format!("{stem}.pages.json"));
-    let evaluator = load_evaluator(&pack_path, &resource_root)?;
-    let detector = load_detector(&pages_path, &evaluator)?;
-    let navigation_path = resource_root
-        .join("navigation")
-        .join(format!("{stem}.navigation.json"));
-    let (navigation_path, navigation) = if navigation_path.exists() {
-        let navigation = read_json_value(&navigation_path)?;
-        (Some(navigation_path), Some(navigation))
-    } else {
-        (None, None)
-    };
+    let operation_path = PathBuf::from(bundle.operation_path());
+    let operation_bundle: OperationBundle = serde_json::from_value(bundle.operation().clone())
+        .map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to parse {}: {err}",
+                bundle.operation_path()
+            ))
+        })?;
+    operation_bundle.validate(control, |relative| {
+        bundle
+            .resource_entry(&format!(
+                "operations/{}/{}",
+                control.entry_task_id, relative
+            ))
+            .map(|_| true)
+            .or_else(|err| match err {
+                ContainmentError::MissingEntry { .. } => Ok(false),
+                other => Err(containment_error(other)),
+            })
+    })?;
+    let pack_path = bundle
+        .recognition_pack_path()
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::package_invalid("missing recognition pack for Lab package"))?;
+    let pages_path = bundle
+        .pages_path()
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::package_invalid("missing page set for Lab package"))?;
+    let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
+        CliError::package_invalid("missing recognition evaluator for Lab package")
+    })?;
+    let detector = bundle
+        .detector()
+        .cloned()
+        .ok_or_else(|| CliError::package_invalid("missing page detector for Lab package"))?;
+    let navigation_path = bundle.navigation_path().map(PathBuf::from);
+    let navigation = bundle.navigation().cloned();
 
     Ok(LabResources {
+        bundle,
         resource_root,
         manifest_path,
         manifest,
-        operation_dir,
         operation_path,
         operation_bundle,
         pack_path,
@@ -1619,26 +1625,6 @@ fn load_lab_resources_from_input(
         navigation_path,
         navigation,
     })
-}
-
-fn load_evaluator(pack_path: &Path, pack_root: &Path) -> CliOutcome<RecognitionEvaluator> {
-    let text = read_text_file(pack_path)?;
-    let pack = load_pack_from_json_str(text.trim_start_matches('\u{feff}'))
-        .map_err(|err| CliError::package_invalid(err.to_string()))?;
-    RecognitionEvaluator::new(pack_root.to_path_buf(), pack)
-        .map_err(|err| CliError::package_invalid(err.to_string()))
-}
-
-fn load_detector(path: &Path, evaluator: &RecognitionEvaluator) -> CliOutcome<PageDetector> {
-    let text = read_text_file(path)?;
-    let page_set = load_page_set_from_json_str(text.trim_start_matches('\u{feff}'))
-        .map_err(|err| CliError::package_invalid(err.to_string()))?;
-    let detector =
-        PageDetector::new(page_set).map_err(|err| CliError::package_invalid(err.to_string()))?;
-    detector
-        .validate(evaluator)
-        .map_err(|err| CliError::package_invalid(err.to_string()))?;
-    Ok(detector)
 }
 
 fn validate_manifest_entry_task_id(
@@ -1687,8 +1673,6 @@ struct LabControl {
     stop_on_error: Option<bool>,
     #[serde(default)]
     stop_on_confirmation: Option<bool>,
-    #[serde(default)]
-    resource_root: Option<String>,
     #[serde(default)]
     allow_placeholder_coords: Option<bool>,
     #[serde(default)]
@@ -1769,10 +1753,10 @@ struct Resolution {
 
 #[derive(Debug)]
 struct LabResources {
+    bundle: LoadedBundle,
     resource_root: PathBuf,
     manifest_path: PathBuf,
     manifest: Value,
-    operation_dir: PathBuf,
     operation_path: PathBuf,
     operation_bundle: OperationBundle,
     pack_path: PathBuf,
@@ -1781,6 +1765,17 @@ struct LabResources {
     detector: PageDetector,
     navigation_path: Option<PathBuf>,
     navigation: Option<Value>,
+}
+
+impl LabResources {
+    fn operation_asset(&self, relative: &str) -> CliOutcome<&[u8]> {
+        self.bundle
+            .resource_entry(&format!(
+                "operations/{}/{}",
+                self.operation_bundle.task_id, relative
+            ))
+            .map_err(containment_error)
+    }
 }
 
 #[derive(Debug)]
@@ -1813,7 +1808,11 @@ struct OperationBundle {
 }
 
 impl OperationBundle {
-    fn validate(&self, control: &LabControl, operation_dir: &Path) -> CliOutcome<()> {
+    fn validate(
+        &self,
+        control: &LabControl,
+        mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
+    ) -> CliOutcome<()> {
         if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5") {
             return Err(CliError::package_invalid(format!(
                 "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5",
@@ -1865,12 +1864,10 @@ impl OperationBundle {
                     "operation anchor id must not be empty",
                 ));
             }
-            let path = safe_join(operation_dir, &anchor.template)?;
-            if !path.is_file() {
+            if !operation_asset_exists(&anchor.template)? {
                 return Err(CliError::package_invalid(format!(
                     "operation anchor '{}' references missing template {}",
-                    anchor.id,
-                    path.display()
+                    anchor.id, anchor.template
                 )));
             }
         }
@@ -1883,29 +1880,24 @@ impl OperationBundle {
                     operation.id
                 )));
             }
-            if let Some(template) = &operation.verify_template {
-                let path = safe_join(operation_dir, template)?;
-                if !path.is_file() {
-                    return Err(CliError::package_invalid(format!(
-                        "operation '{}' references missing verify_template {}",
-                        operation.id,
-                        path.display()
-                    )));
-                }
+            if let Some(template) = &operation.verify_template
+                && !operation_asset_exists(template)?
+            {
+                return Err(CliError::package_invalid(format!(
+                    "operation '{}' references missing verify_template {}",
+                    operation.id, template
+                )));
             }
             if let Some(guard_template) = operation
                 .guard
                 .as_ref()
                 .and_then(|guard| guard.verify_template.as_ref())
+                && !operation_asset_exists(guard_template)?
             {
-                let path = safe_join(operation_dir, guard_template)?;
-                if !path.is_file() {
-                    return Err(CliError::package_invalid(format!(
-                        "operation '{}' guard references missing verify_template {}",
-                        operation.id,
-                        path.display()
-                    )));
-                }
+                return Err(CliError::package_invalid(format!(
+                    "operation '{}' guard references missing verify_template {}",
+                    operation.id, guard_template
+                )));
             }
         }
         Ok(())
@@ -2634,43 +2626,12 @@ fn validate_frame_resolution(control: &LabControl, width: u32, height: u32) -> C
     Ok(())
 }
 
-struct LabValidateTemp {
-    root: PathBuf,
-    input_dir: PathBuf,
-}
-
-impl LabValidateTemp {
-    fn create() -> CliOutcome<Self> {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let root = env::temp_dir().join(format!(
-            "actinglab-validate-{}-{}",
-            std::process::id(),
-            suffix
-        ));
-        let input_dir = root.join("input");
-        fs::create_dir_all(&input_dir).map_err(|err| {
-            CliError::package_invalid(format!("failed to create {}: {err}", input_dir.display()))
-        })?;
-        Ok(Self { root, input_dir })
-    }
-
-    fn cleanup(self) -> CliOutcome<()> {
-        fs::remove_dir_all(&self.root).map_err(|err| {
-            CliError::package_invalid(format!("failed to remove {}: {err}", self.root.display()))
-        })
-    }
-}
-
 struct LabRunContext {
     run_id: String,
     run_seed: u64,
     started_at: SystemTime,
     started_instant: Instant,
     run_dir: PathBuf,
-    input_dir: PathBuf,
     output_dir: PathBuf,
     logs_dir: PathBuf,
     screenshots_dir: PathBuf,
@@ -2710,13 +2671,9 @@ impl LabRunContext {
         let now = SystemTime::now();
         let run_id = format!("lab1y-{}", timestamp_file_stem(now));
         let run_dir = run_root.join(&run_id);
-        let input_dir = run_dir.join("input");
         let output_dir = run_dir.join("output");
         let logs_dir = output_dir.join("logs");
         let screenshots_dir = output_dir.join("screenshots");
-        fs::create_dir_all(&input_dir).map_err(|err| {
-            CliError::package_invalid(format!("failed to create {}: {err}", input_dir.display()))
-        })?;
         fs::create_dir_all(&logs_dir).map_err(|err| {
             CliError::package_invalid(format!("failed to create {}: {err}", logs_dir.display()))
         })?;
@@ -2736,7 +2693,6 @@ impl LabRunContext {
             started_at: now,
             started_instant: Instant::now(),
             run_dir,
-            input_dir,
             output_dir,
             logs_dir,
             screenshots_dir,
@@ -3415,168 +3371,6 @@ fn interval_stats(values: &[u64]) -> Option<IntervalStats> {
     })
 }
 
-struct LabInput {
-    entries: Vec<String>,
-}
-
-fn unpack_lab_input(zip_path: &Path, input_dir: &Path) -> CliOutcome<LabInput> {
-    let file = File::open(zip_path).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to open input zip {}: {err}",
-            zip_path.display()
-        ))
-    })?;
-    let mut archive = ZipArchive::new(file).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to read input zip {}: {err}",
-            zip_path.display()
-        ))
-    })?;
-    let mut seen = BTreeSet::new();
-    let mut entries = Vec::new();
-    let mut has_control = false;
-    let mut has_resources = false;
-    let mut dangerous = Vec::new();
-    let mut total_uncompressed = 0u64;
-
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|err| CliError::package_invalid(format!("failed to read zip entry: {err}")))?;
-        let Some(path_name) = normalize_lab_zip_path(entry.name())? else {
-            continue;
-        };
-        let duplicate_key = path_name.to_ascii_lowercase();
-        if !seen.insert(duplicate_key) {
-            return Err(CliError::package_invalid(format!(
-                "duplicate zip entry: {path_name}"
-            )));
-        }
-        if has_dangerous_extension(&path_name) {
-            dangerous.push(path_name.clone());
-            continue;
-        }
-        has_control |= path_name == "control.json";
-        has_resources |= path_name.starts_with("resources/");
-        let entry_size = entry.size();
-        if entry_size > MAX_LAB_ZIP_ENTRY_BYTES {
-            return Err(CliError::package_invalid(format!(
-                "zip entry {path_name} exceeds {} bytes",
-                MAX_LAB_ZIP_ENTRY_BYTES
-            )));
-        }
-        let target = input_dir.join(&path_name);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
-            })?;
-        }
-        let bytes = read_zip_entry_limited(&mut entry, &path_name, MAX_LAB_ZIP_ENTRY_BYTES)?;
-        total_uncompressed = total_uncompressed
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| CliError::package_invalid("input zip uncompressed size overflowed"))?;
-        if total_uncompressed > MAX_LAB_ZIP_TOTAL_BYTES {
-            return Err(CliError::package_invalid(format!(
-                "input zip exceeds total uncompressed limit of {} bytes",
-                MAX_LAB_ZIP_TOTAL_BYTES
-            )));
-        }
-        fs::write(&target, bytes).map_err(|err| {
-            CliError::package_invalid(format!("failed to write {}: {err}", target.display()))
-        })?;
-        entries.push(path_name);
-    }
-    if !dangerous.is_empty() {
-        return Err(CliError::package_invalid(format!(
-            "input zip contains executable/script entries: {}",
-            dangerous.join(", ")
-        )));
-    }
-    if !has_control {
-        return Err(CliError::package_invalid("missing control.json"));
-    }
-    if !has_resources {
-        return Err(CliError::package_invalid("missing resources/"));
-    }
-    Ok(LabInput { entries })
-}
-
-fn read_zip_entry_limited<R: Read>(
-    reader: &mut R,
-    path_name: &str,
-    limit: u64,
-) -> CliOutcome<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut limited = reader.take(limit.saturating_add(1));
-    limited.read_to_end(&mut bytes).map_err(|err| {
-        CliError::package_invalid(format!("failed to read zip entry {path_name}: {err}"))
-    })?;
-    if bytes.len() as u64 > limit {
-        return Err(CliError::package_invalid(format!(
-            "zip entry {path_name} exceeds {limit} bytes"
-        )));
-    }
-    Ok(bytes)
-}
-
-fn normalize_lab_zip_path(name: &str) -> CliOutcome<Option<String>> {
-    if name.ends_with('/') {
-        return Ok(None);
-    }
-    if name.contains('\\') || name.contains(':') || name.starts_with('/') {
-        return Err(CliError::package_invalid(format!(
-            "unsafe zip path: {name}"
-        )));
-    }
-    let path = Path::new(name);
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(CliError::package_invalid(format!(
-            "zip-slip path is not allowed: {name}"
-        )));
-    }
-    Ok(Some(name.to_string()))
-}
-
-fn has_dangerous_extension(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            super::DANGEROUS_EXTENSIONS
-                .iter()
-                .any(|dangerous| extension.eq_ignore_ascii_case(dangerous))
-        })
-}
-
-fn safe_join(root: &Path, relative: &str) -> CliOutcome<PathBuf> {
-    validate_relative_path(relative)?;
-    Ok(root.join(relative))
-}
-
-fn validate_relative_path(relative: &str) -> CliOutcome<()> {
-    if relative.contains('\\') || relative.contains(':') || relative.starts_with('/') {
-        return Err(CliError::package_invalid(format!(
-            "unsafe resource path: {relative}"
-        )));
-    }
-    if Path::new(relative).components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(CliError::package_invalid(format!(
-            "resource path escapes root: {relative}"
-        )));
-    }
-    Ok(())
-}
-
 fn path_is_inside(path: &Path, parent: &Path) -> bool {
     let path = normalized_absolute_path(path);
     let parent = normalized_absolute_path(parent);
@@ -3607,26 +3401,6 @@ fn normalize_path_components(path: &Path) -> PathBuf {
         }
     }
     normalized
-}
-
-fn read_json_file<T>(path: &Path) -> CliOutcome<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let text = read_text_file(path)?;
-    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|err| {
-        CliError::package_invalid(format!("failed to parse {}: {err}", path.display()))
-    })
-}
-
-fn read_text_file(path: &Path) -> CliOutcome<String> {
-    fs::read_to_string(path).map_err(|err| {
-        CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
-    })
-}
-
-fn read_json_value(path: &Path) -> CliOutcome<Value> {
-    read_json_file(path)
 }
 
 fn write_json(path: &Path, value: &Value) -> CliOutcome<()> {
@@ -3779,6 +3553,14 @@ fn parse_optional_u64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<u64>> {
                 CliError::usage(format!("failed to parse {name} value '{value}': {err}"))
             })
         })
+        .transpose()
+}
+
+fn parse_optional_sha256(flags: &FlagArgs, name: &str) -> CliOutcome<Option<Sha256Hash>> {
+    flags
+        .optional(name)
+        .filter(|value| value != "true")
+        .map(|value| Sha256Hash::parse_hex(&value).map_err(containment_error))
         .transpose()
 }
 
@@ -3953,7 +3735,9 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_recognition_pack::load_pack_from_json_str;
     use tempfile::TempDir;
+    use zip::ZipArchive;
 
     #[test]
     fn rejects_missing_control_and_writes_failure_zip() {
@@ -3998,6 +3782,32 @@ mod tests {
         assert_eq!(data["status"], "valid");
         assert_eq!(data["control"]["entry_task_id"], "task");
         assert_eq!(data["resources"]["operation_count"], 1);
+    }
+
+    #[test]
+    fn lab_validate_rejects_expected_sha256_mismatch() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+
+        let result = super::super::run_cli(
+            [
+                "--json",
+                "lab",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+                "--expected-sha256",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "package_invalid"
+        );
     }
 
     #[test]
@@ -4070,7 +3880,6 @@ mod tests {
             max_steps: None,
             stop_on_error: None,
             stop_on_confirmation: None,
-            resource_root: None,
             allow_placeholder_coords: None,
             output: None,
             capture_backend: None,
@@ -5185,26 +4994,21 @@ mod tests {
                 ("resources/tool.exe", b"danger"),
             ],
         );
-        let input_dir = temp.path().join("input");
 
-        let err = match unpack_lab_input(&zip, &input_dir) {
+        let err = match validate_lab_package_zip(&zip) {
             Ok(_) => panic!("dangerous entry accepted"),
             Err(err) => err,
         };
 
         assert_eq!(err.code, "package_invalid");
-        assert!(!input_dir.join("resources").join("tool.exe").exists());
-    }
-
-    #[test]
-    fn read_zip_entry_limited_rejects_oversized_entry() {
-        let mut input = std::io::Cursor::new(vec![1, 2, 3]);
-
-        let err =
-            read_zip_entry_limited(&mut input, "resources/large.bin", 2).expect_err("oversized");
-
-        assert_eq!(err.code, "package_invalid");
-        assert!(err.message.contains("exceeds 2 bytes"));
+        assert!(
+            !temp
+                .path()
+                .join("input")
+                .join("resources")
+                .join("tool.exe")
+                .exists()
+        );
     }
 
     fn test_control() -> LabControl {
@@ -5225,7 +5029,6 @@ mod tests {
             max_steps: None,
             stop_on_error: None,
             stop_on_confirmation: None,
-            resource_root: None,
             allow_placeholder_coords: None,
             output: None,
             capture_backend: None,

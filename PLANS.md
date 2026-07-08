@@ -10,7 +10,7 @@ The runtime owns device/control primitives, capture primitives, recognition prim
 
 The active approved issue is Runtime issue #26:
 
-- `[基础模块] 任务包收容模块:资源加载唯一咽喉(每实例一操作台 + 哈希校验 + capability)`
+- `[基础模块] 任务包加载模块(全内存):资源加载唯一咽喉 · 每实例一操作台 + 哈希校验 + LoadedBundle capability`
 - Technical source of truth: `C:\合作工作区\ActingCommand\DECISION-task-pack-containment-module.md`
 
 Implementation direction:
@@ -21,13 +21,16 @@ Implementation direction:
 - Decompress into memory only, with compressed size, total decompressed size, per-entry size, entry count, and per-instance resident-byte limits.
 - Reject zip-slip paths, duplicate entries, executable/script entries, malformed zips, oversized packages, manifest hash mismatches, and invalid package structure as fatal containment errors.
 - Make `LoadedBundle` the capability returned only by `Containment::load`; fields stay private so downstream code cannot fabricate a verified bundle.
+- Keep Lab zip package resources in memory as `LoadedBundle` data; do not unpack Lab resources to a temporary directory for `lab validate --zip` or `lab run --zip`.
+- Allow CLI callers to provide an external expected compressed-zip SHA-256 with `--expected-sha256`; when omitted, local Lab/package validation computes the expected hash from the selected local input file.
 - Extend `recognition-pack` with an asset resolver abstraction so contained packages can feed recognition from memory while existing filesystem-backed callers continue to work.
-- Route `package validate/inspect/run` and `lab validate/run` through containment before existing compatibility behavior.
+- Route `package validate/inspect/run` and `lab validate/run` through containment before execution or inspection.
 
 Current boundary:
 
 - The containment crate now owns the shared bomb/slip/manifest-hash guards for `package` validation.
-- `lab validate/run` now pass through containment first, then continue through the existing extraction-backed compatibility chain until a later task removes the remaining Lab-run temp extraction.
+- `lab validate/run` now consume a containment-created `LoadedBundle` directly from memory for control, manifest, operation, recognition pack, pages, navigation, and operation assets.
+- `--resource-root` directory-scattered loading is not part of the Lab zip execution path; older resource-root commands remain outside this task until separately migrated.
 - No scheduler, UI, OCR, SQLite, game logic, encryption, trusted channel, or upstream source import is part of this task.
 
 ## Current Lab-2 chain repair round 5 closeout

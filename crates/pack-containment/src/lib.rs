@@ -214,6 +214,12 @@ impl Containment {
             bench.loaded = None;
         }
     }
+
+    pub fn take_loaded(&mut self, instance: &InstanceId) -> Option<LoadedBundle> {
+        self.benches
+            .get_mut(instance)
+            .and_then(|bench| bench.loaded.take())
+    }
 }
 
 #[derive(Debug)]

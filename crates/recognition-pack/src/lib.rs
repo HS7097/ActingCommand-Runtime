@@ -197,7 +197,7 @@ pub struct ColorCheck {
     pub expected: [u8; 3],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecognitionEvaluator {
     asset_resolver: Arc<dyn AssetResolver>,
     pack: RecognitionPack,
