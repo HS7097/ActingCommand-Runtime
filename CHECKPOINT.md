@@ -5,8 +5,8 @@
 ### Current status
 
 - Implemented approved Runtime issue #28 from `C:\合作工作区\ActingCommand\TASK-runtime-ledger-unified-fact-source.md`.
-- Runtime source commit: pending.
-- Checkpoint tag: pending.
+- Runtime source commit: `6852330157a322a26a03990bc566a241af0133ba`.
+- Checkpoint tag: `checkpoint/20260708-runtime-ledger-fact-source`.
 - Generalized the existing `crates/ledger` crate instead of creating a second ledger crate.
 - Added `run` and `evidence` ID kinds to the existing ID issuer/parser.
 - Added event-line support, runtime per-instance/per-run ledger shards, receipt/header `sync_all` durability, ledger projection helpers, and last-resort stderr plus error-file reporting.
@@ -68,7 +68,7 @@
 
 ### Next step
 
-1. Commit, tag, and push this Runtime issue #28 baseline.
+1. Push this Runtime issue #28 baseline and checkpoint tag.
 2. Let the next issue #28 repair phase migrate the remaining Session journal, Lab-2 ledger, CLI projection, UI projection, and scheduler projection surfaces.
 
 ## 2026-07-08 task-pack containment module
