@@ -97,19 +97,22 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let result = execute_lab_run(&mut ctx, global, &config, &zip_path, options);
     match result {
         Ok(run_state) => {
-            let archive = ctx.finish(&out_path, true, None, Some(&run_state))?;
+            ctx.finish(&out_path, true, None, Some(&run_state))?;
+            let completed = ctx.project_completed_run_from_ledger()?;
+            let output_zip = completed.require_output_zip()?;
             Ok(json!({
-                "ok": true,
-                "status": "ok",
-                "run_id": ctx.run_id,
-                "result_zip": archive.path.display().to_string(),
+                "ok": completed.ok,
+                "status": completed.status,
+                "run_id": completed.run_id,
+                "result_zip": output_zip.path,
                 "run_dir": run_dir_string,
                 "run_dir_cleaned": true,
-                "out": archive.path.display().to_string(),
-                "output_zip_sha256": archive.sha256,
+                "out": output_zip.path,
+                "output_zip_sha256": output_zip.sha256,
                 "ledger": {
                     "projection_source": "runtime_ledger",
-                    "path": ctx.ledger_path.as_ref().map(|path| path.display().to_string())
+                    "path": completed.ledger_path.display().to_string(),
+                    "terminal_receipt": completed.record_type
                 },
                 "screenshot_count": ctx.screenshots.len(),
                 "executed_step_count": ctx.steps.len()
@@ -120,12 +123,13 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
             let message = err.message.clone();
             let archive = ctx.finish(&out_path, false, Some(&message), None);
             match archive {
-                Ok(archive) => {
+                Ok(_) => {
+                    let completed = ctx.project_completed_run_from_ledger()?;
+                    let output_zip = completed.require_output_zip()?;
                     let mut err = err;
                     err.message = format!(
                         "{}; failure report written to {}",
-                        err.message,
-                        archive.path.display()
+                        err.message, output_zip.path
                     );
                     Err(err)
                 }
@@ -3458,6 +3462,104 @@ impl LabRunContext {
         })
     }
 
+    fn project_completed_run_from_ledger(&self) -> CliOutcome<LabCompletedProjection> {
+        let ledger_path = self.ledger_path.as_ref().ok_or_else(|| {
+            CliError::package_invalid(
+                "runtime ledger path is unavailable for completed Lab run projection",
+            )
+        })?;
+        if let Some(ledger) = &self.ledger {
+            ledger
+                .sync()
+                .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_sync"))?;
+        }
+        let read = LabLedger::read(ledger_path)
+            .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_read"))?;
+        let mut saw_finalizing = false;
+        let mut terminal_receipt = None;
+        for record in &read.records {
+            match record.payload.get("record_type").and_then(Value::as_str) {
+                Some("finalizing") => saw_finalizing = true,
+                Some("finish_ok") | Some("finish_error") => terminal_receipt = Some(record),
+                _ => {}
+            }
+        }
+        if !saw_finalizing {
+            return Err(CliError::package_invalid(
+                "runtime ledger completed projection missing finalizing record",
+            ));
+        }
+        let receipt = terminal_receipt.ok_or_else(|| {
+            CliError::package_invalid(
+                "runtime ledger completed projection missing terminal receipt",
+            )
+        })?;
+        let record_type = receipt
+            .payload
+            .get("record_type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CliError::package_invalid("runtime ledger terminal receipt missing record_type")
+            })?;
+        let status = receipt
+            .payload
+            .get("status")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CliError::package_invalid("runtime ledger terminal receipt missing status")
+            })?;
+        let ok = match (record_type, status) {
+            ("finish_ok", "ok") => true,
+            ("finish_error", "failed") => false,
+            _ => {
+                return Err(CliError::package_invalid(format!(
+                    "runtime ledger terminal receipt has inconsistent record_type/status: {record_type}/{status}"
+                )));
+            }
+        };
+        let output_zip = match receipt.payload.get("output_zip") {
+            Some(Value::Object(object)) => Some(TerminalOutputZip {
+                path: object
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "runtime ledger terminal receipt output_zip missing path",
+                        )
+                    })?
+                    .to_string(),
+                sha256: object
+                    .get("sha256")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "runtime ledger terminal receipt output_zip missing sha256",
+                        )
+                    })?
+                    .to_string(),
+            }),
+            Some(Value::Null) | None => None,
+            Some(_) => {
+                return Err(CliError::package_invalid(
+                    "runtime ledger terminal receipt output_zip must be an object or null",
+                ));
+            }
+        };
+        if ok && output_zip.is_none() {
+            return Err(CliError::package_invalid(
+                "runtime ledger successful terminal receipt missing output_zip",
+            ));
+        }
+        Ok(LabCompletedProjection {
+            run_id: self.run_id.clone(),
+            status: status.to_string(),
+            ok,
+            record_type: record_type.to_string(),
+            output_zip,
+            ledger_path: ledger_path.to_path_buf(),
+        })
+    }
+
     fn summary_json(
         &self,
         ok: bool,
@@ -3674,6 +3776,30 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
 struct ArchiveResult {
     path: PathBuf,
     sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalOutputZip {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabCompletedProjection {
+    run_id: String,
+    status: String,
+    ok: bool,
+    record_type: String,
+    output_zip: Option<TerminalOutputZip>,
+    ledger_path: PathBuf,
+}
+
+impl LabCompletedProjection {
+    fn require_output_zip(&self) -> CliOutcome<&TerminalOutputZip> {
+        self.output_zip.as_ref().ok_or_else(|| {
+            CliError::package_invalid("runtime ledger completed projection missing output_zip")
+        })
+    }
 }
 
 struct LabLogProjection {
@@ -5371,6 +5497,63 @@ mod tests {
                 "\"record_type\":\"finish_ok\"",
             ],
         );
+    }
+
+    #[test]
+    fn completed_projection_reports_terminal_output_zip() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let out = temp.path().join("out.zip");
+
+        let archive = ctx.finish(&out, true, None, None).expect("finish");
+        let completed = ctx
+            .project_completed_run_from_ledger()
+            .expect("completed projection");
+        let output_zip = completed.require_output_zip().expect("output zip");
+
+        assert!(completed.ok);
+        assert_eq!(completed.status, "ok");
+        assert_eq!(completed.record_type, "finish_ok");
+        assert_eq!(completed.run_id, ctx.run_id);
+        assert_eq!(output_zip.path, out.display().to_string());
+        assert_eq!(output_zip.sha256, archive.sha256);
+        assert_eq!(
+            completed.ledger_path,
+            ctx.ledger_path.as_ref().expect("ledger path").to_path_buf()
+        );
+    }
+
+    #[test]
+    fn completed_projection_requires_finalizing_record() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        ctx.append_terminal_receipt(false, Some("terminal failure"), None, None)
+            .expect("terminal receipt");
+
+        let err = ctx
+            .project_completed_run_from_ledger()
+            .expect_err("missing finalizing must fail");
+
+        assert!(err.message.contains("missing finalizing record"));
+    }
+
+    #[test]
+    fn completed_projection_requires_terminal_receipt() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        let summary = ctx.summary_json(true, None, None);
+        let diagnostics = ctx.diagnostics_json(None, None);
+        let environment = ctx.environment_json(None);
+        ctx.append_finalizing_record(true, None, summary, diagnostics, environment)
+            .expect("finalizing");
+
+        let err = ctx
+            .project_completed_run_from_ledger()
+            .expect_err("missing terminal receipt must fail");
+
+        assert!(err.message.contains("missing terminal receipt"));
     }
 
     #[test]

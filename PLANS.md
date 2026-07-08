@@ -17,18 +17,19 @@ The active approved issue is Runtime issue #28:
 
 Current node:
 
-- L0 `record-before-act` repair is implemented and verified in this working tree.
+- L0 `record-before-act` repair is implemented, verified, committed, tagged, and pushed.
 - `output_zip_written` is no longer recorded before terminal output work.
 - `finalizing` is recorded as a non-terminal `Drive` record for summary, diagnostics, and environment projection.
 - `write_logs`, `write_output_zip`, output zip `sync_all`, and `file_sha256` now form the terminal artifact stage.
 - `output_zip_written` with real SHA-256 and terminal `finish_ok`/`finish_error` receipts are recorded only after the terminal artifact stage succeeds.
 - Terminal artifact failure writes last-resort error evidence and records `finish_error`; it must not leave `finish_ok` or a fake `output_zip_written`.
 - `actingcommand-ledger` now exposes the lightweight `commit_then_record` / `CommitProof` guard used by this terminal recording path.
+- L2 `lab run` completed-run projection is implemented locally: post-finish result output reads run id, status, terminal receipt type, output zip path, SHA-256, and ledger path from the runtime ledger terminal projection.
+- Completed-run projection fails loudly when `finalizing` is missing or when terminal `finish_ok`/`finish_error` receipt is missing.
 
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L2: complete `lab run` projection semantics, including fail-loud consumer handling for missing `finalizing` or terminal receipt.
 - L3: bridge Session journal and fix the known `run_session_request_cancel` record-before-act issue.
 - L4: route Lab-2 and Lab-1 existing entrances into the unified ledger.
 - L5: make CLI outputs ledger projections instead of independent facts.

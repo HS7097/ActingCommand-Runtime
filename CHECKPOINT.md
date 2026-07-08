@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L2 Lab run completed projection
+
+### Current status
+
+- Implemented the next Issue #28 node after L0: `lab run` completed-run projection now verifies and consumes the runtime ledger terminal receipt.
+- `lab run` success JSON now gets `ok`, `status`, `run_id`, output zip path, output SHA-256, ledger path, and terminal receipt type from a completed-run ledger projection after `finish()` records its terminal receipt.
+- Failure-report packaging now also checks the completed-run ledger projection before reporting the generated failure package path.
+- Completed-run projection fails loudly when the `finalizing` record is missing.
+- Completed-run projection fails loudly when the terminal `finish_ok` or `finish_error` receipt is missing.
+- Successful terminal receipts must include an `output_zip` object with path and SHA-256.
+- This node does not migrate Session journal, Lab-2 ledger, Lab-1/Lab-2 entrances, CLI-wide projection, query commands, evidence references, UI, database, scheduler, or game logic.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `git status --short --branch`
+- `git log --oneline -5 --decorate`
+- `Get-Content -LiteralPath AGENTS.md -Raw`
+- `Get-Content -LiteralPath PLANS.md -Raw`
+- `Get-Content -LiteralPath CHECKPOINT.md -Raw`
+- `Get-Content -LiteralPath NOTICE.md -Raw`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -Raw`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments,updatedAt`
+- `rg -n "project_logs_from_ledger|LabLogProjection|finish_ok|finish_error|finalizing|output_zip_written|ledger_path|run_id|receipt" apps/actinglab/src/lab_run.rs crates/ledger/src/lib.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab_run::tests::completed_projection_reports_terminal_output_zip -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::completed_projection_requires_finalizing_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::completed_projection_requires_terminal_receipt -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused completed-projection tests passed:
+  - terminal output zip projection reports status, receipt type, path, SHA-256, run id, and ledger path;
+  - missing `finalizing` fails loudly;
+  - missing terminal receipt fails loudly.
+- Focused Lab suite passed: 61/61 tests under the `lab_` filter.
+- Final public gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+
+### Current blocker
+
+- No blocker for L2 is known.
+- Full Issue #28 remains active: L3-L8 are not complete yet.
+
+### Next step
+
+1. Commit and push this L2 Runtime node with a checkpoint tag.
+2. Continue Issue #28 at L3: Session journal bridge and `run_session_request_cancel` record-before-act repair.
+
 ## 2026-07-08 runtime-ledger L0 record-before-act repair
 
 ### Current status
