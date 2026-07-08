@@ -1,5 +1,62 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session journal receipt bridge
+
+### Current status
+
+- Continued Runtime issue #28 L3 after the cancellation-ordering repair.
+- Added `LabLedger::open_or_create` to reuse a long-lived ledger file without duplicating `session_header` lines.
+- `append_session_request_journal` now first writes a `session_request_receipt` record through the shared `actingcommand-ledger` crate, then writes the legacy request journal entry.
+- The old request journal remains as compatibility output; it is not yet a pure projection from runtime-ledger.
+- Session request receipt records include request id, command, status, error, data summary, request metadata, response timestamps, and optional instance id.
+- Receipt writes are idempotent per request id so a crash after ledger write but before legacy journal append does not duplicate ledger receipts on retry.
+- Cancellation success and forced legacy journal failure tests both assert that the runtime-ledger receipt exists.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `crates/ledger/src/lib.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log --oneline --decorate -5`
+- `rg -n "runtime ledger|RuntimeLedger|LedgerRecord|append_record|commit_then_record|IdIssuer|IdKind|create_runtime_shard|finish_ok|output_zip_written|session" crates/ledger/src/lib.rs apps/actinglab/src/lab_run.rs apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-ledger open_or_create -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_cancel -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused ledger test passed: `open_or_create_reuses_existing_ledger_without_duplicate_header`.
+- Focused cancellation suite passed: 11/11 `session_request_cancel` tests.
+- Focused request-state suite passed: 19/19 `session_request_state` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 receipt bridge subnode is known.
+- Full L3 convergence remains incomplete: legacy Session journal/query output is still compatibility output, not yet purely projected from runtime-ledger.
+
+### Next step
+
+1. Commit, tag, and push this L3 Session receipt bridge.
+2. Continue L3 with journal/query projection and ledger conflict detection.
+
 ## 2026-07-08 runtime-ledger L3 session cancel ordering
 
 ### Current status

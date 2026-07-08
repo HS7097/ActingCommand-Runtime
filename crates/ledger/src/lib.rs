@@ -360,6 +360,31 @@ impl LabLedger {
         })
     }
 
+    pub fn open_or_create(
+        run_root: impl AsRef<Path>,
+        session_name: &str,
+        header: SessionHeader,
+    ) -> LabLogResult<Self> {
+        validate_non_empty("session_name", session_name)?;
+        let session_dir = run_root
+            .as_ref()
+            .join("sessions")
+            .join(sanitize_path_segment(session_name));
+        fs::create_dir_all(&session_dir)?;
+        let ledger_path = session_dir.join(LEDGER_FILE_NAME);
+        let needs_header = !ledger_path.exists() || fs::metadata(&ledger_path)?.len() == 0;
+        let mut writer = open_ledger_writer(&ledger_path)?;
+        if needs_header {
+            write_json_line(&mut writer, &LedgerLine::from(header))?;
+            writer.sync_all()?;
+        }
+        Ok(Self {
+            session_dir,
+            ledger_path,
+            writer,
+        })
+    }
+
     pub fn create_runtime_shard(
         run_root: impl AsRef<Path>,
         run_id: &str,
@@ -1328,6 +1353,44 @@ mod tests {
         assert_eq!(read.records[0].kind, LedgerRecordKind::Drive);
         assert_eq!(read.records[1].kind, LedgerRecordKind::Receipt);
         assert_eq!(read.skipped_corrupt_lines, 1);
+    }
+
+    #[test]
+    fn open_or_create_reuses_existing_ledger_without_duplicate_header() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let header = SessionHeader::new("runtime", "session", "session", "session");
+        let mut ledger =
+            LabLedger::open_or_create(temp.path(), "session requests", header).expect("ledger");
+        ledger
+            .append(LedgerRecord::new(
+                LedgerRecordKind::Receipt,
+                Some("req-1".to_string()),
+                json!({"record_type": "session_request_receipt"}),
+            ))
+            .expect("append");
+        let path = ledger.ledger_path().to_path_buf();
+        drop(ledger);
+
+        let header = SessionHeader::new("runtime", "other", "other", "other");
+        let mut reopened =
+            LabLedger::open_or_create(temp.path(), "session requests", header).expect("reopen");
+        reopened
+            .append(LedgerRecord::new(
+                LedgerRecordKind::Receipt,
+                Some("req-2".to_string()),
+                json!({"record_type": "session_request_receipt"}),
+            ))
+            .expect("append reopened");
+        drop(reopened);
+
+        let line_types = fs::read_to_string(path)
+            .expect("read ledger")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("json"))
+            .map(|value| value["line_type"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(line_types, vec!["session_header", "record", "record"]);
     }
 
     #[test]

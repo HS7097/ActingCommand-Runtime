@@ -7,6 +7,7 @@ use actingcommand_device::{
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
     vendor_stdio_session_diagnostic,
 };
+use actingcommand_ledger::{LabLedger, LedgerRecord, LedgerRecordKind, SessionHeader};
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
 };
@@ -17161,6 +17162,7 @@ fn append_session_request_journal(
     request: &SessionCommandRequest,
     response: &SessionCommandResponse,
 ) -> CliOutcome<()> {
+    append_session_request_ledger_receipt(state_dir, request, response)?;
     let entry = SessionRequestJournalEntry {
         request_id: request.request_id.clone(),
         command: request.command.clone(),
@@ -17177,6 +17179,92 @@ fn append_session_request_journal(
     let journal_path = session_request_journal_path(state_dir);
     rotate_session_request_journal_if_needed(state_dir, &journal_path)?;
     write_json_line(&journal_path, &entry)
+}
+
+fn append_session_request_ledger_receipt(
+    state_dir: &Path,
+    request: &SessionCommandRequest,
+    response: &SessionCommandResponse,
+) -> CliOutcome<()> {
+    if session_request_ledger_contains_receipt(state_dir, &request.request_id)? {
+        return Ok(());
+    }
+    let root = session_request_ledger_root(state_dir);
+    let ledger_path = session_request_ledger_path(state_dir);
+    let header = SessionHeader::new(RUNTIME_VERSION, "session", "session", "session");
+    let mut ledger =
+        LabLedger::open_or_create(&root, "session-requests", header).map_err(|err| {
+            session_request_ledger_error("open_or_create", &ledger_path, err.to_string())
+        })?;
+    let mut record = LedgerRecord::new(
+        LedgerRecordKind::Receipt,
+        Some(request.request_id.clone()),
+        json!({
+            "record_type": "session_request_receipt",
+            "source": "session_request_journal_bridge",
+            "status": if response.ok { "completed" } else { "failed" },
+            "ok": response.ok,
+            "command": response.command,
+            "error": response.error,
+            "data_summary": session_request_data_summary(response),
+            "request": {
+                "request_id": request.request_id,
+                "command": request.command,
+                "global": request.global,
+                "lease": request.lease,
+                "args_count": request.args.len(),
+                "created_at_unix_ms": request.created_at_unix_ms
+            },
+            "response": {
+                "started_at_unix_ms": response.started_at_unix_ms,
+                "completed_at_unix_ms": response.completed_at_unix_ms
+            }
+        }),
+    )
+    .with_id("req_id", request.request_id.clone());
+    if let Some(instance) = request
+        .global
+        .instance
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        record = record.with_id("instance_id", instance.clone());
+    }
+    ledger.append(record).map_err(|err| {
+        session_request_ledger_error("append_receipt", &ledger_path, err.to_string())
+    })
+}
+
+fn session_request_ledger_contains_receipt(state_dir: &Path, request_id: &str) -> CliOutcome<bool> {
+    let path = session_request_ledger_path(state_dir);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let read = LabLedger::read(&path)
+        .map_err(|err| session_request_ledger_error("read", &path, err.to_string()))?;
+    Ok(read.records.iter().any(|record| {
+        record.req_id.as_deref() == Some(request_id)
+            && record.payload.get("record_type").and_then(Value::as_str)
+                == Some("session_request_receipt")
+    }))
+}
+
+fn session_request_ledger_root(state_dir: &Path) -> PathBuf {
+    state_dir.join("runtime-ledger")
+}
+
+fn session_request_ledger_path(state_dir: &Path) -> PathBuf {
+    session_request_ledger_root(state_dir)
+        .join("sessions")
+        .join("session-requests")
+        .join("ledger.jsonl")
+}
+
+fn session_request_ledger_error(phase: &str, path: &Path, message: String) -> CliError {
+    CliError::runtime_not_running(format!(
+        "failed to write session request runtime ledger during {phase} at {}: {message}",
+        path.display()
+    ))
 }
 
 fn session_request_data_summary(response: &SessionCommandResponse) -> Option<Value> {
@@ -46663,6 +46751,21 @@ mod tests {
                 .and_then(Value::as_str),
             Some("request_cancelled")
         );
+        let ledger = LabLedger::read(session_request_ledger_path(temp.path())).unwrap();
+        let receipt = ledger
+            .records
+            .iter()
+            .find(|record| record.req_id.as_deref() == Some("cancel-me"))
+            .expect("session request ledger receipt");
+        assert_eq!(receipt.kind, LedgerRecordKind::Receipt);
+        assert_eq!(
+            receipt.payload.get("record_type").and_then(Value::as_str),
+            Some("session_request_receipt")
+        );
+        assert_eq!(
+            receipt.payload.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
     }
 
     #[test]
@@ -46779,6 +46882,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(response.error.as_ref().unwrap().code, "request_cancelled");
+        let ledger = LabLedger::read(session_request_ledger_path(temp.path())).unwrap();
+        assert!(ledger.records.iter().any(|record| {
+            record.req_id.as_deref() == Some("cancel-journal-fails")
+                && record.payload.get("record_type").and_then(Value::as_str)
+                    == Some("session_request_receipt")
+        }));
     }
 
     #[test]
