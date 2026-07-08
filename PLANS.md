@@ -41,6 +41,8 @@ Current node:
 - `session response get|wait` now refuses to return a queued daemon response unless a matching runtime-ledger receipt exists, rejects response/ledger status conflicts, and includes the ledger receipt in response output.
 - `session queue` now reports runtime-ledger consistency for pending/running requests and pending responses; missing dispatch or receipt facts visibly block queue admission with `runtime_ledger_inconsistent`.
 - Daemon request processing no longer leaves a request executable when legacy journal compatibility output fails after the runtime-ledger receipt exists.
+- L3 Session status projection convergence has started: `read_session_request_journal`, `request-state get`, cancellation not-found checks, journal entry counts, and `session status --diagnostics` now consume the runtime-ledger-backed projection by default instead of legacy-only request-journal facts.
+- Session status diagnostics now expose `source=runtime_ledger_projection`, the session runtime-ledger path, and ledger projection counters so UI/scheduler clients can distinguish ledger-backed receipts from legacy compatibility entries.
 - L4 direct Lab-1 semantic entrance bridging has started: direct `detect-page`, `tap-target`, and `navigate` calls now receive `req_id` values and write runtime-ledger dispatch, drive, and receipt records when `--run-root` or configured `run_root` is available.
 - Direct Lab-1 `detect-page` records recognition `reco_id`; `tap-target` records recognition `reco_id` plus action `action_id`; `navigate` records recognition `reco_id` and route action ids.
 - `lab receipt --req <req_id>` can reconstruct the direct Lab-1 semantic command chain from the same `actingcommand-ledger` records.
@@ -60,7 +62,7 @@ Current node:
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
+- L3: continue Session convergence for any remaining legacy-only diagnostics and remove the compatibility request journal as a second durable output after compatibility is proven.
 - L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
 - L5: continue remaining CLI output projection surfaces beyond the first Lab-2 and direct Lab-1 semantic receipt-backed response paths.
 - L7: continue remaining Evidence / FrameStore convergence for any remaining record-step or evidence surfaces beyond the screenshot evidence index, recognition id/evidence traceability, capture backend selection record, and action-id step traceability now in place.
@@ -70,7 +72,7 @@ Current boundary:
 
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
-- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
+- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, `session status --diagnostics`, cancellation not-found checks, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished while the compatibility request journal still exists.
 - The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, remaining CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - The current L5 work projects the first Lab-2 and direct Lab-1 semantic CLI outputs from durable runtime-ledger receipts; full CLI-wide projection remains unfinished.
 - The current L6 work adds read-only ledger/evidence inspection commands only; it does not trigger capture, touch, runtime daemon, or game-device work.

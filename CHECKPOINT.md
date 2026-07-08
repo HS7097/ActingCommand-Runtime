@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L3 session status projection
+
+### Current status
+
+- Continued Runtime issue #28 L3 after the L5 direct semantic CLI projection subnode.
+- `read_session_request_journal` now returns the runtime-ledger-backed compatibility projection by default, so internal callers no longer get legacy-only completed/failed request facts.
+- Session runtime-ledger receipt reads preserve ledger append order while still keeping only the latest receipt per request id.
+- `session request-state get`, cancellation not-found checks, journal entry counts, and `session status --diagnostics` now consume projected ledger receipts instead of legacy-only request-journal entries.
+- `session status --diagnostics` now exposes `journal.source=runtime_ledger_projection`, the session runtime-ledger path, and projection counters for ledger-backed and legacy compatibility entries.
+- A new status diagnostics test verifies that a ledger-only Session receipt appears in the status journal summary without a legacy journal line.
+- Implementation commit `6b055ed80d20fc1a34b1aedb62d30ff0c0a62349` was created and tagged `checkpoint/20260709-runtime-ledger-l3-session-status-projection`.
+- This node does not remove the compatibility request-journal file yet and does not add new device behavior, capture behavior, OCR, template matching, UI, SQLite, scheduler, game logic, or resource repository reads.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-actinglab session_request_journal -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_request_state -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_projects_ledger_only_receipts -- --nocapture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused Session journal, request-state, and status diagnostics tests passed.
+- New ledger-only status diagnostics projection test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 Session status projection subnode is known.
+- Full issue #28 remains incomplete: the compatibility request journal still exists, remaining CLI projection surfaces may remain, and L8 adversarial acceptance is not complete yet.
+
+### Next step
+
+1. Push implementation commit `6b055ed80d20fc1a34b1aedb62d30ff0c0a62349`, tag `checkpoint/20260709-runtime-ledger-l3-session-status-projection`, and this planning/checkpoint update.
+2. Continue issue #28 with remaining L3/L5 tail checks or L8 acceptance.
+
 ## 2026-07-09 runtime-ledger L5 direct semantic CLI receipt projection
 
 ### Current status
