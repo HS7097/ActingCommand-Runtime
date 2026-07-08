@@ -14,6 +14,10 @@ use actingcommand_device::{
     CaptureBackendName, DeviceTarget, Frame, InputBackend, PixelFormat, SelectedTouchBackend,
     TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
+use actingcommand_ledger::{
+    IdIssuer, IdKind, LabLedger, LabLogError, LastResortError, LedgerRecord, LedgerRecordKind,
+    LightEvent, SessionHeader, project_light_events, write_last_resort_error,
+};
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
 };
@@ -25,7 +29,7 @@ use actingcommand_recognition_pack::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -95,11 +99,17 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
             let archive = ctx.finish(&out_path, true, None, Some(&run_state))?;
             Ok(json!({
                 "ok": true,
+                "status": "ok",
                 "run_id": ctx.run_id,
+                "result_zip": archive.path.display().to_string(),
                 "run_dir": run_dir_string,
                 "run_dir_cleaned": true,
                 "out": archive.path.display().to_string(),
                 "output_zip_sha256": archive.sha256,
+                "ledger": {
+                    "projection_source": "runtime_ledger",
+                    "path": ctx.ledger_path.as_ref().map(|path| path.display().to_string())
+                },
                 "screenshot_count": ctx.screenshots.len(),
                 "executed_step_count": ctx.steps.len()
             }))
@@ -263,6 +273,7 @@ fn execute_lab_run(
     let device = device_config(&effective_global, config)?;
     ctx.instance = Some(device.target.resolved_serial());
     ctx.adb_path = Some(effective_adb_path(config)?.path);
+    ctx.ensure_ledger()?;
 
     ctx.set_phase("lab_lease_acquired");
     let _lease_guard = LabLeaseGuard::acquire(&device.target.resolved_serial())?;
@@ -679,7 +690,7 @@ fn execute_lab_run(
             json!({"step_id": operation.id, "page": after.matched_page, "anchor": after.matched_anchor(&state.control.game)}),
         )?;
 
-        ctx.steps.push(json!({
+        let step_record = json!({
             "id": operation.id,
             "operation_id": operation.id,
             "purpose": operation.purpose,
@@ -700,7 +711,19 @@ fn execute_lab_run(
             "guard": operation.guard.as_ref().map(OperationGuard::to_json),
             "unguarded_trusted_coordinate": operation.unguarded_trusted_coordinate,
             "result": verification.result_label()
-        }));
+        });
+        ctx.append_ledger_record(
+            ctx.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "step",
+                    "phase": ctx.phase,
+                    "step": step_record
+                }),
+            ),
+            "ledger_step",
+        )?;
+        ctx.steps.push(step_record);
         ctx.event(
             "step_finished",
             json!({"step_id": operation.id, "result": verification.result_label()}),
@@ -2631,10 +2654,14 @@ struct LabRunContext {
     run_seed: u64,
     started_at: SystemTime,
     started_instant: Instant,
+    run_root: PathBuf,
     run_dir: PathBuf,
     output_dir: PathBuf,
     logs_dir: PathBuf,
     screenshots_dir: PathBuf,
+    ledger: Option<LabLedger>,
+    ledger_path: Option<PathBuf>,
+    ledger_dispatch_written: bool,
     input_zip_sha256: Option<String>,
     input_entries: Vec<String>,
     requested_capture_interval_ms: u64,
@@ -2669,7 +2696,8 @@ struct LabRunContext {
 impl LabRunContext {
     fn create(run_root: &Path, input_zip: &Path) -> CliOutcome<Self> {
         let now = SystemTime::now();
-        let run_id = format!("lab1y-{}", timestamp_file_stem(now));
+        let issuer = IdIssuer::new();
+        let run_id = issuer.issue(IdKind::Run).value;
         let run_dir = run_root.join(&run_id);
         let output_dir = run_dir.join("output");
         let logs_dir = output_dir.join("logs");
@@ -2692,10 +2720,14 @@ impl LabRunContext {
             run_seed: hash_text(&input_zip.display().to_string()),
             started_at: now,
             started_instant: Instant::now(),
+            run_root: run_root.to_path_buf(),
             run_dir,
             output_dir,
             logs_dir,
             screenshots_dir,
+            ledger: None,
+            ledger_path: None,
+            ledger_dispatch_written: false,
             input_zip_sha256: None,
             input_entries: Vec::new(),
             requested_capture_interval_ms: DEFAULT_CAPTURE_INTERVAL_MS,
@@ -2746,6 +2778,149 @@ impl LabRunContext {
         self.expected_page = None;
     }
 
+    fn ensure_ledger(&mut self) -> CliOutcome<()> {
+        if self.ledger.is_some() {
+            return Ok(());
+        }
+        let instance = self.instance.as_deref().unwrap_or("unknown").to_string();
+        let control = self.control.as_ref();
+        let header = SessionHeader::new(
+            "runtime-embedded-lab1y",
+            control
+                .map(|control| control.game.as_str())
+                .unwrap_or("unknown"),
+            control
+                .map(|control| control.server.as_str())
+                .unwrap_or("unknown"),
+            &instance,
+        );
+        let mut ledger =
+            LabLedger::create_runtime_shard(&self.run_root, &self.run_id, &instance, header)
+                .map_err(|err| self.ledger_failure(err, "ledger_create"))?;
+        let path = ledger.ledger_path().to_path_buf();
+        let backlog = self.events.clone();
+        for event in backlog {
+            ledger
+                .append_event(self.light_event_from_legacy_event(&event)?)
+                .map_err(|err| self.ledger_failure(err, "ledger_backfill_event"))?;
+        }
+        self.ledger_path = Some(path);
+        self.ledger = Some(ledger);
+        self.write_dispatch_record()
+    }
+
+    fn write_dispatch_record(&mut self) -> CliOutcome<()> {
+        if self.ledger_dispatch_written {
+            return Ok(());
+        }
+        let record = self.ledger_record(
+            LedgerRecordKind::Dispatch,
+            json!({
+                "record_type": "lab_run_dispatch",
+                "command": "lab run",
+                "phase": self.phase,
+                "input_summary": self.input_summary()
+            }),
+        );
+        self.append_ledger_record(record, "ledger_dispatch")?;
+        self.ledger_dispatch_written = true;
+        Ok(())
+    }
+
+    fn append_ledger_event(&mut self, event: &Value) -> CliOutcome<()> {
+        let light_event = self.light_event_from_legacy_event(event)?;
+        let Some(ledger) = self.ledger.as_mut() else {
+            return Ok(());
+        };
+        ledger
+            .append_event(light_event)
+            .map_err(|err| self.ledger_failure(err, "ledger_event"))
+    }
+
+    fn append_ledger_record(
+        &mut self,
+        record: LedgerRecord,
+        failure_phase: &str,
+    ) -> CliOutcome<()> {
+        let Some(ledger) = self.ledger.as_mut() else {
+            return Err(self.ledger_failure(
+                LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string()),
+                failure_phase,
+            ));
+        };
+        ledger
+            .append(record)
+            .map_err(|err| self.ledger_failure(err, failure_phase))
+    }
+
+    fn ledger_record(&self, kind: LedgerRecordKind, payload: Value) -> LedgerRecord {
+        let mut record = LedgerRecord::new(kind, None, payload);
+        for (key, value) in self.id_chain() {
+            record = record.with_id(key, value);
+        }
+        record
+    }
+
+    fn id_chain(&self) -> BTreeMap<String, String> {
+        let mut ids = BTreeMap::from([("run_id".to_string(), self.run_id.clone())]);
+        if let Some(instance) = &self.instance {
+            ids.insert("instance_id".to_string(), instance.clone());
+        }
+        if let Some(control) = &self.control {
+            ids.insert("task_id".to_string(), control.entry_task_id.clone());
+        }
+        ids
+    }
+
+    fn input_summary(&self) -> Value {
+        json!({
+            "input_zip_sha256": self.input_zip_sha256,
+            "entry_count": self.input_entries.len(),
+            "run_id": self.run_id,
+            "instance": self.instance,
+            "phase": self.phase
+        })
+    }
+
+    fn light_event_from_legacy_event(&self, event: &Value) -> CliOutcome<LightEvent> {
+        let event_name = event
+            .get("event")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        LightEvent::new(
+            format!("lab.{event_name}.event"),
+            self.id_chain(),
+            event.clone(),
+        )
+        .map_err(|err| self.ledger_failure(err, "ledger_event_shape"))
+    }
+
+    fn ledger_failure(&self, err: LabLogError, phase: &str) -> CliError {
+        let attempted_ledger_path = self
+            .ledger_path
+            .as_ref()
+            .map(|path| path.display().to_string());
+        let message = err.to_string();
+        let last_resort = LastResortError::new(
+            "lab run",
+            phase,
+            "runtime_ledger_failed",
+            &message,
+            self.input_summary(),
+            attempted_ledger_path,
+        );
+        let last_resort_result = write_last_resort_error(Some(&self.run_root), &last_resort);
+        let suffix = match last_resort_result {
+            Ok(path) => format!("; last-resort error file written to {}", path.display()),
+            Err(last_resort_err) => {
+                format!("; additionally failed to write last-resort error file: {last_resort_err}")
+            }
+        };
+        CliError::package_invalid(format!(
+            "runtime ledger failure during {phase}: {message}{suffix}"
+        ))
+    }
+
     fn set_frame_store_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
         self.frame_store.set_config(config)
     }
@@ -2764,7 +2939,9 @@ impl LabRunContext {
         );
         object.insert("phase".to_string(), json!(self.phase));
         object.insert("data".to_string(), data);
-        self.events.push(Value::Object(object));
+        let event = Value::Object(object);
+        self.append_ledger_event(&event)?;
+        self.events.push(event);
         Ok(())
     }
 
@@ -2874,6 +3051,17 @@ impl LabRunContext {
             "candidates": evaluations.iter().map(page_evaluation_json).collect::<Vec<_>>(),
             "diagnostics": {"label": label}
         });
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "recognition",
+                    "phase": self.phase,
+                    "recognition": recognition
+                }),
+            ),
+            "ledger_recognition",
+        )?;
         self.recognition.push(recognition);
         self.event(
             "recognition_recorded",
@@ -3005,6 +3193,7 @@ impl LabRunContext {
         failure_reason: Option<&str>,
         state: Option<&RunState>,
     ) -> CliOutcome<ArchiveResult> {
+        self.ensure_ledger()?;
         if self.lease_acquired && !self.lease_released {
             self.event(
                 "lab_lease_released",
@@ -3029,6 +3218,25 @@ impl LabRunContext {
             )?;
         }
         self.event("output_zip_written", json!({"out": out_path}))?;
+        let summary = self.summary_json(ok, failure_reason, state);
+        let diagnostics = self.diagnostics_json(failure_reason, state);
+        let environment = self.environment_json(state);
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Receipt,
+                json!({
+                    "record_type": if ok { "finish_ok" } else { "finish_error" },
+                    "status": if ok { "ok" } else { "failed" },
+                    "phase": self.phase,
+                    "failure_reason": failure_reason,
+                    "input_summary": self.input_summary(),
+                    "summary": summary,
+                    "diagnostics": diagnostics,
+                    "environment": environment
+                }),
+            ),
+            "ledger_finish_receipt",
+        )?;
         self.write_logs(ok, failure_reason, state)?;
         write_output_zip(&self.output_dir, out_path)?;
         let sha256 = file_sha256(out_path)?;
@@ -3051,8 +3259,12 @@ impl LabRunContext {
         failure_reason: Option<&str>,
         state: Option<&RunState>,
     ) -> CliOutcome<()> {
-        write_json_lines(&self.logs_dir.join("events.jsonl"), &self.events)?;
-        write_json_lines(&self.logs_dir.join("recognition.jsonl"), &self.recognition)?;
+        let projection = self.project_logs_from_ledger()?;
+        write_json_lines(&self.logs_dir.join("events.jsonl"), &projection.events)?;
+        write_json_lines(
+            &self.logs_dir.join("recognition.jsonl"),
+            &projection.recognition,
+        )?;
         write_json_lines(
             &self.logs_dir.join("frame_timeline.jsonl"),
             &self.frame_store.timeline(),
@@ -3061,17 +3273,14 @@ impl LabRunContext {
             &self.logs_dir.join("frame_store.json"),
             &self.frame_store.diagnostics_json(),
         )?;
-        write_json(
-            &self.logs_dir.join("summary.json"),
-            &self.summary_json(ok, failure_reason, state),
-        )?;
+        write_json(&self.logs_dir.join("summary.json"), &projection.summary)?;
         write_json(
             &self.logs_dir.join("diagnostics.json"),
-            &self.diagnostics_json(failure_reason, state),
+            &projection.diagnostics,
         )?;
         write_json(
             &self.logs_dir.join("environment.json"),
-            &self.environment_json(state),
+            &projection.environment,
         )?;
         fs::write(
             self.logs_dir.join("result.md"),
@@ -3079,6 +3288,82 @@ impl LabRunContext {
         )
         .map_err(|err| CliError::package_invalid(format!("failed to write result.md: {err}")))?;
         Ok(())
+    }
+
+    fn project_logs_from_ledger(&self) -> CliOutcome<LabLogProjection> {
+        let ledger_path = self.ledger_path.as_ref().ok_or_else(|| {
+            CliError::package_invalid(
+                "runtime ledger path is unavailable for Lab result projection",
+            )
+        })?;
+        if let Some(ledger) = &self.ledger {
+            ledger
+                .sync()
+                .map_err(|err| self.ledger_failure(err, "ledger_projection_sync"))?;
+        }
+        let read = LabLedger::read(ledger_path)
+            .map_err(|err| self.ledger_failure(err, "ledger_projection_read"))?;
+        let events = project_light_events(&read);
+        if events.is_empty() {
+            return Err(CliError::package_invalid(
+                "runtime ledger projection has no events",
+            ));
+        }
+        let mut recognition = Vec::new();
+        let mut steps = Vec::new();
+        let mut finish_summary = None;
+        let mut finish_diagnostics = None;
+        let mut finish_environment = None;
+        for record in &read.records {
+            match record.payload.get("record_type").and_then(Value::as_str) {
+                Some("recognition") => {
+                    if let Some(value) = record.payload.get("recognition") {
+                        recognition.push(value.clone());
+                    }
+                }
+                Some("step") => {
+                    if let Some(value) = record.payload.get("step") {
+                        steps.push(value.clone());
+                    }
+                }
+                Some("finish_ok") | Some("finish_error") => {
+                    finish_summary = record.payload.get("summary").cloned();
+                    finish_diagnostics = record.payload.get("diagnostics").cloned();
+                    finish_environment = record.payload.get("environment").cloned();
+                }
+                _ => {}
+            }
+        }
+        let projection_source = json!({
+            "kind": "runtime_ledger",
+            "ledger_path": ledger_path.display().to_string(),
+            "event_count": read.events.len(),
+            "record_count": read.records.len(),
+            "skipped_corrupt_lines": read.skipped_corrupt_lines
+        });
+        let mut summary = finish_summary.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finish summary")
+        })?;
+        summary["projection_source"] = projection_source.clone();
+        summary["steps"] = Value::Array(steps.clone());
+        let mut diagnostics = finish_diagnostics.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finish diagnostics")
+        })?;
+        diagnostics["projection_source"] = projection_source.clone();
+        diagnostics["command"] = json!("lab run");
+        diagnostics["phase"] = json!(self.phase);
+        diagnostics["input_summary"] = self.input_summary();
+        let mut environment = finish_environment.ok_or_else(|| {
+            CliError::package_invalid("runtime ledger projection missing finish environment")
+        })?;
+        environment["projection_source"] = projection_source;
+        Ok(LabLogProjection {
+            events,
+            recognition,
+            summary,
+            diagnostics,
+            environment,
+        })
     }
 
     fn summary_json(
@@ -3296,6 +3581,14 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
 struct ArchiveResult {
     path: PathBuf,
     sha256: String,
+}
+
+struct LabLogProjection {
+    events: Vec<Value>,
+    recognition: Vec<Value>,
+    summary: Value,
+    diagnostics: Value,
+    environment: Value,
 }
 
 struct LabLeaseGuard {
@@ -4922,6 +5215,34 @@ mod tests {
         assert!(archive.by_name("screenshots/frame1.png").is_ok());
         assert!(archive.by_name("logs/frame_store.json").is_ok());
         assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
+        let summary: Value =
+            serde_json::from_reader(archive.by_name("logs/summary.json").expect("summary"))
+                .expect("summary json");
+        assert_eq!(
+            summary
+                .pointer("/projection_source/kind")
+                .and_then(Value::as_str),
+            Some("runtime_ledger")
+        );
+        let events = zip_text(&mut archive, "logs/events.jsonl");
+        assert!(events.contains("runtime_ledger"));
+        let diagnostics: Value = serde_json::from_reader(
+            archive
+                .by_name("logs/diagnostics.json")
+                .expect("diagnostics"),
+        )
+        .expect("diagnostics json");
+        assert_eq!(
+            diagnostics.get("command").and_then(Value::as_str),
+            Some("lab run")
+        );
+        assert!(ctx.ledger_path.as_ref().expect("ledger path").is_file());
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        assert!(!ledger.events.is_empty());
+        assert!(ledger.records.iter().any(|record| {
+            record.kind == LedgerRecordKind::Receipt
+                && record.payload.get("record_type").and_then(Value::as_str) == Some("finish_error")
+        }));
         assert!(ctx.run_dir.exists());
     }
 
@@ -4935,6 +5256,7 @@ mod tests {
 
         assert!(out.is_file());
         assert!(!ctx.run_dir.exists());
+        assert!(ctx.ledger_path.as_ref().expect("ledger path").is_file());
     }
 
     #[test]
@@ -5179,6 +5501,13 @@ mod tests {
             zip.write_all(content).expect("write file");
         }
         zip.finish().expect("finish");
+    }
+
+    fn zip_text(archive: &mut ZipArchive<File>, name: &str) -> String {
+        let mut entry = archive.by_name(name).expect("zip entry");
+        let mut text = String::new();
+        entry.read_to_string(&mut text).expect("zip text");
+        text
     }
 
     fn write_minimal_lab_package(path: &Path) {

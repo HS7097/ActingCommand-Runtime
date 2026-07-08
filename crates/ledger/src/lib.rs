@@ -69,22 +69,26 @@ impl From<serde_json::Error> for LabLogError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IdKind {
+    Run,
     Req,
     Task,
     Lease,
     Reco,
     Action,
+    Evidence,
     Wf,
 }
 
 impl IdKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Run => "run",
             Self::Req => "req",
             Self::Task => "task",
             Self::Lease => "lease",
             Self::Reco => "reco",
             Self::Action => "action",
+            Self::Evidence => "evidence",
             Self::Wf => "wf",
         }
     }
@@ -270,6 +274,15 @@ enum LedgerLine {
         #[serde(default)]
         payload: Value,
     },
+    #[serde(rename = "event")]
+    Event {
+        schema_version: String,
+        event_type: String,
+        timestamp_unix_ms: u64,
+        ids: BTreeMap<String, String>,
+        #[serde(default)]
+        payload: Value,
+    },
 }
 
 impl From<SessionHeader> for LedgerLine {
@@ -298,9 +311,22 @@ impl From<LedgerRecord> for LedgerLine {
     }
 }
 
+impl From<LightEvent> for LedgerLine {
+    fn from(event: LightEvent) -> Self {
+        Self::Event {
+            schema_version: event.schema_version,
+            event_type: event.event_type,
+            timestamp_unix_ms: event.timestamp_unix_ms,
+            ids: event.ids,
+            payload: event.payload,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LedgerRead {
     pub header: Option<SessionHeader>,
+    pub events: Vec<LightEvent>,
     pub records: Vec<LedgerRecord>,
     pub skipped_corrupt_lines: usize,
 }
@@ -324,11 +350,36 @@ impl LabLedger {
             .join(sanitize_path_segment(session_name));
         fs::create_dir_all(&session_dir)?;
         let ledger_path = session_dir.join(LEDGER_FILE_NAME);
-        let mut writer = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&ledger_path)?;
+        let mut writer = open_ledger_writer(&ledger_path)?;
         write_json_line(&mut writer, &LedgerLine::from(header))?;
+        writer.sync_all()?;
+        Ok(Self {
+            session_dir,
+            ledger_path,
+            writer,
+        })
+    }
+
+    pub fn create_runtime_shard(
+        run_root: impl AsRef<Path>,
+        run_id: &str,
+        instance_id: &str,
+        header: SessionHeader,
+    ) -> LabLogResult<Self> {
+        validate_non_empty("run_id", run_id)?;
+        validate_non_empty("instance_id", instance_id)?;
+        let session_dir = run_root
+            .as_ref()
+            .join("runtime-ledger")
+            .join("instances")
+            .join(sanitize_path_segment(instance_id))
+            .join("runs")
+            .join(sanitize_path_segment(run_id));
+        fs::create_dir_all(&session_dir)?;
+        let ledger_path = session_dir.join(LEDGER_FILE_NAME);
+        let mut writer = open_ledger_writer(&ledger_path)?;
+        write_json_line(&mut writer, &LedgerLine::from(header))?;
+        writer.sync_all()?;
         Ok(Self {
             session_dir,
             ledger_path,
@@ -345,12 +396,27 @@ impl LabLedger {
     }
 
     pub fn append(&mut self, record: LedgerRecord) -> LabLogResult<()> {
-        write_json_line(&mut self.writer, &LedgerLine::from(record))
+        let durable = matches!(record.kind, LedgerRecordKind::Receipt);
+        write_json_line(&mut self.writer, &LedgerLine::from(record))?;
+        if durable {
+            self.writer.sync_all()?;
+        }
+        Ok(())
+    }
+
+    pub fn append_event(&mut self, event: LightEvent) -> LabLogResult<()> {
+        write_json_line(&mut self.writer, &LedgerLine::from(event))
+    }
+
+    pub fn sync(&self) -> LabLogResult<()> {
+        self.writer.sync_all()?;
+        Ok(())
     }
 
     pub fn read(path: impl AsRef<Path>) -> LabLogResult<LedgerRead> {
         let file = File::open(path)?;
         let mut header = None;
+        let mut events = Vec::new();
         let mut records = Vec::new();
         let mut skipped_corrupt_lines = 0;
         for line in BufReader::new(file).lines() {
@@ -390,11 +456,25 @@ impl LabLedger {
                     id_chain,
                     payload,
                 }),
+                Ok(LedgerLine::Event {
+                    schema_version,
+                    event_type,
+                    timestamp_unix_ms,
+                    ids,
+                    payload,
+                }) => events.push(LightEvent {
+                    schema_version,
+                    event_type,
+                    timestamp_unix_ms,
+                    ids,
+                    payload,
+                }),
                 Err(_) => skipped_corrupt_lines += 1,
             }
         }
         Ok(LedgerRead {
             header,
+            events,
             records,
             skipped_corrupt_lines,
         })
@@ -512,6 +592,75 @@ impl EvidenceStore {
         refs.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         Ok(refs)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LastResortError {
+    pub command: String,
+    pub phase: String,
+    pub error_code: String,
+    pub error_message: String,
+    pub timestamp_unix_ms: u64,
+    pub input_summary: Value,
+    pub attempted_ledger_path: Option<String>,
+}
+
+impl LastResortError {
+    pub fn new(
+        command: impl Into<String>,
+        phase: impl Into<String>,
+        error_code: impl Into<String>,
+        error_message: impl Into<String>,
+        input_summary: Value,
+        attempted_ledger_path: Option<String>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            phase: phase.into(),
+            error_code: error_code.into(),
+            error_message: error_message.into(),
+            timestamp_unix_ms: unix_ms_now(),
+            input_summary,
+            attempted_ledger_path,
+        }
+    }
+}
+
+pub fn write_last_resort_error(
+    run_root: Option<&Path>,
+    error: &LastResortError,
+) -> LabLogResult<PathBuf> {
+    eprintln!(
+        "actingcommand-ledger last resort: command={} phase={} code={} error={} attempted_ledger_path={}",
+        error.command,
+        error.phase,
+        error.error_code,
+        error.error_message,
+        error.attempted_ledger_path.as_deref().unwrap_or("unknown")
+    );
+    let preferred = run_root.map(|root| root.join("last-error.json"));
+    if let Some(path) = preferred
+        && write_last_resort_file(&path, error).is_ok()
+    {
+        return Ok(path);
+    }
+    let fallback = std::env::temp_dir().join(format!(
+        "actingcommand-last-error-{}.json",
+        error.timestamp_unix_ms
+    ));
+    write_last_resort_file(&fallback, error)?;
+    Ok(fallback)
+}
+
+fn write_last_resort_file(path: &Path, error: &LastResortError) -> LabLogResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(error)?;
+    let mut file = File::create(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -666,6 +815,43 @@ pub fn project_record(record: &Value, request: &ProjectionRequest) -> LabLogResu
     Ok(projected)
 }
 
+pub fn project_ledger_records(
+    read: &LedgerRead,
+    request: &ProjectionRequest,
+) -> LabLogResult<Vec<Value>> {
+    read.records
+        .iter()
+        .map(|record| {
+            project_record(
+                &json!({
+                    "kind": record.kind.as_str(),
+                    "timestamp_unix_ms": record.timestamp_unix_ms,
+                    "req_id": record.req_id,
+                    "id_chain": record.id_chain,
+                    "payload": record.payload
+                }),
+                request,
+            )
+        })
+        .collect()
+}
+
+pub fn project_light_events(read: &LedgerRead) -> Vec<Value> {
+    read.events
+        .iter()
+        .map(|event| {
+            json!({
+                "schema_version": event.schema_version,
+                "event_type": event.event_type,
+                "timestamp_unix_ms": event.timestamp_unix_ms,
+                "ids": event.ids,
+                "payload": event.payload,
+                "projection_source": "runtime_ledger"
+            })
+        })
+        .collect()
+}
+
 pub fn error_projection(
     req_id: impl Into<String>,
     error: impl Into<String>,
@@ -711,11 +897,13 @@ pub fn stale_frame_suspicion(frame_age_ms: u64) -> Value {
 
 fn parse_id_kind(value: &str) -> LabLogResult<IdKind> {
     match value {
+        "run" => Ok(IdKind::Run),
         "req" => Ok(IdKind::Req),
         "task" => Ok(IdKind::Task),
         "lease" => Ok(IdKind::Lease),
         "reco" => Ok(IdKind::Reco),
         "action" => Ok(IdKind::Action),
+        "evidence" => Ok(IdKind::Evidence),
         "wf" => Ok(IdKind::Wf),
         other => Err(LabLogError::InvalidInput(format!(
             "unknown id kind: {other}"
@@ -738,6 +926,10 @@ fn unix_ms_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis() as u64
+}
+
+fn open_ledger_writer(path: &Path) -> LabLogResult<File> {
+    Ok(OpenOptions::new().create(true).append(true).open(path)?)
 }
 
 fn write_json_line(writer: &mut File, value: &impl Serialize) -> LabLogResult<()> {
@@ -1040,6 +1232,18 @@ mod tests {
             }
         }
         assert_eq!(ids.len(), 1024);
+        assert_eq!(
+            IssuedId::parse(&issuer.issue(IdKind::Run).value)
+                .expect("run id")
+                .kind,
+            IdKind::Run
+        );
+        assert_eq!(
+            IssuedId::parse(&issuer.issue(IdKind::Evidence).value)
+                .expect("evidence id")
+                .kind,
+            IdKind::Evidence
+        );
     }
 
     #[test]
@@ -1074,6 +1278,16 @@ mod tests {
                 json!({"state": "ok"}),
             ))
             .expect("append receipt");
+        ledger
+            .append_event(
+                LightEvent::new(
+                    "runtime.state.finished",
+                    BTreeMap::from([("req_id".to_string(), "req-1".to_string())]),
+                    json!({"state": "ok"}),
+                )
+                .expect("event"),
+            )
+            .expect("append event");
         let path = ledger.ledger_path().to_path_buf();
         fs::OpenOptions::new()
             .append(true)
@@ -1085,6 +1299,8 @@ mod tests {
         let read = LabLedger::read(path).expect("read ledger");
 
         assert_eq!(read.header.as_ref().unwrap().game, "arknights");
+        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.events[0].event_type, "runtime.state.finished");
         assert_eq!(read.records.len(), 2);
         assert_eq!(read.records[0].kind, LedgerRecordKind::Drive);
         assert_eq!(read.records[1].kind, LedgerRecordKind::Receipt);

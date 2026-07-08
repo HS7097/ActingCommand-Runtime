@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger unified fact source
+
+### Current status
+
+- Implemented approved Runtime issue #28 from `C:\合作工作区\ActingCommand\TASK-runtime-ledger-unified-fact-source.md`.
+- Runtime source commit: pending.
+- Checkpoint tag: pending.
+- Generalized the existing `crates/ledger` crate instead of creating a second ledger crate.
+- Added `run` and `evidence` ID kinds to the existing ID issuer/parser.
+- Added event-line support, runtime per-instance/per-run ledger shards, receipt/header `sync_all` durability, ledger projection helpers, and last-resort stderr plus error-file reporting.
+- Routed `lab run` IDs through `IdIssuer`.
+- Routed `lab run` events, recognition records, step records, dispatch, and finish receipts into the runtime ledger.
+- `result.zip/logs/events.jsonl`, `summary.json`, `diagnostics.json`, and `environment.json` now come from the runtime ledger projection.
+- Projection now fails loudly if the runtime ledger events or finish receipt payloads are missing.
+- This task does not migrate all CLI entrances, remove Session journal/Lab-2 ledger, add UI, add database work, add scheduler projection, or change Lab execution behavior.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `crates/ledger/src/lib.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `Get-Content -Raw AGENTS.md`
+- `Get-Content -Raw PLANS.md`
+- `Get-Content -Raw CHECKPOINT.md`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,updatedAt,body`
+- `Get-Content -Raw "C:\合作工作区\ActingCommand\TASK-runtime-ledger-unified-fact-source.md"`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-ledger`
+- `cargo test -p actingcommand-actinglab lab_run::tests::failure_zip_materializes_frame_store_screenshots -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests::success_finish_cleans_run_dir_but_keeps_outside_zip -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo build --release`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+- `Get-ChildItem crates -Directory | Where-Object { $_.Name -match 'ledger' } | Select-Object -ExpandProperty Name`
+- `rg -n "IdKind::Run|IdKind::Evidence|create_runtime_shard|runtime-ledger|sync_all|write_last_resort_error|projection_source|project_light_events|project_logs_from_ledger" crates/ledger/src/lib.rs apps/actinglab/src/lab_run.rs PLANS.md CHECKPOINT.md`
+- `git diff -U0 -- apps/actinglab/src/lab_run.rs crates/ledger/src/lib.rs | Select-String -Pattern 'adb shell input','reconnect','retry','fallback','new ledger crate','global single JSONL'`
+
+### Test results
+
+- Focused ledger tests passed: 17/17.
+- Focused Lab failure projection test passed and verified projected `summary.json`, `events.jsonl`, `diagnostics.json`, and finish-error receipt.
+- Focused Lab success cleanup test passed and verified the ledger shard remains after run directory cleanup.
+- Focused Lab suite passed: 56/56.
+- Final public gates passed:
+  - `cargo fmt --all -- --check`
+  - `cargo build --release`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `git diff --check`
+- Ledger crate scan returned only `ledger`; no second ledger crate was added.
+- Runtime-ledger invariant scan confirmed `Run` and `Evidence` ID kinds, runtime per-instance/per-run shard path, `sync_all`, last-resort error writer, and ledger projection paths.
+- Added-code scan found no `adb shell input`, reconnect, retry, new ledger crate, or global single-JSONL implementation in the touched source diff. The only `fallback` added is the specified last-resort temp-file fallback for ledger self-failure.
+
+### Current blocker
+
+- No implementation blocker is known.
+- Full Session journal and Lab-2 ledger migration remain deferred to the follow-up repair phase for issue #28.
+
+### Next step
+
+1. Commit, tag, and push this Runtime issue #28 baseline.
+2. Let the next issue #28 repair phase migrate the remaining Session journal, Lab-2 ledger, CLI projection, UI projection, and scheduler projection surfaces.
+
 ## 2026-07-08 task-pack containment module
 
 ### Current status

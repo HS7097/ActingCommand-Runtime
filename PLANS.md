@@ -6,6 +6,30 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current runtime-ledger unified fact source
+
+The active approved issue is Runtime issue #28:
+
+- `[主任务] runtime-ledger 统一事实源:泛化现有 ledger,一切输出改投影(本轮基础可用)`
+- Technical source of truth: `C:\合作工作区\ActingCommand\TASK-runtime-ledger-unified-fact-source.md`
+
+Implementation direction for this round:
+
+- Generalize the existing `crates/ledger` crate as the runtime fact source; do not create a second ledger crate.
+- Add `run` and `evidence` IDs to the existing unified ID issuer.
+- Add event-line support, runtime per-instance/per-run ledger shards, receipt/header durability, projection helpers, and the last-resort stderr plus error-file channel to `actingcommand-ledger`.
+- Route `lab run` record writes through the generalized ledger while keeping `LabRunContext` as the execution context.
+- Generate `lab run` IDs through `IdIssuer`.
+- Project `result.zip/logs/events.jsonl`, `summary.json`, and `diagnostics.json` from the ledger instead of old ad hoc in-memory output builders.
+- Keep this round to P0/P1 only: no UI, database, encryption log service, scheduler projection, complete CLI migration, or full Session/Lab-2 journal removal.
+
+Current boundary:
+
+- `LabRunContext` remains the owner of Lab execution state, frame store paths, screenshots, and archive assembly.
+- `LabRunContext` no longer acts as the authoritative result fact source for Lab output logs; it writes facts to the runtime ledger and packages projected logs.
+- Existing Session journal and Lab-2 ledger migration is deferred to the repair phase named in issue #28.
+- Resource repositories are not read or modified by this task.
+
 ## Current task-pack containment module
 
 The active approved issue is Runtime issue #26:
