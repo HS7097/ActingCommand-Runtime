@@ -1,5 +1,52 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L7 action id step traceability
+
+### Current status
+
+- Continued Runtime issue #28 L7 after capture backend selection traceability.
+- Executed `lab run` operation steps now issue an `action_id` through the shared `IdIssuer`.
+- Tap, drag, and long-tap started/finished light events now include the `action_id`.
+- Step drive records now include the same `action_id` in the runtime-ledger `id_chain` and in the step payload projected into result.zip logs.
+- This node does not add new device behavior, capture behavior, OCR, template matching, UI, SQLite, scheduler, or game logic.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab step_record_keeps_action_id_in_ledger_chain -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused step action-id ledger chain test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L7 action id step traceability subnode is known.
+- Full issue #28 remains incomplete: remaining Evidence / FrameStore convergence, L5 CLI projection, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L7 action id step traceability node.
+2. Continue issue #28 with remaining L7 evidence surfaces or L5 CLI projection work.
+
 ## 2026-07-09 runtime-ledger L7 capture backend selection traceability
 
 ### Current status

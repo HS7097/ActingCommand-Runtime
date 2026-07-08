@@ -578,6 +578,7 @@ fn execute_lab_run(
             ctx.run_seed,
             action_target.as_ref(),
         )?;
+        let action_id = ctx.id_issuer.issue(IdKind::Action).value;
         let backend = ensure_touch_backend(
             &mut input,
             &device.target,
@@ -589,7 +590,7 @@ fn execute_lab_run(
                 let action_started = Instant::now();
                 ctx.event(
                     "click_started",
-                    json!({"step_id": operation.id, "actual_click_point": point.to_json()}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
                 )?;
                 if let Err(err) = backend.tap(point.x, point.y) {
                     return close_backend_after_error(
@@ -599,7 +600,7 @@ fn execute_lab_run(
                 }
                 ctx.event(
                     "click_finished",
-                    json!({"step_id": operation.id, "actual_click_point": point.to_json()}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
                 )?;
                 ctx.action_durations_ms
                     .push(action_started.elapsed().as_millis() as u64);
@@ -612,7 +613,7 @@ fn execute_lab_run(
                 let action_started = Instant::now();
                 ctx.event(
                     "drag_started",
-                    json!({"step_id": operation.id, "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
                 )?;
                 if let Err(err) = backend.swipe(from.x, from.y, to.x, to.y, *duration_ms) {
                     return close_backend_after_error(
@@ -622,7 +623,7 @@ fn execute_lab_run(
                 }
                 ctx.event(
                     "drag_finished",
-                    json!({"step_id": operation.id, "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
                 )?;
                 ctx.action_durations_ms
                     .push(action_started.elapsed().as_millis() as u64);
@@ -631,7 +632,7 @@ fn execute_lab_run(
                 let action_started = Instant::now();
                 ctx.event(
                     "long_tap_started",
-                    json!({"step_id": operation.id, "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
                 )?;
                 if let Err(err) = backend.long_tap(point.x, point.y, *duration_ms) {
                     return close_backend_after_error(
@@ -641,7 +642,7 @@ fn execute_lab_run(
                 }
                 ctx.event(
                     "long_tap_finished",
-                    json!({"step_id": operation.id, "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
                 )?;
                 ctx.action_durations_ms
                     .push(action_started.elapsed().as_millis() as u64);
@@ -692,6 +693,7 @@ fn execute_lab_run(
 
         let step_record = json!({
             "id": operation.id,
+            "action_id": action_id.as_str(),
             "operation_id": operation.id,
             "purpose": operation.purpose,
             "from": operation.from,
@@ -712,21 +714,10 @@ fn execute_lab_run(
             "unguarded_trusted_coordinate": operation.unguarded_trusted_coordinate,
             "result": verification.result_label()
         });
-        ctx.append_ledger_record(
-            ctx.ledger_record(
-                LedgerRecordKind::Drive,
-                json!({
-                    "record_type": "step",
-                    "phase": ctx.phase,
-                    "step": step_record
-                }),
-            ),
-            "ledger_step",
-        )?;
-        ctx.steps.push(step_record);
+        ctx.append_step_record(step_record, &action_id)?;
         ctx.event(
             "step_finished",
-            json!({"step_id": operation.id, "result": verification.result_label()}),
+            json!({"step_id": operation.id, "action_id": action_id, "result": verification.result_label()}),
         )?;
         state.current_page = next_current_page(&state.control.game, &after, &operation);
         ctx.clear_step_context();
@@ -2815,6 +2806,23 @@ impl LabRunContext {
             ),
             "ledger_capture_backend_selection",
         )
+    }
+
+    fn append_step_record(&mut self, step_record: Value, action_id: &str) -> CliOutcome<()> {
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "step",
+                    "phase": self.phase,
+                    "step": step_record.clone()
+                }),
+            )
+            .with_id("action_id", action_id.to_string()),
+            "ledger_step",
+        )?;
+        self.steps.push(step_record);
+        Ok(())
     }
 
     fn ensure_ledger(&mut self) -> CliOutcome<()> {
@@ -5822,6 +5830,50 @@ mod tests {
                 .pointer("/attempts/0/message")
                 .and_then(Value::as_str),
             Some("selected nemu ipc")
+        );
+    }
+
+    #[test]
+    fn step_record_keeps_action_id_in_ledger_chain() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        let action_id = ctx.id_issuer.issue(IdKind::Action).value;
+        let step = json!({
+            "id": "open_terminal",
+            "action_id": action_id.as_str(),
+            "result": "verified"
+        });
+
+        ctx.append_step_record(step, &action_id)
+            .expect("append step record");
+
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        let record = ledger
+            .records
+            .iter()
+            .find(|record| {
+                record.kind == LedgerRecordKind::Drive
+                    && record.payload.get("record_type").and_then(Value::as_str) == Some("step")
+            })
+            .expect("step record");
+        assert_eq!(
+            record.id_chain.get("action_id").map(String::as_str),
+            Some(action_id.as_str())
+        );
+        assert_eq!(
+            record
+                .payload
+                .pointer("/step/action_id")
+                .and_then(Value::as_str),
+            Some(action_id.as_str())
+        );
+        assert_eq!(
+            ctx.steps
+                .first()
+                .and_then(|step| step.get("action_id"))
+                .and_then(Value::as_str),
+            Some(action_id.as_str())
         );
     }
 
