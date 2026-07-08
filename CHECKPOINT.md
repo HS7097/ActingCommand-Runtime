@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L4 direct Lab-1 semantic ledger bridge
+
+### Current status
+
+- Re-read Runtime issue #28 and `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`.
+- Continued issue #28 into L4 with a direct Lab-1 semantic command bridge.
+- Direct `detect-page`, `tap-target`, and `navigate` now create `req_id` values and write runtime-ledger dispatch, drive, and receipt records when a run root is available.
+- `detect-page` records recognition `reco_id`; `tap-target` records recognition `reco_id` plus action `action_id`; `navigate` records recognition `reco_id` plus per-route action ids.
+- `lab receipt --req <req_id>` can reconstruct these direct Lab-1 semantic command chains from `actingcommand-ledger`.
+- Existing Session daemon-routed versions of these commands continue through the Session request bridge.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments --jq ...`
+- `Get-Content -LiteralPath "C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md" -Raw`
+- `git status --short --branch`
+- `rg -n "lab2|Lab2|observe|ensure|tap-target|tap_target|detect-page|detect_page|navigate|wait|runtime_ledger|ledger|receipt" apps/actinglab/src/main.rs`
+- `rg -n "pub fn run_|fn run_|dispatch|receipt|ledger|LabLedger|RequestEnvelope|append|admit|arbitrator|evidence|req_id|actual_click|observe|ensure|wait" apps/actinglab/src/lab2_cli.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab lab1_direct_semantic_commands_write_runtime_ledger_receipts -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused direct Lab-1 semantic ledger bridge test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this direct Lab-1 semantic ledger bridge subnode is known.
+- Full issue #28 remains incomplete: L4 containment light events, L5 CLI projection, L6 ledger diagnostics, L7 evidence/frame-store convergence, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L4 direct Lab-1 semantic ledger bridge node.
+2. Continue issue #28 with remaining L4 scope or proceed to L5 projection work.
+
 ## 2026-07-08 runtime-ledger L3 legacy journal non-authoritative queue cleanup
 
 ### Current status

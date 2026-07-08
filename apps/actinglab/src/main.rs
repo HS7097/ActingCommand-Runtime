@@ -7,7 +7,9 @@ use actingcommand_device::{
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
     vendor_stdio_session_diagnostic,
 };
-use actingcommand_ledger::{LabLedger, LedgerRecord, LedgerRecordKind, SessionHeader};
+use actingcommand_ledger::{
+    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, SessionHeader,
+};
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
 };
@@ -5901,23 +5903,38 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "detect_page", args);
     }
-    let config = read_user_config()?;
-    let resources = recognition_resources(global, &config, &flags, true)?;
-    let pages_path = resources
-        .pages_path
-        .as_ref()
-        .ok_or_else(|| CliError::usage("detect-page requires --pages or --resource-root --game"))?;
-    let (evaluator, detector) =
-        load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
-    detector
-        .validate(&evaluator)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    if flags.bool("--check-pages") {
-        return Ok(json!({"check_pages": "passed"}));
-    }
-    let scene = load_scene_from_flags(global, &flags)?;
-    let outcome = detect_current_page(&evaluator, &detector, &scene)?;
-    Ok(page_detection_json(&outcome))
+    let mut ledger = SemanticLedgerContext::new("detect-page", global, args);
+    let result = (|| -> CliOutcome<Value> {
+        let config = read_user_config()?;
+        let resources = recognition_resources(global, &config, &flags, true)?;
+        let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
+            CliError::usage("detect-page requires --pages or --resource-root --game")
+        })?;
+        let (evaluator, detector) =
+            load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
+        detector
+            .validate(&evaluator)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        if flags.bool("--check-pages") {
+            return Ok(json!({"check_pages": "passed"}));
+        }
+        let scene = load_scene_from_flags(global, &flags)?;
+        let outcome = detect_current_page(&evaluator, &detector, &scene)?;
+        let reco_id = ledger.issue(IdKind::Reco);
+        let mut payload = page_detection_json(&outcome);
+        payload["req_id"] = json!(ledger.req_id.clone());
+        payload["reco_id"] = json!(reco_id.clone());
+        ledger.record_drive(json!({
+            "stage": "recognition",
+            "command": "detect-page",
+            "reco_id": reco_id,
+            "page": outcome.page,
+            "matched": outcome.matched,
+            "standby": outcome.standby
+        }));
+        Ok(payload)
+    })();
+    finish_semantic_result_with_ledger(global, ledger, result)
 }
 
 fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -5992,76 +6009,321 @@ fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
+struct SemanticLedgerContext {
+    command: &'static str,
+    instance: String,
+    issuer: IdIssuer,
+    req_id: String,
+    records: Vec<LedgerRecord>,
+}
+
+impl SemanticLedgerContext {
+    fn new(command: &'static str, global: &GlobalOptions, args: &[String]) -> Self {
+        let issuer = IdIssuer::new();
+        let req_id = issuer.issue(IdKind::Req).value;
+        let instance = global
+            .instance
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let records = vec![LedgerRecord::new(
+            LedgerRecordKind::Dispatch,
+            Some(req_id.clone()),
+            json!({
+                "stage": "request",
+                "command": command,
+                "instance": instance,
+                "args": args,
+                "args_count": args.len(),
+                "dry_run": global.dry_run
+            }),
+        )];
+        Self {
+            command,
+            instance,
+            issuer,
+            req_id,
+            records,
+        }
+    }
+
+    fn issue(&self, kind: IdKind) -> String {
+        self.issuer.issue(kind).value
+    }
+
+    fn record_drive(&mut self, payload: Value) {
+        self.records.push(LedgerRecord::new(
+            LedgerRecordKind::Drive,
+            Some(self.req_id.clone()),
+            payload,
+        ));
+    }
+}
+
+fn finish_semantic_result_with_ledger(
+    global: &GlobalOptions,
+    ctx: SemanticLedgerContext,
+    result: CliOutcome<Value>,
+) -> CliOutcome<Value> {
+    match result {
+        Ok(payload) => finish_semantic_payload_with_ledger(global, ctx, payload),
+        Err(error) => return_semantic_error_with_ledger(global, ctx, error),
+    }
+}
+
+fn finish_semantic_payload_with_ledger(
+    global: &GlobalOptions,
+    mut ctx: SemanticLedgerContext,
+    mut payload: Value,
+) -> CliOutcome<Value> {
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("req_id")
+            .or_insert_with(|| json!(ctx.req_id.clone()));
+        object
+            .entry("instance")
+            .or_insert_with(|| json!(ctx.instance.clone()));
+    }
+    let ledger = write_semantic_ledger(
+        global,
+        ctx.command,
+        &ctx.instance,
+        &ctx.req_id,
+        &payload,
+        &mut ctx.records,
+    )?;
+    payload["ledger"] = ledger;
+    Ok(payload)
+}
+
+fn return_semantic_error_with_ledger(
+    global: &GlobalOptions,
+    mut ctx: SemanticLedgerContext,
+    error: CliError,
+) -> CliOutcome<Value> {
+    let mut payload = json!({
+        "req_id": ctx.req_id.clone(),
+        "instance": ctx.instance.clone(),
+        "command": ctx.command,
+        "error": error.code.clone(),
+        "state": "failed",
+        "blocked_error": {
+            "code": error.code.clone(),
+            "message": error.message.clone(),
+            "blocked_by": error.blocked_by.clone()
+        },
+        "details": error.details.as_deref().cloned().unwrap_or(Value::Null)
+    });
+    payload["ledger"] = match write_semantic_ledger(
+        global,
+        ctx.command,
+        &ctx.instance,
+        &ctx.req_id,
+        &payload,
+        &mut ctx.records,
+    ) {
+        Ok(ledger) => ledger,
+        Err(ledger_error) => json!({
+            "written": false,
+            "reason": "ledger_write_failed",
+            "error": ledger_error.message
+        }),
+    };
+    Err(error.with_details(payload))
+}
+
+fn write_semantic_ledger(
+    global: &GlobalOptions,
+    command: &str,
+    instance: &str,
+    req_id: &str,
+    payload: &Value,
+    records: &mut Vec<LedgerRecord>,
+) -> CliOutcome<Value> {
+    let config = read_user_config()?;
+    let Some(run_root) = effective_run_root(global, &config) else {
+        return Ok(json!({"written": false, "reason": "run_root_not_configured"}));
+    };
+    let game = global.game.clone().unwrap_or_else(|| "unknown".to_string());
+    let server = global
+        .server
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut ledger = LabLedger::create(
+        &run_root,
+        &format!("{command}-{req_id}"),
+        SessionHeader::new(RUNTIME_VERSION, game, server, instance),
+    )
+    .map_err(|err| CliError::device(err.to_string()))?;
+    for record in records.drain(..) {
+        ledger
+            .append(with_semantic_id_chain(record, req_id, &[payload]))
+            .map_err(|err| CliError::device(err.to_string()))?;
+    }
+    let receipt = with_semantic_id_chain(
+        LedgerRecord::new(
+            LedgerRecordKind::Receipt,
+            Some(req_id.to_string()),
+            payload.clone(),
+        ),
+        req_id,
+        &[payload],
+    );
+    ledger
+        .append(receipt)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "written": true,
+        "path": ledger.ledger_path().display().to_string()
+    }))
+}
+
+fn with_semantic_id_chain(
+    mut record: LedgerRecord,
+    req_id: &str,
+    extra_values: &[&Value],
+) -> LedgerRecord {
+    let ids = {
+        let mut values = Vec::with_capacity(extra_values.len() + 1);
+        values.push(&record.payload);
+        values.extend_from_slice(extra_values);
+        [
+            ("reco_id", &["/reco_id", "/recognition/reco_id"][..]),
+            ("action_id", &["/action_id", "/action/action_id"][..]),
+        ]
+        .into_iter()
+        .filter_map(|(key, paths)| {
+            semantic_first_string_at_paths(&values, paths).map(|value| (key, value))
+        })
+        .collect::<Vec<_>>()
+    };
+    record = record.with_id("req_id", req_id);
+    for (key, value) in ids {
+        record = record.with_id(key, value);
+    }
+    record
+}
+
+fn semantic_first_string_at_paths(values: &[&Value], paths: &[&str]) -> Option<String> {
+    values.iter().find_map(|value| {
+        paths.iter().find_map(|path| {
+            value
+                .pointer(path)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+    })
+}
+
 fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if should_route_control_via_session_daemon(global, &flags)? {
         return submit_control_session_request(global, &flags, "tap_target", args);
     }
     let target = target_argument(&flags, "tap-target")?;
-    let allow_destructive = flags.bool("--allow-destructive");
-    let dry_run = global.dry_run || flags.bool("--dry-run");
-    if !allow_destructive {
-        reject_dangerous_semantic_id("target", &target)?;
-    }
-    if !dry_run && !flags.bool("--capture") {
-        return Err(CliError::usage(
-            "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
-        ));
-    }
+    let mut ledger = SemanticLedgerContext::new("tap-target", global, args);
+    let result = (|| -> CliOutcome<Value> {
+        let allow_destructive = flags.bool("--allow-destructive");
+        let dry_run = global.dry_run || flags.bool("--dry-run");
+        if !allow_destructive {
+            reject_dangerous_semantic_id("target", &target)?;
+        }
+        if !dry_run && !flags.bool("--capture") {
+            return Err(CliError::usage(
+                "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
+            ));
+        }
 
-    let config = read_user_config()?;
-    let resources = recognition_resources(global, &config, &flags, false)?;
-    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
-    if evaluator
-        .target_kind(&target)
-        .map_err(|err| CliError::usage(err.to_string()))?
-        == TargetKind::ClickOnly
-    {
-        return Err(CliError::usage(format!(
-            "tap-target requires a visually evaluatable target; '{target}' is click-only"
-        )));
-    }
-    let scene = load_scene_from_flags(global, &flags)?;
-    let evaluation = evaluator
-        .evaluate_target(&scene, &target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    if !evaluation.passed {
-        return Err(CliError::safety_blocked(
-            "target_not_visible",
-            format!(
-                "target '{target}' did not pass recognition: {}",
-                evaluation.message
-            ),
-            &["visible_target"],
-        ));
-    }
-    let click = evaluator
-        .get_click_target(&target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    let point = rect_center(click)?;
-    if dry_run {
-        return Ok(json!({
-            "status": "planned",
-            "executed": false,
-            "target": target,
+        let config = read_user_config()?;
+        let resources = recognition_resources(global, &config, &flags, false)?;
+        let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+        if evaluator
+            .target_kind(&target)
+            .map_err(|err| CliError::usage(err.to_string()))?
+            == TargetKind::ClickOnly
+        {
+            return Err(CliError::usage(format!(
+                "tap-target requires a visually evaluatable target; '{target}' is click-only"
+            )));
+        }
+        let scene = load_scene_from_flags(global, &flags)?;
+        let evaluation = evaluator
+            .evaluate_target(&scene, &target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        let reco_id = ledger.issue(IdKind::Reco);
+        ledger.record_drive(json!({
+            "stage": "recognition",
+            "command": "tap-target",
+            "target": target.clone(),
+            "reco_id": reco_id.clone(),
+            "evaluation": target_eval_json(&evaluation)
+        }));
+        if !evaluation.passed {
+            return Err(CliError::safety_blocked(
+                "target_not_visible",
+                format!(
+                    "target '{target}' did not pass recognition: {}",
+                    evaluation.message
+                ),
+                &["visible_target"],
+            ));
+        }
+        let click = evaluator
+            .get_click_target(&target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        let point = rect_center(click)?;
+        let action_id = ledger.issue(IdKind::Action);
+        if dry_run {
+            let payload = json!({
+                "status": "planned",
+                "executed": false,
+                "target": target.clone(),
+                "req_id": ledger.req_id.clone(),
+                "reco_id": reco_id.clone(),
+                "action_id": action_id.clone(),
+                "click": rect_json(click),
+                "point": point_json(point),
+                "evaluation": target_eval_json(&evaluation),
+                "safety_gate": "navigation_only_default"
+            });
+            ledger.record_drive(json!({
+                "stage": "action_plan",
+                "command": "tap-target",
+                "target": target.clone(),
+                "action_id": action_id.clone(),
+                "executed": false,
+                "click": rect_json(click),
+                "point": point_json(point)
+            }));
+            return Ok(payload);
+        }
+
+        let action_result = send_semantic_tap(global, &config, point)?;
+        let payload = json!({
+            "status": "sent",
+            "executed": true,
+            "target": target.clone(),
+            "req_id": ledger.req_id.clone(),
+            "reco_id": reco_id.clone(),
+            "action_id": action_id.clone(),
             "click": rect_json(click),
             "point": point_json(point),
             "evaluation": target_eval_json(&evaluation),
-            "safety_gate": "navigation_only_default"
+            "safety_gate": "navigation_only_default",
+            "device": action_result
+        });
+        ledger.record_drive(json!({
+            "stage": "action",
+            "command": "tap-target",
+            "target": target.clone(),
+            "action_id": action_id.clone(),
+            "executed": true,
+            "click": rect_json(click),
+            "point": point_json(point),
+            "device": payload.get("device").cloned().unwrap_or(Value::Null)
         }));
-    }
-
-    let action_result = send_semantic_tap(global, &config, point)?;
-    Ok(json!({
-        "status": "sent",
-        "executed": true,
-        "target": target,
-        "click": rect_json(click),
-        "point": point_json(point),
-        "evaluation": target_eval_json(&evaluation),
-        "safety_gate": "navigation_only_default",
-        "device": action_result
-    }))
+        Ok(payload)
+    })();
+    finish_semantic_result_with_ledger(global, ledger, result)
 }
 
 fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6070,80 +6332,126 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         return submit_control_session_request(global, &flags, "navigate", args);
     }
     let to = flags.required("--to")?;
-    let allow_destructive = flags.bool("--allow-destructive");
-    let dry_run = global.dry_run || flags.bool("--dry-run");
-    if !dry_run && !flags.bool("--capture") {
-        return Err(CliError::usage(
-            "navigate real execution requires --capture; use --dry-run with --scene for route planning",
-        ));
-    }
-
-    let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
-    let graph = load_navigation_graph(global, &config, &flags)?;
-    let scene = load_scene_from_flags(global, &flags)?;
-    let start = detect_current_page(&evaluator, &detector, &scene)?;
-    if start.standby {
-        return Err(CliError::safety_blocked(
-            "current_page_unknown",
-            "navigate requires a matched current page before clicking",
-            &["current_page"],
-        ));
-    }
-    let target_page = canonical_navigation_page(&graph, &to);
-    if start.page == target_page {
-        return Ok(json!({
-            "status": "already_at_target",
-            "executed": false,
-            "from": start.page,
-            "to": target_page,
-            "route": []
-        }));
-    }
-    let route =
-        find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
-            CliError::usage(format!(
-                "no navigation route from '{}' to '{}'",
-                start.page, target_page
-            ))
-        })?;
-    for edge in &route {
-        if !allow_destructive {
-            reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-            reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+    let mut ledger = SemanticLedgerContext::new("navigate", global, args);
+    let result = (|| -> CliOutcome<Value> {
+        let allow_destructive = flags.bool("--allow-destructive");
+        let dry_run = global.dry_run || flags.bool("--dry-run");
+        if !dry_run && !flags.bool("--capture") {
+            return Err(CliError::usage(
+                "navigate real execution requires --capture; use --dry-run with --scene for route planning",
+            ));
         }
-    }
-    let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
-    if dry_run {
-        return Ok(json!({
-            "status": "planned",
-            "executed": false,
-            "from": start.page,
-            "to": target_page,
-            "route": route_json,
-            "safety_gate": "navigation_only_default"
-        }));
-    }
 
-    let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
-    let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
-    let execution = NavigationExecutionContext {
-        global,
-        flags: &flags,
-        config: &config,
-        evaluator: &evaluator,
-        detector: &detector,
-        step_timeout,
-        poll,
-    };
-    let (executed, _) = execute_navigation_route(&execution, start.page, route)?;
-    Ok(json!({
-        "status": "arrived",
-        "executed": true,
-        "to": target_page,
-        "steps": executed,
-        "safety_gate": "navigation_only_default"
-    }))
+        let config = read_user_config()?;
+        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let graph = load_navigation_graph(global, &config, &flags)?;
+        let scene = load_scene_from_flags(global, &flags)?;
+        let start = detect_current_page(&evaluator, &detector, &scene)?;
+        let reco_id = ledger.issue(IdKind::Reco);
+        ledger.record_drive(json!({
+            "stage": "recognition",
+            "command": "navigate",
+            "reco_id": reco_id.clone(),
+            "page": start.page.clone(),
+            "matched": start.matched,
+            "standby": start.standby
+        }));
+        if start.standby {
+            return Err(CliError::safety_blocked(
+                "current_page_unknown",
+                "navigate requires a matched current page before clicking",
+                &["current_page"],
+            ));
+        }
+        let target_page = canonical_navigation_page(&graph, &to);
+        if start.page == target_page {
+            return Ok(json!({
+                "status": "already_at_target",
+                "executed": false,
+                "req_id": ledger.req_id.clone(),
+                "reco_id": reco_id,
+                "from": start.page,
+                "to": target_page,
+                "route": []
+            }));
+        }
+        let route =
+            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+                CliError::usage(format!(
+                    "no navigation route from '{}' to '{}'",
+                    start.page, target_page
+                ))
+            })?;
+        for edge in &route {
+            if !allow_destructive {
+                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+            }
+        }
+        let action_ids = route
+            .iter()
+            .map(|_| ledger.issue(IdKind::Action))
+            .collect::<Vec<_>>();
+        let route_json = route
+            .iter()
+            .zip(action_ids.iter())
+            .map(|(edge, action_id)| navigation_edge_json_with_action_id(edge, action_id))
+            .collect::<Vec<_>>();
+        if dry_run {
+            let payload = json!({
+                "status": "planned",
+                "executed": false,
+                "req_id": ledger.req_id.clone(),
+                "reco_id": reco_id,
+                "from": start.page,
+                "to": target_page,
+                "route": route_json,
+                "safety_gate": "navigation_only_default"
+            });
+            ledger.record_drive(json!({
+                "stage": "action_plan",
+                "command": "navigate",
+                "executed": false,
+                "action_ids": action_ids,
+                "route": payload.get("route").cloned().unwrap_or(Value::Null)
+            }));
+            return Ok(payload);
+        }
+
+        let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
+        let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
+        let execution = NavigationExecutionContext {
+            global,
+            flags: &flags,
+            config: &config,
+            evaluator: &evaluator,
+            detector: &detector,
+            step_timeout,
+            poll,
+        };
+        let (mut executed, _) = execute_navigation_route(&execution, start.page, route)?;
+        for (step, action_id) in executed.iter_mut().zip(action_ids.iter()) {
+            step["action_id"] = json!(action_id);
+        }
+        let payload = json!({
+            "status": "arrived",
+            "executed": true,
+            "req_id": ledger.req_id.clone(),
+            "reco_id": reco_id,
+            "to": target_page,
+            "steps": executed,
+            "safety_gate": "navigation_only_default"
+        });
+        ledger.record_drive(json!({
+            "stage": "action",
+            "command": "navigate",
+            "executed": true,
+            "action_ids": action_ids,
+            "steps": payload.get("steps").cloned().unwrap_or(Value::Null)
+        }));
+        Ok(payload)
+    })();
+    finish_semantic_result_with_ledger(global, ledger, result)
 }
 
 fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6936,6 +7244,12 @@ fn navigation_edge_json(edge: &NavigationEdge) -> Value {
         "input": semantic_input_json(&edge.input),
         "source": edge.source
     })
+}
+
+fn navigation_edge_json_with_action_id(edge: &NavigationEdge, action_id: &str) -> Value {
+    let mut value = navigation_edge_json(edge);
+    value["action_id"] = json!(action_id);
+    value
 }
 
 fn control_point_json(point: &ControlPoint) -> Value {
@@ -53741,6 +54055,149 @@ mod tests {
             route[0].get("id").and_then(Value::as_str),
             Some("home_to_target")
         );
+    }
+
+    #[test]
+    fn lab1_direct_semantic_commands_write_runtime_ledger_receipts() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let run_root = temp.path().join("runs");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let detect = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "detect-page",
+                "--scene",
+                scene.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(detect.exit_code(), 0, "{}", detect.envelope_json());
+        let detect_data = detect.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            detect_data
+                .pointer("/ledger/written")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_lab_receipt_has_stages(
+            &run_root,
+            detect_data.get("req_id").and_then(Value::as_str).unwrap(),
+            &["request", "recognition"],
+        );
+
+        let tap = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "tap-target",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+        assert_eq!(tap.exit_code(), 0, "{}", tap.envelope_json());
+        let tap_data = tap.envelope.data.as_ref().unwrap();
+        assert!(tap_data.get("reco_id").and_then(Value::as_str).is_some());
+        assert!(tap_data.get("action_id").and_then(Value::as_str).is_some());
+        assert_lab_receipt_has_stages(
+            &run_root,
+            tap_data.get("req_id").and_then(Value::as_str).unwrap(),
+            &["request", "recognition", "action_plan"],
+        );
+
+        let navigate = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "navigate",
+                "--to",
+                "target",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+        assert_eq!(navigate.exit_code(), 0, "{}", navigate.envelope_json());
+        let navigate_data = navigate.envelope.data.as_ref().unwrap();
+        assert!(
+            navigate_data
+                .pointer("/route/0/action_id")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+        assert_lab_receipt_has_stages(
+            &run_root,
+            navigate_data.get("req_id").and_then(Value::as_str).unwrap(),
+            &["request", "recognition", "action_plan"],
+        );
+    }
+
+    fn assert_lab_receipt_has_stages(run_root: &Path, req_id: &str, stages: &[&str]) {
+        let receipt = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "lab",
+                "receipt",
+                "--req",
+                req_id,
+            ],
+            true,
+        );
+        assert_eq!(receipt.exit_code(), 0, "{}", receipt.envelope_json());
+        let records = receipt
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("records")
+            .and_then(Value::as_array)
+            .unwrap();
+        for stage in stages {
+            assert!(
+                records.iter().any(|item| {
+                    item.pointer("/record/payload/stage")
+                        .and_then(Value::as_str)
+                        == Some(*stage)
+                }),
+                "missing stage {stage} in {}",
+                receipt.envelope_json()
+            );
+        }
+        assert!(records.iter().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("receipt")
+                && item
+                    .pointer("/record/id_chain/req_id")
+                    .and_then(Value::as_str)
+                    == Some(req_id)
+        }));
     }
 
     #[test]
