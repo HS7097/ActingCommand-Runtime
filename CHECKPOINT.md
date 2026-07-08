@@ -10,6 +10,7 @@
 - A new `evidence_index` runtime-ledger drive record stores screenshot file names, issued `evidence_id` values, evidence refs, indexed/degraded counts, and degradation details.
 - `summary.json` and `diagnostics.json` now include screenshot evidence metadata, and result.zip includes `logs/evidence.json` generated from runtime-ledger projection data.
 - Missing or unreadable screenshot evidence degrades visibly with warnings and an `evidence_index_degraded` light event instead of silently pretending the evidence is complete.
+- Implementation commit `cca9788bccf80585aeebde9e8bec83b4111ce1d9` was pushed to `main` and tagged `checkpoint/20260709-runtime-ledger-l7-screenshot-evidence`.
 - This node does not add capture, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
 - Resource repositories were not read or modified for this node.
 
