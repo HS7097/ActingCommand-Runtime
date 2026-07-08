@@ -14362,7 +14362,8 @@ fn session_request_state_payload(state_dir: &Path, request_id: &str) -> CliOutco
             "request": request_path.display().to_string(),
             "running": running_path.display().to_string(),
             "response": response_path.display().to_string(),
-            "journal": session_request_journal_path(state_dir).display().to_string()
+            "journal": session_request_journal_path(state_dir).display().to_string(),
+            "ledger": session_request_ledger_path(state_dir).display().to_string()
         },
         "pending_request": pending_request,
         "running_request": running_request,
@@ -15006,8 +15007,11 @@ fn session_status_diagnostics(
     now_ms: u64,
     config: Option<&UserConfig>,
 ) -> CliOutcome<Value> {
-    let journal_read = read_session_request_journal_with_diagnostics(state_dir, 5)?;
+    let journal_read = read_session_request_projected_journal_with_diagnostics(state_dir, 5)?;
     let skipped_corrupt_lines = journal_read.skipped_corrupt_lines;
+    let ledger_receipts_scanned = journal_read.ledger_receipts_scanned;
+    let projected_from_ledger = journal_read.projected_from_ledger;
+    let projected_from_legacy = journal_read.projected_from_legacy;
     let recent_entries = journal_read.entries;
     let last_entry = recent_entries.last();
     let last_error = recent_entries.iter().rev().find(|entry| !entry.ok);
@@ -15061,11 +15065,16 @@ fn session_status_diagnostics(
         "phase_c": session_phase_c_diagnostics_summary()?,
         "validation": session_validation_diagnostics_summary(),
         "journal": {
+            "source": "runtime_ledger_projection",
             "exists": session_request_journal_path(state_dir).exists(),
             "path": session_request_journal_path(state_dir).display().to_string(),
+            "ledger": session_request_ledger_path(state_dir).display().to_string(),
             "bytes": file_size_if_exists(&session_request_journal_path(state_dir))?,
             "total_entries": count_session_request_journal_entries(state_dir)?,
             "skipped_corrupt_lines": skipped_corrupt_lines,
+            "ledger_receipts_scanned": ledger_receipts_scanned,
+            "projected_from_ledger": projected_from_ledger,
+            "projected_from_legacy": projected_from_legacy,
             "recent_limit": 5,
             "recent_count": recent_entries.len(),
             "last_entry": last_entry,
@@ -18445,14 +18454,17 @@ fn read_session_request_ledger_records(state_dir: &Path) -> CliOutcome<Vec<Ledge
 
 fn read_session_request_ledger_receipts(state_dir: &Path) -> CliOutcome<Vec<LedgerRecord>> {
     let mut latest_by_id = BTreeMap::new();
-    for record in read_session_request_ledger_records(state_dir)?
+    for (index, record) in read_session_request_ledger_records(state_dir)?
         .into_iter()
-        .filter(is_session_request_ledger_receipt)
+        .enumerate()
+        .filter(|(_, record)| is_session_request_ledger_receipt(record))
     {
         let request_id = session_request_ledger_record_request_id(&record)?;
-        latest_by_id.insert(request_id, record);
+        latest_by_id.insert(request_id, (index, record));
     }
-    Ok(latest_by_id.into_values().collect())
+    let mut records = latest_by_id.into_values().collect::<Vec<_>>();
+    records.sort_by_key(|(index, _)| *index);
+    Ok(records.into_iter().map(|(_, record)| record).collect())
 }
 
 fn is_session_request_ledger_receipt(record: &LedgerRecord) -> bool {
@@ -24654,7 +24666,7 @@ fn read_session_request_journal(
     state_dir: &Path,
     limit: usize,
 ) -> CliOutcome<Vec<SessionRequestJournalEntry>> {
-    Ok(read_session_request_journal_with_diagnostics(state_dir, limit)?.entries)
+    Ok(read_session_request_projected_journal_with_diagnostics(state_dir, limit)?.entries)
 }
 
 fn read_session_request_journal_with_diagnostics(
@@ -24704,40 +24716,45 @@ fn read_session_request_projected_journal_with_diagnostics(
     let legacy = read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?;
     let ledger_records = read_session_request_ledger_receipts(state_dir)?;
     let mut legacy_by_id = BTreeMap::new();
-    for entry in legacy.entries {
-        legacy_by_id.insert(entry.request_id.clone(), entry);
+    for (index, entry) in legacy.entries.into_iter().enumerate() {
+        legacy_by_id.insert(entry.request_id.clone(), (index, entry));
     }
 
     let mut projected_by_id = BTreeMap::new();
     let mut ledger_projected_request_ids = BTreeSet::new();
-    for record in ledger_records {
+    for (index, record) in ledger_records.into_iter().enumerate() {
         let projected = session_request_journal_entry_from_ledger_receipt(&record)?;
-        if let Some(legacy_entry) = legacy_by_id.get(&projected.request_id) {
+        if let Some((_, legacy_entry)) = legacy_by_id.get(&projected.request_id) {
             ensure_session_request_legacy_ledger_match(legacy_entry, &projected)?;
         }
         ledger_projected_request_ids.insert(projected.request_id.clone());
-        projected_by_id.insert(projected.request_id.clone(), projected);
+        projected_by_id.insert(projected.request_id.clone(), (index, projected));
     }
 
     let projected_from_ledger = projected_by_id.len();
     let mut projected_from_legacy = 0usize;
-    for (request_id, legacy_entry) in legacy_by_id {
+    for (request_id, (index, legacy_entry)) in legacy_by_id {
         if let std::collections::btree_map::Entry::Vacant(entry) = projected_by_id.entry(request_id)
         {
             projected_from_legacy += 1;
-            entry.insert(legacy_entry);
+            entry.insert((index, legacy_entry));
         }
     }
 
     let mut entries = projected_by_id.into_values().collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
+    entries.sort_by(|(left_index, left), (right_index, right)| {
         left.completed_at_unix_ms
             .cmp(&right.completed_at_unix_ms)
+            .then_with(|| left_index.cmp(right_index))
             .then_with(|| left.request_id.cmp(&right.request_id))
     });
     let skip = entries.len().saturating_sub(limit);
     Ok(SessionRequestJournalRead {
-        entries: entries.into_iter().skip(skip).collect(),
+        entries: entries
+            .into_iter()
+            .skip(skip)
+            .map(|(_, entry)| entry)
+            .collect(),
         skipped_corrupt_lines: legacy.skipped_corrupt_lines,
         legacy_entries_scanned: legacy.legacy_entries_scanned,
         ledger_receipts_scanned: projected_from_ledger,
@@ -24890,7 +24907,7 @@ fn session_request_journal_entry_from_ledger_receipt(
 
 fn count_session_request_journal_entries(state_dir: &Path) -> CliOutcome<usize> {
     Ok(
-        read_session_request_journal_with_diagnostics(state_dir, usize::MAX)?
+        read_session_request_projected_journal_with_diagnostics(state_dir, usize::MAX)?
             .entries
             .len(),
     )
@@ -42997,6 +43014,61 @@ mod tests {
     }
 
     #[test]
+    fn session_status_diagnostics_projects_ledger_only_receipts() {
+        let temp = TempDir::new().unwrap();
+        write_test_session_files(temp.path());
+        let request = SessionCommandRequest {
+            request_id: "status-ledger-only".to_string(),
+            command: "readiness".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("ark".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: 11,
+        };
+        let response = SessionCommandResponse {
+            request_id: "status-ledger-only".to_string(),
+            command: "readiness".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ready"})),
+            error: None,
+            started_at_unix_ms: 12,
+            completed_at_unix_ms: 13,
+        };
+        append_session_request_ledger_receipt(temp.path(), &request, &response).unwrap();
+
+        let status = session_status_payload(temp.path(), true).unwrap();
+        let journal = status.pointer("/diagnostics/journal").unwrap();
+        assert_eq!(
+            journal.get("source").and_then(Value::as_str),
+            Some("runtime_ledger_projection")
+        );
+        assert_eq!(
+            journal
+                .get("ledger_receipts_scanned")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            journal.get("projected_from_ledger").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            journal
+                .pointer("/last_entry/request_id")
+                .and_then(Value::as_str),
+            Some("status-ledger-only")
+        );
+    }
+
+    #[test]
     fn session_status_diagnostics_recommends_self_heal_escalation_review() {
         let temp = TempDir::new().unwrap();
         write_test_session_files(temp.path());
@@ -49083,7 +49155,18 @@ mod tests {
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(data.get("status").and_then(Value::as_str), Some("failed"));
-        assert!(data.get("journal_entry").is_some_and(Value::is_null));
+        assert_eq!(
+            data.pointer("/journal_entry/request_id")
+                .and_then(Value::as_str),
+            Some("ledger-only")
+        );
+        let expected_ledger_path = session_request_ledger_path(temp.path())
+            .display()
+            .to_string();
+        assert_eq!(
+            data.pointer("/paths/ledger").and_then(Value::as_str),
+            Some(expected_ledger_path.as_str())
+        );
         assert_eq!(
             data.pointer("/ledger_receipt/payload/error/code")
                 .and_then(Value::as_str),
