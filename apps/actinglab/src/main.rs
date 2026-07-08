@@ -12839,6 +12839,18 @@ fn session_response_payload(
             response.request_id
         )));
     }
+    let ledger_receipt = wait_for_session_request_ledger_receipt(
+        state_dir,
+        request_id,
+        Duration::from_millis(SESSION_DAEMON_REQUEST_ACK_TIMEOUT_MS),
+    )?;
+    let ledger_status = session_request_ledger_status(&ledger_receipt)?;
+    let expected_status = if response.ok { "completed" } else { "failed" };
+    if ledger_status != expected_status {
+        return Err(CliError::runtime_not_running(format!(
+            "session response {request_id} status conflicts with runtime ledger receipt status {ledger_status}"
+        )));
+    }
     let data_summary = session_request_data_summary(&response);
     if consume {
         fs::remove_file(&response_path).map_err(|err| {
@@ -12855,6 +12867,7 @@ fn session_response_payload(
         "consumed": consume,
         "response_path": response_path.display().to_string(),
         "response": response,
+        "ledger_receipt": ledger_receipt,
         "data_summary": data_summary
     });
     if let Some(wait) = wait {
@@ -27418,6 +27431,29 @@ mod tests {
             completed_at_unix_ms: 3,
         };
         append_session_request_journal(state_dir, &request, &response).unwrap();
+    }
+
+    fn append_test_session_response_ledger_receipt(
+        state_dir: &Path,
+        response: &SessionCommandResponse,
+    ) {
+        let request = SessionCommandRequest {
+            request_id: response.request_id.clone(),
+            command: response.command.clone(),
+            global: SessionCommandGlobal {
+                instance: None,
+                game: None,
+                server: None,
+                resource_root: None,
+                capture_backend: None,
+                touch_backend: None,
+                dry_run: false,
+            },
+            args: Vec::new(),
+            lease: None,
+            created_at_unix_ms: response.started_at_unix_ms.saturating_sub(1),
+        };
+        append_session_request_ledger_receipt(state_dir, &request, response).unwrap();
     }
 
     fn assert_daemon_request_ack_timeout(result: CliResult) {
@@ -42637,6 +42673,7 @@ mod tests {
         };
         let response_path = session_responses_dir(state_dir).join("response_ok.json");
         write_json_file_atomic(&response_path, &response).unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
 
         let result = run_cli(
             [
@@ -42681,6 +42718,7 @@ mod tests {
         };
         let response_path = session_responses_dir(state_dir).join("response_consume.json");
         write_json_file_atomic(&response_path, &response).unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
 
         let result = run_cli(
             [
@@ -42721,6 +42759,7 @@ mod tests {
         };
         let response_path = session_responses_dir(state_dir).join("response_wait.json");
         write_json_file_atomic(&response_path, &response).unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
 
         let result = run_cli(
             [
@@ -42780,6 +42819,7 @@ mod tests {
         };
         let response_path = session_responses_dir(state_dir).join("response_wait_consume.json");
         write_json_file_atomic(&response_path, &response).unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
 
         let result = run_cli(
             [
@@ -42885,6 +42925,48 @@ mod tests {
     }
 
     #[test]
+    fn session_response_get_requires_runtime_ledger_receipt() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path();
+        let response = SessionCommandResponse {
+            request_id: "response_without_ledger".to_string(),
+            command: "status".to_string(),
+            ok: true,
+            data: Some(json!({"status": "ready"})),
+            error: None,
+            started_at_unix_ms: 12,
+            completed_at_unix_ms: 13,
+        };
+        write_json_file_atomic(
+            &session_responses_dir(state_dir).join("response_without_ledger.json"),
+            &response,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "response",
+                "get",
+                "response_without_ledger",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 5);
+        let error = result.envelope.error.as_ref().unwrap();
+        assert_eq!(error.code, "runtime_not_running");
+        assert!(
+            error
+                .message
+                .contains("completed without a runtime ledger receipt")
+        );
+    }
+
+    #[test]
     fn session_response_get_rejects_unsafe_request_id() {
         let temp = TempDir::new().unwrap();
         let result = run_cli(
@@ -42924,6 +43006,7 @@ mod tests {
             &response,
         )
         .unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
         let query = SessionCommandRequest {
             request_id: "response-query".to_string(),
             command: "response".to_string(),
@@ -42977,6 +43060,7 @@ mod tests {
             &response,
         )
         .unwrap();
+        append_test_session_response_ledger_receipt(state_dir, &response);
         let query = SessionCommandRequest {
             request_id: "response-wait-query".to_string(),
             command: "response".to_string(),

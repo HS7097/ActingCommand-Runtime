@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session response projection
+
+### Current status
+
+- Continued Runtime issue #28 L3 after session request dispatch receipt recording.
+- `session response get` and `session response wait` now require a matching runtime-ledger receipt before returning a daemon response payload.
+- Response status and ledger receipt status must agree; conflicts fail loudly.
+- Response output now includes `ledger_receipt` so response consumers can trace the response to the unified fact source.
+- `--consume` removes the response only after the runtime-ledger receipt has been found and checked.
+- Added focused coverage for successful response reads with ledger receipts and the missing-ledger-receipt failure path.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "fn run_session_request|fn submit_session|request-state|session journal|session events|SessionCommandResponse|append_session_request_journal|session_request_ledger|request_wait|wait_for_session_request" apps/actinglab/src/main.rs`
+- `rg -n "request-state|request state|session request|journal|events" apps/actinglab/tests crates apps/actinglab/src/main.rs -g "*.rs"`
+- `rg -n "fn run_session_response|session_response|response get|response wait|read_pending_session_response|consume" apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_response -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused response suite passed: 10/10 `session_response` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 session response projection subnode is known.
+- Full issue #28 remains incomplete: remaining L3 surfaces and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 session response projection.
+2. Continue issue #28 with remaining L3 Session convergence surfaces.
+
 ## 2026-07-08 runtime-ledger L3 session request dispatch receipts
 
 ### Current status
