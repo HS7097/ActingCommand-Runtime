@@ -3087,8 +3087,35 @@ impl LabRunContext {
             }),
         )?;
         let reco_id = self.id_issuer.issue(IdKind::Reco).value;
+        let candidates = evaluations
+            .iter()
+            .map(page_evaluation_json)
+            .collect::<Vec<_>>();
+        let diagnostics = json!({"label": label});
+        let recognition_evidence_id = self.id_issuer.issue(IdKind::Evidence).value;
+        let recognition_detail = json!({
+            "reco_id": reco_id.as_str(),
+            "frame_index": self.frame_index,
+            "matched_page": matched_page.clone(),
+            "candidates": candidates.clone(),
+            "diagnostics": diagnostics.clone()
+        });
+        let recognition_evidence =
+            self.store_json_evidence(&recognition_evidence_id, "recognition", &recognition_detail);
+        if recognition_evidence.get("status").and_then(Value::as_str) == Some("degraded") {
+            self.event(
+                "recognition_evidence_degraded",
+                json!({
+                    "reco_id": reco_id.as_str(),
+                    "evidence_id": recognition_evidence_id.as_str(),
+                    "evidence": recognition_evidence.clone()
+                }),
+            )?;
+        }
         let recognition = json!({
-            "reco_id": reco_id,
+            "reco_id": reco_id.as_str(),
+            "evidence_id": recognition_evidence_id.as_str(),
+            "evidence": recognition_evidence,
             "timestamp": timestamp_iso(SystemTime::now()),
             "frame_index": self.frame_index,
             "file": retained_file,
@@ -3097,8 +3124,8 @@ impl LabRunContext {
             "storage_state": store_outcome.storage_state.as_str(),
             "backpressure_state": store_outcome.backpressure_state.as_str(),
             "matched_page": matched_page.clone(),
-            "candidates": evaluations.iter().map(page_evaluation_json).collect::<Vec<_>>(),
-            "diagnostics": {"label": label}
+            "candidates": candidates,
+            "diagnostics": diagnostics
         });
         self.append_ledger_record(
             self.ledger_record(
@@ -3109,7 +3136,8 @@ impl LabRunContext {
                     "recognition": recognition
                 }),
             )
-            .with_id("reco_id", reco_id.clone()),
+            .with_id("reco_id", reco_id.clone())
+            .with_id("evidence_id", recognition_evidence_id.clone()),
             "ledger_recognition",
         )?;
         self.recognition.push(recognition);
@@ -3370,6 +3398,38 @@ impl LabRunContext {
             )?;
         }
         Ok(())
+    }
+
+    fn store_json_evidence(&self, evidence_id: &str, kind: &str, value: &Value) -> Value {
+        let store = EvidenceStore::new(&self.run_root, true);
+        match serde_json::to_vec(value) {
+            Ok(bytes) => match store.put(evidence_id, kind, &bytes) {
+                Ok(Some(reference)) => json!({
+                    "evidence_id": evidence_id,
+                    "kind": kind,
+                    "status": "indexed",
+                    "refs": [reference]
+                }),
+                Ok(None) => json!({
+                    "evidence_id": evidence_id,
+                    "kind": kind,
+                    "status": "degraded",
+                    "warnings": ["evidence store debug mode disabled during lab run"]
+                }),
+                Err(err) => json!({
+                    "evidence_id": evidence_id,
+                    "kind": kind,
+                    "status": "degraded",
+                    "warnings": [format!("failed to store {kind} evidence: {err}")]
+                }),
+            },
+            Err(err) => json!({
+                "evidence_id": evidence_id,
+                "kind": kind,
+                "status": "degraded",
+                "warnings": [format!("failed to serialize {kind} evidence: {err}")]
+            }),
+        }
     }
 
     fn append_finalizing_record(
@@ -5746,12 +5806,35 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).expect("recognition line"))
             .collect::<Vec<_>>();
-        let reco_id = recognition
-            .first()
-            .and_then(|item| item.get("reco_id"))
+        let recognition_item = recognition.first().expect("recognition item");
+        let reco_id = recognition_item
+            .get("reco_id")
             .and_then(Value::as_str)
             .expect("reco_id");
         assert!(reco_id.starts_with("reco-"));
+        let evidence_id = recognition_item
+            .get("evidence_id")
+            .and_then(Value::as_str)
+            .expect("evidence_id");
+        assert!(evidence_id.starts_with("evidence-"));
+        let evidence_ref = recognition_item
+            .pointer("/evidence/refs/0/relative_path")
+            .and_then(Value::as_str)
+            .expect("evidence relative path");
+        let evidence_bytes =
+            fs::read(temp.path().join(evidence_ref)).expect("recognition evidence");
+        let evidence_detail: Value =
+            serde_json::from_slice(&evidence_bytes).expect("recognition evidence json");
+        assert_eq!(
+            evidence_detail.get("reco_id").and_then(Value::as_str),
+            Some(reco_id)
+        );
+        assert_eq!(
+            recognition_item
+                .pointer("/evidence/status")
+                .and_then(Value::as_str),
+            Some("indexed")
+        );
         let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
         let record = ledger
             .records
@@ -5765,6 +5848,10 @@ mod tests {
         assert_eq!(
             record.id_chain.get("reco_id").map(String::as_str),
             Some(reco_id)
+        );
+        assert_eq!(
+            record.id_chain.get("evidence_id").map(String::as_str),
+            Some(evidence_id)
         );
         assert_eq!(
             record
