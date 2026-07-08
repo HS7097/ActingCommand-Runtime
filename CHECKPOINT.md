@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L6 ledger query diagnostics
+
+### Current status
+
+- Re-read Runtime issue #28 and `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`.
+- Continued Runtime issue #28 into L6 with read-only ledger/evidence query commands.
+- Added `ledger show`, `ledger events`, `ledger receipts`, `ledger diagnose`, and `ledger evidence`.
+- Ledger queries recursively scan existing `ledger.jsonl` files under the selected run root and support `--run-id`, `--req-id`, and `--instance-id` filters where applicable.
+- `ledger diagnose` reports record/event/receipt/finalizing counts, corrupt-tail count, incomplete/not-found/terminal status, terminal receipt data, and missing-output diagnostics for terminal `finish_ok` records.
+- `ledger evidence` reads existing `EvidenceStore` files by `--evidence-id`; it does not write evidence or trigger device work.
+- Added capability and schema entries for the new read-only ledger commands.
+- Added focused coverage for records, events, receipts, diagnose, evidence lookup, and corrupt-tail reporting.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "runtime-ledger|Issue #28|ActingCommand-Runtime|TASK-runtime-ledger" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,updatedAt,url`
+- `gh issue view 28 --repo HS7097/ActingCommand-Runtime --comments`
+- `Get-Content -Path C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`
+- `cargo fmt --all`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab ledger_query_commands_read_records_events_receipts_diagnostics_and_evidence -- --nocapture`
+- `cargo test -p actingcommand-actinglab direct_touch_commands_are_capability_registered -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused L6 ledger query test passed.
+- Capability registration test passed with the new ledger commands.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L6 ledger query diagnostics subnode is known.
+- Full issue #28 remains incomplete: L5 CLI projection, L7 evidence/frame-store convergence, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L6 ledger query diagnostics node.
+2. Continue issue #28 with L5 CLI projection work or L7 evidence/frame-store convergence.
+
 ## 2026-07-08 runtime-ledger L4 containment light events
 
 ### Current status

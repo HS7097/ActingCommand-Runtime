@@ -45,6 +45,9 @@ Current node:
 - Direct Lab-1 `detect-page` records recognition `reco_id`; `tap-target` records recognition `reco_id` plus action `action_id`; `navigate` records recognition `reco_id` and route action ids.
 - `lab receipt --req <req_id>` can reconstruct the direct Lab-1 semantic command chain from the same `actingcommand-ledger` records.
 - L4 containment light-event bridging has started: `package validate`, `package inspect`, and direct blocked `package run` write package containment light events when a run root is available.
+- L6 ledger read-only query and diagnostic commands are implemented: `ledger show`, `ledger events`, `ledger receipts`, `ledger diagnose`, and `ledger evidence` now query existing runtime-ledger/evidence files without device I/O.
+- L6 queries support `--run-root` plus `--run-id`, `--req-id`, and `--instance-id` filters where applicable; corrupt JSONL tail counts are surfaced in query outputs instead of hiding partial-read state.
+- `ledger diagnose` reports incomplete/not-found/terminal status, receipt counts, finalizing counts, terminal receipt data when present, and missing-output diagnostics for `finish_ok` records.
 
 Issue #28 remaining chain:
 
@@ -52,7 +55,6 @@ Issue #28 remaining chain:
 - L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
 - L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
 - L5: make CLI outputs ledger projections instead of independent facts.
-- L6: add read-only ledger query and diagnosis commands.
 - L7: connect Evidence and FrameStore references.
 - L8: run the full adversarial acceptance set and the 95 percent completion gate.
 
@@ -62,6 +64,7 @@ Current boundary:
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
 - The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
 - The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
+- The current L6 work adds read-only ledger/evidence inspection commands only; it does not trigger capture, touch, runtime daemon, or game-device work.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module

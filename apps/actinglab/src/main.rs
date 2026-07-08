@@ -8,7 +8,8 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_ledger::{
-    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader,
+    EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRead, LedgerRecord, LedgerRecordKind,
+    LightEvent, SessionHeader,
 };
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
@@ -1270,7 +1271,7 @@ fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
         "config" | "lab" | "package" | "operation" | "control" | "scheduler" | "resource"
-        | "run" | "report" | "session" => rest.get(1).map(|_| 2).unwrap_or(1),
+        | "run" | "report" | "session" | "ledger" => rest.get(1).map(|_| 2).unwrap_or(1),
         _ => 1,
     };
     let command = rest.iter().take(path_len).cloned().collect::<Vec<_>>();
@@ -1340,6 +1341,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "resource" => {
             run_resource(sub, &invocation.global, &invocation.args)
         }
+        [group, sub] if group == "ledger" => run_ledger(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "session" => {
             run_session(sub, &invocation.global, &invocation.args)
         }
@@ -4601,8 +4603,15 @@ fn run_schema(args: &[String]) -> CliOutcome<Value> {
             "required_paths": ["<module>/manifest.json", "<module>/operations/<task_id>/task.json"],
             "security": ["no zip-slip", "no executable scripts", "hashes verified when declared"]
         }),
+        "ledger" => json!({
+            "schema_version": "actingcommand.ledger.query.v0.1",
+            "commands": ["show", "events", "receipts", "diagnose", "evidence"],
+            "filters": ["--run-id", "--req-id", "--instance-id"],
+            "read_only": true,
+            "device_io": false
+        }),
         "all" => json!({
-            "schemas": ["task", "control", "pack", "package", "observe", "do", "ensure", "wait", "lab receipt"]
+            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt"]
         }),
         other => lab2_cli::command_schema(other)
             .ok_or_else(|| CliError::usage(format!("unknown schema kind: {other}")))?,
@@ -4623,6 +4632,424 @@ fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         }
         other => Err(CliError::usage(format!("unknown list kind: {other}"))),
     }
+}
+
+struct LedgerFile {
+    path: PathBuf,
+    read: LedgerRead,
+}
+
+fn run_ledger(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    match sub {
+        "show" => run_ledger_show(global, &flags),
+        "events" => run_ledger_events(global, &flags),
+        "receipts" => run_ledger_receipts(global, &flags),
+        "diagnose" => run_ledger_diagnose(global, &flags),
+        "evidence" => run_ledger_evidence(global, &flags),
+        other => Err(CliError::usage(format!(
+            "unknown ledger command: {other}; expected show, events, receipts, diagnose, or evidence"
+        ))),
+    }
+}
+
+fn run_ledger_show(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let filter = LedgerFilter::from_flags(flags)?;
+    let run_root = ledger_run_root(global, flags)?;
+    let entries = read_ledger_files(&run_root)?;
+    let limit = parse_optional_usize(flags, "--limit", 200)?;
+    let mut records = Vec::new();
+    let mut events = Vec::new();
+    for entry in &entries {
+        for record in &entry.read.records {
+            if filter.matches_record(record, &entry.path, entry.read.header.as_ref()) {
+                records.push(json!({
+                    "ledger_path": entry.path.display().to_string(),
+                    "kind": record.kind.as_str(),
+                    "record": record
+                }));
+            }
+        }
+        for event in &entry.read.events {
+            if filter.matches_event(event, &entry.path, entry.read.header.as_ref()) {
+                events.push(json!({
+                    "ledger_path": entry.path.display().to_string(),
+                    "event": event
+                }));
+            }
+        }
+    }
+    let record_count = records.len();
+    let event_count = events.len();
+    records.truncate(limit);
+    events.truncate(limit);
+    Ok(json!({
+        "schema_version": "actingcommand.ledger.show.v0.1",
+        "run_root": run_root.display().to_string(),
+        "filter": filter.to_json(),
+        "ledgers_scanned": entries.len(),
+        "skipped_corrupt_lines": skipped_corrupt_lines(&entries),
+        "record_count": record_count,
+        "event_count": event_count,
+        "records_more": record_count.saturating_sub(records.len()),
+        "events_more": event_count.saturating_sub(events.len()),
+        "records": records,
+        "events": events
+    }))
+}
+
+fn run_ledger_events(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let filter = LedgerFilter::from_flags(flags)?;
+    let run_root = ledger_run_root(global, flags)?;
+    let entries = read_ledger_files(&run_root)?;
+    let limit = parse_optional_usize(flags, "--limit", 200)?;
+    let mut events = Vec::new();
+    for entry in &entries {
+        for event in &entry.read.events {
+            if filter.matches_event(event, &entry.path, entry.read.header.as_ref()) {
+                events.push(json!({
+                    "ledger_path": entry.path.display().to_string(),
+                    "event": event
+                }));
+            }
+        }
+    }
+    let event_count = events.len();
+    events.truncate(limit);
+    Ok(json!({
+        "schema_version": "actingcommand.ledger.events.v0.1",
+        "run_root": run_root.display().to_string(),
+        "filter": filter.to_json(),
+        "ledgers_scanned": entries.len(),
+        "skipped_corrupt_lines": skipped_corrupt_lines(&entries),
+        "event_count": event_count,
+        "events_more": event_count.saturating_sub(events.len()),
+        "events": events
+    }))
+}
+
+fn run_ledger_receipts(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let req_id = flags.required("--req-id")?;
+    let filter = LedgerFilter::for_req(req_id.clone());
+    let run_root = ledger_run_root(global, flags)?;
+    let entries = read_ledger_files(&run_root)?;
+    let mut receipts = Vec::new();
+    for entry in &entries {
+        for record in &entry.read.records {
+            if record.kind == LedgerRecordKind::Receipt
+                && filter.matches_record(record, &entry.path, entry.read.header.as_ref())
+            {
+                receipts.push(json!({
+                    "ledger_path": entry.path.display().to_string(),
+                    "record": record
+                }));
+            }
+        }
+    }
+    Ok(json!({
+        "schema_version": "actingcommand.ledger.receipts.v0.1",
+        "run_root": run_root.display().to_string(),
+        "req_id": req_id,
+        "ledgers_scanned": entries.len(),
+        "skipped_corrupt_lines": skipped_corrupt_lines(&entries),
+        "receipt_count": receipts.len(),
+        "receipts": receipts
+    }))
+}
+
+fn run_ledger_diagnose(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let filter = LedgerFilter::from_flags(flags)?;
+    let run_root = ledger_run_root(global, flags)?;
+    let entries = read_ledger_files(&run_root)?;
+    let mut matching_records = Vec::new();
+    let mut matching_events = Vec::new();
+    for entry in &entries {
+        for record in &entry.read.records {
+            if filter.matches_record(record, &entry.path, entry.read.header.as_ref()) {
+                matching_records.push((entry.path.clone(), record.clone()));
+            }
+        }
+        for event in &entry.read.events {
+            if filter.matches_event(event, &entry.path, entry.read.header.as_ref()) {
+                matching_events.push((entry.path.clone(), event.clone()));
+            }
+        }
+    }
+    let receipt_records = matching_records
+        .iter()
+        .filter(|(_, record)| record.kind == LedgerRecordKind::Receipt)
+        .collect::<Vec<_>>();
+    let finalizing_count = matching_records
+        .iter()
+        .filter(|(_, record)| record_type(record) == Some("finalizing"))
+        .count();
+    let terminal = receipt_records
+        .iter()
+        .rev()
+        .find(|(_, record)| matches!(record_type(record), Some("finish_ok" | "finish_error")))
+        .copied();
+    let status = terminal
+        .and_then(|(_, record)| record.payload.get("status").and_then(Value::as_str))
+        .or_else(|| {
+            receipt_records
+                .iter()
+                .rev()
+                .find_map(|(_, record)| record.payload.get("state").and_then(Value::as_str))
+        })
+        .unwrap_or(
+            if matching_records.is_empty() && matching_events.is_empty() {
+                "not_found"
+            } else {
+                "incomplete"
+            },
+        );
+    let output_zip = terminal.and_then(|(_, record)| record.payload.get("output_zip").cloned());
+    let output_zip_exists = output_zip
+        .as_ref()
+        .and_then(|zip| zip.get("path"))
+        .and_then(Value::as_str)
+        .map(|path| Path::new(path).exists());
+    Ok(json!({
+        "schema_version": "actingcommand.ledger.diagnose.v0.1",
+        "run_root": run_root.display().to_string(),
+        "filter": filter.to_json(),
+        "status": status,
+        "ledgers_scanned": entries.len(),
+        "skipped_corrupt_lines": skipped_corrupt_lines(&entries),
+        "record_count": matching_records.len(),
+        "event_count": matching_events.len(),
+        "receipt_count": receipt_records.len(),
+        "finalizing_count": finalizing_count,
+        "terminal_receipt": terminal.map(|(path, record)| json!({
+            "ledger_path": path.display().to_string(),
+            "record": record
+        })),
+        "output_zip": output_zip,
+        "output_zip_exists": output_zip_exists,
+        "diagnostics": ledger_diagnosis_warnings(
+            status,
+            finalizing_count,
+            receipt_records.len(),
+            output_zip_exists
+        )
+    }))
+}
+
+fn run_ledger_evidence(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    let evidence_id = flags.required("--evidence-id")?;
+    let run_root = ledger_run_root(global, flags)?;
+    let refs = EvidenceStore::new(&run_root, true)
+        .list_by_id(&evidence_id)
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "schema_version": "actingcommand.ledger.evidence.v0.1",
+        "run_root": run_root.display().to_string(),
+        "evidence_id": evidence_id,
+        "evidence_count": refs.len(),
+        "evidence": refs
+    }))
+}
+
+#[derive(Debug)]
+struct LedgerFilter {
+    run_id: Option<String>,
+    req_id: Option<String>,
+    instance_id: Option<String>,
+}
+
+impl LedgerFilter {
+    fn from_flags(flags: &FlagArgs) -> CliOutcome<Self> {
+        let filter = Self {
+            run_id: flags.optional("--run-id").filter(|value| value != "true"),
+            req_id: flags
+                .optional("--req-id")
+                .or_else(|| flags.optional("--request-id"))
+                .filter(|value| value != "true"),
+            instance_id: flags
+                .optional("--instance-id")
+                .or_else(|| flags.optional("--instance"))
+                .filter(|value| value != "true"),
+        };
+        if filter.run_id.is_none() && filter.req_id.is_none() && filter.instance_id.is_none() {
+            return Err(CliError::usage(
+                "ledger query requires --run-id, --req-id, or --instance-id",
+            ));
+        }
+        Ok(filter)
+    }
+
+    fn for_req(req_id: String) -> Self {
+        Self {
+            run_id: None,
+            req_id: Some(req_id),
+            instance_id: None,
+        }
+    }
+
+    fn matches_record(
+        &self,
+        record: &LedgerRecord,
+        path: &Path,
+        header: Option<&SessionHeader>,
+    ) -> bool {
+        self.run_id
+            .as_ref()
+            .is_none_or(|run_id| record_contains_id(record, path, "run_id", run_id))
+            && self.req_id.as_ref().is_none_or(|req_id| {
+                record.req_id.as_deref() == Some(req_id)
+                    || record_contains_id(record, path, "req_id", req_id)
+            })
+            && self.instance_id.as_ref().is_none_or(|instance_id| {
+                header.is_some_and(|header| header.instance == *instance_id)
+                    || record_contains_id(record, path, "instance", instance_id)
+                    || record_contains_id(record, path, "instance_id", instance_id)
+            })
+    }
+
+    fn matches_event(
+        &self,
+        event: &LightEvent,
+        path: &Path,
+        header: Option<&SessionHeader>,
+    ) -> bool {
+        self.run_id
+            .as_ref()
+            .is_none_or(|run_id| event_contains_id(event, path, "run_id", run_id))
+            && self.req_id.as_ref().is_none_or(|req_id| {
+                event.ids.get("req_id").is_some_and(|value| value == req_id)
+                    || event_contains_id(event, path, "req_id", req_id)
+            })
+            && self.instance_id.as_ref().is_none_or(|instance_id| {
+                header.is_some_and(|header| header.instance == *instance_id)
+                    || event_contains_id(event, path, "instance", instance_id)
+                    || event_contains_id(event, path, "instance_id", instance_id)
+            })
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "run_id": self.run_id,
+            "req_id": self.req_id,
+            "instance_id": self.instance_id
+        })
+    }
+}
+
+fn ledger_run_root(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<PathBuf> {
+    if let Some(path) = flags.optional_path("--run-root") {
+        return Ok(path);
+    }
+    let config = read_user_config()?;
+    effective_run_root(global, &config)
+        .ok_or_else(|| CliError::usage("ledger query requires --run-root or config run_root"))
+}
+
+fn read_ledger_files(run_root: &Path) -> CliOutcome<Vec<LedgerFile>> {
+    let mut paths = Vec::new();
+    collect_runtime_ledger_paths(run_root, &mut paths)?;
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let read = LabLedger::read(&path).map_err(|err| {
+                CliError::device(format!("failed to read ledger {}: {err}", path.display()))
+            })?;
+            Ok(LedgerFile { path, read })
+        })
+        .collect()
+}
+
+fn collect_runtime_ledger_paths(root: &Path, paths: &mut Vec<PathBuf>) -> CliOutcome<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)
+        .map_err(|err| CliError::device(format!("failed to read {}: {err}", root.display())))?
+    {
+        let entry = entry.map_err(|err| CliError::device(err.to_string()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_runtime_ledger_paths(&path, paths)?;
+        } else if path.file_name().and_then(|name| name.to_str()) == Some("ledger.jsonl") {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn skipped_corrupt_lines(entries: &[LedgerFile]) -> usize {
+    entries
+        .iter()
+        .map(|entry| entry.read.skipped_corrupt_lines)
+        .sum()
+}
+
+fn record_contains_id(record: &LedgerRecord, path: &Path, key: &str, expected: &str) -> bool {
+    record
+        .id_chain
+        .get(key)
+        .is_some_and(|value| value == expected)
+        || value_contains_id(&record.payload, key, expected)
+        || path_contains_segment(path, expected)
+}
+
+fn event_contains_id(event: &LightEvent, path: &Path, key: &str, expected: &str) -> bool {
+    event.ids.get(key).is_some_and(|value| value == expected)
+        || value_contains_id(&event.payload, key, expected)
+        || path_contains_segment(path, expected)
+}
+
+fn value_contains_id(value: &Value, key: &str, expected: &str) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(item_key, item)| {
+            (item_key == key && item.as_str() == Some(expected))
+                || value_contains_id(item, key, expected)
+        }),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| value_contains_id(item, key, expected)),
+        _ => false,
+    }
+}
+
+fn path_contains_segment(path: &Path, expected: &str) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().to_string_lossy() == expected)
+}
+
+fn record_type(record: &LedgerRecord) -> Option<&str> {
+    record.payload.get("record_type").and_then(Value::as_str)
+}
+
+fn ledger_diagnosis_warnings(
+    status: &str,
+    finalizing_count: usize,
+    receipt_count: usize,
+    output_zip_exists: Option<bool>,
+) -> Vec<Value> {
+    let mut diagnostics = Vec::new();
+    if finalizing_count == 0 {
+        diagnostics.push(json!({
+            "severity": "warning",
+            "code": "missing_finalizing",
+            "message": "runtime ledger query did not find a finalizing record"
+        }));
+    }
+    if receipt_count == 0 {
+        diagnostics.push(json!({
+            "severity": "warning",
+            "code": "missing_receipt",
+            "message": "runtime ledger query did not find a receipt record"
+        }));
+    }
+    if status == "ok" && output_zip_exists == Some(false) {
+        diagnostics.push(json!({
+            "severity": "error",
+            "code": "terminal_output_missing",
+            "message": "ledger reports ok but the recorded output zip path does not exist"
+        }));
+    }
+    diagnostics
 }
 
 fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -25977,6 +26404,11 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("package inspect", ["offline"], "available"),
         command_cap("package build-task", ["offline"], "available"),
         command_cap("package build-pack", ["offline"], "available"),
+        command_cap("ledger show", ["offline", "read_only"], "available"),
+        command_cap("ledger events", ["offline", "read_only"], "available"),
+        command_cap("ledger receipts", ["offline", "read_only"], "available"),
+        command_cap("ledger diagnose", ["offline", "read_only"], "available"),
+        command_cap("ledger evidence", ["offline", "read_only"], "available"),
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
@@ -53432,6 +53864,11 @@ mod tests {
             "session request package-run",
             "session request operation-run",
             "session lease",
+            "ledger show",
+            "ledger events",
+            "ledger receipts",
+            "ledger diagnose",
+            "ledger evidence",
             "stream",
             "capture diagnose",
         ] {
@@ -54308,6 +54745,212 @@ mod tests {
             &run_root,
             navigate_data.get("req_id").and_then(Value::as_str).unwrap(),
             &["request", "recognition", "action_plan"],
+        );
+    }
+
+    #[test]
+    fn ledger_query_commands_read_records_events_receipts_diagnostics_and_evidence() {
+        let _guard = env_lock();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        let temp = semantic_resource_root(false);
+        let run_root = temp.path().join("runs");
+        let scene = temp.path().join("home.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+
+        let tap = run_cli(
+            [
+                "--json",
+                "--resource-root",
+                temp.path().to_str().unwrap(),
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--game",
+                "ark",
+                "tap-target",
+                "home_button",
+                "--scene",
+                scene.to_str().unwrap(),
+                "--dry-run",
+            ],
+            true,
+        );
+        assert_eq!(tap.exit_code(), 0, "{}", tap.envelope_json());
+        let tap_data = tap.envelope.data.as_ref().unwrap();
+        let req_id = tap_data.get("req_id").and_then(Value::as_str).unwrap();
+        let ledger_path = tap_data
+            .pointer("/ledger/path")
+            .and_then(Value::as_str)
+            .unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(ledger_path)
+            .unwrap()
+            .write_all(b"{corrupt-tail\n")
+            .unwrap();
+
+        let show = run_cli(
+            [
+                "--json",
+                "ledger",
+                "show",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--req-id",
+                req_id,
+            ],
+            true,
+        );
+        assert_eq!(show.exit_code(), 0, "{}", show.envelope_json());
+        let show_data = show.envelope.data.as_ref().unwrap();
+        assert!(
+            show_data
+                .get("record_count")
+                .and_then(Value::as_u64)
+                .unwrap()
+                >= 3
+        );
+
+        let receipts = run_cli(
+            [
+                "--json",
+                "ledger",
+                "receipts",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--req-id",
+                req_id,
+            ],
+            true,
+        );
+        assert_eq!(receipts.exit_code(), 0, "{}", receipts.envelope_json());
+        assert!(
+            receipts
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("receipt_count")
+                .and_then(Value::as_u64)
+                .unwrap()
+                >= 1
+        );
+
+        let diagnose = run_cli(
+            [
+                "--json",
+                "ledger",
+                "diagnose",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--req-id",
+                req_id,
+            ],
+            true,
+        );
+        assert_eq!(diagnose.exit_code(), 0, "{}", diagnose.envelope_json());
+        let diagnose_data = diagnose.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            diagnose_data.get("status").and_then(Value::as_str),
+            Some("incomplete")
+        );
+        assert!(
+            diagnose_data
+                .get("skipped_corrupt_lines")
+                .and_then(Value::as_u64)
+                .unwrap()
+                >= 1
+        );
+
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+        let package = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(package.exit_code(), 0, "{}", package.envelope_json());
+        let package_req_id = package
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("req_id")
+            .and_then(Value::as_str)
+            .unwrap();
+        let events = run_cli(
+            [
+                "--json",
+                "ledger",
+                "events",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--req-id",
+                package_req_id,
+            ],
+            true,
+        );
+        assert_eq!(events.exit_code(), 0, "{}", events.envelope_json());
+        let event_items = events
+            .envelope
+            .data
+            .as_ref()
+            .unwrap()
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(event_items.iter().any(|item| {
+            item.pointer("/event/event_type").and_then(Value::as_str) == Some("package.validate.ok")
+        }));
+
+        EvidenceStore::new(&run_root, true)
+            .put("evidence-query", "frame", b"frame bytes")
+            .unwrap()
+            .unwrap();
+        let evidence = run_cli(
+            [
+                "--json",
+                "ledger",
+                "evidence",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "--evidence-id",
+                "evidence-query",
+            ],
+            true,
+        );
+        assert_eq!(evidence.exit_code(), 0, "{}", evidence.envelope_json());
+        assert_eq!(
+            evidence
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("evidence_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
     }
 
