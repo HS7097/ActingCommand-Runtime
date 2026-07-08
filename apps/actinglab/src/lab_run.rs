@@ -3741,6 +3741,27 @@ impl LabRunContext {
                 "runtime ledger successful terminal receipt missing output_zip",
             ));
         }
+        if ok {
+            let output_zip = output_zip.as_ref().ok_or_else(|| {
+                CliError::package_invalid(
+                    "runtime ledger successful terminal receipt missing output_zip",
+                )
+            })?;
+            let output_path = Path::new(&output_zip.path);
+            if !output_path.is_file() {
+                return Err(CliError::package_invalid(format!(
+                    "runtime ledger successful terminal receipt output_zip file is missing: {}",
+                    output_path.display()
+                )));
+            }
+            let actual_sha256 = file_sha256(output_path)?;
+            if actual_sha256 != output_zip.sha256 {
+                return Err(CliError::package_invalid(format!(
+                    "runtime ledger successful terminal receipt output_zip sha256 mismatch: expected {}, got {}",
+                    output_zip.sha256, actual_sha256
+                )));
+            }
+        }
         Ok(LabCompletedProjection {
             run_id: self.run_id.clone(),
             status: status.to_string(),
@@ -6009,6 +6030,62 @@ mod tests {
             completed.ledger_path,
             ctx.ledger_path.as_ref().expect("ledger path").to_path_buf()
         );
+    }
+
+    #[test]
+    fn completed_projection_rejects_finish_ok_with_missing_output_zip_file() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        let summary = ctx.summary_json(true, None, None);
+        let diagnostics = ctx.diagnostics_json(None, None);
+        let environment = ctx.environment_json(None);
+        ctx.append_finalizing_record(true, None, summary, diagnostics, environment)
+            .expect("finalizing");
+        let archive = commit_then_record(|| -> Result<_, LabLogError> {
+            Ok(ArchiveResult {
+                path: temp.path().join("missing.zip"),
+                sha256: "missing".to_string(),
+            })
+        })
+        .expect("commit proof");
+        ctx.append_terminal_receipt(true, None, None, Some(&archive))
+            .expect("terminal receipt");
+
+        let err = ctx
+            .project_completed_run_from_ledger()
+            .expect_err("missing output zip file must fail");
+
+        assert!(err.message.contains("output_zip file is missing"));
+    }
+
+    #[test]
+    fn completed_projection_rejects_finish_ok_with_output_zip_sha256_mismatch() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.ensure_ledger().expect("ledger");
+        let summary = ctx.summary_json(true, None, None);
+        let diagnostics = ctx.diagnostics_json(None, None);
+        let environment = ctx.environment_json(None);
+        ctx.append_finalizing_record(true, None, summary, diagnostics, environment)
+            .expect("finalizing");
+        let out = temp.path().join("out.zip");
+        fs::write(&out, b"changed after ledger receipt").expect("output file");
+        let archive = commit_then_record(|| -> Result<_, LabLogError> {
+            Ok(ArchiveResult {
+                path: out,
+                sha256: "not-the-real-sha256".to_string(),
+            })
+        })
+        .expect("commit proof");
+        ctx.append_terminal_receipt(true, None, None, Some(&archive))
+            .expect("terminal receipt");
+
+        let err = ctx
+            .project_completed_run_from_ledger()
+            .expect_err("sha mismatch must fail");
+
+        assert!(err.message.contains("output_zip sha256 mismatch"));
     }
 
     #[test]
