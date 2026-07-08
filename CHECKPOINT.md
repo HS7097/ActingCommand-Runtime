@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L8 acceptance closeout
+
+### Current status
+
+- Continued Runtime issue #28 into L8 after the L3 Session status projection subnode.
+- Successful Lab completed-run projection now verifies that the terminal receipt output zip still exists and that its current sha256 matches the sha256 recorded in the runtime-ledger receipt.
+- Added adversarial tests for `finish_ok` receipts whose output zip is missing or whose output zip sha256 no longer matches.
+- Added acceptance report `benchmarks/reports/2026-07-09-runtime-ledger-issue28-l8-acceptance.md`.
+- The report records the issue #28 implemented-module gate as 23/23 current fact surfaces covered by runtime-ledger writes, projections, or explicit compatibility boundaries.
+- The Session `request-journal.jsonl` compatibility sidecar remains physically present, but covered read/status/event paths now consume or cross-check runtime-ledger receipt projections and fail loudly on conflicts.
+- Implementation commit `3c4f3d9ccf92515f8fb94897e96ab6bdaed94729` was created and tagged `checkpoint/20260709-runtime-ledger-l8-output-zip-receipt-validation`.
+- This closeout does not add live-device work, UI, scheduler, SQLite, encrypted log service, new game logic, or resource repository reads.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `benchmarks/reports/2026-07-09-runtime-ledger-issue28-l8-acceptance.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-actinglab completed_projection_rejects_finish_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab completed_projection_requires_finalizing_record -- --nocapture`
+- `cargo test -p actingcommand-actinglab completed_projection_requires_terminal_receipt -- --nocapture`
+- `cargo test -p actingcommand-actinglab completed_projection_rejects_finish_ok_with_missing_output_zip_file -- --nocapture`
+- `cargo test -p actingcommand-actinglab completed_projection_rejects_finish_ok_with_output_zip_sha256_mismatch -- --nocapture`
+- `cargo test -p actingcommand-actinglab zip_failure_after_success_does_not_record_finish_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab write_logs_failure_does_not_record_finish_ok -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_response_get_requires_runtime_ledger_receipt -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab2_do_guard_miss_returns_actionable_error_details -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab1_direct_semantic_commands_write_runtime_ledger_receipts -- --nocapture`
+- `cargo test -p actingcommand-actinglab ledger_query_commands_read_records_events_receipts_diagnostics_and_evidence -- --nocapture`
+- `cargo test -p actingcommand-actinglab session_status_diagnostics_projects_ledger_only_receipts -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused adversarial projection tests passed.
+- Focused runtime-ledger acceptance checks passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker is known for issue #28 current implemented-module scope.
+- Compatibility request-journal physical removal remains a later tail after downstream compatibility is no longer needed.
+
+### Next step
+
+1. Push implementation commit `3c4f3d9ccf92515f8fb94897e96ab6bdaed94729`, tag `checkpoint/20260709-runtime-ledger-l8-output-zip-receipt-validation`, the acceptance report, and this planning/checkpoint update.
+2. Treat issue #28 as complete for the current implemented-module scope after remote push verifies cleanly.
+
 ## 2026-07-09 runtime-ledger L3 session status projection
 
 ### Current status

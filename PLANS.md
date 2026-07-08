@@ -58,15 +58,13 @@ Current node:
 - L7 recognition evidence traceability has started: `lab run` now stores per-recognition detail payloads in `EvidenceStore`, projects the evidence ref into `logs/recognition.jsonl`, and records the `evidence_id` in the recognition drive record id chain.
 - L5 CLI projection convergence has started: Lab-2 command success and error payloads now read back the durable runtime-ledger receipt after write, project the CLI response from that receipt, and expose `projection_source.kind=runtime_ledger`.
 - L5 semantic CLI projection convergence has started: direct Lab-1 semantic commands `detect-page`, `tap-target`, and `navigate` now read back the durable runtime-ledger receipt and project their CLI output from it with `projection_source.kind=runtime_ledger`.
+- L8 acceptance closeout is recorded in `benchmarks/reports/2026-07-09-runtime-ledger-issue28-l8-acceptance.md`; current implemented-module fact surfaces meet the 95 percent gate at 23/23, and successful Lab output-zip receipts now reject missing files or sha256 mismatches during projection.
 
-Issue #28 remaining chain:
+Issue #28 completed status and follow-up tail:
 
-- L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
-- L3: continue Session convergence for any remaining legacy-only diagnostics and remove the compatibility request journal as a second durable output after compatibility is proven.
-- L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
-- L5: continue remaining CLI output projection surfaces beyond the first Lab-2 and direct Lab-1 semantic receipt-backed response paths.
-- L7: continue remaining Evidence / FrameStore convergence for any remaining record-step or evidence surfaces beyond the screenshot evidence index, recognition id/evidence traceability, capture backend selection record, and action-id step traceability now in place.
-- L8: run the full adversarial acceptance set and the 95 percent completion gate.
+- L0-L8 are accepted for the issue #28 current implemented-module scope.
+- The Session `request-journal.jsonl` compatibility sidecar still exists, but covered read/status/event paths consume or cross-check runtime-ledger receipt projections and fail loudly on conflict.
+- Future UI, scheduler, agent-only protocol, database, encrypted log service, and new game-logic modules remain excluded from the issue #28 denominator and need their own runtime-ledger integration when implemented.
 
 Current boundary:
 
@@ -74,9 +72,10 @@ Current boundary:
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
 - The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, `session status --diagnostics`, cancellation not-found checks, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished while the compatibility request journal still exists.
 - The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, remaining CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
-- The current L5 work projects the first Lab-2 and direct Lab-1 semantic CLI outputs from durable runtime-ledger receipts; full CLI-wide projection remains unfinished.
+- The current L5 work projects the covered Lab-2 and direct Lab-1 semantic CLI outputs from durable runtime-ledger receipts; future modules excluded from issue #28 will need the same projection rule when implemented.
 - The current L6 work adds read-only ledger/evidence inspection commands only; it does not trigger capture, touch, runtime daemon, or game-device work.
 - The current L7 work connects already-materialized `lab run` screenshots, per-capture `reco_id` values, per-recognition detail evidence refs, capture-backend selection attempts, and per-step `action_id` values to runtime-ledger projection output only; it does not add new capture, OCR, matching, UI, database, scheduler, or game-device behavior.
+- The current L8 closeout adds projection-time validation for successful output-zip receipts and records the 23/23 implemented-module acceptance matrix; it does not add live-device work or expand scope to excluded future modules.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module
