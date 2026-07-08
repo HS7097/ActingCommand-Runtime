@@ -44,12 +44,13 @@ Current node:
 - L4 direct Lab-1 semantic entrance bridging has started: direct `detect-page`, `tap-target`, and `navigate` calls now receive `req_id` values and write runtime-ledger dispatch, drive, and receipt records when `--run-root` or configured `run_root` is available.
 - Direct Lab-1 `detect-page` records recognition `reco_id`; `tap-target` records recognition `reco_id` plus action `action_id`; `navigate` records recognition `reco_id` and route action ids.
 - `lab receipt --req <req_id>` can reconstruct the direct Lab-1 semantic command chain from the same `actingcommand-ledger` records.
+- L4 containment light-event bridging has started: `package validate`, `package inspect`, and direct blocked `package run` write package containment light events when a run root is available.
 
 Issue #28 remaining chain:
 
 - L1: ledger foundation verification remains broadly complete; the guard API was added with L0.
 - L3: continue Session convergence for remaining wait/list surfaces and remove remaining independent journal fact-source behavior after compatibility is proven.
-- L4: finish remaining Lab-2/Lab-1 convergence checks and decide whether to include the lower-priority containment light events in this issue node or leave them as a documented tail.
+- L4: finish remaining Lab-2/Lab-1/containment convergence checks and decide whether any tail remains before marking the node complete.
 - L5: make CLI outputs ledger projections instead of independent facts.
 - L6: add read-only ledger query and diagnosis commands.
 - L7: connect Evidence and FrameStore references.
@@ -60,7 +61,7 @@ Current boundary:
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
 - The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
-- The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`; full L4 closure, containment light events, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
+- The current L4 work adds a direct Lab-1 semantic command bridge for `detect-page`, `tap-target`, and `navigate`, plus first package containment light events for `package validate|inspect|run`; full L4 closure, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 
 ## Current task-pack containment module

@@ -1,5 +1,55 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L4 containment light events
+
+### Current status
+
+- Continued Runtime issue #28 L4 after the direct Lab-1 semantic ledger bridge.
+- `package validate` and `package inspect` now attach a `req_id` and write package containment light events when a run root is available.
+- Direct blocked `package run` now records a `package.run.blocked` light event before returning the visible `lab_lease_required` safety error.
+- Package containment events are written through `actingcommand-ledger` as eventlog-layer facts, not a new ledger crate or a separate fact source.
+- Added focused coverage that reads the package event ledger and verifies the `package.validate.ok` event.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "fn run_package|package validate|package inspect|package run|lab validate|lab run|Containment|LoadedBundle|package_run|validate_package|loaded_bundle" apps/actinglab/src/main.rs apps/actinglab/src/lab_run.rs crates/pack-containment/src/lib.rs`
+- `rg -n "LightEvent|append_event|package\\.loaded|package\\.validated|validated|loaded" apps/actinglab/src apps -g "*.rs"`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab package_validate_records_containment_light_event -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused package containment light-event test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this containment light-event subnode is known.
+- Full issue #28 remains incomplete: L5 CLI projection, L6 ledger diagnostics, L7 evidence/frame-store convergence, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L4 containment light-event node.
+2. Continue issue #28 with L5 projection work or remaining L4 closure checks.
+
 ## 2026-07-08 runtime-ledger L4 direct Lab-1 semantic ledger bridge
 
 ### Current status

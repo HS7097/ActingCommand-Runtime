@@ -8,7 +8,7 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_ledger::{
-    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, SessionHeader,
+    IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader,
 };
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
@@ -9613,11 +9613,31 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
     match sub {
         "validate" => {
             let zip = flags.required_path("--zip")?;
-            Ok(package_validation_json(&validate_package_zip(&zip)?, false))
+            let validation = validate_package_zip(&zip)?;
+            let mut payload = package_validation_json(&validation, false);
+            attach_package_event(
+                global,
+                "package.validate.ok",
+                "package-validate",
+                &zip,
+                &validation,
+                &mut payload,
+            )?;
+            Ok(payload)
         }
         "inspect" => {
             let zip = flags.required_path("--zip")?;
-            Ok(package_validation_json(&validate_package_zip(&zip)?, true))
+            let validation = validate_package_zip(&zip)?;
+            let mut payload = package_validation_json(&validation, true);
+            attach_package_event(
+                global,
+                "package.inspect.ok",
+                "package-inspect",
+                &zip,
+                &validation,
+                &mut payload,
+            )?;
+            Ok(payload)
         }
         "run" => {
             if should_route_control_via_session_daemon(global, &flags)? {
@@ -9634,6 +9654,19 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
             let result_zip = out
                 .map(|out| create_package_blocked_result_zip(&out, &validation))
                 .transpose()?;
+            let mut details = package_validation_json(&validation, false);
+            details["status"] = json!("blocked");
+            details["blocked_by"] = json!(["lab_lease", "exclusive_drain"]);
+            details["result_zip"] =
+                json!(result_zip.as_ref().map(|path| path.display().to_string()));
+            attach_package_event(
+                global,
+                "package.run.blocked",
+                global.instance.as_deref().unwrap_or("package-run"),
+                &zip,
+                &validation,
+                &mut details,
+            )?;
             Err(CliError::safety_blocked(
                 "lab_lease_required",
                 format!(
@@ -9644,12 +9677,78 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
                         .unwrap_or_default()
                 ),
                 &["lab_lease", "exclusive_drain"],
-            ))
+            )
+            .with_details(details))
         }
         "build-task" => package_build::run_build_task(global, &flags),
         "build-pack" => package_build::run_build_pack(global, &flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
+}
+
+fn attach_package_event(
+    global: &GlobalOptions,
+    event_type: &str,
+    instance: &str,
+    zip: &Path,
+    validation: &PackageValidation,
+    payload: &mut Value,
+) -> CliOutcome<()> {
+    let req_id = IdIssuer::new().issue(IdKind::Req).value;
+    let event = write_package_light_event(global, event_type, instance, &req_id, zip, validation)?;
+    payload["req_id"] = json!(req_id);
+    payload["ledger_event"] = event;
+    Ok(())
+}
+
+fn write_package_light_event(
+    global: &GlobalOptions,
+    event_type: &str,
+    instance: &str,
+    req_id: &str,
+    zip: &Path,
+    validation: &PackageValidation,
+) -> CliOutcome<Value> {
+    let config = read_user_config()?;
+    let Some(run_root) = effective_run_root(global, &config) else {
+        return Ok(json!({"written": false, "reason": "run_root_not_configured"}));
+    };
+    let game = global.game.clone().unwrap_or_else(|| "unknown".to_string());
+    let server = global
+        .server
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut ids = BTreeMap::new();
+    ids.insert("req_id".to_string(), req_id.to_string());
+    ids.insert("module".to_string(), validation.module.clone());
+    let event = LightEvent::new(
+        event_type,
+        ids,
+        json!({
+            "command": event_type,
+            "zip": zip.display().to_string(),
+            "module": validation.module.clone(),
+            "manifest_path": validation.manifest_path.clone(),
+            "task_count": validation.task_count,
+            "entry_count": validation.entry_count
+        }),
+    )
+    .map_err(|err| CliError::device(err.to_string()))?;
+    let mut ledger = LabLedger::create(
+        &run_root,
+        &format!("package-{req_id}"),
+        SessionHeader::new(RUNTIME_VERSION, game, server, instance),
+    )
+    .map_err(|err| CliError::device(err.to_string()))?;
+    ledger
+        .append_event(event)
+        .and_then(|_| ledger.sync())
+        .map_err(|err| CliError::device(err.to_string()))?;
+    Ok(json!({
+        "written": true,
+        "path": ledger.ledger_path().display().to_string(),
+        "event_type": event_type
+    }))
 }
 
 fn run_operation(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -53376,6 +53475,60 @@ mod tests {
             true,
         );
         assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn package_validate_records_containment_light_event() {
+        let _guard = env_lock();
+        set_missing_config_env();
+        let temp = TempDir::new().unwrap();
+        let run_root = temp.path().join("runs");
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "--run-root",
+                run_root.to_str().unwrap(),
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/ledger_event/written")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let path = data
+            .pointer("/ledger_event/path")
+            .and_then(Value::as_str)
+            .unwrap();
+        let read = LabLedger::read(path).expect("read package event ledger");
+        assert!(read.events.iter().any(|event| {
+            event.event_type == "package.validate.ok"
+                && event.ids.get("req_id").is_some()
+                && event.payload.get("module").and_then(Value::as_str) == Some("module")
+        }));
     }
 
     #[test]
