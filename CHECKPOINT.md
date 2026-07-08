@@ -1,5 +1,55 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L5 direct semantic CLI receipt projection
+
+### Current status
+
+- Continued Runtime issue #28 L5 after the Lab-2 CLI projection subnode.
+- Direct Lab-1 semantic commands `detect-page`, `tap-target`, and `navigate` now write semantic runtime-ledger records, read back the durable receipt, and project CLI output from that receipt when `--run-root` or configured `run_root` is available.
+- Direct semantic error payloads use the same receipt-backed projection path when the ledger write succeeds.
+- Missing run-root behavior remains explicit as `written=false` with `run_root_not_configured`; runtime-ledger write or readback failures remain visible instead of silently returning pre-ledger output.
+- The direct semantic command test now asserts `projection_source.kind=runtime_ledger` for `detect-page`, `tap-target`, and `navigate`.
+- Implementation commit `0e2a898e34a5acbf41f3b1f4a6bfed1fb9f263ec` was created and tagged `checkpoint/20260709-runtime-ledger-l5-semantic-cli-projection`.
+- This node does not add new device behavior, capture behavior, OCR, template matching, UI, SQLite, scheduler, game logic, or resource repository reads.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `git diff --stat`
+- `git diff -- apps/actinglab/src/main.rs | Select-Object -First 260`
+- `cargo test -p actingcommand-actinglab lab1_direct_semantic_commands_write_runtime_ledger_receipts -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused direct semantic receipt projection test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L5 direct semantic CLI projection subnode is known.
+- Full issue #28 remains incomplete: remaining CLI projection surfaces, any remaining L7 evidence surfaces, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Push implementation commit `0e2a898e34a5acbf41f3b1f4a6bfed1fb9f263ec`, tag `checkpoint/20260709-runtime-ledger-l5-semantic-cli-projection`, and this planning/checkpoint update.
+2. Continue issue #28 with remaining L5 CLI projection surfaces or L8 preparation after the remaining evidence surfaces are confirmed.
+
 ## 2026-07-09 runtime-ledger L5 Lab-2 CLI receipt projection
 
 ### Current status
