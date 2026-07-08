@@ -15,9 +15,9 @@ use actingcommand_device::{
     TouchBackendConfig, combine_operation_and_close, create_capture_backend, create_touch_backend,
 };
 use actingcommand_ledger::{
-    CommitProof, IdIssuer, IdKind, LabLedger, LabLogError, LastResortError, LedgerRecord,
-    LedgerRecordKind, LightEvent, SessionHeader, commit_then_record, project_light_events,
-    write_last_resort_error,
+    CommitProof, EvidenceStore, IdIssuer, IdKind, LabLedger, LabLogError, LastResortError,
+    LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader, commit_then_record,
+    project_light_events, write_last_resort_error,
 };
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
@@ -2655,6 +2655,7 @@ fn validate_frame_resolution(control: &LabControl, width: u32, height: u32) -> C
 }
 
 struct LabRunContext {
+    id_issuer: IdIssuer,
     run_id: String,
     run_seed: u64,
     started_at: SystemTime,
@@ -2672,6 +2673,7 @@ struct LabRunContext {
     requested_capture_interval_ms: u64,
     screenshot_names: HashMap<String, usize>,
     screenshots: Vec<ScreenshotRecord>,
+    screenshot_evidence: Vec<Value>,
     frame_store: FrameStore,
     recognition: Vec<Value>,
     events: Vec<Value>,
@@ -2721,6 +2723,7 @@ impl LabRunContext {
             FrameStoreConfig::default(),
         )?;
         Ok(Self {
+            id_issuer: issuer,
             run_id,
             run_seed: hash_text(&input_zip.display().to_string()),
             started_at: now,
@@ -2738,6 +2741,7 @@ impl LabRunContext {
             requested_capture_interval_ms: DEFAULT_CAPTURE_INTERVAL_MS,
             screenshot_names: HashMap::new(),
             screenshots: Vec::new(),
+            screenshot_evidence: Vec::new(),
             frame_store,
             recognition: Vec::new(),
             events: Vec::new(),
@@ -3216,6 +3220,7 @@ impl LabRunContext {
             "frame_store_materialized",
             json!({"screenshot_count": self.screenshots.len()}),
         )?;
+        self.index_screenshot_evidence()?;
         for warning in self.frame_store.cleanup_temp() {
             self.event(
                 "frame_store_temp_cleanup_warning",
@@ -3248,6 +3253,82 @@ impl LabRunContext {
             self.cleanup_run_dir();
         }
         Ok(archive)
+    }
+
+    fn index_screenshot_evidence(&mut self) -> CliOutcome<()> {
+        self.screenshot_evidence.clear();
+        if self.screenshots.is_empty() {
+            return Ok(());
+        }
+        let store = EvidenceStore::new(&self.run_root, true);
+        let mut degraded = Vec::new();
+        for screenshot in &self.screenshots {
+            let evidence_id = self.id_issuer.issue(IdKind::Evidence).value;
+            let path = self.output_dir.join(&screenshot.file);
+            let mut record = json!({
+                "frame_index": screenshot.frame_index,
+                "file": screenshot.file,
+                "evidence_id": evidence_id,
+                "status": "indexed",
+                "refs": []
+            });
+            match fs::read(&path) {
+                Ok(bytes) => match store.put(&evidence_id, "screenshot", &bytes) {
+                    Ok(Some(reference)) => {
+                        record["refs"] = json!([reference]);
+                    }
+                    Ok(None) => {
+                        record["status"] = json!("degraded");
+                        record["warnings"] =
+                            json!(["evidence store debug mode disabled during lab run"]);
+                    }
+                    Err(err) => {
+                        record["status"] = json!("degraded");
+                        record["warnings"] = json!([format!(
+                            "failed to store screenshot evidence {}: {err}",
+                            path.display()
+                        )]);
+                    }
+                },
+                Err(err) => {
+                    record["status"] = json!("degraded");
+                    record["warnings"] = json!([format!(
+                        "failed to read screenshot evidence {}: {err}",
+                        path.display()
+                    )]);
+                }
+            }
+            if record.get("status").and_then(Value::as_str) == Some("degraded") {
+                degraded.push(record.clone());
+            }
+            self.screenshot_evidence.push(record);
+        }
+        self.append_ledger_record(
+            self.ledger_record(
+                LedgerRecordKind::Drive,
+                json!({
+                    "record_type": "evidence_index",
+                    "phase": self.phase,
+                    "evidence_kind": "screenshots",
+                    "screenshot_count": self.screenshots.len(),
+                    "indexed_count": self.screenshot_evidence.iter().filter(|item| item.get("status").and_then(Value::as_str) == Some("indexed")).count(),
+                    "degraded_count": degraded.len(),
+                    "evidence": self.screenshot_evidence.clone()
+                }),
+            ),
+            "ledger_evidence_index",
+        )?;
+        if !degraded.is_empty() {
+            self.event(
+                "evidence_index_degraded",
+                json!({
+                    "evidence_kind": "screenshots",
+                    "degraded_count": degraded.len(),
+                    "degraded": degraded
+                }),
+            )?;
+        }
+        Ok(())
     }
 
     fn append_finalizing_record(
@@ -3366,6 +3447,10 @@ impl LabRunContext {
             &self.frame_store.timeline(),
         )?;
         write_json(
+            &self.logs_dir.join("evidence.json"),
+            &json!(projection.evidence),
+        )?;
+        write_json(
             &self.logs_dir.join("frame_store.json"),
             &self.frame_store.diagnostics_json(),
         )?;
@@ -3407,6 +3492,7 @@ impl LabRunContext {
         }
         let mut recognition = Vec::new();
         let mut steps = Vec::new();
+        let mut evidence = Vec::new();
         let mut finalizing_summary = None;
         let mut finalizing_diagnostics = None;
         let mut finalizing_environment = None;
@@ -3421,6 +3507,9 @@ impl LabRunContext {
                     if let Some(value) = record.payload.get("step") {
                         steps.push(value.clone());
                     }
+                }
+                Some("evidence_index") => {
+                    evidence.push(record.payload.clone());
                 }
                 Some("finalizing") => {
                     finalizing_summary = record.payload.get("summary").cloned();
@@ -3456,6 +3545,7 @@ impl LabRunContext {
         Ok(LabLogProjection {
             events,
             recognition,
+            evidence,
             summary,
             diagnostics,
             environment,
@@ -3576,7 +3666,7 @@ impl LabRunContext {
             .screenshots
             .iter()
             .map(|record| {
-                json!({
+                let mut item = json!({
                     "frame_index": record.frame_index,
                     "file": record.file,
                     "width": record.width,
@@ -3587,7 +3677,13 @@ impl LabRunContext {
                     "recognition_state": record.recognition_state.as_json(),
                     "storage_state": record.storage_state.as_str(),
                     "key_frame": record.key_frame
-                })
+                });
+                if let Some(evidence) = self.screenshot_evidence.iter().find(|evidence| {
+                    evidence.get("file").and_then(Value::as_str) == Some(record.file.as_str())
+                }) {
+                    item["evidence"] = evidence.clone();
+                }
+                item
             })
             .collect::<Vec<_>>();
         let control = self
@@ -3628,6 +3724,7 @@ impl LabRunContext {
             "capture_backend_requested": self.capture_backend_requested.map(|backend| backend.as_str()),
             "capture_backend_used": self.capture_backend_used.map(|backend| backend.as_str()),
             "frame_store": frame_store,
+            "screenshot_evidence": self.screenshot_evidence.clone(),
             "screenshots": screenshots,
             "steps": self.steps
         })
@@ -3652,6 +3749,7 @@ impl LabRunContext {
                 "message": attempt.message
             })).collect::<Vec<_>>(),
             "frame_store": frame_store,
+            "screenshot_evidence": self.screenshot_evidence.clone(),
             "input_structure": self.input_entries,
             "resource_load_results": state.map(|state| json!({
                 "manifest": state.resources.manifest_path,
@@ -3805,6 +3903,7 @@ impl LabCompletedProjection {
 struct LabLogProjection {
     events: Vec<Value>,
     recognition: Vec<Value>,
+    evidence: Vec<Value>,
     summary: Value,
     diagnostics: Value,
     environment: Value,
@@ -5439,6 +5538,7 @@ mod tests {
         let file = File::open(&out).expect("zip");
         let mut archive = ZipArchive::new(file).expect("archive");
         assert!(archive.by_name("screenshots/frame1.png").is_ok());
+        assert!(archive.by_name("logs/evidence.json").is_ok());
         assert!(archive.by_name("logs/frame_store.json").is_ok());
         assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
         let summary: Value =
@@ -5450,6 +5550,18 @@ mod tests {
                 .and_then(Value::as_str),
             Some("runtime_ledger")
         );
+        let screenshot_evidence = summary
+            .pointer("/screenshots/0/evidence")
+            .expect("screenshot evidence");
+        assert_eq!(
+            screenshot_evidence.get("status").and_then(Value::as_str),
+            Some("indexed")
+        );
+        let evidence_relative_path = screenshot_evidence
+            .pointer("/refs/0/relative_path")
+            .and_then(Value::as_str)
+            .expect("relative evidence path");
+        assert!(temp.path().join(evidence_relative_path).is_file());
         let events = zip_text(&mut archive, "logs/events.jsonl");
         assert!(events.contains("runtime_ledger"));
         let diagnostics: Value = serde_json::from_reader(
@@ -5467,6 +5579,11 @@ mod tests {
         assert!(!ledger.events.is_empty());
         assert!(ledger.records.iter().any(|record| {
             record.kind == LedgerRecordKind::Drive
+                && record.payload.get("record_type").and_then(Value::as_str)
+                    == Some("evidence_index")
+        }));
+        assert!(ledger.records.iter().any(|record| {
+            record.kind == LedgerRecordKind::Drive
                 && record.payload.get("record_type").and_then(Value::as_str) == Some("finalizing")
         }));
         assert!(ledger.records.iter().any(|record| {
@@ -5474,6 +5591,72 @@ mod tests {
                 && record.payload.get("record_type").and_then(Value::as_str) == Some("finish_error")
         }));
         assert!(ctx.run_dir.exists());
+    }
+
+    #[test]
+    fn screenshot_evidence_records_degradation_when_file_is_missing() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let frame = Frame::from_pixels(
+            1,
+            1,
+            vec![0, 0, 0, 255],
+            PixelFormat::Rgba8,
+            CaptureBackendName::NemuIpc,
+        )
+        .expect("frame");
+        ctx.ensure_ledger().expect("ledger");
+        ctx.frame_store
+            .add_frame(FrameStoreFrameInput {
+                frame_index: 1,
+                file_name: "missing.png".to_string(),
+                label: "missing".to_string(),
+                recognition_state: RecognitionState::from_matched_page(Some(
+                    "arknights/home".to_string(),
+                )),
+                frame,
+            })
+            .expect("frame store");
+        ctx.frame_store
+            .materialize(&ctx.screenshots_dir)
+            .expect("materialize");
+        ctx.screenshots = ctx.frame_store.screenshots();
+        let screenshot_path = ctx.output_dir.join(&ctx.screenshots[0].file);
+        fs::remove_file(&screenshot_path).expect("remove screenshot");
+
+        ctx.index_screenshot_evidence().expect("index evidence");
+
+        let evidence = ctx.screenshot_evidence.first().expect("evidence");
+        assert_eq!(
+            evidence.get("status").and_then(Value::as_str),
+            Some("degraded")
+        );
+        assert!(
+            evidence
+                .get("warnings")
+                .and_then(Value::as_array)
+                .and_then(|warnings| warnings.first())
+                .and_then(Value::as_str)
+                .is_some_and(|warning| warning.contains("failed to read screenshot evidence"))
+        );
+        let ledger = LabLedger::read(ctx.ledger_path.as_ref().unwrap()).expect("ledger read");
+        let record = ledger
+            .records
+            .iter()
+            .find(|record| {
+                record.kind == LedgerRecordKind::Drive
+                    && record.payload.get("record_type").and_then(Value::as_str)
+                        == Some("evidence_index")
+            })
+            .expect("evidence index record");
+        assert_eq!(
+            record.payload.get("indexed_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            record.payload.get("degraded_count").and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[test]

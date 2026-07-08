@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-09 runtime-ledger L7 screenshot evidence index
+
+### Current status
+
+- Re-read Runtime issue #28 and `C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md`.
+- Continued Runtime issue #28 into L7 with the first Evidence / FrameStore convergence step.
+- `lab run` now indexes already-materialized screenshot files into `EvidenceStore` after FrameStore materialization and before finalizing result.zip output.
+- A new `evidence_index` runtime-ledger drive record stores screenshot file names, issued `evidence_id` values, evidence refs, indexed/degraded counts, and degradation details.
+- `summary.json` and `diagnostics.json` now include screenshot evidence metadata, and result.zip includes `logs/evidence.json` generated from runtime-ledger projection data.
+- Missing or unreadable screenshot evidence degrades visibly with warnings and an `evidence_index_degraded` light event instead of silently pretending the evidence is complete.
+- This node does not add capture, OCR, template matching, UI, SQLite, scheduler, or game-device behavior.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status --short --branch`
+- `gh issue view 28 --json number,title,state,labels,body,url`
+- `Get-Content -LiteralPath C:\合作工作区\ActingCommand\TASK-runtime-ledger-chain.md -Raw`
+- `git diff --stat`
+- `rg -n "enum FrameStorageState|struct ScreenshotRecord|FrameStorageState" apps/actinglab/src/frame_store.rs`
+- `rg -n "screenshot_evidence|index_screenshot_evidence|evidence_index|failure_zip_materializes" apps/actinglab/src/lab_run.rs`
+- `git diff -- apps/actinglab/src/lab_run.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab failure_zip_materializes_frame_store_screenshots -- --nocapture`
+- `cargo test -p actingcommand-actinglab screenshot_evidence_records_degradation_when_file_is_missing -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused screenshot evidence projection test passed.
+- Focused missing screenshot degradation test passed.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L7 screenshot evidence index subnode is known.
+- Full issue #28 remains incomplete: remaining Evidence / FrameStore convergence, L5 CLI projection, and L8 adversarial acceptance are not complete yet.
+
+### Next step
+
+1. Continue issue #28 with the remaining L7 evidence surfaces or L5 CLI projection work.
+2. Keep L8 adversarial acceptance pending until the remaining issue #28 nodes are closed.
+
 ## 2026-07-09 runtime-ledger L6 ledger query diagnostics
 
 ### Current status
