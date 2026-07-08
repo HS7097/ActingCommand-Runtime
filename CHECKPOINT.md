@@ -12,6 +12,7 @@
 - `ledger evidence` reads existing `EvidenceStore` files by `--evidence-id`; it does not write evidence or trigger device work.
 - Added capability and schema entries for the new read-only ledger commands.
 - Added focused coverage for records, events, receipts, diagnose, evidence lookup, and corrupt-tail reporting.
+- Implementation commit `0c71100` was pushed to `main` and tagged `checkpoint/20260709-runtime-ledger-l6-query-diagnostics`.
 - Resource repositories were not read or modified for this node.
 
 ### Files changed
@@ -55,8 +56,8 @@
 
 ### Next step
 
-1. Commit, tag, and push this L6 ledger query diagnostics node.
-2. Continue issue #28 with L5 CLI projection work or L7 evidence/frame-store convergence.
+1. Continue issue #28 with L5 CLI projection work or L7 evidence/frame-store convergence.
+2. Keep L8 adversarial acceptance pending until L5/L7 are closed.
 
 ## 2026-07-08 runtime-ledger L4 containment light events
 
