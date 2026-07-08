@@ -9672,15 +9672,31 @@ fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
         .filter_map(|action| action.get("action").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
+    let ledger_consistency = session_queue_ledger_consistency(state_dir)?;
+    let ledger_consistent =
+        ledger_consistency.get("status").and_then(Value::as_str) == Some("consistent");
     let pending_requests = count_files_with_extension(&session_requests_dir(state_dir), "json")?;
     let running_requests = count_files_with_extension(&session_running_dir(state_dir), "json")?;
     let pending_responses = count_files_with_extension(&session_responses_dir(state_dir), "json")?;
+    let effective_status = if ledger_consistent {
+        status
+    } else {
+        "needs_attention"
+    };
+    let can_enqueue = can_enqueue && ledger_consistent;
+    let blocked_code = if can_enqueue {
+        Value::Null
+    } else if ledger_consistent {
+        json!("request_queue_needs_attention")
+    } else {
+        json!("runtime_ledger_inconsistent")
+    };
 
     Ok(json!({
         "schema_version": "session.queue.v0.1",
         "state_dir": state_dir.display().to_string(),
         "generated_at_unix_ms": now_ms,
-        "status": status,
+        "status": effective_status,
         "counts": {
             "pending_requests": pending_requests,
             "running_requests": running_requests,
@@ -9689,15 +9705,18 @@ fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
         "admission": {
             "can_enqueue": can_enqueue,
             "status": if can_enqueue { "ready" } else { "blocked" },
-            "blocked_code": if can_enqueue { Value::Null } else { json!("request_queue_needs_attention") },
+            "blocked_code": blocked_code,
             "preflight_command": "session command-check <command...>",
             "message": if can_enqueue {
                 "daemon request queue can accept another request"
+            } else if !ledger_consistent {
+                "daemon request queue has runtime-ledger consistency errors"
             } else {
                 "daemon request queue needs attention before enqueueing another request"
             }
         },
         "health": health,
+        "runtime_ledger_consistency": ledger_consistency,
         "previews": {
             "preview_limit": SESSION_PENDING_REQUEST_PREVIEW_LIMIT,
             "pending_requests": session_pending_request_preview(
@@ -9722,6 +9741,67 @@ fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
             "does_not_start_maatouch": true,
             "does_not_start_listener": true
         }
+    }))
+}
+
+fn session_queue_ledger_consistency(state_dir: &Path) -> CliOutcome<Value> {
+    let mut pending_or_running_ids = BTreeSet::new();
+    let mut response_ids = BTreeSet::new();
+
+    for path in sorted_json_paths(&session_requests_dir(state_dir))? {
+        if let Some(request) = read_pending_session_request(&path)? {
+            pending_or_running_ids.insert(request.request_id);
+        }
+    }
+    for path in sorted_json_paths(&session_running_dir(state_dir))? {
+        if let Some(request) = read_running_session_request(&path)? {
+            pending_or_running_ids.insert(request.request_id);
+        }
+    }
+    for path in sorted_json_paths(&session_responses_dir(state_dir))? {
+        if let Some(response) = read_pending_session_response(&path)? {
+            response_ids.insert(response.request_id);
+        }
+    }
+
+    let mut dispatch_ids = BTreeSet::new();
+    let mut receipt_ids = BTreeSet::new();
+    for record in read_session_request_ledger_records(state_dir)? {
+        match record.payload.get("record_type").and_then(Value::as_str) {
+            Some("session_request_dispatch") => {
+                dispatch_ids.insert(session_request_ledger_record_request_id(&record)?);
+            }
+            Some("session_request_receipt") => {
+                receipt_ids.insert(session_request_ledger_record_request_id(&record)?);
+            }
+            _ => {}
+        }
+    }
+
+    let missing_dispatch = pending_or_running_ids
+        .difference(&dispatch_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_receipt = response_ids
+        .difference(&receipt_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let status = if missing_dispatch.is_empty() && missing_receipt.is_empty() {
+        "consistent"
+    } else {
+        "inconsistent"
+    };
+
+    Ok(json!({
+        "schema_version": "session.queue_ledger_consistency.v0.1",
+        "status": status,
+        "ledger": session_request_ledger_path(state_dir).display().to_string(),
+        "pending_or_running_request_count": pending_or_running_ids.len(),
+        "pending_response_count": response_ids.len(),
+        "dispatch_count": dispatch_ids.len(),
+        "receipt_count": receipt_ids.len(),
+        "missing_dispatch_for_pending_or_running": missing_dispatch,
+        "missing_receipt_for_pending_response": missing_receipt
     }))
 }
 
@@ -28274,9 +28354,13 @@ mod tests {
             lease: None,
             created_at_unix_ms: 1,
         };
-        write_json_file_atomic(
-            &session_requests_dir(temp.path()).join("pending-queue-view.json"),
+        let request_path = session_requests_dir(temp.path()).join("pending-queue-view.json");
+        write_json_file_atomic(&request_path, &pending).unwrap();
+        append_session_request_ledger_dispatch(
+            temp.path(),
             &pending,
+            &request_path,
+            &session_responses_dir(temp.path()).join("pending-queue-view.json"),
         )
         .unwrap();
 
@@ -28323,6 +28407,56 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|action| action.as_str() == Some("blocked_request_cancel_dry_run"))
+        );
+    }
+
+    #[test]
+    fn session_queue_reports_missing_dispatch_ledger_fact() {
+        let temp = TempDir::new().unwrap();
+        let pending = SessionCommandRequest {
+            request_id: "pending-without-ledger".to_string(),
+            command: "capture".to_string(),
+            global: SessionCommandGlobal {
+                instance: Some("ak".to_string()),
+                game: Some("arknights".to_string()),
+                server: Some("cn-bilibili".to_string()),
+                resource_root: None,
+                capture_backend: Some("adb_screencap".to_string()),
+                touch_backend: None,
+                dry_run: true,
+            },
+            args: vec!["--require-fresh".to_string()],
+            lease: None,
+            created_at_unix_ms: current_unix_ms(),
+        };
+        write_json_file_atomic(
+            &session_requests_dir(temp.path()).join("pending-without-ledger.json"),
+            &pending,
+        )
+        .unwrap();
+
+        let result = run_cli(
+            [
+                "--json",
+                "session",
+                "queue",
+                "--state-dir",
+                temp.path().to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            data.pointer("/admission/blocked_code")
+                .and_then(Value::as_str),
+            Some("runtime_ledger_inconsistent")
+        );
+        assert_eq!(
+            data.pointer("/runtime_ledger_consistency/missing_dispatch_for_pending_or_running/0")
+                .and_then(Value::as_str),
+            Some("pending-without-ledger")
         );
     }
 

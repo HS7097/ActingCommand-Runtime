@@ -1,5 +1,55 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 session queue consistency
+
+### Current status
+
+- Continued Runtime issue #28 L3 after session response projection.
+- `session queue` now reports `runtime_ledger_consistency` for pending/running requests and pending responses.
+- Pending or running requests without a matching `session_request_dispatch` fact are surfaced as `runtime_ledger_inconsistent`.
+- Pending responses without a matching `session_request_receipt` fact are surfaced as `runtime_ledger_inconsistent`.
+- Queue admission is blocked when ledger consistency is broken; this is visible in `admission.blocked_code` and does not silently report the queue as ready.
+- Added focused coverage for missing dispatch facts in a pending queue request.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "fn run_session_queue|queue_payload|session_queue|request_queue|queue_health|pending_requests|running_requests" apps/actinglab/src/main.rs`
+- `rg -n "session request queue|session queue|queue" apps/actinglab/src/main.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab session_queue -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused queue suite passed: 4/4 `session_queue` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 session queue consistency subnode is known.
+- Full issue #28 remains incomplete: remaining L3 surfaces and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 session queue consistency node.
+2. Continue issue #28 with remaining L3 Session convergence surfaces.
+
 ## 2026-07-08 runtime-ledger L3 session response projection
 
 ### Current status
