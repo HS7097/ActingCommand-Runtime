@@ -1,5 +1,54 @@
 # CHECKPOINT.md
 
+## 2026-07-08 runtime-ledger L3 legacy journal non-authoritative queue cleanup
+
+### Current status
+
+- Continued Runtime issue #28 L3 after session queue ledger consistency.
+- Daemon request processing now treats the runtime-ledger receipt as the authoritative completion fact before legacy journal compatibility output.
+- If a queued request already has a response, processing removes the request from the executable queue even when legacy journal append fails after ledger receipt creation.
+- If a newly executed request writes its response and ledger receipt but legacy journal append fails, processing removes the request and running marker before surfacing the compatibility-output failure.
+- This prevents the old request journal from keeping an already-receipted request executable.
+- Added focused coverage for the legacy journal append failure path.
+- Resource repositories were not read or modified for this node.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `rg -n "process_session_requests_keeps_request_when_journal_append_fails|already-responded|after_response_write|after_journal_append" apps/actinglab/src/main.rs apps/actinglab/tests/session_closeout.rs`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab process_session_requests_ -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused process-session-requests suite passed: 2/2 `process_session_requests_` tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for this L3 legacy journal queue-cleanup subnode is known.
+- Full issue #28 remains incomplete: remaining L3 cleanup and L4-L8 are not complete yet.
+
+### Next step
+
+1. Commit, tag, and push this L3 legacy journal queue-cleanup node.
+2. Continue issue #28 with remaining L3 cleanup or proceed to L4.
+
 ## 2026-07-08 runtime-ledger L3 session queue consistency
 
 ### Current status

@@ -40,6 +40,7 @@ Current node:
 - Synchronous daemon-routed request output now waits for the runtime-ledger receipt, rejects response/ledger status conflicts, and includes the ledger receipt in successful command output.
 - `session response get|wait` now refuses to return a queued daemon response unless a matching runtime-ledger receipt exists, rejects response/ledger status conflicts, and includes the ledger receipt in response output.
 - `session queue` now reports runtime-ledger consistency for pending/running requests and pending responses; missing dispatch or receipt facts visibly block queue admission with `runtime_ledger_inconsistent`.
+- Daemon request processing no longer leaves a request executable when legacy journal compatibility output fails after the runtime-ledger receipt exists.
 
 Issue #28 remaining chain:
 
@@ -55,7 +56,7 @@ Current boundary:
 
 - This L0 node only changes terminal Lab result recording order and the minimal ledger guard API.
 - `LabRunContext` remains the Lab execution context, archive assembler, and owner of frame-store paths and screenshots.
-- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
+- The current L3 work repairs session cancellation ordering, adds a first Session request receipt bridge into runtime-ledger, records submit dispatch facts, records failed acknowledgement-timeout receipts, prevents legacy journal write failure from keeping an already-receipted request executable, and makes `request-state get`, `session journal`, `session events`, `request-state list`, `session response get|wait`, `session queue`, and synchronous daemon-routed request output consume or cross-check ledger facts with conflict detection; full Session convergence remains unfinished.
 - Lab-2 ledger, CLI-wide projection, UI, database, scheduler projection, encryption log service, and game logic remain out of this node.
 - Resource repositories are not read or modified by this task.
 

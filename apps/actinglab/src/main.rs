@@ -17107,16 +17107,21 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
         let response_path =
             session_responses_dir(state_dir).join(format!("{}.json", request.request_id));
         if let Some(response) = read_pending_session_response(&response_path)? {
-            if !session_request_journal_contains(state_dir, &request.request_id)? {
-                append_session_request_journal(state_dir, &request, &response)?;
-            }
-            fs::remove_file(&path).map_err(|err| {
+            let journal_result =
+                if !session_request_journal_contains(state_dir, &request.request_id)? {
+                    append_session_request_journal(state_dir, &request, &response)
+                } else {
+                    Ok(())
+                };
+            let remove_result = fs::remove_file(&path).map_err(|err| {
                 CliError::runtime_not_running(format!(
                     "failed to remove already-responded request {}: {err}",
                     path.display()
                 ))
-            })?;
+            });
+            remove_result?;
             remove_session_running_request_if_exists(state_dir, &request.request_id)?;
+            journal_result?;
             processed += 1;
             continue;
         }
@@ -17124,8 +17129,10 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
         let response = execute_session_command_request(request.clone(), state_dir);
         write_json_file_atomic(&response_path, &response)?;
         maybe_exit_for_session_crash_test("after_response_write");
-        append_session_request_journal(state_dir, &request, &response)?;
-        maybe_exit_for_session_crash_test("after_journal_append");
+        let journal_result = append_session_request_journal(state_dir, &request, &response);
+        if journal_result.is_ok() {
+            maybe_exit_for_session_crash_test("after_journal_append");
+        }
         fs::remove_file(&path).map_err(|err| {
             CliError::runtime_not_running(format!(
                 "failed to remove processed request {}: {err}",
@@ -17134,6 +17141,7 @@ fn process_session_requests(state_dir: &Path) -> CliOutcome<usize> {
         })?;
         maybe_exit_for_session_crash_test("after_request_remove");
         remove_session_running_request(state_dir, &request.request_id)?;
+        journal_result?;
         processed += 1;
     }
     Ok(processed)
@@ -49289,7 +49297,7 @@ mod tests {
     }
 
     #[test]
-    fn process_session_requests_keeps_request_when_journal_append_fails() {
+    fn process_session_requests_removes_request_when_legacy_journal_append_fails() {
         let temp = TempDir::new().unwrap();
         let state_dir = temp.path();
         fs::create_dir_all(session_requests_dir(state_dir)).unwrap();
@@ -49316,11 +49324,16 @@ mod tests {
         let err = process_session_requests(state_dir).unwrap_err();
 
         assert_eq!(err.code, "runtime_not_running");
-        assert!(request_path.exists());
+        assert!(!request_path.exists());
         assert!(
             session_responses_dir(state_dir)
                 .join("journal-fails.json")
                 .exists()
+        );
+        assert!(
+            read_session_request_ledger_receipt(state_dir, "journal-fails")
+                .unwrap()
+                .is_some()
         );
     }
 
