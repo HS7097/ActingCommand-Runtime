@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::env_detection;
 use super::lab_run;
 use super::resource_convert::{Bundle, ConvertOutputs, OperationConverter};
 use super::{
@@ -32,7 +33,13 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     if includes_recovery {
         task_ids.push("return_home".to_string());
     }
-    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
+    let mut outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
+    env_detection::resolve_env_markers_in_value(
+        global,
+        flags,
+        &resource_root.root,
+        &mut outputs.pack,
+    )?;
     let entry_bundle = find_bundle(&converter, &task_id)?;
     let resolution = parse_resolution(flags, entry_bundle)?;
     let package_id = flags
@@ -62,7 +69,14 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         &task_ids,
         true,
     )?;
-    add_selected_operations(&mut entries, &converter, &task_ids)?;
+    add_selected_operations(
+        &mut entries,
+        global,
+        flags,
+        &resource_root.root,
+        &converter,
+        &task_ids,
+    )?;
     add_generated_outputs(&mut entries, &converter, &outputs)?;
     add_recognition_target_assets(&mut entries, &resource_root.root, &outputs.pack)?;
     entries.add_manifest(&task_id)?;
@@ -133,7 +147,14 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
                 &task_ids,
                 true,
             )?;
-            add_selected_operations(&mut entries, &converter, &task_ids)?;
+            add_selected_operations(
+                &mut entries,
+                global,
+                flags,
+                &resource_root.root,
+                &converter,
+                &task_ids,
+            )?;
             add_generated_outputs(&mut entries, &converter, &outputs)?;
             add_recognition_target_assets(&mut entries, &resource_root.root, &outputs.pack)?;
             entries.add_manifest(&bundle.task_id)?;
@@ -215,7 +236,14 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         &all_task_ids,
         false,
     )?;
-    add_selected_operations(&mut entries, &converter, &all_task_ids)?;
+    add_selected_operations(
+        &mut entries,
+        global,
+        flags,
+        &resource_root.root,
+        &converter,
+        &all_task_ids,
+    )?;
     add_generated_outputs(&mut entries, &converter, &outputs)?;
     entries.add_manifest(&entry_task)?;
     let write = write_and_validate_package(&out, entries, dry_run)?;
@@ -420,14 +448,20 @@ fn referenced_resource_ids(
 
 fn add_selected_operations(
     entries: &mut PackageEntries,
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    resource_root: &Path,
     converter: &OperationConverter,
     task_ids: &[String],
 ) -> CliOutcome<()> {
     for bundle in &converter.bundles {
         if task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
-            entries.add_dir(
+            entries.add_operation_dir(
                 &bundle.dir,
                 &format!("resources/operations/{}", bundle.task_id),
+                global,
+                flags,
+                resource_root,
             )?;
         }
     }
@@ -506,10 +540,55 @@ impl PackageEntries {
         self.add_bytes(zip_path, bytes)
     }
 
-    fn add_dir(&mut self, source_dir: &Path, zip_prefix: &str) -> CliOutcome<()> {
+    fn add_operation_dir(
+        &mut self,
+        source_dir: &Path,
+        zip_prefix: &str,
+        global: &GlobalOptions,
+        flags: &FlagArgs,
+        resource_root: &Path,
+    ) -> CliOutcome<()> {
         for path in collect_files(source_dir)? {
             let rel = relative_slash(source_dir, &path)?;
-            self.add_file(&path, &format!("{zip_prefix}/{rel}"))?;
+            if rel == "task.json" {
+                let mut task = read_json_value(&path)?;
+                env_detection::resolve_env_markers_in_value(
+                    global,
+                    flags,
+                    resource_root,
+                    &mut task,
+                )?;
+                self.add_root_relative_operation_assets(&task, resource_root)?;
+                self.add_json(&format!("{zip_prefix}/{rel}"), task)?;
+            } else {
+                self.add_file(&path, &format!("{zip_prefix}/{rel}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_root_relative_operation_assets(
+        &mut self,
+        task: &Value,
+        resource_root: &Path,
+    ) -> CliOutcome<()> {
+        for path in task_verify_template_paths(task) {
+            if path.starts_with("assets/") {
+                continue;
+            }
+            if !is_safe_package_relative_path(path) {
+                return Err(CliError::package_invalid(format!(
+                    "operation verify_template path is unsafe: {path}"
+                )));
+            }
+            let source = resource_root.join(path);
+            if !source.is_file() {
+                continue;
+            }
+            let zip_path = format!("resources/{path}");
+            if !self.contains(&zip_path) {
+                self.add_file(&source, &zip_path)?;
+            }
         }
         Ok(())
     }
@@ -796,6 +875,48 @@ fn validate_zip_entry_path(path: &str) -> CliOutcome<()> {
         )));
     }
     Ok(())
+}
+
+fn is_safe_package_relative_path(path: &str) -> bool {
+    !path.ends_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && !path.starts_with('/')
+        && !Path::new(path).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+}
+
+fn task_verify_template_paths(task: &Value) -> Vec<&str> {
+    let mut paths = Vec::new();
+    collect_task_verify_template_paths(task, &mut paths);
+    paths.sort_unstable();
+    paths.dedup();
+    paths
+}
+
+fn collect_task_verify_template_paths<'a>(value: &'a Value, paths: &mut Vec<&'a str>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(path) = object.get("verify_template").and_then(Value::as_str)
+                && !path.trim().is_empty()
+            {
+                paths.push(path);
+            }
+            for value in object.values() {
+                collect_task_verify_template_paths(value, paths);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_task_verify_template_paths(value, paths);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn temp_zip_path(out: &Path) -> CliOutcome<PathBuf> {

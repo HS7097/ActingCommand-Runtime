@@ -1,5 +1,98 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env pointer runtime consumption and AK target-center routes
+
+### Current status
+
+- Continued issue #31 after an interrupted local session and verified there were no git locks, merge conflict markers, or residual `actinglab`/`cargo`/`rustc` processes.
+- Runtime and resource repositories were fetched from remote before continuing this resource-dependent work.
+- Implemented Runtime consumption of `{env:<key>}` markers when loading recognition packs from a resource root.
+- Added fail-loud env pointer selection rules: if no detector declares all requested keys, or more than one detector does and `--env-task` is not supplied, loading fails with a usage error.
+- Added selected package assembly support for env-backed packs and resolved operation task JSON so `package build-task` can validate concrete per-instance env assets.
+- Added root-relative operation asset lookup for package-contained operation guards whose concrete template path comes from a resolved env value.
+- Added dynamic navigation support for `target` / `target_center` clicks: the route stores a target id, execution evaluates that recognition target on the current scene, derives the concrete click rect/point, then applies destructive-click checks before sending input.
+- Kept Runtime logic game-agnostic; detector ids, keys, values, thresholds, and template paths remain resource data.
+- Arknights resources now use `hometheme/{env:ui_theme}/...` for the home `DepotEnter`, `Friends`, and `Task` targets and route those home clicks through `target_center`.
+- Added safe flat path variants for Dreamland/LoneTrail Day/Night theme directories because env values are path segments and cannot contain `/`.
+- Runtime-generated AK env result remained ignored by git under `ours/env-detection/envinst_.../result.json`.
+
+### Files changed
+
+- Runtime:
+  - `apps/actinglab/src/env_detection.rs`
+  - `apps/actinglab/src/lab2_cli.rs`
+  - `apps/actinglab/src/lab_run.rs`
+  - `apps/actinglab/src/main.rs`
+  - `apps/actinglab/src/package_build.rs`
+  - `apps/actinglab/src/resource_convert.rs`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resources:
+  - `ours/env-detection/README.md`
+  - `ours/env-detection/detections.json`
+  - `ours/hometheme/DreamlandDay/`
+  - `ours/hometheme/DreamlandNight/`
+  - `ours/hometheme/LoneTrailDay/`
+  - `ours/hometheme/LoneTrailNight/`
+  - `ours/operations/open_depot/**`
+  - `ours/operations/open_friends/**`
+  - `ours/operations/open_mission/**`
+  - `ours/recognition/arknights.cn.pack.json`
+  - `ours/navigation/arknights.cn.navigation.json`
+  - `ours/operations/operations.primitives.json`
+  - `ours/tools/convert_operations.py`
+
+### Commands run
+
+- `git fetch --prune --tags` for Runtime, Arknights resources, AzurLane resources, and BlueArchive resources.
+- `cargo check -p actingcommand-actinglab`
+- `python .\ours\tools\bundle_v3.py materialize --repo . --server cn`
+- `cargo run -q -p actingcommand-actinglab -- --json resource convert --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --locale zh-CN`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 --capture-backend adb detect --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --capture`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 env resolve --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --path 'hometheme/{env:ui_theme}/DepotEnter.png'`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 --capture-backend adb recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --target button/depot_enter --capture`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:9999 recognize --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --target button/depot_enter --scene C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\issue31-ak-env\scene-default-terminal.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --game arknights --server cn --instance 127.0.0.1:16416 package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_depot --out C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\issue31-env-package\open_depot.zip`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --game arknights --server cn --instance 127.0.0.1:16416 package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_friends --out C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\issue31-env-package\open_friends.zip`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --game arknights --server cn --instance 127.0.0.1:16416 package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_mission --out C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\issue31-env-package\open_mission.zip`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- `cargo test -p actingcommand-actinglab package_build -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_center -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab` passed after repairing the interrupted `NavigationExecutionContext` field addition.
+- Focused env-detection tests passed: `9` tests.
+- Focused package-build tests passed: `6` tests.
+- Focused target-center test passed.
+- `cargo fmt --all -- --check` passed.
+- Runtime `git diff --check` passed.
+- Arknights resource `git diff --check` passed after normalizing generated JSON line endings/trailing whitespace.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Live read-only AK detection on `127.0.0.1:16416` detected `ui_theme=Siege` with confidence `0.9673871994018555`.
+- Quoted `env resolve` returned `hometheme/Siege/DepotEnter.png`.
+- Direct `recognize --target button/depot_enter --capture` loaded the env-backed target successfully and failed only by score on the current non-home screen.
+- A fake instance without an env result failed loudly with `env detection result ... is missing; run detect first`.
+- `package build-task --dry-run` validated `open_depot`, `open_friends`, and `open_mission` with env-backed concrete assets.
+- Resource `git status --ignored=matching ours/env-detection` showed the generated `result.json` ignored rather than staged.
+
+### Current blocker
+
+- No blocker for the current issue #31 env pointer consumption and AK target-center route update.
+- Scheduler-triggered redetection, SwitchTheme fallback, touch-interactive detection tasks, BA/AzurLane detection catalogs, UI, OCR, and SQLite remain future work.
+
+### Next step
+
+1. Commit and push Runtime changes with this checkpoint.
+2. Commit and push Arknights resource changes.
+3. Update GitHub issue #31 with the final validation summary and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env catalog compatibility and AK validation
 
 ### Current status

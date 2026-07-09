@@ -480,6 +480,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             config: &config,
             evaluator: &evaluator,
             detector: &detector,
+            destructive_clicks: &graph.destructive_clicks,
             step_timeout,
             poll,
         };

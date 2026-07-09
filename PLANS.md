@@ -24,6 +24,9 @@ Implemented direction:
 - Validate env values against `allowed_values` and path-safety rules before writing or resolving them.
 - Treat missing, stale, expired, low-confidence, schema-mismatched, detector-mismatched, or resource-hash-mismatched env results as visible failures instead of defaulting.
 - Add `env resolve` and `env status` commands for `{env:<key>}` pointer resolution and freshness inspection.
+- Resolve `{env:<key>}` markers during runtime recognition-pack loading so normal `recognize`, `detect-page`, `is-visible`, `tap-target`, and semantic navigation paths consume the detected per-instance value instead of requiring a separate manual path rewrite.
+- Resolve `{env:<key>}` markers during selected `package build-task` pack/operation assembly when an instance result exists, so instance-specific dry-run packages validate with concrete assets.
+- Support `target` / `target_center` navigation clicks that resolve at execution time through a recognition target match, with destructive-overlap checks applied to the resolved concrete click point before device input.
 - Record `env_detected` and `env_resolved` stages through the existing semantic ledger path when a run root is configured.
 - Use atomic JSON publication plus a per-result lock file for concurrent detection writes.
 
@@ -33,7 +36,7 @@ Current boundary:
 - Scheduler auto-triggering, SwitchTheme recovery, OCR, SQLite, UI, and game-specific logic remain out of scope.
 - Interactive touch-based detection steps are not implemented yet; current detection candidates use recognition templates.
 - The current mirrored Arknights resource repository now contains `ours/env-detection` and `ours/hometheme`.
-- Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, and `{env:ui_theme}` resolution to an existing theme resource path.
+- Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, `{env:ui_theme}` resolution to an existing theme resource path, direct `recognize` loading of an env-backed target, fail-loud missing-env loading, and `package build-task --dry-run` for the AK env-backed home routes.
 - Resource repositories were mirrored before this resource-dependent task. The Arknights resource repository required a small catalog correction for Dreamland/LoneTrail Day/Night template paths; Runtime remains game-agnostic.
 
 ## Current guarded-click and retry/recovery execution node

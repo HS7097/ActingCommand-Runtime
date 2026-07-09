@@ -224,6 +224,37 @@ impl EnvCommandContext {
             server_id,
         })
     }
+
+    fn from_resource_root(
+        global: &GlobalOptions,
+        flags: &FlagArgs,
+        resource_root: &Path,
+    ) -> CliOutcome<Self> {
+        let game_id = flags
+            .optional("--game")
+            .or_else(|| global.game.clone())
+            .ok_or_else(|| CliError::usage("env pointer resolution requires --game"))?;
+        let game_id = canonical_game(&game_id)?;
+        let server_id = flags
+            .optional("--server")
+            .or_else(|| global.server.clone())
+            .unwrap_or_else(|| default_server_for_game(&game_id).to_string());
+        let instance_identity = flags
+            .optional("--instance")
+            .or_else(|| global.instance.clone())
+            .ok_or_else(|| CliError::usage("env pointer resolution requires --instance"))?;
+        let env_dir = resource_root.join(ENV_DETECTION_DIR);
+        let salt_dir = app_state_root()?.join(ENV_DETECTION_DIR);
+        let salt = read_or_create_local_salt(&salt_dir)?;
+        let instance_id = env_instance_id(&instance_identity, &salt)?;
+        Ok(Self {
+            resource_root: resource_root.to_path_buf(),
+            env_dir,
+            instance_id,
+            game_id,
+            server_id,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,12 +374,12 @@ struct EnvDetectedValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ResolvedEnvValue {
-    key: String,
-    value: String,
-    confidence: f32,
-    source: String,
-    source_result: String,
+pub(super) struct ResolvedEnvValue {
+    pub(super) key: String,
+    pub(super) value: String,
+    pub(super) confidence: f32,
+    pub(super) source: String,
+    pub(super) source_result: String,
 }
 
 fn load_env_catalog(env_dir: &Path) -> CliOutcome<EnvDetectionCatalog> {
@@ -365,6 +396,145 @@ fn load_env_catalog(env_dir: &Path) -> CliOutcome<EnvDetectionCatalog> {
     })?;
     validate_catalog(&catalog)?;
     Ok(catalog)
+}
+
+pub(super) fn resolve_env_markers_in_value(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    resource_root: &Path,
+    value: &mut Value,
+) -> CliOutcome<Vec<ResolvedEnvValue>> {
+    let mut keys = BTreeSet::new();
+    collect_env_pointer_keys(value, &mut keys)?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let context = EnvCommandContext::from_resource_root(global, flags, resource_root)?;
+    let catalog = load_env_catalog(&context.env_dir)?;
+    let detector = select_detector_for_env_keys(&catalog, flags.optional("--env-task"), &keys)?;
+    validate_detector_scope(detector, &context)?;
+    let result_path = env_result_path(&context.env_dir, &context.instance_id);
+    let result = load_env_result(&result_path)?;
+    let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
+    let now_ms = current_unix_ms();
+    ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms)?;
+    let mut resolved = BTreeMap::<String, ResolvedEnvValue>::new();
+    resolve_env_markers_in_value_inner(value, detector, &result, now_ms, &mut resolved)?;
+    Ok(resolved.into_values().collect())
+}
+
+fn collect_env_pointer_keys(value: &Value, keys: &mut BTreeSet<String>) -> CliOutcome<()> {
+    match value {
+        Value::String(text) => {
+            collect_env_pointer_keys_from_str(text, keys)?;
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_env_pointer_keys(value, keys)?;
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values() {
+                collect_env_pointer_keys(value, keys)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    Ok(())
+}
+
+fn collect_env_pointer_keys_from_str(text: &str, keys: &mut BTreeSet<String>) -> CliOutcome<()> {
+    let mut offset = 0usize;
+    while let Some(start_rel) = text[offset..].find("{env:") {
+        let key_start = offset + start_rel + "{env:".len();
+        let end_rel = text[key_start..].find('}').ok_or_else(|| {
+            CliError::usage(format!(
+                "malformed env pointer in '{text}': missing closing '}}'"
+            ))
+        })?;
+        let end = key_start + end_rel;
+        let key = &text[key_start..end];
+        if key.trim().is_empty() {
+            return Err(CliError::usage("env pointer key must not be empty"));
+        }
+        keys.insert(key.to_string());
+        offset = end + 1;
+    }
+    Ok(())
+}
+
+fn select_detector_for_env_keys<'a>(
+    catalog: &'a EnvDetectionCatalog,
+    requested_detector: Option<String>,
+    keys: &BTreeSet<String>,
+) -> CliOutcome<&'a EnvDetector> {
+    if let Some(detector_id) = requested_detector {
+        let detector = catalog.detector(&detector_id)?;
+        ensure_detector_has_env_keys(detector, keys)?;
+        return Ok(detector);
+    }
+    let matches = catalog
+        .detections
+        .iter()
+        .filter(|detector| detector_declares_env_keys(detector, keys))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [detector] => Ok(detector),
+        [] => Err(CliError::usage(format!(
+            "no env detector declares all required keys: {}",
+            keys.iter().cloned().collect::<Vec<_>>().join(", ")
+        ))),
+        _ => Err(CliError::usage(format!(
+            "env keys are ambiguous across detectors; pass --env-task explicitly for keys: {}",
+            keys.iter().cloned().collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+fn ensure_detector_has_env_keys(detector: &EnvDetector, keys: &BTreeSet<String>) -> CliOutcome<()> {
+    if detector_declares_env_keys(detector, keys) {
+        return Ok(());
+    }
+    Err(CliError::usage(format!(
+        "env detector '{}' does not declare all required keys: {}",
+        detector.id,
+        keys.iter().cloned().collect::<Vec<_>>().join(", ")
+    )))
+}
+
+fn detector_declares_env_keys(detector: &EnvDetector, keys: &BTreeSet<String>) -> bool {
+    keys.iter()
+        .all(|key| detector.keys.iter().any(|item| &item.key == key))
+}
+
+fn resolve_env_markers_in_value_inner(
+    value: &mut Value,
+    detector: &EnvDetector,
+    result: &EnvDetectionResult,
+    now_ms: u64,
+    resolved: &mut BTreeMap<String, ResolvedEnvValue>,
+) -> CliOutcome<()> {
+    match value {
+        Value::String(text) => {
+            let (replacement, keys) = resolve_env_markers(text, detector, result, now_ms)?;
+            *text = replacement;
+            for key in keys {
+                resolved.entry(key.key.clone()).or_insert(key);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                resolve_env_markers_in_value_inner(value, detector, result, now_ms, resolved)?;
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                resolve_env_markers_in_value_inner(value, detector, result, now_ms, resolved)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    Ok(())
 }
 
 fn parse_env_catalog_value(value: Value) -> Result<EnvDetectionCatalog, String> {

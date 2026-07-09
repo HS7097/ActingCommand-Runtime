@@ -2331,6 +2331,10 @@ impl LabResources {
     fn operation_asset_for_task(&self, task_id: &str, relative: &str) -> CliOutcome<&[u8]> {
         self.bundle
             .resource_entry(&format!("operations/{}/{}", task_id, relative))
+            .or_else(|err| match err {
+                ContainmentError::MissingEntry { .. } => self.bundle.resource_entry(relative),
+                other => Err(other),
+            })
             .map_err(containment_error)
     }
 
@@ -2349,6 +2353,10 @@ impl LabResources {
         operation_bundle.validate(control, |relative| {
             self.bundle
                 .resource_entry(&format!("operations/{task_id}/{relative}"))
+                .or_else(|err| match err {
+                    ContainmentError::MissingEntry { .. } => self.bundle.resource_entry(relative),
+                    other => Err(other),
+                })
                 .map(|_| true)
                 .or_else(|err| match err {
                     ContainmentError::MissingEntry { .. } => Ok(false),
@@ -2484,6 +2492,10 @@ impl OperationBundle {
                 .guard
                 .as_ref()
                 .and_then(|guard| guard.verify_template.as_ref())
+                && !matches!(
+                    operation.click.kind.as_str(),
+                    "offset" | "target" | "target_center"
+                )
                 && !operation_asset_exists(guard_template)?
             {
                 return Err(CliError::package_invalid(format!(

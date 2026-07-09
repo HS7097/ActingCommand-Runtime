@@ -6303,7 +6303,7 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let target = flags.required("--target")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
-    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+    let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
     if is_click_only_target(&evaluator, &target)? {
         let click = evaluator
             .get_click_target(&target)
@@ -6345,8 +6345,13 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
             CliError::usage("detect-page requires --pages or --resource-root --game")
         })?;
-        let (evaluator, detector) =
-            load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
+        let (evaluator, detector) = load_evaluator_and_detector(
+            global,
+            &flags,
+            &resources.pack_path,
+            &resources.pack_root,
+            pages_path,
+        )?;
         detector
             .validate(&evaluator)
             .map_err(|err| CliError::usage(err.to_string()))?;
@@ -6392,7 +6397,7 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
     let target = target_argument(&flags, "is-visible")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
-    let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+    let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
     if evaluator
         .target_kind(&target)
         .map_err(|err| CliError::usage(err.to_string()))?
@@ -6737,7 +6742,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
         let config = read_user_config()?;
         let resources = recognition_resources(global, &config, &flags, false)?;
-        let evaluator = load_evaluator(&resources.pack_path, &resources.pack_root)?;
+        let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
         if evaluator
             .target_kind(&target)
             .map_err(|err| CliError::usage(err.to_string()))?
@@ -6928,6 +6933,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             config: &config,
             evaluator: &evaluator,
             detector: &detector,
+            destructive_clicks: &graph.destructive_clicks,
             step_timeout,
             poll,
         };
@@ -7084,6 +7090,7 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             config: &config,
             evaluator: &evaluator,
             detector: &detector,
+            destructive_clicks: &graph.destructive_clicks,
             step_timeout,
             poll,
         };
@@ -7120,6 +7127,7 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         config: &config,
         evaluator: &evaluator,
         detector: &detector,
+        destructive_clicks: &graph.destructive_clicks,
         step_timeout,
         poll,
     };
@@ -7281,6 +7289,9 @@ enum SemanticInput {
         rect: PackRect,
         point: SemanticPoint,
     },
+    TargetCenter {
+        target_id: String,
+    },
     Drag {
         from_rect: PackRect,
         to_rect: PackRect,
@@ -7329,8 +7340,13 @@ fn load_semantic_detector(
     let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
         CliError::usage("semantic page commands require --pages or --resource-root --game")
     })?;
-    let (evaluator, detector) =
-        load_evaluator_and_detector(&resources.pack_path, &resources.pack_root, pages_path)?;
+    let (evaluator, detector) = load_evaluator_and_detector(
+        global,
+        flags,
+        &resources.pack_path,
+        &resources.pack_root,
+        pages_path,
+    )?;
     detector
         .validate(&evaluator)
         .map_err(|err| CliError::usage(err.to_string()))?;
@@ -7572,6 +7588,9 @@ fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput> {
                 point: rect_center(rect)?,
             })
         }
+        Some("target") | Some("target_center") => Ok(SemanticInput::TargetCenter {
+            target_id: required_string_field(value, "target_id")?.to_string(),
+        }),
         Some("drag") => {
             let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
             let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
@@ -7769,6 +7788,10 @@ fn semantic_input_json(input: &SemanticInput) -> Value {
             "rect": rect_json(*rect),
             "point": point_json(*point)
         }),
+        SemanticInput::TargetCenter { target_id } => json!({
+            "type": "target_center",
+            "target_id": target_id
+        }),
         SemanticInput::Drag {
             from_rect,
             to_rect,
@@ -7790,7 +7813,15 @@ fn reject_destructive_overlap(
     edge: &NavigationEdge,
     destructive: &[DestructiveClick],
 ) -> CliOutcome<()> {
-    let rects = semantic_input_rects(&edge.input);
+    reject_destructive_overlap_input(edge, &edge.input, destructive)
+}
+
+fn reject_destructive_overlap_input(
+    edge: &NavigationEdge,
+    input: &SemanticInput,
+    destructive: &[DestructiveClick],
+) -> CliOutcome<()> {
+    let rects = semantic_input_rects(input);
     for rect in rects {
         if destructive.iter().any(|other| {
             other
@@ -8109,6 +8140,7 @@ fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcom
 fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
     match input {
         SemanticInput::Tap { rect, .. } => vec![*rect],
+        SemanticInput::TargetCenter { .. } => Vec::new(),
         SemanticInput::Drag {
             from_rect, to_rect, ..
         } => vec![*from_rect, *to_rect],
@@ -8238,6 +8270,11 @@ fn send_semantic_input(
     let handshake = backend.handshake_info().cloned();
     let operation = match input {
         SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
+        SemanticInput::TargetCenter { .. } => {
+            return Err(CliError::usage(
+                "target_center semantic input must be resolved before device execution",
+            ));
+        }
         SemanticInput::Drag {
             from,
             to,
@@ -8305,6 +8342,7 @@ struct NavigationExecutionContext<'a> {
     config: &'a UserConfig,
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
+    destructive_clicks: &'a [DestructiveClick],
     step_timeout: Duration,
     poll: Duration,
 }
@@ -8327,7 +8365,9 @@ fn execute_navigation_route(
                 &["page_guard"],
             ));
         }
-        let device = send_semantic_input(ctx.global, ctx.config, &edge.input)?;
+        let (input, recognition) = resolve_navigation_edge_input(ctx, &edge)?;
+        reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+        let device = send_semantic_input(ctx.global, ctx.config, &input)?;
         let arrived = poll_for_page(
             ctx.global,
             ctx.flags,
@@ -8350,11 +8390,65 @@ fn execute_navigation_route(
         current_page = arrived.page.clone();
         executed.push(json!({
             "edge": navigation_edge_json(&edge),
+            "resolved_input": semantic_input_json(&input),
+            "recognition": recognition,
             "device": device,
             "arrived": page_detection_json(&arrived)
         }));
     }
     Ok((executed, current_page))
+}
+
+fn resolve_navigation_edge_input(
+    ctx: &NavigationExecutionContext<'_>,
+    edge: &NavigationEdge,
+) -> CliOutcome<(SemanticInput, Value)> {
+    let SemanticInput::TargetCenter { target_id } = &edge.input else {
+        return Ok((edge.input.clone(), Value::Null));
+    };
+    let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
+    let evaluation = ctx
+        .evaluator
+        .evaluate_target(&scene, target_id)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    let evaluation_json = target_eval_json(&evaluation);
+    if !evaluation.passed {
+        return Err(CliError::safety_blocked(
+            "navigation_target_not_visible",
+            format!(
+                "navigation edge '{}' target '{}' did not pass recognition: {}",
+                edge.id, target_id, evaluation.message
+            ),
+            &["visible_target", "navigation"],
+        ));
+    }
+    let rect = target_evaluation_rect(&evaluation)?;
+    let input = SemanticInput::Tap {
+        rect,
+        point: rect_center(rect)?,
+    };
+    Ok((
+        input,
+        json!({
+            "target_id": target_id,
+            "evaluation": evaluation_json
+        }),
+    ))
+}
+
+fn target_evaluation_rect(evaluation: &TargetEvaluation) -> CliOutcome<PackRect> {
+    let template = evaluation.template.as_ref().ok_or_else(|| {
+        CliError::usage(format!(
+            "target '{}' has no matched template rect",
+            evaluation.id
+        ))
+    })?;
+    Ok(PackRect {
+        x: template.x,
+        y: template.y,
+        width: template.width,
+        height: template.height,
+    })
 }
 
 fn poll_for_page(
@@ -26382,9 +26476,24 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
         .map_err(|err| CliError::device(err.to_string()))
 }
 
-fn load_evaluator(pack_path: &Path, pack_root: &Path) -> CliOutcome<RecognitionEvaluator> {
+fn load_evaluator(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    pack_path: &Path,
+    pack_root: &Path,
+) -> CliOutcome<RecognitionEvaluator> {
     let pack_json = fs::read_to_string(pack_path)
         .map_err(|err| CliError::usage(format!("failed to read {}: {err}", pack_path.display())))?;
+    let mut pack_value: Value = serde_json::from_str(&pack_json).map_err(|err| {
+        CliError::usage(format!("failed to parse {}: {err}", pack_path.display()))
+    })?;
+    env_detection::resolve_env_markers_in_value(global, flags, pack_root, &mut pack_value)?;
+    let pack_json = serde_json::to_string(&pack_value).map_err(|err| {
+        CliError::usage(format!(
+            "failed to serialize resolved recognition pack {}: {err}",
+            pack_path.display()
+        ))
+    })?;
     let pack =
         load_pack_from_json_str(&pack_json).map_err(|err| CliError::usage(err.to_string()))?;
     RecognitionEvaluator::new(pack_root.to_path_buf(), pack)
@@ -26392,11 +26501,13 @@ fn load_evaluator(pack_path: &Path, pack_root: &Path) -> CliOutcome<RecognitionE
 }
 
 fn load_evaluator_and_detector(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
     pack_path: &Path,
     pack_root: &Path,
     pages_path: &Path,
 ) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {
-    let evaluator = load_evaluator(pack_path, pack_root)?;
+    let evaluator = load_evaluator(global, flags, pack_path, pack_root)?;
     let pages_json = fs::read_to_string(pages_path).map_err(|err| {
         CliError::usage(format!("failed to read {}: {err}", pages_path.display()))
     })?;

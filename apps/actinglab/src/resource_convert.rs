@@ -353,7 +353,16 @@ impl OperationConverter {
             }
             for verify_template in array_field(&bundle.data, "verify_templates") {
                 let template = string_field(verify_template, "template").unwrap_or_default();
-                if !bundle.dir.join(&template).is_file() {
+                if is_env_template_ref(&template) {
+                    if let Err(error) = validate_env_template_ref(&template) {
+                        errors.push(format!(
+                            "{}: verify_template {:?} env template invalid: {}",
+                            bundle.task_json_path().display(),
+                            verify_template.get("id").and_then(Value::as_str),
+                            error.message
+                        ));
+                    }
+                } else if !bundle.dir.join(&template).is_file() {
                     errors.push(format!(
                         "{}: verify_template {:?} template missing on disk: {}",
                         bundle.task_json_path().display(),
@@ -364,15 +373,24 @@ impl OperationConverter {
             }
             for operation in array_field(&bundle.data, "operations") {
                 validate_click_shape(&bundle.task_json_path(), operation, &mut errors);
-                if let Some(template) = operation.get("verify_template").and_then(Value::as_str)
-                    && !bundle.dir.join(template).is_file()
-                {
-                    errors.push(format!(
-                        "{}: op {:?} verify_template missing on disk: {}",
-                        bundle.task_json_path().display(),
-                        operation.get("id").and_then(Value::as_str),
-                        bundle.dir.join(template).display()
-                    ));
+                if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
+                    if is_env_template_ref(template) {
+                        if let Err(error) = validate_env_template_ref(template) {
+                            errors.push(format!(
+                                "{}: op {:?} verify_template env template invalid: {}",
+                                bundle.task_json_path().display(),
+                                operation.get("id").and_then(Value::as_str),
+                                error.message
+                            ));
+                        }
+                    } else if !bundle.dir.join(template).is_file() {
+                        errors.push(format!(
+                            "{}: op {:?} verify_template missing on disk: {}",
+                            bundle.task_json_path().display(),
+                            operation.get("id").and_then(Value::as_str),
+                            bundle.dir.join(template).display()
+                        ));
+                    }
                 }
                 for resource in operation
                     .get("consumes")
@@ -422,7 +440,7 @@ impl OperationConverter {
                 let target = pack_target(
                     &source,
                     &target_id,
-                    &repo_rel(&self.root, &bundle.dir.join(&template))?,
+                    &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
                     source.get("threshold").cloned().unwrap_or_else(|| {
                         required_field(&self.defaults, "template_threshold")
@@ -451,7 +469,7 @@ impl OperationConverter {
                 let target = pack_target(
                     &source,
                     &target_id,
-                    &repo_rel(&self.root, &bundle.dir.join(&template))?,
+                    &template_resource_path(&self.root, &bundle.dir, &template)?,
                     region_to_pack(required_field(&source, "region")?)?,
                     source.get("threshold").cloned().unwrap_or_else(|| {
                         required_field(&self.defaults, "template_threshold")
@@ -477,7 +495,7 @@ impl OperationConverter {
                 let target = pack_target(
                     &source,
                     &target_id,
-                    &repo_rel(&self.root, &bundle.dir.join(template))?,
+                    &template_resource_path(&self.root, &bundle.dir, template)?,
                     Value::String(FULL_FRAME_SENTINEL.to_string()),
                     source
                         .get("threshold")
@@ -949,7 +967,7 @@ impl OperationConverter {
 
     fn operation_guard(&self, bundle: &Bundle, operation: &Value) -> CliOutcome<Value> {
         if let Some(guard) = operation.get("guard") {
-            return Ok(guard.clone());
+            return canonicalize_guard_page_id(&self.game, guard);
         }
         if operation
             .get("unguarded_trusted_coordinate")
@@ -1092,6 +1110,24 @@ impl OperationConverter {
     }
 }
 
+fn canonicalize_guard_page_id(game: &str, guard: &Value) -> CliOutcome<Value> {
+    let mut guard = guard.clone();
+    let Some(object) = guard.as_object_mut() else {
+        return Ok(guard);
+    };
+    let Some(page_id_value) = object.get_mut("page_id") else {
+        return Ok(guard);
+    };
+    let Some(page_id_value_str) = page_id_value.as_str() else {
+        return Ok(guard);
+    };
+    if page_id_value_str == "any" || page_id_value_str.contains('/') {
+        return Ok(guard);
+    }
+    *page_id_value = Value::String(page_id(game, page_id_value_str));
+    Ok(guard)
+}
+
 impl Bundle {
     pub(super) fn task_json_path(&self) -> PathBuf {
         self.dir.join("task.json")
@@ -1175,6 +1211,19 @@ fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>
                 errors,
                 "click.offset",
             );
+        }
+        Some("target") | Some("target_center") => {
+            require_click_keys(path, operation, click, &["target_id"], errors, "click");
+            if let Some(offset) = click.get("offset").and_then(Value::as_object) {
+                require_click_keys(
+                    path,
+                    operation,
+                    offset,
+                    &["x", "y", "width", "height"],
+                    errors,
+                    "click.offset",
+                );
+            }
         }
         Some("drag") => {
             require_click_keys(
@@ -1705,6 +1754,22 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
             ),
             ("offset", required_field(click, "offset")?.clone()),
         ])),
+        Some("target") | Some("target_center") => Ok(ordered_object([
+            (
+                "kind",
+                Value::String(
+                    click
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("target_center")
+                        .to_string(),
+                ),
+            ),
+            (
+                "target_id",
+                click.get("target_id").cloned().unwrap_or(Value::Null),
+            ),
+        ])),
         Some("drag") => Ok(ordered_object([
             ("kind", Value::String("drag".to_string())),
             ("from", required_field(click, "from")?.clone()),
@@ -1794,6 +1859,9 @@ fn validate_pack_targets_exist(root: &Path, pack: &Value) -> CliOutcome<()> {
         let Some(path) = target.get("template_path").and_then(Value::as_str) else {
             continue;
         };
+        if is_env_template_ref(path) {
+            continue;
+        }
         if !root.join(path).is_file() {
             errors.push(format!(
                 "pack target {:?} template_path missing on disk: {path}",
@@ -1989,6 +2057,34 @@ fn repo_rel(root: &Path, path: &Path) -> CliOutcome<String> {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/"))
+}
+
+fn template_resource_path(root: &Path, bundle_dir: &Path, template: &str) -> CliOutcome<String> {
+    if is_env_template_ref(template) {
+        validate_env_template_ref(template)?;
+        return Ok(template.to_string());
+    }
+    repo_rel(root, &bundle_dir.join(template))
+}
+
+fn is_env_template_ref(template: &str) -> bool {
+    template.contains("{env:")
+}
+
+fn validate_env_template_ref(template: &str) -> CliOutcome<()> {
+    if template.contains('\\') || Path::new(template).is_absolute() {
+        return Err(CliError::package_invalid(format!(
+            "env template_path '{template}' is not a safe resource path"
+        )));
+    }
+    for part in template.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err(CliError::package_invalid(format!(
+                "env template_path '{template}' is not a safe resource path"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn ordered_object<const N: usize>(fields: [(&str, Value); N]) -> Value {
