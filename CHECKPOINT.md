@@ -22,6 +22,8 @@
 - Live read-only AK validation passed on `127.0.0.1:16416`: `detect_ui_theme` detected `Siege` with confidence `0.9682732820510864`.
 - The generated per-instance result path uses `envinst_.../result.json`; result JSON does not include raw `127.0.0.1:16416`, and the runtime-generated result file is ignored by the resource repository.
 - `{env:ui_theme}` resolved from the live result to `hometheme/Siege/DepotEnter.png`, and that resource file exists.
+- Runtime compatibility implementation was committed and pushed as `1e4dcaaeba30b7867fe2e39e18ee566a7c61f00f`.
+- Checkpoint tag `checkpoint/20260709-issue31-env-detection-ak-validation` was created and pushed for the Runtime implementation commit.
 
 ### Files changed
 
@@ -75,9 +77,8 @@
 
 ### Next step
 
-1. Commit and push the Runtime compatibility update.
-2. Commit and push the Arknights resource catalog correction.
-3. Comment issue #31 with the Runtime/resource commits and validation evidence, leaving the issue open for Alice acceptance unless explicitly asked to close it.
+1. Comment issue #31 with the Runtime/resource commits and validation evidence, leaving the issue open for Alice acceptance unless explicitly asked to close it.
+2. Record the issue comment URL in this checkpoint.
 
 ## 2026-07-09 issue 31 environment detection memory P1
 
