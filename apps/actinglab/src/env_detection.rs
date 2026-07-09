@@ -8,9 +8,7 @@ use super::{
     write_json_file_atomic,
 };
 use actingcommand_recognition::Scene;
-use actingcommand_recognition_pack::{
-    RecognitionEvaluator, TargetEvaluation, load_pack_from_json_str,
-};
+use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -493,8 +491,12 @@ impl EnvDetectionKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EnvDetectionCandidate {
     value: String,
-    #[serde(alias = "template")]
-    template_path: String,
+    #[serde(default, alias = "template")]
+    template_path: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
     #[serde(
         default,
         alias = "roi",
@@ -505,6 +507,60 @@ struct EnvDetectionCandidate {
     threshold: Option<f32>,
     #[serde(default)]
     source: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvCandidateMatcher {
+    Template,
+    SceneSize { width: u32, height: u32 },
+}
+
+impl EnvDetectionCandidate {
+    fn matcher(&self, key: &str) -> CliOutcome<EnvCandidateMatcher> {
+        let template = self.template_path.as_deref().map(str::trim);
+        let has_template = template.is_some_and(|value| !value.is_empty());
+        let has_empty_template = template.is_some_and(str::is_empty);
+        let has_width = self.width.is_some();
+        let has_height = self.height.is_some();
+        let has_scene_size = has_width || has_height;
+
+        if has_empty_template {
+            return Err(CliError::usage(format!(
+                "env key '{}' candidate '{}' has empty template_path",
+                key, self.value
+            )));
+        }
+        if has_template && has_scene_size {
+            return Err(CliError::usage(format!(
+                "env key '{}' candidate '{}' must not mix template and scene size matchers",
+                key, self.value
+            )));
+        }
+        if has_template {
+            return Ok(EnvCandidateMatcher::Template);
+        }
+        if has_width && has_height {
+            let width = self.width.unwrap_or_default();
+            let height = self.height.unwrap_or_default();
+            if width == 0 || height == 0 {
+                return Err(CliError::usage(format!(
+                    "env key '{}' candidate '{}' scene size must be non-zero",
+                    key, self.value
+                )));
+            }
+            return Ok(EnvCandidateMatcher::SceneSize { width, height });
+        }
+        if has_scene_size {
+            return Err(CliError::usage(format!(
+                "env key '{}' candidate '{}' scene size matcher requires width and height",
+                key, self.value
+            )));
+        }
+        Err(CliError::usage(format!(
+            "env key '{}' candidate '{}' must declare template_path or width/height",
+            key, self.value
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -966,12 +1022,7 @@ fn validate_detection_key(detector: &EnvDetector, key: &EnvDetectionKey) -> CliO
     }
     for candidate in &key.candidates {
         validate_env_value(candidate, key)?;
-        if candidate.template_path.trim().is_empty() {
-            return Err(CliError::usage(format!(
-                "env key '{}' candidate '{}' has empty template_path",
-                key.key, candidate.value
-            )));
-        }
+        candidate.matcher(&key.key)?;
         if let Some(threshold) = candidate.threshold {
             validate_confidence(threshold, &format!("{}.candidate.threshold", key.key))?;
         }
@@ -1136,32 +1187,33 @@ fn evaluate_detection_key(
     scene: &Scene,
     now_ms: u64,
 ) -> CliOutcome<EnvDetectedValue> {
-    let evaluator = build_key_evaluator(detector, key, context, scene)?;
-    let mut best: Option<(&EnvDetectionCandidate, TargetEvaluation, f32)> = None;
+    let evaluator = if key.candidates.iter().any(|candidate| {
+        matches!(
+            candidate.matcher(&key.key),
+            Ok(EnvCandidateMatcher::Template)
+        )
+    }) {
+        Some(build_key_evaluator(detector, key, context, scene)?)
+    } else {
+        None
+    };
+    let mut best: Option<(&EnvDetectionCandidate, bool, f32)> = None;
     for (index, candidate) in key.candidates.iter().enumerate() {
-        let target_id = env_target_id(&key.key, index);
-        let evaluation = evaluator
-            .evaluate_target(scene, &target_id)
-            .map_err(|err| CliError::usage(err.to_string()))?;
-        let score = evaluation
-            .template
-            .as_ref()
-            .map(|template| template.score)
-            .unwrap_or(0.0);
+        let (passed, score) = evaluate_candidate(key, candidate, index, scene, evaluator.as_ref())?;
         if best
             .as_ref()
             .is_none_or(|(_, _, best_score)| score > *best_score)
         {
-            best = Some((candidate, evaluation, score));
+            best = Some((candidate, passed, score));
         }
     }
-    let Some((candidate, evaluation, confidence)) = best else {
+    let Some((candidate, passed, confidence)) = best else {
         return Err(CliError::usage(format!(
             "env key '{}' has no evaluated candidates",
             key.key
         )));
     };
-    if !evaluation.passed || confidence < key.min_confidence {
+    if !passed || confidence < key.min_confidence {
         return Err(CliError::usage(format!(
             "env detector '{}' key '{}' needs detection: best candidate '{}' scored {:.6}, below threshold {:.6}",
             detector.id, key.key, candidate.value, confidence, key.min_confidence
@@ -1181,41 +1233,90 @@ fn evaluate_detection_key(
     })
 }
 
+fn evaluate_candidate(
+    key: &EnvDetectionKey,
+    candidate: &EnvDetectionCandidate,
+    index: usize,
+    scene: &Scene,
+    evaluator: Option<&RecognitionEvaluator>,
+) -> CliOutcome<(bool, f32)> {
+    match candidate.matcher(&key.key)? {
+        EnvCandidateMatcher::Template => {
+            let evaluator = evaluator.ok_or_else(|| {
+                CliError::usage(format!(
+                    "env key '{}' template candidate '{}' has no evaluator",
+                    key.key, candidate.value
+                ))
+            })?;
+            let target_id = env_target_id(&key.key, index);
+            let evaluation = evaluator
+                .evaluate_target(scene, &target_id)
+                .map_err(|err| CliError::usage(err.to_string()))?;
+            let score = evaluation
+                .template
+                .as_ref()
+                .map(|template| template.score)
+                .unwrap_or(0.0);
+            Ok((evaluation.passed, score))
+        }
+        EnvCandidateMatcher::SceneSize { width, height } => {
+            let confidence = if scene.width() == width && scene.height() == height {
+                1.0
+            } else {
+                0.0
+            };
+            let threshold = candidate.threshold.unwrap_or(key.min_confidence);
+            Ok((confidence >= threshold, confidence))
+        }
+    }
+}
+
 fn build_key_evaluator(
     detector: &EnvDetector,
     key: &EnvDetectionKey,
     context: &EnvCommandContext,
     scene: &Scene,
 ) -> CliOutcome<RecognitionEvaluator> {
-    let targets = key
-        .candidates
-        .iter()
-        .enumerate()
-        .map(|(index, candidate)| {
-            let region = candidate.region.map_or_else(
-                || json!("full_frame"),
-                |rect| {
-                    json!({
-                        "x": rect.x,
-                        "y": rect.y,
-                        "width": rect.width,
-                        "height": rect.height
-                    })
-                },
-            );
-            json!({
+    let mut targets = Vec::new();
+    for (index, candidate) in key.candidates.iter().enumerate() {
+        if candidate.matcher(&key.key)? != EnvCandidateMatcher::Template {
+            continue;
+        }
+        let template_path = candidate.template_path.as_deref().ok_or_else(|| {
+            CliError::usage(format!(
+                "env key '{}' candidate '{}' has no template_path",
+                key.key, candidate.value
+            ))
+        })?;
+        let region = candidate.region.map_or_else(
+            || json!("full_frame"),
+            |rect| {
+                json!({
+                    "x": rect.x,
+                    "y": rect.y,
+                    "width": rect.width,
+                    "height": rect.height
+                })
+            },
+        );
+        targets.push(json!({
                 "type": "template",
                 "id": env_target_id(&key.key, index),
-                "template_path": candidate.template_path,
+            "template_path": template_path,
                 "region": region,
                 "threshold": candidate.threshold.unwrap_or(key.min_confidence),
                 "mask": Value::Null,
                 "rect_move": Value::Null,
                 "color_check": Value::Null,
                 "click": Value::Null
-            })
-        })
-        .collect::<Vec<_>>();
+        }));
+    }
+    if targets.is_empty() {
+        return Err(CliError::usage(format!(
+            "env key '{}' has no template candidates",
+            key.key
+        )));
+    }
     let match_metric = detector.match_metric.as_deref().unwrap_or("ccorr_normed");
     let pack_value = json!({
         "schema_version": "0.3",
@@ -1254,7 +1355,7 @@ fn detector_resource_hash(detector: &EnvDetector, resource_root: &Path) -> CliOu
         .flat_map(|key| {
             key.candidates
                 .iter()
-                .map(|candidate| candidate.template_path.clone())
+                .filter_map(|candidate| candidate.template_path.clone())
         })
         .collect::<Vec<_>>();
     templates.sort();
@@ -1702,7 +1803,10 @@ mod tests {
         assert_eq!(key.min_confidence, 0.7);
         assert_eq!(key.stale_below_confidence, Some(0.6));
         let candidate = &key.candidates[0];
-        assert_eq!(candidate.template_path, "hometheme/Default/Terminal.png");
+        assert_eq!(
+            candidate.template_path.as_deref(),
+            Some("hometheme/Default/Terminal.png")
+        );
         assert_eq!(
             candidate.region,
             Some(EnvRect {
@@ -1865,6 +1969,39 @@ mod tests {
     }
 
     #[test]
+    fn scene_size_candidate_detects_resolution_without_template_file() {
+        let temp = TempDir::new().unwrap();
+        let resource_root = temp.path();
+        let context = context(resource_root, "envinst_a");
+        let detector = resolution_detector();
+        let scene = Scene::from_pixels(1280, 720, &vec![0; 1280 * 720 * 3], ScenePixelFormat::Rgb8)
+            .unwrap();
+        let hash = detector_resource_hash(&detector, resource_root).unwrap();
+        let result =
+            evaluate_detector(&detector, &context, &scene, &hash, current_unix_ms()).unwrap();
+
+        assert_eq!(result.detections["resolution"].value, "1280x720");
+        assert_eq!(result.detections["resolution"].confidence, 1.0);
+    }
+
+    #[test]
+    fn env_candidate_must_declare_one_matcher() {
+        let mut no_matcher = candidate("Default");
+        no_matcher.template_path = None;
+        assert!(no_matcher.matcher("ui_theme").is_err());
+
+        let mut mixed = candidate("Default");
+        mixed.width = Some(1280);
+        mixed.height = Some(720);
+        assert!(mixed.matcher("ui_theme").is_err());
+
+        let mut partial_size = candidate("Default");
+        partial_size.template_path = None;
+        partial_size.width = Some(1280);
+        assert!(partial_size.matcher("ui_theme").is_err());
+    }
+
+    #[test]
     fn lock_conflict_is_visible() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("envinst_a/result.json");
@@ -1901,7 +2038,21 @@ mod tests {
     fn candidate(value: &str) -> EnvDetectionCandidate {
         EnvDetectionCandidate {
             value: value.to_string(),
-            template_path: "templates/default.png".to_string(),
+            template_path: Some("templates/default.png".to_string()),
+            width: None,
+            height: None,
+            region: None,
+            threshold: None,
+            source: None,
+        }
+    }
+
+    fn size_candidate(value: &str, width: u32, height: u32) -> EnvDetectionCandidate {
+        EnvDetectionCandidate {
+            value: value.to_string(),
+            template_path: None,
+            width: Some(width),
+            height: Some(height),
             region: None,
             threshold: None,
             source: None,
@@ -1924,6 +2075,29 @@ mod tests {
                 ttl_ms: None,
                 allowed_values: vec!["Default".to_string()],
                 candidates: vec![candidate("Default")],
+            }],
+        }
+    }
+
+    fn resolution_detector() -> EnvDetector {
+        EnvDetector {
+            id: "detect_resolution".to_string(),
+            version: Some("1".to_string()),
+            game_id: Some("arknights".to_string()),
+            server_id: None,
+            resource_pack_id: Some("test-pack".to_string()),
+            match_metric: None,
+            steps: Vec::new(),
+            keys: vec![EnvDetectionKey {
+                key: "resolution".to_string(),
+                min_confidence: 1.0,
+                stale_below_confidence: Some(1.0),
+                ttl_ms: None,
+                allowed_values: vec!["1280x720".to_string(), "1920x1080".to_string()],
+                candidates: vec![
+                    size_candidate("1280x720", 1280, 720),
+                    size_candidate("1920x1080", 1920, 1080),
+                ],
             }],
         }
     }

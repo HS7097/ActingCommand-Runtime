@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 generic scene-size env detection and BA/AzurLane catalogs
+
+### Current status
+
+- Continued issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Rechecked Runtime, Arknights, AzurLane, and BlueArchive repositories before editing; all were clean and aligned with remote.
+- Added a generic scene-size matcher for env detection candidates in Runtime, alongside the existing template matcher.
+- Scene-size candidates are resource-authored with `width` and `height`, validate exactly one matcher per candidate, and do not require template files.
+- The Runtime remains game-agnostic; resolution values, thresholds, and candidates are data-defined.
+- Added server-neutral `detect_resolution` catalogs to BlueArchive and AzurLane resource repositories under `ours/env-detection`.
+- Runtime-generated BA/AzurLane `result.json` files stayed ignored by the new env-detection `.gitignore` files.
+
+### Files changed
+
+- Runtime:
+  - `apps/actinglab/src/env_detection.rs`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- AzurLane resources:
+  - `ours/env-detection/.gitignore`
+  - `ours/env-detection/README.md`
+  - `ours/env-detection/detections.json`
+- BlueArchive resources:
+  - `ours/env-detection/.gitignore`
+  - `ours/env-detection/README.md`
+  - `ours/env-detection/detections.json`
+
+### Commands run
+
+- `git status --short --branch`
+- `git log -1 --oneline --decorate`
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `cargo fmt --all`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- Created a synthetic `1280x720` PNG under `target\issue31-resolution-scene\scene-1280x720.png` for CLI smoke validation.
+- `cargo run -q -p actingcommand-actinglab -- --json --game bluearchive --server jp --instance issue31-ba-resolution env status --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\ours`
+- `cargo run -q -p actingcommand-actinglab -- --json --game azurlane --server jp --instance issue31-al-resolution env status --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\ours`
+- `cargo run -q -p actingcommand-actinglab -- --json --game bluearchive --server jp --instance issue31-ba-resolution detect --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\ours --scene target\issue31-resolution-scene\scene-1280x720.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --game azurlane --server jp --instance issue31-al-resolution detect --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\ours --scene target\issue31-resolution-scene\scene-1280x720.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --game bluearchive --server jp --instance issue31-ba-resolution env resolve --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive\ours --path 'resolution\{env:resolution}\anchor.png'`
+- `cargo run -q -p actingcommand-actinglab -- --json --game azurlane --server jp --instance issue31-al-resolution env resolve --task detect_resolution --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane\ours --path 'resolution\{env:resolution}\anchor.png'`
+- `cargo fmt --all -- --check`
+- `git diff --check` for Runtime, AzurLane resources, and BlueArchive resources
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- Focused env-detection tests passed: `14` tests.
+- `cargo check -p actingcommand-actinglab` passed.
+- BA/AzurLane `env status` returned `needs_detection` before detection and `fresh` after detection.
+- BA/AzurLane `detect_resolution` detected `resolution=1280x720` with confidence `1.0` from the synthetic `1280x720` scene.
+- BA/AzurLane `{env:resolution}` resolution returned `resolution\1280x720\anchor.png`.
+- Runtime-generated BA/AzurLane result files were reported as ignored by `git status --ignored=matching ours/env-detection`.
+- `cargo fmt --all -- --check` passed.
+- Runtime, AzurLane resource, and BlueArchive resource `git diff --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Local review found no scope creep beyond the issue #31 thick spec: scene-size detection is generic, resource-authored, and keeps Runtime free of game-specific resolution logic.
+
+### Current blocker
+
+- No blocker for the current generic scene-size env detection and BA/AzurLane resource catalog update.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Runtime changes with updated planning files.
+2. Commit and push BlueArchive and AzurLane resource catalog changes.
+3. Update GitHub issue #31 with validation evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 generic interactive env detection steps
 
 ### Current status
