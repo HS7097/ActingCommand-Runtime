@@ -26,7 +26,7 @@
 - Live AK `open_depot` rerun with the full recovery-recognition selected package reached the issue #30 target path: run `run-af98796c0b15f8cd-1` recorded `operation_retry_scheduled`, `operation_recovery_required`, `recovery_started(return_home)`, recovery operations `open_quickswitch` and `quickswitch_to_home`, `recovery_result(status=ok,page=home)`, whole-task rerun of `home_to_depot`, and final `paused_needs_human` after the one allowed task retry was exhausted.
 - The live final failure remained explicit: `operation 'home_to_depot' exhausted recovery after 1 task retry/retries; paused_needs_human; failure report written to target\issue30-retry-inert\ak-open-depot-fullctx-out.zip`.
 - AK `127.0.0.1:16416` was manually returned to `arknights/home` after the smoke run.
-- Implementation commit for the recovery-recognition package follow-up: `bfc19579164decaa0037bc6fdcee348987a50f8b`.
+- Implementation commit for the recovery-recognition package follow-up: `817edb3d0b02db9822a66152e299d18bf410ad60`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-recovery-recognition-context`.
 - Implementation commit for the implicit recovery follow-up: `c107aca72193f56738ae16fec99ceaf723f798bc`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
