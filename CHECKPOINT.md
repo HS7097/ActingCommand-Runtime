@@ -12,6 +12,7 @@
 - Added schema `0.6` parsing for operation flow fields and task-level recovery fields.
 - Added explicit recognition-target click modes (`target`, `target_center`) as the Phase 3 path for position-tolerant clicks without changing absolute coordinate semantics.
 - Retry, recovery, pause, and attempt outcomes are emitted as ledger/light-event records.
+- Added direct regression tests for the retry/recover/fail branch decision used by the execution loop, including error-page recovery, exhausted retry recovery, no-recovery failure, and non-retryable side-effect failure.
 - This node changes only Runtime `actinglab` execution logic and documentation.
 - Live AK `home -> depot` revalidation was not run in this local node; automated/unit/workspace verification passed.
 - Implementation commit `80c98f194ba6d9f868c56aaaa20901814c04464a` was created for this milestone.
@@ -41,6 +42,7 @@
 - `cargo test -p actingcommand-actinglab operation_bundle_accepts_schema_0_6_retry_recovery_fields -- --nocapture`
 - `cargo test -p actingcommand-actinglab error_page_detection_matches_explicit_and_negative_pages -- --nocapture`
 - `cargo test -p actingcommand-actinglab target_click_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab operation_failure_decision_ -- --nocapture`
 - `cargo test -p actingcommand-actinglab lab_run::tests:: -- --nocapture`
 - `cargo fmt --all -- --check`
 - `git diff --check`
@@ -53,7 +55,9 @@
 
 - Focused issue #29 coordinate semantics tests passed.
 - Focused issue #30 retry/recovery/schema/target-click tests passed.
+- Focused retry/recover/fail branch decision tests passed.
 - `cargo test -p actingcommand-actinglab lab_run::tests:: -- --nocapture` passed with all lab-run tests.
+- `cargo test --workspace` passed with `660` workspace tests after adding the branch-decision tests.
 - Final gates passed:
   - `cargo fmt --all -- --check`
   - `git diff --check`

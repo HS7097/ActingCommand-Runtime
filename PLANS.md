@@ -27,6 +27,7 @@ Implemented direction:
 - Retry, recovery, task retry exhaustion, and `paused_needs_human` states emit ledger/light-event records.
 - `return_home` recovery is loaded as a contained operation bundle and is bounded; recovery failure or exhausted task retry fails loud with `paused_needs_human`.
 - Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics.
+- The retry/recovery branch policy is factored and covered by regression tests for retry, recover, fail, error-page recovery, exhausted attempts, and non-retryable side effects.
 
 Current boundary:
 

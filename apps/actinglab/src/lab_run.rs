@@ -1380,6 +1380,28 @@ enum OperationRunOutcome {
     NeedsRecovery(OperationRecoveryTrigger),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationFailureDecision {
+    Retry,
+    Recover,
+    Fail,
+}
+
+fn operation_failure_decision(
+    flow: OperationFlowPolicy,
+    attempt: u32,
+    hit_error_page: bool,
+    recovery_configured: bool,
+) -> OperationFailureDecision {
+    if flow.retryable && attempt < flow.max_attempts && !hit_error_page {
+        return OperationFailureDecision::Retry;
+    }
+    if flow.retryable && recovery_configured {
+        return OperationFailureDecision::Recover;
+    }
+    OperationFailureDecision::Fail
+}
+
 fn execute_operation_with_retries(
     ctx: &mut LabRunContext,
     capture: &mut dyn CaptureBackend,
@@ -1678,41 +1700,50 @@ fn execute_operation_with_retries(
                 "page_guard_failed",
                 json!({"step_id": operation.id, "attempt": attempt, "expected": operation.expected_after_page(), "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
             )?;
-            if flow.retryable && attempt < flow.max_attempts && !hit_error_page {
-                ctx.event(
-                    "operation_retry_scheduled",
-                    json!({"step_id": operation.id, "attempt": attempt, "next_attempt": attempt + 1, "reason": failure_reason, "retry_interval_ms": flow.retry_interval_ms, "after_page": after_page}),
-                )?;
-                sleep_ms(flow.retry_interval_ms);
-                continue;
-            }
-            if flow.retryable && (bundle.recovery.is_some() || operation.on_error.is_some()) {
-                ctx.event(
-                    "operation_recovery_required",
-                    json!({"step_id": operation.id, "attempts": attempt, "reason": if hit_error_page { "error_page" } else { failure_reason }, "after_page": after_page}),
-                )?;
-                ctx.clear_step_context();
-                return Ok(OperationRunOutcome::NeedsRecovery(
-                    OperationRecoveryTrigger {
-                        operation_id: operation.id.clone(),
-                        reason: if hit_error_page {
-                            "error_page"
-                        } else {
-                            failure_reason
+            match operation_failure_decision(
+                flow,
+                attempt,
+                hit_error_page,
+                bundle.recovery.is_some() || operation.on_error.is_some(),
+            ) {
+                OperationFailureDecision::Retry => {
+                    ctx.event(
+                        "operation_retry_scheduled",
+                        json!({"step_id": operation.id, "attempt": attempt, "next_attempt": attempt + 1, "reason": failure_reason, "retry_interval_ms": flow.retry_interval_ms, "after_page": after_page}),
+                    )?;
+                    sleep_ms(flow.retry_interval_ms);
+                    continue;
+                }
+                OperationFailureDecision::Recover => {
+                    ctx.event(
+                        "operation_recovery_required",
+                        json!({"step_id": operation.id, "attempts": attempt, "reason": if hit_error_page { "error_page" } else { failure_reason }, "after_page": after_page}),
+                    )?;
+                    ctx.clear_step_context();
+                    return Ok(OperationRunOutcome::NeedsRecovery(
+                        OperationRecoveryTrigger {
+                            operation_id: operation.id.clone(),
+                            reason: if hit_error_page {
+                                "error_page"
+                            } else {
+                                failure_reason
+                            },
+                            after_page,
+                            attempts: attempt,
                         },
-                        after_page,
-                        attempts: attempt,
-                    },
-                ));
+                    ));
+                }
+                OperationFailureDecision::Fail => {
+                    ctx.event(
+                        "step_failed",
+                        json!({"step_id": operation.id, "reason": "page_confirmation_failed", "attempts": attempt}),
+                    )?;
+                    return Err(CliError::device(format!(
+                        "page confirmation failed for operation '{}' after {attempt} attempt(s)",
+                        operation.id
+                    )));
+                }
             }
-            ctx.event(
-                "step_failed",
-                json!({"step_id": operation.id, "reason": "page_confirmation_failed", "attempts": attempt}),
-            )?;
-            return Err(CliError::device(format!(
-                "page confirmation failed for operation '{}' after {attempt} attempt(s)",
-                operation.id
-            )));
         }
         let guard_event = match verification {
             OperationVerification::Verified => "page_guard_passed",
@@ -6042,6 +6073,58 @@ mod tests {
         assert_eq!(policy.max_attempts, 2);
         assert_eq!(policy.retry_interval_ms, 250);
         assert_eq!(policy.post_wait_freezes_ms, 700);
+    }
+
+    #[test]
+    fn operation_failure_decision_retries_only_bounded_transient_navigation_failures() {
+        let flow = OperationFlowPolicy {
+            retryable: true,
+            max_attempts: 3,
+            retry_interval_ms: 100,
+            pre_delay_ms: 0,
+            post_delay_ms: 0,
+            pre_wait_freezes_ms: 0,
+            post_wait_freezes_ms: 0,
+        };
+
+        assert_eq!(
+            operation_failure_decision(flow, 1, false, true),
+            OperationFailureDecision::Retry
+        );
+        assert_eq!(
+            operation_failure_decision(flow, 1, true, true),
+            OperationFailureDecision::Recover
+        );
+        assert_eq!(
+            operation_failure_decision(flow, 3, false, true),
+            OperationFailureDecision::Recover
+        );
+        assert_eq!(
+            operation_failure_decision(flow, 3, false, false),
+            OperationFailureDecision::Fail
+        );
+    }
+
+    #[test]
+    fn operation_failure_decision_does_not_retry_non_retryable_side_effects() {
+        let flow = OperationFlowPolicy {
+            retryable: false,
+            max_attempts: 1,
+            retry_interval_ms: 100,
+            pre_delay_ms: 0,
+            post_delay_ms: 0,
+            pre_wait_freezes_ms: 0,
+            post_wait_freezes_ms: 0,
+        };
+
+        assert_eq!(
+            operation_failure_decision(flow, 1, false, true),
+            OperationFailureDecision::Fail
+        );
+        assert_eq!(
+            operation_failure_decision(flow, 1, true, true),
+            OperationFailureDecision::Fail
+        );
     }
 
     #[test]
