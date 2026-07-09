@@ -23,6 +23,7 @@
 - The live failure reason was explicit: `return_home recovery failed for operation 'home_to_depot'; paused_needs_human`. No fake success or silent fallback occurred.
 - Implementation commit for the implicit recovery follow-up: `c107aca72193f56738ae16fec99ceaf723f798bc`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
+- GitHub issue #30 was updated with implicit-recovery follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922673056` and intentionally left open for Alice acceptance/resource-route follow-up.
 - Implementation commit `e5288b54195ef6854f1f150c9cfc99510bc5d375` was created and pushed.
 - Checkpoint tag `checkpoint/20260709-issue30-navigation-retry-default` was created and pushed.
 - GitHub issue #30 was updated with follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922448681` and intentionally left open for Alice acceptance.
@@ -100,9 +101,9 @@
 
 ### Next step
 
-1. Run final formatting, clippy, workspace tests, and release build after the implicit recovery update.
-2. Commit and push the Runtime source and documentation update.
-3. Comment issue #30 with the new commit, tag, live evidence, and remaining resource-route follow-up; keep the issue open until Alice accepts.
+1. Keep issue #30 open until Alice accepts the Runtime behavior.
+2. Track the remaining AK `return_home` resource-route/page-recognition gap as a resource follow-up.
+3. Do not close #30 automatically.
 
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 
