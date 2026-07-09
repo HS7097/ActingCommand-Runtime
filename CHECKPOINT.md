@@ -15,6 +15,7 @@
 - Added a source-derived command inventory with `44` top-level dispatch arms and `119` concrete commands, plus the A0 exemption table.
 - Added a PowerShell extractor/check wrapper under the existing `scripts/actinglab` tool surface.
 - No Runtime behavior, game resource, resource repository, or emulator state was changed.
+- A0 implementation commit: `ad2facfbf163120ca89d8622b81391b5d603b89a`.
 
 ### Files changed
 
@@ -73,7 +74,7 @@
 
 ### Next step
 
-1. Commit and push the A0 task branch.
+1. Push the A0 task branch and checkpoint tag.
 2. Post the implementation delivery report to #34 with base/final commits, frozen specification hash, and verification evidence.
 3. Wait for the independent A0 sign-off/closure authorization required by issue #32.
 4. After A0 is accepted, open and execute A1 without starting any migration work early.
