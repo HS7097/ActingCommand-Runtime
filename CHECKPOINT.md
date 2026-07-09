@@ -15,6 +15,9 @@
   - BlueArchive `1cbcf3f`
 - AK `open_depot` package build with `--include-recovery` passed against the current Arknights resource repository.
 - Fresh live AK `open_depot` from home was not completed in this node because `127.0.0.1:16416` was not on AK home; `current-page` reported a non-home page and the attempted full-pack `return_home` reset failed at the `quickswitch_to_home` pre-execution guard after the route observed `current_page=gacha`.
+- Implementation commit `e5288b54195ef6854f1f150c9cfc99510bc5d375` was created and pushed.
+- Checkpoint tag `checkpoint/20260709-issue30-navigation-retry-default` was created and pushed.
+- GitHub issue #30 was updated with follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922448681` and intentionally left open for Alice acceptance.
 
 ### Files changed
 
@@ -43,6 +46,11 @@
 - `cargo clippy -p actingcommand-actinglab -- -D warnings`
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
+- `git commit -m "Fix navigation retry defaults"`
+- `git tag checkpoint/20260709-issue30-navigation-retry-default`
+- `git push origin main`
+- `git push origin checkpoint/20260709-issue30-navigation-retry-default`
+- `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body-file -`
 
 ### Test results
 
@@ -66,9 +74,9 @@
 
 ### Next step
 
-1. Commit and push this Runtime follow-up without closing issue #30.
-2. Comment on issue #30 with the implementation and validation evidence, leaving the issue open for Alice acceptance.
-3. Treat the fresh AK `open_depot` live rerun from a stable home page as acceptance follow-up once the device/resource route is ready.
+1. Push this checkpoint update documenting the commit, tag, and issue comment.
+2. Treat the fresh AK `open_depot` live rerun from a stable home page as acceptance follow-up once the device/resource route is ready.
+3. Keep issue #30 open until Alice accepts the follow-up.
 
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 
