@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A1 is implemented and verified; A2a interface inventory and freeze is next.
+Current node: A2a is frozen; A2b implementation is next.
 
 A1 delivers:
 
@@ -48,6 +48,17 @@ A1 delivers:
 - deterministic normalization for generated IDs, timestamps, absolute paths, env instance IDs, lease/process facts, retention byte counts, and the generated Lab output artifact hash;
 - a checked-in CLI exit-code table, baseline review record, and explicit recorder script that is never used during normal comparison;
 - deliberate baseline tampering evidence: changing a retained `cli_version` field makes the golden suite fail, and restoration returns it to green.
+
+A2a interface freeze:
+
+- document: `docs/architecture/actinglab-a2a-interface-freeze.md`;
+- SHA-256: `de50cfbb8906549662017efed4e39e0ac6f2375c77024772f5d3ca489c062c57`;
+- promote the existing `actingcommand-contract` in place rather than creating `lab-contract`;
+- add `crates/lab` as the sole application core;
+- reuse `InputBackend` and `CaptureBackend` through factories instead of duplicating device/capture operation traits;
+- add only the missing ledger, clock, and config ports in Lab;
+- keep semantic errors in contract and the process exit-code table in the CLI adapter;
+- expose typed Lab use-case request/response methods and claim I5a state ownership only.
 
 ## Current environment detection memory and env pointer node
 

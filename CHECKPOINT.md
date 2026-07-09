@@ -1,5 +1,49 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A2a interface freeze complete
+
+### Current status
+
+- Completed the required pre-implementation inventory of `actingcommand-contract` modules, current consumers, and candidate Lab ports.
+- Froze `docs/architecture/actinglab-a2a-interface-freeze.md` at SHA-256 `de50cfbb8906549662017efed4e39e0ac6f2375c77024772f5d3ca489c062c57`.
+- Chose in-place promotion of `crates/actingcommand-contract`; no second `lab-contract` crate will be created.
+- Kept `PrimitiveLayer` and `GameEngine` as external/delegated compatibility boundaries rather than using the broad traits as the in-process Lab hot path.
+- Reuse `actingcommand_device::InputBackend` and `CaptureBackend` through factories; no competing input/capture operation traits are authorized.
+- Froze the missing Lab ports as `InputBackendFactory`, `CaptureBackendFactory`, `LedgerSink`, `Clock`, and `ConfigSource`.
+- Froze the initial contract surface for generic envelopes, semantic Lab errors, env detected/resolved/needs-detection facts, drive stages/records, and lease/arbitration facts.
+- Froze lifecycle ownership: one Lab per current CLI invocation, one long-lived Lab for future `actingd`, I5a state ownership in scope, I5b resident-process ownership out of scope.
+- No Runtime behavior or source implementation changed in A2a.
+
+### Files changed
+
+- `docs/architecture/actinglab-a2a-interface-freeze.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read all files in `crates/actingcommand-contract/src` and its manifest.
+- `cargo metadata --format-version 1 --no-deps`.
+- Reverse consumer search for `actingcommand-contract` and `actingcommand_contract`.
+- `Get-FileHash -Algorithm SHA256 docs/architecture/actinglab-a2a-interface-freeze.md`.
+- `git diff --check`.
+
+### Test results
+
+- Frozen document hash is `de50cfbb8906549662017efed4e39e0ac6f2375c77024772f5d3ca489c062c57`.
+- A2a is documentation-only; A1 workspace, golden, Clippy, formatting, and architecture gates were already green at the immediate implementation baseline.
+- Diff whitespace check passed.
+
+### Current blocker
+
+- No A2a blocker remains. Alice's chain-level authorization permits A2b to begin after the freeze is posted to issue #34.
+
+### Next step
+
+1. Commit and push the frozen A2a document with planning/checkpoint state.
+2. Post the document name and SHA-256 to issue #34.
+3. Implement A2b against this exact interface freeze without changing protocol behavior.
+
 ## 2026-07-10 issue 33 A1 protocol golden guard complete
 
 ### Current status
