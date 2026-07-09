@@ -50,6 +50,7 @@ const DEFAULT_MAX_STEPS: usize = 50;
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
 const DEFAULT_RETRY_INTERVAL_MS: u64 = 1_500;
 const DEFAULT_POST_WAIT_FREEZES_MS: u64 = 480;
+const DEFAULT_RECOVERY_TASK_ID: &str = "return_home";
 const DEFAULT_ROI_STABLE_FRAMES: u32 = 2;
 const DEFAULT_ROI_STABILITY_TIMEOUT_MS: u64 = 1_500;
 const DEFAULT_RESOURCE_DRIFT_FRAMES: u32 = 2;
@@ -453,8 +454,13 @@ fn execute_lab_run(
                     .recovery
                     .as_ref()
                     .map(TaskRecovery::task_id)
-                    .or_else(|| operation.on_error.as_deref().map(|_| "return_home"))
-                    .unwrap_or("return_home");
+                    .or_else(|| {
+                        operation
+                            .on_error
+                            .as_deref()
+                            .map(|_| DEFAULT_RECOVERY_TASK_ID)
+                    })
+                    .unwrap_or(DEFAULT_RECOVERY_TASK_ID);
                 ctx.event(
                     "recovery_started",
                     json!({
@@ -1452,6 +1458,25 @@ fn operation_failure_decision(
     OperationFailureDecision::Fail
 }
 
+fn operation_recovery_configured(
+    bundle: &OperationBundle,
+    operation: &Operation,
+    implicit_return_home_available: bool,
+) -> bool {
+    bundle.recovery.is_some() || operation.on_error.is_some() || implicit_return_home_available
+}
+
+fn pre_execution_guard_failure_decision(
+    flow: OperationFlowPolicy,
+    attempt: u32,
+    recovery_configured: bool,
+) -> OperationFailureDecision {
+    if attempt > 1 && flow.retryable && recovery_configured {
+        return OperationFailureDecision::Recover;
+    }
+    OperationFailureDecision::Fail
+}
+
 fn execute_operation_with_retries(
     ctx: &mut LabRunContext,
     capture: &mut dyn CaptureBackend,
@@ -1470,6 +1495,11 @@ fn execute_operation_with_retries(
         candidate_pages,
     } = request;
     let flow = operation.flow_policy(bundle.defaults);
+    let recovery_configured = operation_recovery_configured(
+        bundle,
+        operation,
+        resources.has_operation_bundle(DEFAULT_RECOVERY_TASK_ID)?,
+    );
     ctx.set_step_context(step_index, operation);
     ctx.event(
         "step_started",
@@ -1593,6 +1623,23 @@ fn execute_operation_with_retries(
                     "pre_execution_guard_failed",
                     json!({"step_id": operation.id, "attempt": attempt, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
                 )?;
+                if pre_execution_guard_failure_decision(flow, attempt, recovery_configured)
+                    == OperationFailureDecision::Recover
+                {
+                    ctx.event(
+                        "operation_recovery_required",
+                        json!({"step_id": operation.id, "attempts": attempt - 1, "reason": reason, "after_page": current_page}),
+                    )?;
+                    ctx.clear_step_context();
+                    return Ok(OperationRunOutcome::NeedsRecovery(
+                        OperationRecoveryTrigger {
+                            operation_id: operation.id.clone(),
+                            reason,
+                            after_page: current_page,
+                            attempts: attempt - 1,
+                        },
+                    ));
+                }
                 ctx.event(
                     "step_failed",
                     json!({"step_id": operation.id, "reason": "pre_execution_guard_failed", "attempt": attempt}),
@@ -1749,12 +1796,7 @@ fn execute_operation_with_retries(
                 "page_guard_failed",
                 json!({"step_id": operation.id, "attempt": attempt, "expected": operation.expected_after_page(), "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
             )?;
-            match operation_failure_decision(
-                flow,
-                attempt,
-                hit_error_page,
-                bundle.recovery.is_some() || operation.on_error.is_some(),
-            ) {
+            match operation_failure_decision(flow, attempt, hit_error_page, recovery_configured) {
                 OperationFailureDecision::Retry => {
                     ctx.event(
                         "operation_retry_scheduled",
@@ -2277,6 +2319,15 @@ struct LabResources {
 }
 
 impl LabResources {
+    fn has_operation_bundle(&self, task_id: &str) -> CliOutcome<bool> {
+        let path = format!("operations/{task_id}/task.json");
+        match self.bundle.resource_entry(&path) {
+            Ok(_) => Ok(true),
+            Err(ContainmentError::MissingEntry { .. }) => Ok(false),
+            Err(err) => Err(containment_error(err)),
+        }
+    }
+
     fn operation_asset_for_task(&self, task_id: &str, relative: &str) -> CliOutcome<&[u8]> {
         self.bundle
             .resource_entry(&format!("operations/{}/{}", task_id, relative))
@@ -2500,8 +2551,10 @@ impl TaskRecovery {
 
     fn task_id(&self) -> &str {
         match self {
-            TaskRecovery::Kind(_) => "return_home",
-            TaskRecovery::Config { task_id, .. } => task_id.as_deref().unwrap_or("return_home"),
+            TaskRecovery::Kind(_) => DEFAULT_RECOVERY_TASK_ID,
+            TaskRecovery::Config { task_id, .. } => {
+                task_id.as_deref().unwrap_or(DEFAULT_RECOVERY_TASK_ID)
+            }
         }
     }
 }
@@ -6285,6 +6338,61 @@ mod tests {
     }
 
     #[test]
+    fn recovery_configuration_uses_implicit_return_home_when_available() {
+        let operation = test_operation(Some("terminal"), None);
+        let mut bundle = test_operation_bundle(operation.clone());
+
+        assert!(!operation_recovery_configured(&bundle, &operation, false));
+        assert!(operation_recovery_configured(&bundle, &operation, true));
+
+        bundle.recovery = Some(TaskRecovery::Kind(DEFAULT_RECOVERY_TASK_ID.to_string()));
+        assert!(operation_recovery_configured(&bundle, &operation, false));
+
+        bundle.recovery = None;
+        let mut operation_with_error_handler = operation.clone();
+        operation_with_error_handler.on_error = Some(DEFAULT_RECOVERY_TASK_ID.to_string());
+        assert!(operation_recovery_configured(
+            &bundle,
+            &operation_with_error_handler,
+            false
+        ));
+    }
+
+    #[test]
+    fn pre_execution_guard_failure_recovers_only_after_a_real_attempt() {
+        let retryable = OperationFlowPolicy {
+            retryable: true,
+            max_attempts: 3,
+            retry_interval_ms: 1,
+            pre_delay_ms: 0,
+            post_delay_ms: 0,
+            pre_wait_freezes_ms: 0,
+            post_wait_freezes_ms: 0,
+        };
+        let non_retryable = OperationFlowPolicy {
+            retryable: false,
+            ..retryable
+        };
+
+        assert_eq!(
+            pre_execution_guard_failure_decision(retryable, 1, true),
+            OperationFailureDecision::Fail
+        );
+        assert_eq!(
+            pre_execution_guard_failure_decision(retryable, 2, true),
+            OperationFailureDecision::Recover
+        );
+        assert_eq!(
+            pre_execution_guard_failure_decision(retryable, 2, false),
+            OperationFailureDecision::Fail
+        );
+        assert_eq!(
+            pre_execution_guard_failure_decision(non_retryable, 2, true),
+            OperationFailureDecision::Fail
+        );
+    }
+
+    #[test]
     fn operation_bundle_accepts_schema_0_6_retry_recovery_fields() {
         let control = test_control();
         let bundle: OperationBundle = serde_json::from_value(json!({
@@ -7510,6 +7618,30 @@ mod tests {
             produces: Vec::new(),
             verified_live: None,
             provenance: None,
+        }
+    }
+
+    fn test_operation_bundle(operation: Operation) -> OperationBundle {
+        OperationBundle {
+            schema_version: "0.3".to_string(),
+            task_id: "task".to_string(),
+            game: "arknights".to_string(),
+            server_scope: vec!["cn".to_string()],
+            goal: "test".to_string(),
+            coordinate_space: Resolution {
+                width: 1280,
+                height: 720,
+            },
+            defaults: OperationDefaults::default(),
+            anchors: Vec::new(),
+            entry_page: Some("home".to_string()),
+            target_page: Some("terminal".to_string()),
+            error_pages: Vec::new(),
+            recovery: None,
+            max_task_retries: None,
+            on_exhausted: None,
+            page_rules: BTreeMap::new(),
+            operations: vec![operation],
         }
     }
 

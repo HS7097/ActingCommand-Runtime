@@ -15,6 +15,14 @@
   - BlueArchive `1cbcf3f`
 - AK `open_depot` package build with `--include-recovery` passed against the current Arknights resource repository.
 - Fresh live AK `open_depot` from home was not completed in this node because `127.0.0.1:16416` was not on AK home; `current-page` reported a non-home page and the attempted full-pack `return_home` reset failed at the `quickswitch_to_home` pre-execution guard after the route observed `current_page=gacha`.
+- Follow-up live validation after returning `127.0.0.1:16416` to AK home confirmed `home_to_depot` now starts with `retryable=true` and `max_attempts=3`.
+- The first live retry run exposed an additional Runtime state-machine gap: after a real attempt landed on an unknown/recruit/gacha page, attempt 2 failed at retry-preparation `pre_execution_guard` before recovery could run.
+- Runtime now treats retry-preparation `pre_execution_guard` page mismatch as recoverable only after at least one real retryable attempt and only when recovery is configured or implicitly available; first-attempt guard mismatch, target mismatch, resource drift, non-retryable side effects, and invalid package/coordinate failures remain fail-loud.
+- Selected packages that contain `operations/return_home/task.json` now use that contained bundle as implicit recovery even when the schema `0.3` entry task has no `recovery` or operation-level `on_error`.
+- Live AK `open_depot` rerun with the updated Runtime reached the intended fail-loud recovery path: run `run-db75ef7bf0e6686f-1` recorded `operation_retry_scheduled`, `pre_execution_guard_failed(page_guard_mismatch)`, `operation_recovery_required`, `recovery_started(return_home)`, `recovery_result(status=failed, reason=return_home_failed)`, `paused_needs_human`, and `run_failed`.
+- The live failure reason was explicit: `return_home recovery failed for operation 'home_to_depot'; paused_needs_human`. No fake success or silent fallback occurred.
+- Final implementation commit for the implicit recovery follow-up: `5c304e3f6fd92ad95db3cfcad22250ff80eee071`.
+- Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
 - Implementation commit `e5288b54195ef6854f1f150c9cfc99510bc5d375` was created and pushed.
 - Checkpoint tag `checkpoint/20260709-issue30-navigation-retry-default` was created and pushed.
 - GitHub issue #30 was updated with follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922448681` and intentionally left open for Alice acceptance.
@@ -40,13 +48,27 @@
 - `target\release\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn current-page --capture`
 - `target\release\actinglab.exe --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --entry-task return_home --execution-mode navigable_route --out target\issue30-retry-inert\ak-full-return-home.zip`
 - `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-return-home-reset lab run --zip target\issue30-retry-inert\ak-full-return-home.zip --out target\issue30-retry-inert\ak-full-return-home-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `git fetch --prune --tags origin; git status --short --branch; git rev-parse HEAD; git rev-parse origin/main` in Arknights, AzurLane, and BlueArchive resource repositories.
+- `target\release\actingcommand-device-test.exe --port 16416 tap 844 496`
+- `target\release\actingcommand-device-test.exe --port 16416 tap 267 40`
+- `target\release\actingcommand-device-test.exe --port 16416 tap 91 283`
+- `target\release\actingcommand-device-test.exe --port 16416 capture --out target\issue30-retry-inert\16416-after-confirm-home-wait.png`
+- `target\release\actinglab.exe --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_depot --game arknights --server cn --include-recovery --out target\issue30-retry-inert\ak-open-depot-recovery-fresh.zip`
+- `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-open-depot-home-after-sync lab run --zip target\issue30-retry-inert\ak-open-depot-recovery-fresh.zip --out target\issue30-retry-inert\ak-open-depot-home-after-sync-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `cargo test -p actingcommand-actinglab recovery_configuration_uses_implicit_return_home_when_available -- --nocapture`
+- `cargo test -p actingcommand-actinglab pre_execution_guard_failure_recovers_only_after_a_real_attempt -- --nocapture`
+- `cargo build --release -p actingcommand-actinglab`
+- `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-open-depot-preexec-recovery lab run --zip target\issue30-retry-inert\ak-open-depot-recovery-fresh.zip --out target\issue30-retry-inert\ak-open-depot-preexec-recovery-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `cargo fmt --all`
 - `cargo fmt --all -- --check`
 - `git diff --check`
 - `cargo clippy -p actingcommand-actinglab -- -D warnings`
 - `cargo test --workspace`
 - `cargo clippy --workspace -- -D warnings`
+- `cargo build --release -p actingcommand-actinglab`
 - `git commit -m "Fix navigation retry defaults"`
+- `git commit -m "Enable implicit return_home recovery"`
+- `git commit --amend --no-edit`
 - `git tag checkpoint/20260709-issue30-navigation-retry-default`
 - `git push origin main`
 - `git push origin checkpoint/20260709-issue30-navigation-retry-default`
@@ -58,7 +80,11 @@
 - Focused non-target regression passed: operations without a target page stay `retryable=false` and `max_attempts=1`.
 - Existing side-effect regression still passes: operations with `consumes` / `produces` stay `retryable=false` by default.
 - Focused `target` / `target_center` regressions passed; `target_center` now records `center_point_v1` and clicks the matched rectangle center.
-- `cargo test --workspace` passed with `666` workspace tests.
+- Focused recovery configuration regression passed: a contained `return_home` bundle makes recovery available for schema `0.3` tasks without explicit recovery fields.
+- Focused retry-pre-execution regression passed: only a retryable operation after a real attempt can route a guard mismatch into recovery; first-attempt guard mismatch and non-retryable operations still fail.
+- Live AK `open_depot` rerun from home reached bounded retry and recovery instead of one-shot failure: `run-db75ef7bf0e6686f-1`, input zip sha256 `6d13a1af256b2cba33d15239eb4a06c2f1cb6092949b16c1bf9cd5389cd0f6bb`, screenshot count `48`.
+- Live recovery result was fail-loud and visible because the current `return_home` resource route could not identify the observed post-click page; the run emitted `paused_needs_human`.
+- `cargo test --workspace` passed with `668` workspace tests.
 - Final gates passed:
   - `cargo fmt --all -- --check`
   - `git diff --check`
@@ -69,14 +95,14 @@
 
 ### Current blocker
 
-- No blocker for the Runtime default-retry code fix.
-- Live AK `open_depot` rerun from home is blocked by device/resource state: the 16416 instance was not on AK home, and the current `return_home` route did not successfully reset from the observed non-home screen.
+- No blocker for the Runtime default-retry and implicit-recovery code fix.
+- Remaining live issue is resource-route/page-recognition data: AK `return_home` could not identify the observed post-click recruit/gacha page inside the selected recovery package, so the Runtime correctly paused with `paused_needs_human`.
 
 ### Next step
 
-1. Push this checkpoint update documenting the commit, tag, and issue comment.
-2. Treat the fresh AK `open_depot` live rerun from a stable home page as acceptance follow-up once the device/resource route is ready.
-3. Keep issue #30 open until Alice accepts the follow-up.
+1. Run final formatting, clippy, workspace tests, and release build after the implicit recovery update.
+2. Commit and push the Runtime source and documentation update.
+3. Comment issue #30 with the new commit, tag, live evidence, and remaining resource-route follow-up; keep the issue open until Alice accepts.
 
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 

@@ -32,6 +32,8 @@ Implemented direction:
 - Runtime candidate-page discovery includes package-resident `page_rules` pages, allowing recovery bundles to recognize error/current pages that are not direct operation `from` pages.
 - Runtime operation selection prefers page-specific operations before `from: any` fallback operations so universal recovery steps do not loop over generic actions.
 - Existing schema `0.3` page-transition operations now default to navigation-only retry semantics structurally: a non-empty `to` page with empty `consumes` and `produces` is retryable even when `purpose` is `Navigate ...` and no schema `0.6` flow fields are present.
+- Existing selected task packages that contain `operations/return_home/task.json` now treat that contained bundle as implicit recovery even when the entry task has no explicit `recovery` or operation-level `on_error`.
+- After at least one real retryable attempt, a retry-preparation `page_guard_mismatch` from an unknown or wrong page can enter the bounded recovery path instead of failing before recovery; initial guard mismatch, target mismatch, resource drift, invalid coordinates, and side-effect operations remain fail-loud.
 - Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics; `target` uses the deterministic uniform point sampler, while `target_center` now clicks the matched rectangle center.
 - The retry/recovery branch policy is factored and covered by regression tests for retry, recover, fail, error-page recovery, exhausted attempts, and non-retryable side effects.
 
@@ -39,7 +41,8 @@ Current boundary:
 
 - Deterministic failures such as package validation errors, guard mismatch, resource drift, invalid coordinates, lease/security failures, and missing recovery packages remain fail-loud and are not hidden behind fake success.
 - Runtime implementation is covered by unit/workspace verification; live AK `home -> depot`, non-edge `home -> mission`, full-pack `return_home`, and forced `error_page -> return_home -> retry original task` were revalidated on `127.0.0.1:16416` with MaaTouch before the default-retry follow-up.
-- The default-retry follow-up is covered by focused flow-policy tests and workspace gates; a fresh AK `open_depot` live rerun from home still depends on the device being returned to a stable home page or the current `return_home` resource route being repaired for the observed non-home screen.
+- The default-retry follow-up is covered by focused flow-policy tests, recovery-configuration tests, retry-pre-execution recovery tests, workspace gates, and a live AK `open_depot` rerun that reached `retry -> implicit return_home recovery -> paused_needs_human` instead of silent success or one-shot failure.
+- Current AK `return_home` resource recognition still cannot reliably identify the observed post-click recruit/gacha page in the selected recovery package; that is tracked as a resource-route follow-up, not a Runtime silent failure.
 - Current AK `open_friends` / `open_operator` resource routes still need resource-route follow-up, but #29 now has separate non-edge live evidence through `open_mission`.
 - No UI, SQLite, OCR, new capture backend, scheduler, game logic, resource-repository modification, or upstream source import is part of this node.
 
