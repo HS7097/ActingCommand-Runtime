@@ -6,6 +6,34 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current guarded-click and retry/recovery execution node
+
+The active user-approved Runtime work covers GitHub issues #29 and #30:
+
+- #29 `[BUG][严重] 带守卫的绝对点击被漂移平移到越界/误点`
+- #30 `[新功能] 执行层重试+恢复策略(MAA 标准 + ALAS 补充)`
+- Technical source of truth:
+  - `C:\合作工作区\ActingCommand\FIX-runtime-guarded-absolute-click-drift-oob.md`
+  - `C:\合作工作区\ActingCommand\TASK-exec-retry-recovery-MAA-ALAS.md`
+
+Implemented direction:
+
+- Absolute coordinate clicks (`rect`, `specific_rect`, `point`, `long_press`/`long_tap`, and `drag` from/to) remain guarded but no longer shift by `matched_rect - expected_rect`.
+- `offset` remains relative to the matched template rectangle.
+- Absolute coordinate guards may be template or color-probe guards; only `offset` and recognition-target clicks require a template guard because they need a matched rectangle.
+- Operation bundle schema `0.6` accepts bounded execution flow fields for operation timeout, max attempts, retry interval, pre/post delay, pre/post wait-freezes, retryability, effect, and `on_error`.
+- Task-level `error_pages`, `recovery`, `max_task_retries`, and `on_exhausted` are parsed and validated.
+- Navigation-only or explicitly retryable operations use bounded L0/L1 retry.
+- Retry, recovery, task retry exhaustion, and `paused_needs_human` states emit ledger/light-event records.
+- `return_home` recovery is loaded as a contained operation bundle and is bounded; recovery failure or exhausted task retry fails loud with `paused_needs_human`.
+- Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics.
+
+Current boundary:
+
+- Deterministic failures such as package validation errors, guard mismatch, resource drift, invalid coordinates, lease/security failures, and missing recovery packages remain fail-loud and are not hidden behind fake success.
+- Runtime implementation is covered by unit/workspace verification; live AK `home -> depot` revalidation has not been run in this local node and remains the next optional device acceptance step if required.
+- No UI, SQLite, OCR, new capture backend, scheduler, game logic, resource-repository modification, or upstream source import is part of this node.
+
 ## Current runtime-ledger unified fact source chain
 
 The active approved issue is Runtime issue #28:

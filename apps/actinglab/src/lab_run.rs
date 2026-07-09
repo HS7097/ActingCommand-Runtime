@@ -48,6 +48,8 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_STEP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_STEPS: usize = 50;
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
+const DEFAULT_RETRY_INTERVAL_MS: u64 = 1_500;
+const DEFAULT_POST_WAIT_FREEZES_MS: u64 = 480;
 const DEFAULT_ROI_STABLE_FRAMES: u32 = 2;
 const DEFAULT_ROI_STABILITY_TIMEOUT_MS: u64 = 1_500;
 const DEFAULT_RESOURCE_DRIFT_FRAMES: u32 = 2;
@@ -349,6 +351,7 @@ fn execute_lab_run(
         return Ok(state);
     }
 
+    let mut task_retry_count = 0u32;
     for step_index in 0..max_steps {
         if started.elapsed() > Duration::from_millis(timeout_ms) {
             return Err(CliError::device(format!(
@@ -400,327 +403,137 @@ fn execute_lab_run(
             })?
             .clone();
 
-        ctx.set_step_context(step_index, &operation);
-        ctx.event(
-            "step_started",
-            json!({"step_id": operation.id, "index": step_index, "operation_id": operation.id}),
-        )?;
-        ctx.event(
-            "before_page_detected",
-            json!({"step_id": operation.id, "page": current_page}),
-        )?;
-
-        let stability_baseline = match pre_execution_guard(
+        match execute_operation_with_retries(
             ctx,
             capture.as_mut(),
-            &state.resources,
-            &operation,
-            &state.control.game,
-            actionable_page_candidates.as_deref(),
+            &mut input,
+            OperationExecutionRequest {
+                device: DeviceInputRequest {
+                    target: &device.target,
+                    adb: &device.adb,
+                    touch_backend: device.touch_backend,
+                },
+                resources: &state.resources,
+                bundle: &state.resources.operation_bundle,
+                control: &state.control,
+                operation: &operation,
+                current_page: &current_page,
+                step_index,
+                step_timeout_ms,
+                candidate_pages: actionable_page_candidates.as_deref(),
+            },
         )? {
-            PreExecutionGuardOutcome::Passed {
-                current_page,
-                target,
-            } => {
-                ctx.event(
-                    "pre_execution_guard_passed",
-                    json!({"step_id": operation.id, "page": current_page, "target": target_evaluation_json(&target)}),
-                )?;
-                Some((current_page, target))
+            OperationRunOutcome::Success { current_page } => {
+                state.current_page = current_page;
             }
-            PreExecutionGuardOutcome::TrustedUnguarded => {
+            OperationRunOutcome::NeedsRecovery(trigger) => {
+                let max_task_retries = state
+                    .resources
+                    .operation_bundle
+                    .max_task_retries
+                    .unwrap_or(1);
+                if task_retry_count >= max_task_retries {
+                    ctx.event(
+                        "paused_needs_human",
+                        json!({
+                            "step_id": trigger.operation_id,
+                            "reason": trigger.reason,
+                            "after_page": trigger.after_page,
+                            "attempts": trigger.attempts,
+                            "retry_count": task_retry_count,
+                            "max_task_retries": max_task_retries
+                        }),
+                    )?;
+                    state.failed_step_id = Some(trigger.operation_id.clone());
+                    return Err(CliError::device(format!(
+                        "operation '{}' exhausted recovery after {} task retry/retries; paused_needs_human",
+                        trigger.operation_id, task_retry_count
+                    )));
+                }
+                let recovery_task_id = state
+                    .resources
+                    .operation_bundle
+                    .recovery
+                    .as_ref()
+                    .map(TaskRecovery::task_id)
+                    .or_else(|| operation.on_error.as_deref().map(|_| "return_home"))
+                    .unwrap_or("return_home");
                 ctx.event(
-                    "pre_execution_guard_skipped",
-                    json!({"step_id": operation.id, "reason": "unguarded_trusted_coordinate"}),
+                    "recovery_started",
+                    json!({
+                        "step_id": trigger.operation_id,
+                        "reason": trigger.reason,
+                        "after_page": trigger.after_page,
+                        "recovery": "return_home",
+                        "task_id": recovery_task_id,
+                        "retry_count": task_retry_count + 1,
+                        "max_task_retries": max_task_retries
+                    }),
                 )?;
-                None
-            }
-            PreExecutionGuardOutcome::TargetMismatch {
-                current_page,
-                target,
-                diagnostics,
-            } => {
-                ctx.event(
-                    "pre_execution_guard_failed",
-                    json!({"step_id": operation.id, "reason": "target_guard_mismatch", "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
-                )?;
-                match confirm_resource_drift(
+                let recovery_bundle = match state
+                    .resources
+                    .load_operation_bundle(&state.control, recovery_task_id)
+                {
+                    Ok(bundle) => bundle,
+                    Err(err) => {
+                        ctx.event(
+                            "recovery_result",
+                            json!({"status": "failed", "reason": "recovery_task_unavailable", "error": err.message}),
+                        )?;
+                        ctx.event(
+                            "paused_needs_human",
+                            json!({"step_id": trigger.operation_id, "reason": "recovery_task_unavailable"}),
+                        )?;
+                        state.failed_step_id = Some(trigger.operation_id.clone());
+                        return Err(CliError::device(
+                            "return_home recovery task is unavailable; paused_needs_human",
+                        ));
+                    }
+                };
+                match run_recovery_bundle(
                     ctx,
                     capture.as_mut(),
-                    ResourceDriftRequest {
+                    &mut input,
+                    RecoveryRunRequest {
+                        device: DeviceInputRequest {
+                            target: &device.target,
+                            adb: &device.adb,
+                            touch_backend: device.touch_backend,
+                        },
                         resources: &state.resources,
-                        operation: &operation,
-                        game: &state.control.game,
-                        initial_page: current_page,
-                        initial_target: target,
-                        candidate_pages: actionable_page_candidates.as_deref(),
+                        control: &state.control,
+                        recovery_bundle: &recovery_bundle,
+                        current_page: trigger.after_page.clone(),
+                        step_timeout_ms,
                     },
-                )? {
-                    ResourceDriftOutcome::Recovered {
-                        current_page,
-                        target,
-                    } => {
+                ) {
+                    Ok(page) => {
+                        task_retry_count += 1;
                         ctx.event(
-                            "pre_execution_guard_passed",
-                            json!({"step_id": operation.id, "page": current_page.as_deref(), "target": target_evaluation_json(&target), "after": "target_guard_mismatch_recovered"}),
+                            "recovery_result",
+                            json!({"status": "ok", "page": page, "retry_count": task_retry_count}),
                         )?;
-                        Some((current_page, target))
+                        state.current_page = None;
+                        continue;
                     }
-                    ResourceDriftOutcome::Failed {
-                        reason,
-                        current_page,
-                        diagnostics,
-                    } => {
-                        if reason == "resource_drift" {
-                            ctx.event(
-                                "resource_drift_detected",
-                                json!({"step_id": operation.id, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
-                            )?;
-                        } else {
-                            ctx.event(
-                                "pre_execution_guard_failed",
-                                json!({"step_id": operation.id, "reason": reason, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
-                            )?;
-                        }
+                    Err(err) => {
                         ctx.event(
-                            "step_failed",
-                            json!({"step_id": operation.id, "reason": reason}),
+                            "recovery_result",
+                            json!({"status": "failed", "reason": "return_home_failed", "error": err.message}),
                         )?;
-                        state.current_page = current_page.clone();
-                        state.failed_step_id = Some(operation.id.clone());
+                        ctx.event(
+                            "paused_needs_human",
+                            json!({"step_id": trigger.operation_id, "reason": "return_home_failed"}),
+                        )?;
+                        state.failed_step_id = Some(trigger.operation_id.clone());
                         return Err(CliError::device(format!(
-                            "pre-execution guard failed for operation '{}': {reason}; current_page={}",
-                            operation.id,
-                            current_page.unwrap_or_else(|| "unknown".to_string())
+                            "return_home recovery failed for operation '{}'; paused_needs_human",
+                            trigger.operation_id
                         )));
                     }
                 }
             }
-            PreExecutionGuardOutcome::Failed {
-                reason,
-                current_page,
-                diagnostics,
-            } => {
-                ctx.event(
-                    "pre_execution_guard_failed",
-                    json!({"step_id": operation.id, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
-                )?;
-                ctx.event(
-                    "step_failed",
-                    json!({"step_id": operation.id, "reason": "pre_execution_guard_failed"}),
-                )?;
-                state.current_page = current_page.clone();
-                state.failed_step_id = Some(operation.id.clone());
-                return Err(CliError::device(format!(
-                    "pre-execution guard failed for operation '{}': {reason}; current_page={}",
-                    operation.id,
-                    current_page.unwrap_or_else(|| "unknown".to_string())
-                )));
-            }
-        };
-
-        let mut action_target = None;
-        if let Some((current_page, target)) = stability_baseline {
-            match wait_for_roi_stability(
-                ctx,
-                capture.as_mut(),
-                RoiStabilityRequest {
-                    resources: &state.resources,
-                    operation: &operation,
-                    game: &state.control.game,
-                    baseline_page: current_page,
-                    baseline_target: target,
-                    candidate_pages: actionable_page_candidates.as_deref(),
-                },
-            )? {
-                RoiStabilityOutcome::Passed {
-                    stable_frames,
-                    observed_frames,
-                    target,
-                } => {
-                    ctx.event(
-                        "roi_stability_gate_passed",
-                        json!({
-                            "step_id": operation.id,
-                            "stable_frames": stable_frames,
-                            "observed_frames": observed_frames,
-                            "target": target_evaluation_json(&target)
-                        }),
-                    )?;
-                    action_target = Some(target);
-                }
-                RoiStabilityOutcome::Failed {
-                    reason,
-                    current_page,
-                    diagnostics,
-                } => {
-                    ctx.event(
-                        "roi_stability_gate_failed",
-                        json!({"step_id": operation.id, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
-                    )?;
-                    ctx.event(
-                        "step_failed",
-                        json!({"step_id": operation.id, "reason": reason}),
-                    )?;
-                    state.current_page = current_page.clone();
-                    state.failed_step_id = Some(operation.id.clone());
-                    return Err(CliError::device(format!(
-                        "ROI stability gate failed for operation '{}': {reason}; current_page={}",
-                        operation.id,
-                        current_page.unwrap_or_else(|| "unknown".to_string())
-                    )));
-                }
-            }
         }
-
-        let action = operation.input_action(
-            &state.control.resolution,
-            ctx.run_seed,
-            action_target.as_ref(),
-        )?;
-        let action_id = ctx.id_issuer.issue(IdKind::Action).value;
-        let backend = ensure_touch_backend(
-            &mut input,
-            &device.target,
-            &device.adb,
-            device.touch_backend,
-        )?;
-        match &action {
-            LabInputAction::Tap(point) => {
-                let action_started = Instant::now();
-                ctx.event(
-                    "click_started",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
-                )?;
-                if let Err(err) = backend.tap(point.x, point.y) {
-                    return close_backend_after_error(
-                        &mut input,
-                        CliError::device(err.to_string()),
-                    );
-                }
-                ctx.event(
-                    "click_finished",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
-                )?;
-                ctx.action_durations_ms
-                    .push(action_started.elapsed().as_millis() as u64);
-            }
-            LabInputAction::Drag {
-                from,
-                to,
-                duration_ms,
-            } => {
-                let action_started = Instant::now();
-                ctx.event(
-                    "drag_started",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
-                )?;
-                if let Err(err) = backend.swipe(from.x, from.y, to.x, to.y, *duration_ms) {
-                    return close_backend_after_error(
-                        &mut input,
-                        CliError::device(err.to_string()),
-                    );
-                }
-                ctx.event(
-                    "drag_finished",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
-                )?;
-                ctx.action_durations_ms
-                    .push(action_started.elapsed().as_millis() as u64);
-            }
-            LabInputAction::LongTap { point, duration_ms } => {
-                let action_started = Instant::now();
-                ctx.event(
-                    "long_tap_started",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
-                )?;
-                if let Err(err) = backend.long_tap(point.x, point.y, *duration_ms) {
-                    return close_backend_after_error(
-                        &mut input,
-                        CliError::device(err.to_string()),
-                    );
-                }
-                ctx.event(
-                    "long_tap_finished",
-                    json!({"step_id": operation.id, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
-                )?;
-                ctx.action_durations_ms
-                    .push(action_started.elapsed().as_millis() as u64);
-            }
-        }
-
-        ctx.event(
-            "page_guard_started",
-            json!({"step_id": operation.id, "to": operation.to, "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json), "verify_template": operation.verify_template}),
-        )?;
-        let after = poll_after_operation(
-            ctx,
-            capture.as_mut(),
-            &state.resources,
-            &operation,
-            operation.after_timeout_ms(step_timeout_ms),
-            &state.control.game,
-        )?;
-        let verification = operation_verification_status(&state.control.game, &operation, &after);
-        if verification == OperationVerification::Failed {
-            ctx.event(
-                "page_guard_failed",
-                json!({"step_id": operation.id, "expected": operation.expected_after_page(), "after_page": after.matched_page}),
-            )?;
-            ctx.event(
-                "step_failed",
-                json!({"step_id": operation.id, "reason": "page_confirmation_failed"}),
-            )?;
-            state.failed_step_id = Some(operation.id.clone());
-            return Err(CliError::device(format!(
-                "page confirmation failed for operation '{}'",
-                operation.id
-            )));
-        }
-        let guard_event = match verification {
-            OperationVerification::Verified => "page_guard_passed",
-            OperationVerification::ExecutedUnverified => "page_guard_unverified",
-            OperationVerification::Failed => unreachable!("failed verification returned earlier"),
-        };
-        ctx.event(
-            guard_event,
-            json!({"step_id": operation.id, "after_page": after.matched_page}),
-        )?;
-        ctx.event(
-            "after_page_detected",
-            json!({"step_id": operation.id, "page": after.matched_page, "anchor": after.matched_anchor(&state.control.game)}),
-        )?;
-
-        let step_record = json!({
-            "id": operation.id,
-            "action_id": action_id.as_str(),
-            "operation_id": operation.id,
-            "purpose": operation.purpose,
-            "from": operation.from,
-            "to": operation.to,
-            "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json),
-            "before_page": current_page,
-            "after_page": after.matched_page,
-            "after_anchor": after.matched_anchor(&state.control.game),
-            "click_count": if matches!(action, LabInputAction::Tap(_)) { 1 } else { 0 },
-            "drag_count": if matches!(action, LabInputAction::Drag { .. }) { 1 } else { 0 },
-            "long_tap_count": if matches!(action, LabInputAction::LongTap { .. }) { 1 } else { 0 },
-            "actual_input": action.to_json(),
-            "consumes": operation.consumes,
-            "produces": operation.produces,
-            "verified_live": operation.verified_live,
-            "provenance": operation.provenance,
-            "guard": operation.guard.as_ref().map(OperationGuard::to_json),
-            "unguarded_trusted_coordinate": operation.unguarded_trusted_coordinate,
-            "result": verification.result_label()
-        });
-        ctx.append_step_record(step_record, &action_id)?;
-        ctx.event(
-            "step_finished",
-            json!({"step_id": operation.id, "action_id": action_id, "result": verification.result_label()}),
-        )?;
-        state.current_page = next_current_page(&state.control.game, &after, &operation);
-        ctx.clear_step_context();
         if state.current_page.is_none() {
             break;
         }
@@ -1392,17 +1205,25 @@ fn unsupported_targets_json(targets: &[UnsupportedRecognitionTarget]) -> Vec<Val
 }
 
 fn actionable_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
+    actionable_page_ids_for_bundle(resources, control, &resources.operation_bundle)
+}
+
+fn actionable_page_ids_for_bundle(
+    resources: &LabResources,
+    control: &LabControl,
+    bundle: &OperationBundle,
+) -> CliOutcome<Vec<String>> {
     let mut pages = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(entry_page) = &resources.operation_bundle.entry_page
+    if let Some(entry_page) = &bundle.entry_page
         && entry_page != "any"
     {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
     }
-    if let Some(target_page) = &resources.operation_bundle.target_page {
+    if let Some(target_page) = &bundle.target_page {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
     }
-    for operation in &resources.operation_bundle.operations {
+    for operation in &bundle.operations {
         push_resolved_page_id(
             &mut pages,
             &mut seen,
@@ -1418,18 +1239,26 @@ fn actionable_page_ids(resources: &LabResources, control: &LabControl) -> CliOut
 }
 
 fn initial_page_ids(resources: &LabResources, control: &LabControl) -> CliOutcome<Vec<String>> {
+    initial_page_ids_for_bundle(resources, control, &resources.operation_bundle)
+}
+
+fn initial_page_ids_for_bundle(
+    resources: &LabResources,
+    control: &LabControl,
+    bundle: &OperationBundle,
+) -> CliOutcome<Vec<String>> {
     let mut pages = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(entry_page) = &resources.operation_bundle.entry_page
+    if let Some(entry_page) = &bundle.entry_page
         && entry_page != "any"
     {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
     }
-    if let Some(target_page) = &resources.operation_bundle.target_page {
+    if let Some(target_page) = &bundle.target_page {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
     }
     if pages.is_empty() {
-        return actionable_page_ids(resources, control);
+        return actionable_page_ids_for_bundle(resources, control, bundle);
     }
     Ok(pages)
 }
@@ -1492,6 +1321,542 @@ fn close_backend_after_error<T>(
     Err(err)
 }
 
+fn sleep_ms(ms: u64) {
+    if ms > 0 {
+        thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+fn page_is_error_page(game: &str, page: Option<&str>, error_pages: &[String]) -> bool {
+    let Some(page) = page else {
+        return false;
+    };
+    error_pages
+        .iter()
+        .any(|expected| page_anchor_matches(game, page, expected))
+        || page.contains("/negative_")
+        || page.contains("/forbidden")
+        || page.starts_with("negative_")
+        || page.starts_with("forbidden")
+}
+
+#[derive(Clone, Copy)]
+struct DeviceInputRequest<'a> {
+    target: &'a DeviceTarget,
+    adb: &'a actingcommand_device::AdbConfig,
+    touch_backend: actingcommand_device::TouchBackendChoice,
+}
+
+struct OperationExecutionRequest<'a> {
+    device: DeviceInputRequest<'a>,
+    resources: &'a LabResources,
+    bundle: &'a OperationBundle,
+    control: &'a LabControl,
+    operation: &'a Operation,
+    current_page: &'a str,
+    step_index: usize,
+    step_timeout_ms: u64,
+    candidate_pages: Option<&'a [String]>,
+}
+
+struct RecoveryRunRequest<'a> {
+    device: DeviceInputRequest<'a>,
+    resources: &'a LabResources,
+    control: &'a LabControl,
+    recovery_bundle: &'a OperationBundle,
+    current_page: Option<String>,
+    step_timeout_ms: u64,
+}
+
+struct OperationRecoveryTrigger {
+    operation_id: String,
+    reason: &'static str,
+    after_page: Option<String>,
+    attempts: u32,
+}
+
+enum OperationRunOutcome {
+    Success { current_page: Option<String> },
+    NeedsRecovery(OperationRecoveryTrigger),
+}
+
+fn execute_operation_with_retries(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    input: &mut Option<SelectedTouchBackend>,
+    request: OperationExecutionRequest<'_>,
+) -> CliOutcome<OperationRunOutcome> {
+    let OperationExecutionRequest {
+        device,
+        resources,
+        bundle,
+        control,
+        operation,
+        current_page,
+        step_index,
+        step_timeout_ms,
+        candidate_pages,
+    } = request;
+    let flow = operation.flow_policy(bundle.defaults);
+    ctx.set_step_context(step_index, operation);
+    ctx.event(
+        "step_started",
+        json!({"step_id": operation.id, "index": step_index, "operation_id": operation.id, "max_attempts": flow.max_attempts, "retryable": flow.retryable}),
+    )?;
+    ctx.event(
+        "before_page_detected",
+        json!({"step_id": operation.id, "page": current_page}),
+    )?;
+
+    for attempt in 1..=flow.max_attempts {
+        ctx.event(
+            "operation_attempt_started",
+            json!({
+                "step_id": operation.id,
+                "attempt": attempt,
+                "max_attempts": flow.max_attempts,
+                "retryable": flow.retryable,
+                "flow": flow.to_json()
+            }),
+        )?;
+        sleep_ms(flow.pre_delay_ms);
+        if flow.pre_wait_freezes_ms > 0 {
+            ctx.event(
+                "operation_pre_wait_freezes",
+                json!({"step_id": operation.id, "attempt": attempt, "duration_ms": flow.pre_wait_freezes_ms}),
+            )?;
+            sleep_ms(flow.pre_wait_freezes_ms);
+        }
+
+        let stability_baseline = match pre_execution_guard(
+            ctx,
+            capture,
+            resources,
+            operation,
+            &control.game,
+            candidate_pages,
+        )? {
+            PreExecutionGuardOutcome::Passed {
+                current_page,
+                target,
+            } => {
+                ctx.event(
+                    "pre_execution_guard_passed",
+                    json!({"step_id": operation.id, "attempt": attempt, "page": current_page, "target": target_evaluation_json(&target)}),
+                )?;
+                Some((current_page, target))
+            }
+            PreExecutionGuardOutcome::TrustedUnguarded => {
+                ctx.event(
+                    "pre_execution_guard_skipped",
+                    json!({"step_id": operation.id, "attempt": attempt, "reason": "unguarded_trusted_coordinate"}),
+                )?;
+                None
+            }
+            PreExecutionGuardOutcome::TargetMismatch {
+                current_page,
+                target,
+                diagnostics,
+            } => {
+                ctx.event(
+                    "pre_execution_guard_failed",
+                    json!({"step_id": operation.id, "attempt": attempt, "reason": "target_guard_mismatch", "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                )?;
+                match confirm_resource_drift(
+                    ctx,
+                    capture,
+                    ResourceDriftRequest {
+                        resources,
+                        operation,
+                        game: &control.game,
+                        initial_page: current_page,
+                        initial_target: target,
+                        candidate_pages,
+                    },
+                )? {
+                    ResourceDriftOutcome::Recovered {
+                        current_page,
+                        target,
+                    } => {
+                        ctx.event(
+                            "pre_execution_guard_passed",
+                            json!({"step_id": operation.id, "attempt": attempt, "page": current_page.as_deref(), "target": target_evaluation_json(&target), "after": "target_guard_mismatch_recovered"}),
+                        )?;
+                        Some((current_page, target))
+                    }
+                    ResourceDriftOutcome::Failed {
+                        reason,
+                        current_page,
+                        diagnostics,
+                    } => {
+                        if reason == "resource_drift" {
+                            ctx.event(
+                                "resource_drift_detected",
+                                json!({"step_id": operation.id, "attempt": attempt, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                            )?;
+                        } else {
+                            ctx.event(
+                                "pre_execution_guard_failed",
+                                json!({"step_id": operation.id, "attempt": attempt, "reason": reason, "current_page": current_page.as_deref(), "diagnostics": diagnostics}),
+                            )?;
+                        }
+                        ctx.event(
+                            "step_failed",
+                            json!({"step_id": operation.id, "reason": reason, "attempt": attempt}),
+                        )?;
+                        return Err(CliError::device(format!(
+                            "pre-execution guard failed for operation '{}': {reason}; current_page={}",
+                            operation.id,
+                            current_page.unwrap_or_else(|| "unknown".to_string())
+                        )));
+                    }
+                }
+            }
+            PreExecutionGuardOutcome::Failed {
+                reason,
+                current_page,
+                diagnostics,
+            } => {
+                ctx.event(
+                    "pre_execution_guard_failed",
+                    json!({"step_id": operation.id, "attempt": attempt, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
+                )?;
+                ctx.event(
+                    "step_failed",
+                    json!({"step_id": operation.id, "reason": "pre_execution_guard_failed", "attempt": attempt}),
+                )?;
+                return Err(CliError::device(format!(
+                    "pre-execution guard failed for operation '{}': {reason}; current_page={}",
+                    operation.id,
+                    current_page.unwrap_or_else(|| "unknown".to_string())
+                )));
+            }
+        };
+
+        let mut action_target = None;
+        if let Some((current_page, target)) = stability_baseline {
+            match wait_for_roi_stability(
+                ctx,
+                capture,
+                RoiStabilityRequest {
+                    resources,
+                    operation,
+                    game: &control.game,
+                    baseline_page: current_page,
+                    baseline_target: target,
+                    candidate_pages,
+                },
+            )? {
+                RoiStabilityOutcome::Passed {
+                    stable_frames,
+                    observed_frames,
+                    target,
+                } => {
+                    ctx.event(
+                        "roi_stability_gate_passed",
+                        json!({
+                            "step_id": operation.id,
+                            "attempt": attempt,
+                            "stable_frames": stable_frames,
+                            "observed_frames": observed_frames,
+                            "target": target_evaluation_json(&target)
+                        }),
+                    )?;
+                    action_target = Some(target);
+                }
+                RoiStabilityOutcome::Failed {
+                    reason,
+                    current_page,
+                    diagnostics,
+                } => {
+                    ctx.event(
+                        "roi_stability_gate_failed",
+                        json!({"step_id": operation.id, "attempt": attempt, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
+                    )?;
+                    ctx.event(
+                        "step_failed",
+                        json!({"step_id": operation.id, "reason": reason, "attempt": attempt}),
+                    )?;
+                    return Err(CliError::device(format!(
+                        "ROI stability gate failed for operation '{}': {reason}; current_page={}",
+                        operation.id,
+                        current_page.unwrap_or_else(|| "unknown".to_string())
+                    )));
+                }
+            }
+        }
+
+        let action =
+            operation.input_action(&control.resolution, ctx.run_seed, action_target.as_ref())?;
+        let action_id = ctx.id_issuer.issue(IdKind::Action).value;
+        let backend = ensure_touch_backend(input, device.target, device.adb, device.touch_backend)?;
+        match &action {
+            LabInputAction::Tap(point) => {
+                let action_started = Instant::now();
+                ctx.event(
+                    "click_started",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
+                )?;
+                if let Err(err) = backend.tap(point.x, point.y) {
+                    return close_backend_after_error(input, CliError::device(err.to_string()));
+                }
+                ctx.event(
+                    "click_finished",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "actual_click_point": point.to_json()}),
+                )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
+            }
+            LabInputAction::Drag {
+                from,
+                to,
+                duration_ms,
+            } => {
+                let action_started = Instant::now();
+                ctx.event(
+                    "drag_started",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
+                )?;
+                if let Err(err) = backend.swipe(from.x, from.y, to.x, to.y, *duration_ms) {
+                    return close_backend_after_error(input, CliError::device(err.to_string()));
+                }
+                ctx.event(
+                    "drag_finished",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "from": from.to_json(), "to": to.to_json(), "duration_ms": duration_ms}),
+                )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
+            }
+            LabInputAction::LongTap { point, duration_ms } => {
+                let action_started = Instant::now();
+                ctx.event(
+                    "long_tap_started",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                )?;
+                if let Err(err) = backend.long_tap(point.x, point.y, *duration_ms) {
+                    return close_backend_after_error(input, CliError::device(err.to_string()));
+                }
+                ctx.event(
+                    "long_tap_finished",
+                    json!({"step_id": operation.id, "attempt": attempt, "action_id": action_id.as_str(), "actual_click_point": point.to_json(), "duration_ms": duration_ms}),
+                )?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
+            }
+        }
+
+        sleep_ms(flow.post_delay_ms);
+        ctx.event(
+            "page_guard_started",
+            json!({"step_id": operation.id, "attempt": attempt, "to": operation.to, "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json), "verify_template": operation.verify_template}),
+        )?;
+        let after_result = poll_after_operation(
+            ctx,
+            capture,
+            AfterOperationRequest {
+                resources,
+                task_id: &bundle.task_id,
+                defaults: bundle.defaults,
+                operation,
+                step_timeout_ms: operation.after_timeout_ms(bundle.defaults, step_timeout_ms),
+                post_wait_freezes_ms: flow.post_wait_freezes_ms,
+                game: &control.game,
+            },
+        )?;
+        let after = after_result.scene;
+        let verification = operation_verification_status(&control.game, operation, &after);
+        if verification == OperationVerification::Failed || !after_result.stable_confirmed {
+            let after_page = after.matched_page.clone();
+            let hit_error_page =
+                page_is_error_page(&control.game, after_page.as_deref(), &bundle.error_pages);
+            let failure_reason = if !after_result.stable_confirmed {
+                "after_page_not_stable"
+            } else {
+                "page_confirmation_failed"
+            };
+            ctx.event(
+                "page_guard_failed",
+                json!({"step_id": operation.id, "attempt": attempt, "expected": operation.expected_after_page(), "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
+            )?;
+            if flow.retryable && attempt < flow.max_attempts && !hit_error_page {
+                ctx.event(
+                    "operation_retry_scheduled",
+                    json!({"step_id": operation.id, "attempt": attempt, "next_attempt": attempt + 1, "reason": failure_reason, "retry_interval_ms": flow.retry_interval_ms, "after_page": after_page}),
+                )?;
+                sleep_ms(flow.retry_interval_ms);
+                continue;
+            }
+            if flow.retryable && (bundle.recovery.is_some() || operation.on_error.is_some()) {
+                ctx.event(
+                    "operation_recovery_required",
+                    json!({"step_id": operation.id, "attempts": attempt, "reason": if hit_error_page { "error_page" } else { failure_reason }, "after_page": after_page}),
+                )?;
+                ctx.clear_step_context();
+                return Ok(OperationRunOutcome::NeedsRecovery(
+                    OperationRecoveryTrigger {
+                        operation_id: operation.id.clone(),
+                        reason: if hit_error_page {
+                            "error_page"
+                        } else {
+                            failure_reason
+                        },
+                        after_page,
+                        attempts: attempt,
+                    },
+                ));
+            }
+            ctx.event(
+                "step_failed",
+                json!({"step_id": operation.id, "reason": "page_confirmation_failed", "attempts": attempt}),
+            )?;
+            return Err(CliError::device(format!(
+                "page confirmation failed for operation '{}' after {attempt} attempt(s)",
+                operation.id
+            )));
+        }
+        let guard_event = match verification {
+            OperationVerification::Verified => "page_guard_passed",
+            OperationVerification::ExecutedUnverified => "page_guard_unverified",
+            OperationVerification::Failed => unreachable!("failed verification returned earlier"),
+        };
+        ctx.event(
+            guard_event,
+            json!({"step_id": operation.id, "attempt": attempt, "after_page": after.matched_page}),
+        )?;
+        ctx.event(
+            "after_page_detected",
+            json!({"step_id": operation.id, "attempt": attempt, "page": after.matched_page, "anchor": after.matched_anchor(&control.game)}),
+        )?;
+
+        let step_record = json!({
+            "id": operation.id,
+            "action_id": action_id.as_str(),
+            "operation_id": operation.id,
+            "purpose": operation.purpose,
+            "from": operation.from,
+            "to": operation.to,
+            "expect_after": operation.expect_after.as_ref().map(OperationExpectation::to_json),
+            "before_page": current_page,
+            "after_page": after.matched_page,
+            "after_anchor": after.matched_anchor(&control.game),
+            "attempt_count": attempt,
+            "retryable": flow.retryable,
+            "flow": flow.to_json(),
+            "click_count": if matches!(action, LabInputAction::Tap(_)) { 1 } else { 0 },
+            "drag_count": if matches!(action, LabInputAction::Drag { .. }) { 1 } else { 0 },
+            "long_tap_count": if matches!(action, LabInputAction::LongTap { .. }) { 1 } else { 0 },
+            "actual_input": action.to_json(),
+            "consumes": operation.consumes,
+            "produces": operation.produces,
+            "verified_live": operation.verified_live,
+            "provenance": operation.provenance,
+            "guard": operation.guard.as_ref().map(OperationGuard::to_json),
+            "unguarded_trusted_coordinate": operation.unguarded_trusted_coordinate,
+            "result": verification.result_label()
+        });
+        ctx.append_step_record(step_record, &action_id)?;
+        ctx.event(
+            "operation_attempt_finished",
+            json!({"step_id": operation.id, "attempt": attempt, "result": verification.result_label()}),
+        )?;
+        ctx.event(
+            "step_finished",
+            json!({"step_id": operation.id, "action_id": action_id, "attempt_count": attempt, "result": verification.result_label()}),
+        )?;
+        let current_page = next_current_page(&control.game, &after, operation);
+        ctx.clear_step_context();
+        return Ok(OperationRunOutcome::Success { current_page });
+    }
+
+    unreachable!("operation attempt loop has at least one iteration")
+}
+
+fn run_recovery_bundle(
+    ctx: &mut LabRunContext,
+    capture: &mut dyn CaptureBackend,
+    input: &mut Option<SelectedTouchBackend>,
+    request: RecoveryRunRequest<'_>,
+) -> CliOutcome<Option<String>> {
+    let RecoveryRunRequest {
+        device,
+        resources,
+        control,
+        recovery_bundle,
+        current_page,
+        step_timeout_ms,
+    } = request;
+    let candidate_pages = actionable_page_ids_for_bundle(resources, control, recovery_bundle)?;
+    let mut page = match current_page {
+        Some(page) => page,
+        None => {
+            let scene = capture_until_matched_page(
+                ctx,
+                capture,
+                resources,
+                "recovery_page_wait",
+                step_timeout_ms,
+                control,
+                Some(&candidate_pages),
+            )?;
+            scene.matched_anchor(&control.game).ok_or_else(|| {
+                CliError::device("return_home recovery could not identify the current page")
+            })?
+        }
+    };
+
+    for recovery_index in 0..DEFAULT_MAX_STEPS {
+        if recovery_bundle
+            .target_page
+            .as_ref()
+            .is_some_and(|target| page_anchor_matches(&control.game, &page, target))
+        {
+            return Ok(Some(page));
+        }
+        let operation = recovery_bundle
+            .operations
+            .iter()
+            .find(|operation| page_anchor_matches(&control.game, &page, &operation.from))
+            .ok_or_else(|| {
+                CliError::device(format!(
+                    "return_home recovery cannot continue from page '{page}'"
+                ))
+            })?;
+        match execute_operation_with_retries(
+            ctx,
+            capture,
+            input,
+            OperationExecutionRequest {
+                device,
+                resources,
+                bundle: recovery_bundle,
+                control,
+                operation,
+                current_page: &page,
+                step_index: recovery_index,
+                step_timeout_ms,
+                candidate_pages: Some(&candidate_pages),
+            },
+        )? {
+            OperationRunOutcome::Success { current_page } => {
+                let Some(next_page) = current_page else {
+                    return Ok(None);
+                };
+                page = next_page;
+            }
+            OperationRunOutcome::NeedsRecovery(trigger) => {
+                return Err(CliError::device(format!(
+                    "return_home recovery operation '{}' failed after {} attempt(s): {}",
+                    trigger.operation_id, trigger.attempts, trigger.reason
+                )));
+            }
+        }
+    }
+
+    Err(CliError::device(format!(
+        "return_home recovery exceeded {DEFAULT_MAX_STEPS} steps"
+    )))
+}
+
 fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {
     json!({
         "backend": attempt.backend.as_str(),
@@ -1528,15 +1893,37 @@ fn ensure_touch_backend<'a>(
         .ok_or_else(|| CliError::device("failed to initialize touch backend"))
 }
 
+struct AfterOperationCapture {
+    scene: CapturedScene,
+    stable_confirmed: bool,
+}
+
+struct AfterOperationRequest<'a> {
+    resources: &'a LabResources,
+    task_id: &'a str,
+    defaults: OperationDefaults,
+    operation: &'a Operation,
+    step_timeout_ms: u64,
+    post_wait_freezes_ms: u64,
+    game: &'a str,
+}
+
 fn poll_after_operation(
     ctx: &mut LabRunContext,
     capture: &mut dyn CaptureBackend,
-    resources: &LabResources,
-    operation: &Operation,
-    step_timeout_ms: u64,
-    game: &str,
-) -> CliOutcome<CapturedScene> {
+    request: AfterOperationRequest<'_>,
+) -> CliOutcome<AfterOperationCapture> {
+    let AfterOperationRequest {
+        resources,
+        task_id,
+        defaults,
+        operation,
+        step_timeout_ms,
+        post_wait_freezes_ms,
+        game,
+    } = request;
     let started = Instant::now();
+    let mut verified_since = None::<Instant>;
     let arrival_page_candidates = operation_arrival_page_ids(resources, game, operation)?;
     loop {
         ctx.wait_for_next_capture_start();
@@ -1551,20 +1938,36 @@ fn poll_after_operation(
             scene.verify_template_matched = verify_template(
                 &scene.scene,
                 resources,
+                task_id,
                 template,
-                resources.operation_bundle.defaults.template_threshold,
+                defaults.template_threshold,
             )?;
         }
-        let matched_to = operation.expected_after_page().is_some_and(|page| {
-            matched_page_matches_anchor(game, scene.matched_page.as_deref(), page)
-        });
-        let unverified_single_frame =
-            operation.expected_after_page().is_none() && operation.verify_template.is_none();
-        if matched_to || scene.verify_template_matched || unverified_single_frame {
-            return Ok(scene);
+        let verification = operation_verification_status(game, operation, &scene);
+        if verification == OperationVerification::ExecutedUnverified {
+            return Ok(AfterOperationCapture {
+                scene,
+                stable_confirmed: true,
+            });
+        }
+        if verification == OperationVerification::Verified {
+            let since = *verified_since.get_or_insert_with(Instant::now);
+            if post_wait_freezes_ms == 0
+                || since.elapsed() >= Duration::from_millis(post_wait_freezes_ms)
+            {
+                return Ok(AfterOperationCapture {
+                    scene,
+                    stable_confirmed: true,
+                });
+            }
+        } else {
+            verified_since = None;
         }
         if started.elapsed() >= Duration::from_millis(step_timeout_ms) {
-            return Ok(scene);
+            return Ok(AfterOperationCapture {
+                scene,
+                stable_confirmed: false,
+            });
         }
     }
 }
@@ -1572,10 +1975,11 @@ fn poll_after_operation(
 fn verify_template(
     scene: &Scene,
     resources: &LabResources,
+    task_id: &str,
     template: &str,
     threshold: f32,
 ) -> CliOutcome<bool> {
-    let bytes = resources.operation_asset(template)?;
+    let bytes = resources.operation_asset_for_task(task_id, template)?;
     let matched = scene
         .match_template(bytes, None)
         .map_err(|err| CliError::device(err.to_string()))?;
@@ -1795,13 +2199,34 @@ struct LabResources {
 }
 
 impl LabResources {
-    fn operation_asset(&self, relative: &str) -> CliOutcome<&[u8]> {
+    fn operation_asset_for_task(&self, task_id: &str, relative: &str) -> CliOutcome<&[u8]> {
         self.bundle
-            .resource_entry(&format!(
-                "operations/{}/{}",
-                self.operation_bundle.task_id, relative
-            ))
+            .resource_entry(&format!("operations/{}/{}", task_id, relative))
             .map_err(containment_error)
+    }
+
+    fn load_operation_bundle(
+        &self,
+        control: &LabControl,
+        task_id: &str,
+    ) -> CliOutcome<OperationBundle> {
+        let path = format!("operations/{task_id}/task.json");
+        let bytes = self
+            .bundle
+            .resource_entry(&path)
+            .map_err(containment_error)?;
+        let operation_bundle: OperationBundle = serde_json::from_slice(bytes)
+            .map_err(|err| CliError::package_invalid(format!("failed to parse {path}: {err}")))?;
+        operation_bundle.validate(control, |relative| {
+            self.bundle
+                .resource_entry(&format!("operations/{task_id}/{relative}"))
+                .map(|_| true)
+                .or_else(|err| match err {
+                    ContainmentError::MissingEntry { .. } => Ok(false),
+                    other => Err(containment_error(other)),
+                })
+        })?;
+        Ok(operation_bundle)
     }
 }
 
@@ -1831,6 +2256,14 @@ struct OperationBundle {
     entry_page: Option<String>,
     #[serde(default)]
     target_page: Option<String>,
+    #[serde(default)]
+    error_pages: Vec<String>,
+    #[serde(default)]
+    recovery: Option<TaskRecovery>,
+    #[serde(default)]
+    max_task_retries: Option<u32>,
+    #[serde(default)]
+    on_exhausted: Option<String>,
     operations: Vec<Operation>,
 }
 
@@ -1840,13 +2273,13 @@ impl OperationBundle {
         control: &LabControl,
         mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
     ) -> CliOutcome<()> {
-        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5") {
+        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6") {
             return Err(CliError::package_invalid(format!(
-                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5",
+                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5, 0.6",
                 self.schema_version
             )));
         }
-        if self.task_id != control.entry_task_id {
+        if self.task_id != control.entry_task_id && self.task_id != "return_home" {
             return Err(CliError::package_invalid(format!(
                 "operation task_id '{}' does not match control entry_task_id '{}'",
                 self.task_id, control.entry_task_id
@@ -1885,6 +2318,7 @@ impl OperationBundle {
                 "operation bundle has no operations",
             ));
         }
+        self.defaults.validate()?;
         for anchor in &self.anchors {
             if anchor.id.trim().is_empty() {
                 return Err(CliError::package_invalid(
@@ -1927,7 +2361,68 @@ impl OperationBundle {
                 )));
             }
         }
+        self.validate_recovery()?;
         Ok(())
+    }
+
+    fn validate_recovery(&self) -> CliOutcome<()> {
+        if self.max_task_retries == Some(0) {
+            return Err(CliError::package_invalid(
+                "operation bundle max_task_retries must be positive when provided",
+            ));
+        }
+        if let Some(recovery) = &self.recovery {
+            recovery.validate()?;
+        }
+        if let Some(on_exhausted) = &self.on_exhausted
+            && on_exhausted != "pause"
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation bundle on_exhausted '{on_exhausted}' is unsupported; expected pause"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum TaskRecovery {
+    Kind(String),
+    Config {
+        kind: String,
+        #[serde(default)]
+        task_id: Option<String>,
+    },
+}
+
+impl TaskRecovery {
+    fn validate(&self) -> CliOutcome<()> {
+        if self.kind() != "return_home" {
+            return Err(CliError::package_invalid(format!(
+                "operation bundle recovery kind '{}' is unsupported; expected return_home",
+                self.kind()
+            )));
+        }
+        if self.task_id().trim().is_empty() {
+            return Err(CliError::package_invalid(
+                "operation bundle recovery task_id must not be empty",
+            ));
+        }
+        Ok(())
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            TaskRecovery::Kind(kind) | TaskRecovery::Config { kind, .. } => kind,
+        }
+    }
+
+    fn task_id(&self) -> &str {
+        match self {
+            TaskRecovery::Kind(_) => "return_home",
+            TaskRecovery::Config { task_id, .. } => task_id.as_deref().unwrap_or("return_home"),
+        }
     }
 }
 
@@ -1937,6 +2432,20 @@ struct OperationDefaults {
     template_threshold: f32,
     #[serde(default)]
     color_max_distance: Option<f32>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    max_attempts: Option<u32>,
+    #[serde(default)]
+    retry_interval_ms: Option<u64>,
+    #[serde(default)]
+    pre_delay_ms: Option<u64>,
+    #[serde(default)]
+    post_delay_ms: Option<u64>,
+    #[serde(default)]
+    pre_wait_freezes_ms: Option<u64>,
+    #[serde(default)]
+    post_wait_freezes_ms: Option<u64>,
 }
 
 impl Default for OperationDefaults {
@@ -1944,15 +2453,44 @@ impl Default for OperationDefaults {
         Self {
             template_threshold: DEFAULT_TEMPLATE_THRESHOLD,
             color_max_distance: None,
+            timeout_ms: None,
+            max_attempts: None,
+            retry_interval_ms: None,
+            pre_delay_ms: None,
+            post_delay_ms: None,
+            pre_wait_freezes_ms: None,
+            post_wait_freezes_ms: None,
         }
     }
 }
 
 impl OperationDefaults {
+    fn validate(self) -> CliOutcome<()> {
+        for (name, value) in [
+            ("timeout_ms", self.timeout_ms),
+            ("max_attempts", self.max_attempts.map(u64::from)),
+            ("retry_interval_ms", self.retry_interval_ms),
+        ] {
+            if value == Some(0) {
+                return Err(CliError::package_invalid(format!(
+                    "operation defaults {name} must be positive when provided"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn to_json(self) -> Value {
         json!({
             "template_threshold": self.template_threshold,
-            "color_max_distance": self.color_max_distance
+            "color_max_distance": self.color_max_distance,
+            "timeout_ms": self.timeout_ms,
+            "max_attempts": self.max_attempts,
+            "retry_interval_ms": self.retry_interval_ms,
+            "pre_delay_ms": self.pre_delay_ms,
+            "post_delay_ms": self.post_delay_ms,
+            "pre_wait_freezes_ms": self.pre_wait_freezes_ms,
+            "post_wait_freezes_ms": self.post_wait_freezes_ms
         })
     }
 }
@@ -1980,6 +2518,26 @@ struct Operation {
     #[serde(default)]
     expect_after: Option<OperationExpectation>,
     #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    max_attempts: Option<u32>,
+    #[serde(default)]
+    retry_interval_ms: Option<u64>,
+    #[serde(default)]
+    pre_delay_ms: Option<u64>,
+    #[serde(default)]
+    post_delay_ms: Option<u64>,
+    #[serde(default)]
+    pre_wait_freezes_ms: Option<u64>,
+    #[serde(default)]
+    post_wait_freezes_ms: Option<u64>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default)]
+    effect: Option<String>,
+    #[serde(default)]
+    on_error: Option<String>,
+    #[serde(default)]
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
@@ -2003,40 +2561,74 @@ impl Operation {
             }
         }
         self.click.validate(control)?;
-        if self.click.kind == "offset" {
+        if matches!(
+            self.click.kind.as_str(),
+            "offset" | "target" | "target_center"
+        ) {
             let guard = self.guard.as_ref().ok_or_else(|| {
                 CliError::package_invalid(format!(
-                    "operation '{}' offset click requires guard metadata",
-                    self.id
+                    "operation '{}' {} click requires guard metadata",
+                    self.id, self.click.kind
                 ))
             })?;
             if let Some(target_id) = self.click.target_id.as_deref()
                 && target_id != guard.target_id
             {
                 return Err(CliError::package_invalid(format!(
-                    "operation '{}' offset click target_id '{}' does not match guard target_id '{}'",
-                    self.id, target_id, guard.target_id
+                    "operation '{}' {} click target_id '{}' does not match guard target_id '{}'",
+                    self.id, self.click.kind, target_id, guard.target_id
                 )));
             }
             if guard.verify_template.is_none() {
                 return Err(CliError::package_invalid(format!(
-                    "operation '{}' offset click requires template guard metadata; color-probe guards cannot produce a matched_rect",
-                    self.id
+                    "operation '{}' {} click requires template guard metadata; color-probe guards cannot produce a matched_rect",
+                    self.id, self.click.kind
                 )));
             }
-        } else if self.click.is_absolute_coordinate()
-            && let Some(guard) = &self.guard
-            && guard.verify_template.is_none()
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' coordinate action requires template guard metadata; color-probe guards cannot produce a matched_rect",
-                self.id
-            )));
         }
         if let Some(expect_after) = &self.expect_after {
             expect_after.validate(&self.id)?;
         }
+        self.validate_flow()?;
         self.validate_guard(control)
+    }
+
+    fn validate_flow(&self) -> CliOutcome<()> {
+        if self.timeout_ms == Some(0) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' timeout_ms must be positive when provided",
+                self.id
+            )));
+        }
+        if self.max_attempts == Some(0) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' max_attempts must be positive when provided",
+                self.id
+            )));
+        }
+        if self.retry_interval_ms == Some(0) {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' retry_interval_ms must be positive when provided",
+                self.id
+            )));
+        }
+        if let Some(effect) = &self.effect
+            && effect != "navigation_only"
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' effect '{effect}' is unsupported; expected navigation_only",
+                self.id
+            )));
+        }
+        if let Some(on_error) = &self.on_error
+            && on_error != "return_home"
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' on_error '{on_error}' is unsupported; expected return_home",
+                self.id
+            )));
+        }
+        Ok(())
     }
 
     fn input_action(
@@ -2075,11 +2667,77 @@ impl Operation {
             .or(self.to.as_deref())
     }
 
-    fn after_timeout_ms(&self, default_timeout_ms: u64) -> u64 {
-        self.expect_after
-            .as_ref()
-            .and_then(|expectation| expectation.timeout_ms)
+    fn after_timeout_ms(&self, defaults: OperationDefaults, default_timeout_ms: u64) -> u64 {
+        self.timeout_ms
+            .or(defaults.timeout_ms)
+            .or_else(|| {
+                self.expect_after
+                    .as_ref()
+                    .and_then(|expectation| expectation.timeout_ms)
+            })
             .unwrap_or(default_timeout_ms)
+    }
+
+    fn flow_policy(&self, defaults: OperationDefaults) -> OperationFlowPolicy {
+        let retryable = self.retryable.unwrap_or_else(|| self.is_navigation_only());
+        let requested_attempts = self
+            .max_attempts
+            .or(defaults.max_attempts)
+            .unwrap_or(if retryable { 3 } else { 1 });
+        OperationFlowPolicy {
+            retryable,
+            max_attempts: if retryable {
+                requested_attempts.max(1)
+            } else {
+                1
+            },
+            retry_interval_ms: self
+                .retry_interval_ms
+                .or(defaults.retry_interval_ms)
+                .unwrap_or(DEFAULT_RETRY_INTERVAL_MS),
+            pre_delay_ms: self.pre_delay_ms.or(defaults.pre_delay_ms).unwrap_or(0),
+            post_delay_ms: self.post_delay_ms.or(defaults.post_delay_ms).unwrap_or(0),
+            pre_wait_freezes_ms: self
+                .pre_wait_freezes_ms
+                .or(defaults.pre_wait_freezes_ms)
+                .unwrap_or(0),
+            post_wait_freezes_ms: self
+                .post_wait_freezes_ms
+                .or(defaults.post_wait_freezes_ms)
+                .unwrap_or(DEFAULT_POST_WAIT_FREEZES_MS),
+        }
+    }
+
+    fn is_navigation_only(&self) -> bool {
+        self.effect.as_deref() == Some("navigation_only")
+            || (self.consumes.is_empty()
+                && self.produces.is_empty()
+                && self.purpose.to_ascii_lowercase().contains("navigation"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OperationFlowPolicy {
+    retryable: bool,
+    max_attempts: u32,
+    retry_interval_ms: u64,
+    pre_delay_ms: u64,
+    post_delay_ms: u64,
+    pre_wait_freezes_ms: u64,
+    post_wait_freezes_ms: u64,
+}
+
+impl OperationFlowPolicy {
+    fn to_json(self) -> Value {
+        json!({
+            "retryable": self.retryable,
+            "max_attempts": self.max_attempts,
+            "retry_interval_ms": self.retry_interval_ms,
+            "pre_delay_ms": self.pre_delay_ms,
+            "post_delay_ms": self.post_delay_ms,
+            "pre_wait_freezes_ms": self.pre_wait_freezes_ms,
+            "post_wait_freezes_ms": self.post_wait_freezes_ms
+        })
     }
 }
 
@@ -2256,6 +2914,17 @@ impl OperationClick {
                 }
                 Ok(())
             }
+            "target" | "target_center" => {
+                if let Some(offset) = self.offset
+                    && (offset.width <= 0 || offset.height <= 0)
+                {
+                    return Err(CliError::package_invalid(format!(
+                        "target click offset dimensions must be positive: {}x{}",
+                        offset.width, offset.height
+                    )));
+                }
+                Ok(())
+            }
             "drag" => {
                 let from = self
                     .from_rect
@@ -2353,6 +3022,33 @@ impl OperationClick {
                 validate_click_rect(rect, resolution, false)?;
                 Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
             }
+            "target" | "target_center" => {
+                let guard = guard.ok_or_else(|| {
+                    CliError::package_invalid("target click requires guard metadata")
+                })?;
+                let target = target.ok_or_else(|| {
+                    CliError::package_invalid("target click requires matched template target")
+                })?;
+                if target.id != guard.target_id {
+                    return Err(CliError::package_invalid(format!(
+                        "target click matched target '{}' does not match guard target_id '{}'",
+                        target.id, guard.target_id
+                    )));
+                }
+                let matched_rect = matched_template_rect(target)?;
+                let rect = if let Some(offset) = self.offset {
+                    PackRect {
+                        x: matched_rect.x + offset.x,
+                        y: matched_rect.y + offset.y,
+                        width: offset.width,
+                        height: offset.height,
+                    }
+                } else {
+                    matched_rect
+                };
+                validate_click_rect(rect, resolution, false)?;
+                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
+            }
             "drag" => {
                 let declared_from = self
                     .from_rect
@@ -2405,13 +3101,6 @@ impl OperationClick {
             height: 1,
         })
     }
-
-    fn is_absolute_coordinate(&self) -> bool {
-        matches!(
-            self.kind.as_str(),
-            "rect" | "specific_rect" | "point" | "long_press" | "long_tap" | "drag"
-        )
-    }
 }
 
 fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
@@ -2454,11 +3143,6 @@ fn derive_absolute_coordinate_rect(
     let Some(guard) = guard else {
         return Ok(declared);
     };
-    if guard.verify_template.is_none() {
-        return Err(CliError::package_invalid(format!(
-            "{kind} coordinate action requires template guard metadata"
-        )));
-    }
     let target =
         target.ok_or_else(|| CliError::package_invalid(format!("{kind} requires guard target")))?;
     if target.id != guard.target_id {
@@ -2467,13 +3151,7 @@ fn derive_absolute_coordinate_rect(
             target.id, guard.target_id
         )));
     }
-    let matched_rect = matched_template_rect(target)?;
-    super::derive_absolute_coordinate_rect_from_match(
-        kind,
-        declared,
-        guard.expected_rect,
-        matched_rect,
-    )
+    Ok(declared)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4828,7 +5506,96 @@ mod tests {
     }
 
     #[test]
-    fn guarded_drag_uses_matched_target_rect_for_start_point() {
+    fn target_click_uses_matched_rect_center_with_optional_offset() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "target".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: Some(PackRect {
+                x: 2,
+                y: 3,
+                width: 10,
+                height: 8,
+            }),
+            target_id: Some("target/button".to_string()),
+        };
+
+        operation.validate(&control).expect("target click valid");
+        let action = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/button",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect("target input action");
+
+        match action {
+            LabInputAction::Tap(point) => {
+                assert_eq!(point.rect.x, 302);
+                assert_eq!(point.rect.y, 403);
+                assert_eq!(point.rect.width, 10);
+                assert_eq!(point.rect.height, 8);
+            }
+            _ => panic!("expected tap"),
+        }
+    }
+
+    #[test]
+    fn target_click_rejects_color_probe_guard() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(test_color_guard());
+        operation.click = OperationClick {
+            kind: "target".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: None,
+            target_id: Some("target/button".to_string()),
+        };
+
+        let err = operation
+            .validate(&control)
+            .expect_err("target click requires template guard");
+
+        assert!(err.message.contains("requires template guard metadata"));
+    }
+
+    #[test]
+    fn guarded_drag_uses_declared_rects_without_matched_delta() {
         let control = test_control();
         let mut operation = test_operation(Some("terminal"), None);
         operation.unguarded_trusted_coordinate = false;
@@ -4890,12 +5657,12 @@ mod tests {
                 to,
                 duration_ms,
             } => {
-                assert_eq!(from.rect.x, 303);
-                assert_eq!(from.rect.y, 404);
+                assert_eq!(from.rect.x, 103);
+                assert_eq!(from.rect.y, 204);
                 assert_eq!(from.rect.width, 5);
                 assert_eq!(from.rect.height, 6);
-                assert_eq!(to.rect.x, 1000);
-                assert_eq!(to.rect.y, 500);
+                assert_eq!(to.rect.x, 800);
+                assert_eq!(to.rect.y, 300);
                 assert_eq!(to.rect.width, 10);
                 assert_eq!(to.rect.height, 10);
                 assert_eq!(to.rect.x - from.rect.x, 697);
@@ -5079,7 +5846,7 @@ mod tests {
     }
 
     #[test]
-    fn guarded_rect_point_and_long_press_follow_matched_delta() {
+    fn guarded_absolute_clicks_use_declared_coordinates_without_matched_delta() {
         let control = test_control();
         for kind in ["rect", "specific_rect", "point", "long_press"] {
             let mut operation = test_operation(Some("terminal"), None);
@@ -5158,24 +5925,24 @@ mod tests {
             match (kind, action) {
                 ("long_press", LabInputAction::LongTap { point, duration_ms }) => {
                     assert_eq!(duration_ms, 900);
-                    assert_eq!(point.rect.x, 303);
-                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.x, 103);
+                    assert_eq!(point.rect.y, 204);
                     assert_eq!(point.rect.width, 1);
                     assert_eq!(point.rect.height, 1);
-                    assert_eq!(point.x, 303);
-                    assert_eq!(point.y, 404);
+                    assert_eq!(point.x, 103);
+                    assert_eq!(point.y, 204);
                 }
                 ("point", LabInputAction::Tap(point)) => {
-                    assert_eq!(point.rect.x, 303);
-                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.x, 103);
+                    assert_eq!(point.rect.y, 204);
                     assert_eq!(point.rect.width, 1);
                     assert_eq!(point.rect.height, 1);
-                    assert_eq!(point.x, 303);
-                    assert_eq!(point.y, 404);
+                    assert_eq!(point.x, 103);
+                    assert_eq!(point.y, 204);
                 }
                 (_, LabInputAction::Tap(point)) => {
-                    assert_eq!(point.rect.x, 303);
-                    assert_eq!(point.rect.y, 404);
+                    assert_eq!(point.rect.x, 103);
+                    assert_eq!(point.rect.y, 204);
                     assert_eq!(point.rect.width, 7);
                     assert_eq!(point.rect.height, 9);
                 }
@@ -5223,17 +5990,125 @@ mod tests {
     }
 
     #[test]
-    fn operation_validate_rejects_color_guard_for_absolute_coordinate() {
+    fn operation_validate_allows_color_guard_for_absolute_coordinate() {
         let control = test_control();
         let mut operation = test_operation(Some("terminal"), None);
         operation.unguarded_trusted_coordinate = false;
         operation.guard = Some(test_color_guard());
 
-        let err = operation
+        operation
             .validate(&control)
-            .expect_err("color guard cannot translate coordinates");
+            .expect("color guard can protect absolute coordinates");
+    }
 
-        assert!(err.message.contains("requires template guard metadata"));
+    #[test]
+    fn flow_policy_retries_navigation_only_but_not_side_effects_by_default() {
+        let defaults = OperationDefaults::default();
+        let mut navigation = test_operation(Some("terminal"), None);
+        navigation.effect = Some("navigation_only".to_string());
+        let navigation_policy = navigation.flow_policy(defaults);
+
+        assert!(navigation_policy.retryable);
+        assert_eq!(navigation_policy.max_attempts, 3);
+        assert_eq!(
+            navigation_policy.retry_interval_ms,
+            DEFAULT_RETRY_INTERVAL_MS
+        );
+
+        let mut side_effect = test_operation(Some("terminal"), None);
+        side_effect.consumes = vec!["ap".to_string()];
+        side_effect.produces = vec!["reward".to_string()];
+        let side_effect_policy = side_effect.flow_policy(defaults);
+
+        assert!(!side_effect_policy.retryable);
+        assert_eq!(side_effect_policy.max_attempts, 1);
+    }
+
+    #[test]
+    fn flow_policy_explicit_retryable_uses_bounded_attempts_and_cadence() {
+        let defaults = OperationDefaults {
+            max_attempts: Some(5),
+            retry_interval_ms: Some(250),
+            post_wait_freezes_ms: Some(700),
+            ..OperationDefaults::default()
+        };
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.retryable = Some(true);
+        operation.max_attempts = Some(2);
+
+        let policy = operation.flow_policy(defaults);
+
+        assert!(policy.retryable);
+        assert_eq!(policy.max_attempts, 2);
+        assert_eq!(policy.retry_interval_ms, 250);
+        assert_eq!(policy.post_wait_freezes_ms, 700);
+    }
+
+    #[test]
+    fn operation_bundle_accepts_schema_0_6_retry_recovery_fields() {
+        let control = test_control();
+        let bundle: OperationBundle = serde_json::from_value(json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "arknights",
+            "server_scope": ["cn"],
+            "goal": "navigation",
+            "coordinate_space": {"width": 1280, "height": 720},
+            "defaults": {
+                "max_attempts": 2,
+                "retry_interval_ms": 100,
+                "post_wait_freezes_ms": 0
+            },
+            "entry_page": "home",
+            "target_page": "terminal",
+            "error_pages": ["negative_popup"],
+            "recovery": {"kind": "return_home", "task_id": "return_home"},
+            "max_task_retries": 1,
+            "on_exhausted": "pause",
+            "operations": [{
+                "id": "open_terminal",
+                "purpose": "navigation",
+                "from": "home",
+                "to": "terminal",
+                "effect": "navigation_only",
+                "retryable": true,
+                "click": {"kind": "point", "x": 100, "y": 100},
+                "unguarded_trusted_coordinate": true
+            }]
+        }))
+        .expect("operation bundle");
+
+        bundle
+            .validate(&control, |_relative| Ok(true))
+            .expect("schema 0.6 flow fields valid");
+        assert_eq!(bundle.recovery.as_ref().unwrap().task_id(), "return_home");
+        assert_eq!(
+            bundle.operations[0]
+                .flow_policy(bundle.defaults)
+                .max_attempts,
+            2
+        );
+    }
+
+    #[test]
+    fn error_page_detection_matches_explicit_and_negative_pages() {
+        let explicit = vec!["arknights/error_popup".to_string()];
+
+        assert!(page_is_error_page(
+            "arknights",
+            Some("arknights/error_popup"),
+            &explicit
+        ));
+        assert!(page_is_error_page(
+            "arknights",
+            Some("arknights/negative_connection"),
+            &[]
+        ));
+        assert!(!page_is_error_page(
+            "arknights",
+            Some("arknights/home"),
+            &explicit
+        ));
     }
 
     #[test]
@@ -5600,7 +6475,10 @@ mod tests {
             OperationVerification::Failed
         );
         assert_eq!(operation.expected_after_page(), Some("terminal"));
-        assert_eq!(operation.after_timeout_ms(10_000), 50);
+        assert_eq!(
+            operation.after_timeout_ms(OperationDefaults::default(), 10_000),
+            50
+        );
     }
 
     #[test]
@@ -6284,6 +7162,16 @@ mod tests {
             },
             verify_template: verify_template.map(str::to_string),
             expect_after: None,
+            timeout_ms: None,
+            max_attempts: None,
+            retry_interval_ms: None,
+            pre_delay_ms: None,
+            post_delay_ms: None,
+            pre_wait_freezes_ms: None,
+            post_wait_freezes_ms: None,
+            retryable: None,
+            effect: None,
+            on_error: None,
             guard: None,
             unguarded_trusted_coordinate: true,
             consumes: Vec::new(),

@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
+
+### Current status
+
+- Implemented Runtime issue #29 correctness fix: guarded absolute coordinate actions no longer shift declared coordinates by `matched_rect - expected_rect`.
+- `rect`, `specific_rect`, `point`, `long_press`/`long_tap`, and `drag` from/to now use declared coordinates after guard-target consistency checks.
+- `offset` remains relative to the matched template rectangle.
+- Absolute coordinate actions may use color-probe guards; `offset`, `target`, and `target_center` remain template-guard-only because they require a matched rectangle.
+- Implemented the issue #30 Phase 1/2 execution state-machine skeleton for bounded navigation retry, post-click stable confirmation, error-page detection, `return_home` recovery, task retry exhaustion, and `paused_needs_human`.
+- Added schema `0.6` parsing for operation flow fields and task-level recovery fields.
+- Added explicit recognition-target click modes (`target`, `target_center`) as the Phase 3 path for position-tolerant clicks without changing absolute coordinate semantics.
+- Retry, recovery, pause, and attempt outcomes are emitted as ledger/light-event records.
+- This node changes only Runtime `actinglab` execution logic and documentation.
+- Live AK `home -> depot` revalidation was not run in this local node; automated/unit/workspace verification passed.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 29 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments`
+- `gh issue view 30 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\FIX-runtime-guarded-absolute-click-drift-oob.md`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-exec-retry-recovery-MAA-ALAS.md`
+- `cargo test -p actingcommand-actinglab guarded_absolute_clicks_use_declared_coordinates_without_matched_delta -- --nocapture`
+- `cargo test -p actingcommand-actinglab guarded_drag_uses_declared_rects_without_matched_delta -- --nocapture`
+- `cargo test -p actingcommand-actinglab offset_click_uses_matched_rect_and_offset_for_actual_point -- --nocapture`
+- `cargo test -p actingcommand-actinglab operation_validate_allows_color_guard_for_absolute_coordinate -- --nocapture`
+- `cargo test -p actingcommand-actinglab flow_policy_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab operation_bundle_accepts_schema_0_6_retry_recovery_fields -- --nocapture`
+- `cargo test -p actingcommand-actinglab error_page_detection_matches_explicit_and_negative_pages -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_click_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab lab_run::tests:: -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+
+### Test results
+
+- Focused issue #29 coordinate semantics tests passed.
+- Focused issue #30 retry/recovery/schema/target-click tests passed.
+- `cargo test -p actingcommand-actinglab lab_run::tests:: -- --nocapture` passed with all lab-run tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy -p actingcommand-actinglab -- -D warnings`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release`
+
+### Current blocker
+
+- No blocker for the automated implementation and verification.
+- Optional live-device acceptance remains: AK `home -> depot` and a non-edge navigation action should be re-run on a prepared emulator before declaring the original live route fully revalidated.
+
+### Next step
+
+1. Commit and push this Runtime milestone.
+2. Add a checkpoint tag for rollback/provenance.
+3. Optionally comment on GitHub issues #29 and #30 with the implementation and verification summary.
+4. Run live AK route acceptance later if device/resource conditions are requested for this issue closeout.
+
 ## 2026-07-09 runtime-ledger L8 acceptance closeout
 
 ### Current status
