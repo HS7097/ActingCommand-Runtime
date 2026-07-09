@@ -14,6 +14,8 @@
 - Retry, recovery, pause, and attempt outcomes are emitted as ledger/light-event records.
 - This node changes only Runtime `actinglab` execution logic and documentation.
 - Live AK `home -> depot` revalidation was not run in this local node; automated/unit/workspace verification passed.
+- Implementation commit `80c98f194ba6d9f868c56aaaa20901814c04464a` was created for this milestone.
+- Checkpoint tag target: `checkpoint/20260709-issues29-30-guarded-retry-recovery`.
 
 ### Files changed
 
