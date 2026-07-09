@@ -21,7 +21,7 @@
 - Selected packages that contain `operations/return_home/task.json` now use that contained bundle as implicit recovery even when the schema `0.3` entry task has no `recovery` or operation-level `on_error`.
 - Live AK `open_depot` rerun with the updated Runtime reached the intended fail-loud recovery path: run `run-db75ef7bf0e6686f-1` recorded `operation_retry_scheduled`, `pre_execution_guard_failed(page_guard_mismatch)`, `operation_recovery_required`, `recovery_started(return_home)`, `recovery_result(status=failed, reason=return_home_failed)`, `paused_needs_human`, and `run_failed`.
 - The live failure reason was explicit: `return_home recovery failed for operation 'home_to_depot'; paused_needs_human`. No fake success or silent fallback occurred.
-- Final implementation commit for the implicit recovery follow-up: `5c304e3f6fd92ad95db3cfcad22250ff80eee071`.
+- Implementation commit for the implicit recovery follow-up: `c107aca72193f56738ae16fec99ceaf723f798bc`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
 - Implementation commit `e5288b54195ef6854f1f150c9cfc99510bc5d375` was created and pushed.
 - Checkpoint tag `checkpoint/20260709-issue30-navigation-retry-default` was created and pushed.
