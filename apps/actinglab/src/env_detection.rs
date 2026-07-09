@@ -125,10 +125,35 @@ fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         let detector = catalog.detector(&detector_id)?;
         validate_detector_scope(detector, &context)?;
         let result_path = env_result_path(&context.env_dir, &context.instance_id);
-        let result = load_env_result(&result_path)?;
+        let Some(result) = read_json_file::<EnvDetectionResult>(&result_path)? else {
+            return Err(CliError::usage(format!(
+                "env detection result {} is missing; run detect first",
+                result_path.display()
+            ))
+            .with_details(env_needs_detection_payload(
+                detector,
+                &context,
+                &result_path,
+                None,
+                "missing_result",
+                None,
+            )));
+        };
         let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
         let now_ms = current_unix_ms();
-        ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms)?;
+        if let Err(error) = ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms)
+        {
+            let reason = env_stale_reason(&error);
+            let error_message = error.message.clone();
+            return Err(error.with_details(env_needs_detection_payload(
+                detector,
+                &context,
+                &result_path,
+                Some(&result),
+                reason,
+                Some(&error_message),
+            )));
+        }
         let input = flags
             .optional("--path")
             .or_else(|| flags.optional("--value"))
@@ -183,29 +208,131 @@ fn run_env_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
     validate_detector_scope(detector, &context)?;
     let result_path = env_result_path(&context.env_dir, &context.instance_id);
     let Some(result) = read_json_file::<EnvDetectionResult>(&result_path)? else {
+        let needs_detection = env_needs_detection_payload(
+            detector,
+            &context,
+            &result_path,
+            None,
+            "missing_result",
+            None,
+        );
         return Ok(json!({
             "schema_version": "env-status-command.v1",
             "status": "needs_detection",
             "reason": "missing_result",
             "task": detector.id,
+            "detector_id": detector.id,
+            "detector_version": detector.version(),
             "instance_id": context.instance_id,
-            "result_path": result_path.display().to_string()
+            "result_path": result_path.display().to_string(),
+            "needs_detection": needs_detection
         }));
     };
     let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
     let now_ms = current_unix_ms();
-    let status = match ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms) {
-        Ok(()) => "fresh",
-        Err(_) => "stale",
-    };
-    Ok(json!({
+    let freshness = ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms);
+    let mut payload = json!({
         "schema_version": "env-status-command.v1",
-        "status": status,
+        "status": "fresh",
         "task": detector.id,
         "instance_id": context.instance_id,
         "result_path": result_path.display().to_string(),
         "result": result
-    }))
+    });
+    if let Err(error) = freshness.as_ref() {
+        let reason = env_stale_reason(error);
+        payload["status"] = json!("stale");
+        payload["reason"] = json!(reason);
+        payload["needs_detection"] = env_needs_detection_payload(
+            detector,
+            &context,
+            &result_path,
+            Some(&result),
+            reason,
+            Some(error.message.as_str()),
+        );
+    }
+    Ok(payload)
+}
+
+fn env_needs_detection_payload(
+    detector: &EnvDetector,
+    context: &EnvCommandContext,
+    result_path: &Path,
+    result: Option<&EnvDetectionResult>,
+    reason: &'static str,
+    error: Option<&str>,
+) -> Value {
+    let detections = result
+        .map(|result| {
+            result
+                .detections
+                .iter()
+                .map(|(key, value)| {
+                    json!({
+                        "key": key,
+                        "value": value.value,
+                        "confidence": value.confidence,
+                        "source": value.source,
+                        "detector_id": value.detector_id,
+                        "source_result": format!("{}@{}", result.detector_id, result.generated_at_unix_ms)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut payload = json!({
+        "status": "needs_detection",
+        "reason": reason,
+        "task": detector.id,
+        "detector_id": detector.id,
+        "detector_version": detector.version(),
+        "instance_id": context.instance_id,
+        "game_id": context.game_id,
+        "server_id": context.server_id,
+        "result_path": result_path.display().to_string(),
+        "recommended_action": "run_detect",
+        "detections": detections
+    });
+    if let Some(result) = result {
+        payload["source_result"] = json!(format!(
+            "{}@{}",
+            result.detector_id, result.generated_at_unix_ms
+        ));
+        payload["result_generated_at_unix_ms"] = json!(result.generated_at_unix_ms);
+        payload["result_resource_pack_hash"] = json!(result.resource_pack_hash);
+    }
+    if let Some(error) = error {
+        payload["error"] = json!(error);
+    }
+    payload
+}
+
+fn env_stale_reason(error: &CliError) -> &'static str {
+    let message = error.message.as_str();
+    if message.contains("schema") {
+        "schema_mismatch"
+    } else if message.contains("different instance_id") {
+        "instance_mismatch"
+    } else if message.contains("scope is stale") {
+        "scope_mismatch"
+    } else if message.contains("detector is stale") {
+        "detector_mismatch"
+    } else if message.contains("resource hash changed") {
+        "resource_hash_changed"
+    } else if message.contains("missing key") {
+        "missing_key"
+    } else if message.contains("confidence") && message.contains("below threshold") {
+        "low_confidence"
+    } else if message.contains("expired at") {
+        "expired"
+    } else if message.contains("unsafe value") {
+        "unsafe_value"
+    } else if message.contains("not in allowed_values") {
+        "unallowed_value"
+    } else {
+        "stale_result"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1950,6 +2077,110 @@ mod tests {
         let err = ensure_result_fresh(&result, &detector, &context, "hash", current_unix_ms())
             .expect_err("low confidence rejected");
         assert!(err.message.contains("confidence"));
+    }
+
+    #[test]
+    fn stale_result_payload_reports_machine_readable_needs_detection() {
+        let temp = TempDir::new().unwrap();
+        let context = context(temp.path(), "envinst_a");
+        let detector = detector();
+        let result = result(&context, &detector, "old-hash", "Default", 0.95, None);
+        let err = ensure_result_fresh(&result, &detector, &context, "new-hash", current_unix_ms())
+            .expect_err("stale hash rejected");
+        let result_path = env_result_path(&context.env_dir, &context.instance_id);
+
+        let payload = env_needs_detection_payload(
+            &detector,
+            &context,
+            &result_path,
+            Some(&result),
+            env_stale_reason(&err),
+            Some(&err.message),
+        );
+
+        assert_eq!(payload["status"], "needs_detection");
+        assert_eq!(payload["reason"], "resource_hash_changed");
+        assert_eq!(payload["detector_id"], "detect_ui_theme");
+        assert_eq!(payload["instance_id"], "envinst_a");
+        assert_eq!(payload["recommended_action"], "run_detect");
+        assert_eq!(payload["detections"][0]["key"], "ui_theme");
+        assert_eq!(payload["detections"][0]["value"], "Default");
+        assert_eq!(payload["error"], err.message);
+    }
+
+    #[test]
+    fn missing_result_payload_reports_run_detect_without_fake_detections() {
+        let temp = TempDir::new().unwrap();
+        let context = context(temp.path(), "envinst_a");
+        let detector = detector();
+        let result_path = env_result_path(&context.env_dir, &context.instance_id);
+
+        let payload = env_needs_detection_payload(
+            &detector,
+            &context,
+            &result_path,
+            None,
+            "missing_result",
+            None,
+        );
+
+        assert_eq!(payload["status"], "needs_detection");
+        assert_eq!(payload["reason"], "missing_result");
+        assert_eq!(payload["recommended_action"], "run_detect");
+        assert!(payload["detections"].as_array().unwrap().is_empty());
+        assert!(payload.get("source_result").is_none());
+        assert!(payload.get("error").is_none());
+    }
+
+    #[test]
+    fn stale_reason_classifies_common_result_failures() {
+        let cases = [
+            (
+                "env detection result schema 'old' is stale; expected 'new'",
+                "schema_mismatch",
+            ),
+            (
+                "env detection result belongs to a different instance_id",
+                "instance_mismatch",
+            ),
+            (
+                "env detection result scope is stale: result arknights.cn command arknights.jp",
+                "scope_mismatch",
+            ),
+            (
+                "env detection result detector is stale: result a@1 command a@2",
+                "detector_mismatch",
+            ),
+            (
+                "env detection result is stale because detector resource hash changed",
+                "resource_hash_changed",
+            ),
+            (
+                "env detection result is missing key 'ui_theme'",
+                "missing_key",
+            ),
+            (
+                "env key 'ui_theme' is stale: confidence 0.1 below threshold 0.7",
+                "low_confidence",
+            ),
+            (
+                "env key 'ui_theme' expired at 1; run detect first",
+                "expired",
+            ),
+            (
+                "env key 'ui_theme' has unsafe value '../bad'",
+                "unsafe_value",
+            ),
+            (
+                "env key 'ui_theme' value 'Other' is not in allowed_values",
+                "unallowed_value",
+            ),
+        ];
+
+        for (message, expected) in cases {
+            let error = CliError::usage(message);
+            assert_eq!(env_stale_reason(&error), expected);
+        }
     }
 
     #[test]

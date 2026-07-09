@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env status/resolve stale diagnostics
+
+### Current status
+
+- Resumed issue #31 after an interrupted edit and confirmed the only half-finished source change was in `apps/actinglab/src/env_detection.rs`.
+- Continued to use local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Added a shared machine-readable `needs_detection` payload for env detection results that are missing or stale.
+- `env status` now returns `needs_detection` for a missing result and returns `status=stale`, a concrete stale `reason`, and nested `needs_detection` when an existing result is no longer fresh.
+- `env resolve` now fails visibly with nested `needs_detection` details when the result is missing or stale instead of returning a bare validation error.
+- Stale reasons are classified for schema mismatch, instance mismatch, scope mismatch, detector mismatch, detector resource hash changes, missing keys, low confidence, expiration, unsafe values, and values outside `allowed_values`.
+- Runtime still does not auto-rerun detection or make scheduler decisions; this increment only exposes the recovery handoff evidence for #30 recovery or the future scheduler trigger.
+- Runtime baseline before this increment: `7831e26`.
+
+### Files changed
+
+- `apps/actinglab/src/env_detection.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource mirrors used
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2364644`, already up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `58ed4b4c`, already up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `d4288fa`, already up to date with `origin/main`.
+- No resource repository files were modified by this increment.
+
+### Commands run
+
+- `Get-Content -Raw C:\Users\Alice\.codex\skills\implement\SKILL.md`
+- Read Runtime-local `AGENTS.md`, `PLANS.md`, `CHECKPOINT.md`, and `NOTICE.md`; `LICENSE_POLICY.md` is not present in this repository.
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `git status --short --branch`
+- `git diff -- apps/actinglab/src/env_detection.rs`
+- `Get-Process actinglab,cargo,rustc,adb -ErrorAction SilentlyContinue`
+- `cargo check -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab env_detection::tests -- --nocapture`
+- Created a synthetic temporary resource root under `target\issue31-env-diagnostics-smoke`.
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance issue31-diag env status --task detect_resolution --resource-root target\issue31-env-diagnostics-smoke\resources`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance issue31-diag env resolve --task detect_resolution --key resolution --resource-root target\issue31-env-diagnostics-smoke\resources`
+- `git fetch origin --prune --tags; git pull --ff-only` in Arknights, AzurLane, and BlueArchive resource repositories.
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab` passed.
+- Focused env-detection tests passed: `17` tests.
+- Synthetic CLI smoke passed:
+  - missing result: `env status` returned `status=needs_detection` and `reason=missing_result`;
+  - stale result: `env status` returned `status=stale` and `reason=resource_hash_changed`;
+  - stale resolve: `env resolve` failed with nested `needs_detection.reason=resource_hash_changed`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+
+### Current blocker
+
+- No blocker for this env status/resolve stale diagnostics increment.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Runtime changes with updated planning files.
+2. Tag the milestone as a rollback/provenance checkpoint.
+3. Update GitHub issue #31 with validation evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env-backed recognition failure needs-detection hints
 
 ### Current status
