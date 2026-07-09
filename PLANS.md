@@ -17,6 +17,7 @@ Implemented direction:
 
 - Add a generic `detect` command for environment detection tasks authored in resource data under `env-detection/detections.json`.
 - Keep Runtime logic game-agnostic: detector ids, keys, candidates, thresholds, `allowed_values`, and TTL are data-defined.
+- Accept both the internal detector/key catalog shape and the resource-authored flat `env-detections.v1` shape used by the current Arknights resource repository.
 - Persist per-instance detection results to `env-detection/<instance_id>/result.json` below the resolved resource root.
 - Derive `instance_id` from a salted hash of the normalized instance identity; result files do not include raw ADB endpoints by default.
 - Store required result provenance: schema version, instance id, game/server, detector id/version, resource pack id/hash, generated time, and per-key detection facts.
@@ -31,8 +32,9 @@ Current boundary:
 - This node implements the generic Runtime P1 mechanism only.
 - Scheduler auto-triggering, SwitchTheme recovery, OCR, SQLite, UI, and game-specific logic remain out of scope.
 - Interactive touch-based detection steps are not implemented yet; current detection candidates use recognition templates.
-- The current mirrored Arknights resource repository does not contain `ours/env-detection` or `ours/hometheme`, so AK 16-theme P2 resource integration and live validation remain blocked until the resource definitions land.
-- Resource repositories were mirrored before this resource-dependent task; no resource repository files were modified in this Runtime node.
+- The current mirrored Arknights resource repository now contains `ours/env-detection` and `ours/hometheme`.
+- Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, and `{env:ui_theme}` resolution to an existing theme resource path.
+- Resource repositories were mirrored before this resource-dependent task. The Arknights resource repository required a small catalog correction for Dreamland/LoneTrail Day/Night template paths; Runtime remains game-agnostic.
 
 ## Current guarded-click and retry/recovery execution node
 

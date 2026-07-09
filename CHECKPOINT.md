@@ -1,5 +1,84 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env catalog compatibility and AK validation
+
+### Current status
+
+- Continued GitHub issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Resource repositories and Runtime were refreshed from remote before using resource content:
+  - Arknights `ae54737`
+  - AzurLane `8885eee4`
+  - BlueArchive `1cbcf3f`
+  - Runtime `fd643b3`
+- Confirmed the prior P1 Runtime mechanism was present and pushed, but the current Arknights `ours/env-detection/detections.json` used a resource-authored flat schema that Runtime did not yet parse.
+- Added Runtime normalization for the current flat `env-detections.v1` catalog shape while keeping the internal detector/key model generic.
+- Added field aliases for resource-authored candidate fields: `template` -> `template_path`, `roi` -> `region`, `threshold` -> `min_confidence`, and `invalidate_below_confidence` -> `stale_below_confidence`.
+- Added ROI array parsing for `[x, y, width, height]` while retaining object-region support.
+- Added a focused unit test proving a resource-authored flat catalog normalizes into the internal detector/key/candidate model.
+- Runtime `env status` now reads the current Arknights `detect_ui_theme` catalog and returns `needs_detection` instead of failing on missing `keys`.
+- Arknights resource catalog needed a data correction because `Dreamland` and `LoneTrail` referenced missing parent-level `Terminal.png` files; those themes now have Day/Night candidate templates while preserving the same safe allowed env values.
+- Arknights resource correction was committed and pushed as `89d24ff3f14fdd30de9ee258f6b67d3d6a844e1b`.
+- Offline AK resource validation passed using a synthetic 1280x720 scene with the real `Default/Terminal.png` embedded in the declared ROI.
+- Live read-only AK validation passed on `127.0.0.1:16416`: `detect_ui_theme` detected `Siege` with confidence `0.9682732820510864`.
+- The generated per-instance result path uses `envinst_.../result.json`; result JSON does not include raw `127.0.0.1:16416`, and the runtime-generated result file is ignored by the resource repository.
+- `{env:ui_theme}` resolved from the live result to `hometheme/Siege/DepotEnter.png`, and that resource file exists.
+
+### Files changed
+
+- Runtime:
+  - `apps/actinglab/src/env_detection.rs`
+  - `PLANS.md`
+  - `CHECKPOINT.md`
+- Arknights resources:
+  - `ours/env-detection/README.md`
+  - `ours/env-detection/detections.json`
+
+### Commands run
+
+- `git fetch --prune --tags origin`
+- `git pull --ff-only origin main`
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments`
+- `Get-Content C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance audit-31 env status --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 detect --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --scene C:\Users\Alice\Documents\Azur\ActingCommand-Runtime\target\issue31-ak-env\scene-default-terminal.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 --capture-backend adb detect --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --capture`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 env status --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance 127.0.0.1:16416 env resolve --task detect_ui_theme --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --path hometheme/{env:ui_theme}/DepotEnter.png`
+
+### Test results
+
+- Focused env-detection tests passed: `9` tests.
+- `cargo fmt --all -- --check` passed.
+- Runtime `git diff --check` passed.
+- Arknights resource `git diff --check` passed.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Current Arknights resource catalog no longer has missing candidate templates.
+- Offline synthetic AK resource detect passed and produced `ui_theme=Default`.
+- Live read-only AK capture detect passed and produced `ui_theme=Siege`.
+- `env status` returned `fresh` for the live result.
+- `env resolve` returned `hometheme/Siege/DepotEnter.png`.
+- Resource repository `git status` showed only the intended env-detection README/catalog edits; generated result files remained ignored.
+
+### Current blocker
+
+- No blocker for issue #31 Runtime catalog compatibility and AK read-only validation.
+- Scheduler auto-triggering, SwitchTheme recovery, touch-based interactive detection, BA/AzurLane detection items, OCR, SQLite, and UI remain future phases outside this node.
+
+### Next step
+
+1. Commit and push the Runtime compatibility update.
+2. Commit and push the Arknights resource catalog correction.
+3. Comment issue #31 with the Runtime/resource commits and validation evidence, leaving the issue open for Alice acceptance unless explicitly asked to close it.
+
 ## 2026-07-09 issue 31 environment detection memory P1
 
 ### Current status

@@ -10,7 +10,7 @@ use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     RecognitionEvaluator, TargetEvaluation, load_pack_from_json_str,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -276,8 +276,9 @@ impl EnvDetector {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EnvDetectionKey {
     key: String,
+    #[serde(alias = "threshold")]
     min_confidence: f32,
-    #[serde(default)]
+    #[serde(default, alias = "invalidate_below_confidence")]
     stale_below_confidence: Option<f32>,
     #[serde(default)]
     ttl_ms: Option<u64>,
@@ -294,8 +295,13 @@ impl EnvDetectionKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EnvDetectionCandidate {
     value: String,
+    #[serde(alias = "template")]
     template_path: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "roi",
+        deserialize_with = "deserialize_env_rect_option"
+    )]
     region: Option<EnvRect>,
     #[serde(default)]
     threshold: Option<f32>,
@@ -303,7 +309,7 @@ struct EnvDetectionCandidate {
     source: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct EnvRect {
     x: i32,
     y: i32,
@@ -349,15 +355,139 @@ fn load_env_catalog(env_dir: &Path) -> CliOutcome<EnvDetectionCatalog> {
     let path = env_dir.join(ENV_DETECTION_CATALOG);
     let text = fs::read_to_string(&path)
         .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
-    let catalog: EnvDetectionCatalog = serde_json::from_str(&text)
+    let value: Value = serde_json::from_str(&text)
         .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", path.display())))?;
+    let catalog = parse_env_catalog_value(value).map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse {} as env detection catalog: {err}",
+            path.display()
+        ))
+    })?;
     validate_catalog(&catalog)?;
     Ok(catalog)
+}
+
+fn parse_env_catalog_value(value: Value) -> Result<EnvDetectionCatalog, String> {
+    match serde_json::from_value::<EnvDetectionCatalog>(value.clone()) {
+        Ok(catalog) => Ok(catalog),
+        Err(structured_err) => normalize_flat_env_catalog(value).map_err(|flat_err| {
+            format!("structured parse failed: {structured_err}; flat parse failed: {flat_err}")
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FlatEnvDetectionCatalog {
+    #[serde(default)]
+    schema_version: Option<String>,
+    #[serde(default, alias = "game_id")]
+    game: Option<String>,
+    #[serde(default, alias = "server_id")]
+    server: Option<String>,
+    #[serde(default)]
+    resource_pack_id: Option<String>,
+    #[serde(default)]
+    match_metric: Option<String>,
+    #[serde(default)]
+    detections: Vec<FlatEnvDetectionItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FlatEnvDetectionItem {
+    #[serde(alias = "id", alias = "task_id")]
+    detector_id: String,
+    #[serde(default, alias = "version")]
+    detector_version: Option<String>,
+    #[serde(default, alias = "game", alias = "game_id")]
+    game_id: Option<String>,
+    #[serde(default, alias = "server", alias = "server_id")]
+    server_id: Option<String>,
+    #[serde(default)]
+    resource_pack_id: Option<String>,
+    #[serde(default)]
+    match_metric: Option<String>,
+    #[serde(flatten)]
+    key: EnvDetectionKey,
+}
+
+fn normalize_flat_env_catalog(value: Value) -> Result<EnvDetectionCatalog, String> {
+    let flat: FlatEnvDetectionCatalog = serde_json::from_value(value)
+        .map_err(|err| format!("invalid flat env detection catalog: {err}"))?;
+    let mut detectors = BTreeMap::<String, EnvDetector>::new();
+    for item in flat.detections {
+        let detector_id = item.detector_id.trim().to_string();
+        if detector_id.is_empty() {
+            return Err("flat env detection item has an empty detector_id".to_string());
+        }
+        let candidate = EnvDetector {
+            id: detector_id.clone(),
+            version: item.detector_version,
+            game_id: item.game_id.or_else(|| flat.game.clone()),
+            server_id: item.server_id.or_else(|| flat.server.clone()),
+            resource_pack_id: item
+                .resource_pack_id
+                .or_else(|| flat.resource_pack_id.clone()),
+            match_metric: item.match_metric.or_else(|| flat.match_metric.clone()),
+            keys: Vec::new(),
+        };
+        let detector = detectors
+            .entry(detector_id.clone())
+            .or_insert_with(|| candidate.clone());
+        ensure_flat_detector_metadata_matches(detector, &candidate)?;
+        detector.keys.push(item.key);
+    }
+    Ok(EnvDetectionCatalog {
+        schema_version: flat.schema_version,
+        detections: detectors.into_values().collect(),
+    })
+}
+
+fn ensure_flat_detector_metadata_matches(
+    current: &EnvDetector,
+    candidate: &EnvDetector,
+) -> Result<(), String> {
+    let fields = [
+        (
+            "version",
+            current.version.as_ref(),
+            candidate.version.as_ref(),
+        ),
+        (
+            "game_id",
+            current.game_id.as_ref(),
+            candidate.game_id.as_ref(),
+        ),
+        (
+            "server_id",
+            current.server_id.as_ref(),
+            candidate.server_id.as_ref(),
+        ),
+        (
+            "resource_pack_id",
+            current.resource_pack_id.as_ref(),
+            candidate.resource_pack_id.as_ref(),
+        ),
+        (
+            "match_metric",
+            current.match_metric.as_ref(),
+            candidate.match_metric.as_ref(),
+        ),
+    ];
+    for (field, left, right) in fields {
+        if left != right {
+            return Err(format!(
+                "flat env detector '{}' has conflicting {field}",
+                current.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_catalog(catalog: &EnvDetectionCatalog) -> CliOutcome<()> {
     if let Some(schema_version) = &catalog.schema_version
         && schema_version != "env-detection.v1"
+        && schema_version != "env-detections.v1"
     {
         return Err(CliError::usage(format!(
             "unsupported env detection schema_version '{schema_version}'"
@@ -392,6 +522,48 @@ fn validate_catalog(catalog: &EnvDetectionCatalog) -> CliOutcome<()> {
         }
     }
     Ok(())
+}
+
+fn deserialize_env_rect_option<'de, D>(deserializer: D) -> Result<Option<EnvRect>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    env_rect_from_value(&value).map_err(serde::de::Error::custom)
+}
+
+fn env_rect_from_value(value: &Value) -> Result<Option<EnvRect>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(text) if text == "full_frame" => Ok(None),
+        Value::Object(_) => {
+            let rect: EnvRect = serde_json::from_value(value.clone())
+                .map_err(|err| format!("invalid env rect object: {err}"))?;
+            Ok(Some(rect))
+        }
+        Value::Array(values) => {
+            if values.len() != 4 {
+                return Err("env roi array must contain exactly [x, y, width, height]".to_string());
+            }
+            let mut numbers = [0i32; 4];
+            for (index, value) in values.iter().enumerate() {
+                let number = value
+                    .as_i64()
+                    .ok_or_else(|| "env roi values must be integers".to_string())?;
+                numbers[index] = i32::try_from(number)
+                    .map_err(|_| "env roi value is outside i32 range".to_string())?;
+            }
+            Ok(Some(EnvRect {
+                x: numbers[0],
+                y: numbers[1],
+                width: numbers[2],
+                height: numbers[3],
+            }))
+        }
+        _ => Err("env region must be an object, null, full_frame, or roi array".to_string()),
+    }
 }
 
 fn validate_detection_key(detector: &EnvDetector, key: &EnvDetectionKey) -> CliOutcome<()> {
@@ -1029,6 +1201,57 @@ mod tests {
         assert_eq!(
             path.file_name().and_then(|value| value.to_str()),
             Some("result.json")
+        );
+    }
+
+    #[test]
+    fn flat_resource_authored_catalog_is_normalized() {
+        let temp = TempDir::new().unwrap();
+        let env_dir = temp.path().join(ENV_DETECTION_DIR);
+        fs::create_dir_all(&env_dir).unwrap();
+        fs::write(
+            env_dir.join(ENV_DETECTION_CATALOG),
+            r#"{
+                "schema_version": "env-detections.v1",
+                "game": "arknights",
+                "detections": [{
+                    "detector_id": "detect_ui_theme",
+                    "detector_version": "1",
+                    "key": "ui_theme",
+                    "method": "any_of",
+                    "threshold": 0.7,
+                    "invalidate_below_confidence": 0.6,
+                    "ttl_ms": null,
+                    "allowed_values": ["Default"],
+                    "candidates": [{
+                        "value": "Default",
+                        "template": "hometheme/Default/Terminal.png",
+                        "roi": [844, 58, 268, 272]
+                    }]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let catalog = load_env_catalog(&env_dir).unwrap();
+        let detector = catalog.detector("detect_ui_theme").unwrap();
+        assert_eq!(detector.game_id.as_deref(), Some("arknights"));
+        assert_eq!(detector.version(), "1");
+        assert_eq!(detector.keys.len(), 1);
+        let key = &detector.keys[0];
+        assert_eq!(key.key, "ui_theme");
+        assert_eq!(key.min_confidence, 0.7);
+        assert_eq!(key.stale_below_confidence, Some(0.6));
+        let candidate = &key.candidates[0];
+        assert_eq!(candidate.template_path, "hometheme/Default/Terminal.png");
+        assert_eq!(
+            candidate.region,
+            Some(EnvRect {
+                x: 844,
+                y: 58,
+                width: 268,
+                height: 272
+            })
         );
     }
 
