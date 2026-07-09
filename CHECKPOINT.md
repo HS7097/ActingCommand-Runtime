@@ -16,6 +16,8 @@
 - Live AK `home -> depot` revalidation was not run in this local node; automated/unit/workspace verification passed.
 - Implementation commit `80c98f194ba6d9f868c56aaaa20901814c04464a` was created for this milestone.
 - Checkpoint tag target: `checkpoint/20260709-issues29-30-guarded-retry-recovery`.
+- GitHub issue #29 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921623260`.
+- GitHub issue #30 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921624073`.
 
 ### Files changed
 
@@ -27,6 +29,8 @@
 
 - `gh issue view 29 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments`
 - `gh issue view 30 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments`
+- `gh issue comment 29 --repo HS7097/ActingCommand-Runtime --body "..."`
+- `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body "..."`
 - `Get-Content -Raw C:\合作工作区\ActingCommand\FIX-runtime-guarded-absolute-click-drift-oob.md`
 - `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-exec-retry-recovery-MAA-ALAS.md`
 - `cargo test -p actingcommand-actinglab guarded_absolute_clicks_use_declared_coordinates_without_matched_delta -- --nocapture`
