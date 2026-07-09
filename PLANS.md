@@ -15,6 +15,7 @@ The active user-approved Runtime work covers GitHub issues #29 and #30:
 - Technical source of truth:
   - `C:\合作工作区\ActingCommand\FIX-runtime-guarded-absolute-click-drift-oob.md`
   - `C:\合作工作区\ActingCommand\TASK-exec-retry-recovery-MAA-ALAS.md`
+  - `C:\合作工作区\ActingCommand\FIX-30-navigation-retry-inert-by-default.md`
 
 Implemented direction:
 
@@ -30,13 +31,15 @@ Implemented direction:
 - Selected task packages prune non-resident `page_rules` pages and soft optional/forbidden targets while keeping full-pack validation strict.
 - Runtime candidate-page discovery includes package-resident `page_rules` pages, allowing recovery bundles to recognize error/current pages that are not direct operation `from` pages.
 - Runtime operation selection prefers page-specific operations before `from: any` fallback operations so universal recovery steps do not loop over generic actions.
-- Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics.
+- Existing schema `0.3` page-transition operations now default to navigation-only retry semantics structurally: a non-empty `to` page with empty `consumes` and `produces` is retryable even when `purpose` is `Navigate ...` and no schema `0.6` flow fields are present.
+- Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics; `target` uses the deterministic uniform point sampler, while `target_center` now clicks the matched rectangle center.
 - The retry/recovery branch policy is factored and covered by regression tests for retry, recover, fail, error-page recovery, exhausted attempts, and non-retryable side effects.
 
 Current boundary:
 
 - Deterministic failures such as package validation errors, guard mismatch, resource drift, invalid coordinates, lease/security failures, and missing recovery packages remain fail-loud and are not hidden behind fake success.
-- Runtime implementation is covered by unit/workspace verification; live AK `home -> depot`, non-edge `home -> mission`, full-pack `return_home`, and forced `error_page -> return_home -> retry original task` were revalidated on `127.0.0.1:16416` with MaaTouch.
+- Runtime implementation is covered by unit/workspace verification; live AK `home -> depot`, non-edge `home -> mission`, full-pack `return_home`, and forced `error_page -> return_home -> retry original task` were revalidated on `127.0.0.1:16416` with MaaTouch before the default-retry follow-up.
+- The default-retry follow-up is covered by focused flow-policy tests and workspace gates; a fresh AK `open_depot` live rerun from home still depends on the device being returned to a stable home page or the current `return_home` resource route being repaired for the observed non-home screen.
 - Current AK `open_friends` / `open_operator` resource routes still need resource-route follow-up, but #29 now has separate non-edge live evidence through `open_mission`.
 - No UI, SQLite, OCR, new capture backend, scheduler, game logic, resource-repository modification, or upstream source import is part of this node.
 

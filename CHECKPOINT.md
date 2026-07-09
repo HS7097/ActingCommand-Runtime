@@ -1,5 +1,75 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 30 navigation retry default follow-up
+
+### Current status
+
+- GitHub issue #30 was reopened with the approved follow-up `C:\合作工作区\ActingCommand\FIX-30-navigation-retry-inert-by-default.md`.
+- Root cause confirmed: existing resource packages such as AK `open_depot` are schema `0.3`, have `purpose: "Navigate from ..."`, no `effect`, no `retryable`, no `max_attempts`, and empty `consumes` / `produces`; the previous `purpose.contains("navigation")` heuristic left them `retryable=false` and `max_attempts=1`.
+- Runtime `Operation::is_navigation_only` now uses structural page-transition semantics: non-empty `to` page plus empty `consumes` and `produces`, or explicit `effect: "navigation_only"`.
+- Non-navigation/no-target operations remain non-retryable by default; operations with resource side effects remain non-retryable by default.
+- `target_center` was fixed for the Phase 3 follow-up noted in the task file: it now clicks the matched rectangle center, while `target` keeps the deterministic uniform point sampler.
+- Resource repositories were mirrored before using resource content:
+  - Arknights `d711f0b`
+  - AzurLane `8885eee4`
+  - BlueArchive `1cbcf3f`
+- AK `open_depot` package build with `--include-recovery` passed against the current Arknights resource repository.
+- Fresh live AK `open_depot` from home was not completed in this node because `127.0.0.1:16416` was not on AK home; `current-page` reported a non-home page and the attempted full-pack `return_home` reset failed at the `quickswitch_to_home` pre-execution guard after the route observed `current_page=gacha`.
+
+### Files changed
+
+- `apps/actinglab/src/lab_run.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 30 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments,url`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\FIX-30-navigation-retry-inert-by-default.md`
+- `git fetch --prune --tags origin; git pull --ff-only origin main; git status --short --branch; git rev-parse --short HEAD` in Runtime and the three resource repositories.
+- `cargo test -p actingcommand-actinglab flow_policy_treats_structural_page_transition_as_navigation -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_center_click_uses_matched_rect_center_with_optional_offset -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_click_uses_matched_rect_with_optional_offset -- --nocapture`
+- `cargo test -p actingcommand-actinglab flow_policy_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_click_ -- --nocapture`
+- `cargo build --release -p actingcommand-actinglab`
+- `target\release\actinglab.exe --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_depot --game arknights --server cn --include-recovery --out target\issue30-retry-inert\ak-open-depot-recovery.zip`
+- `target\release\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn current-page --capture`
+- `target\release\actinglab.exe --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --entry-task return_home --execution-mode navigable_route --out target\issue30-retry-inert\ak-full-return-home.zip`
+- `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-return-home-reset lab run --zip target\issue30-retry-inert\ak-full-return-home.zip --out target\issue30-retry-inert\ak-full-return-home-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- Focused flow-policy regression passed: schema `0.3`-style `Navigate from ...` operations with a non-empty `to` page now default to `retryable=true` and `max_attempts=3`.
+- Focused non-target regression passed: operations without a target page stay `retryable=false` and `max_attempts=1`.
+- Existing side-effect regression still passes: operations with `consumes` / `produces` stay `retryable=false` by default.
+- Focused `target` / `target_center` regressions passed; `target_center` now records `center_point_v1` and clicks the matched rectangle center.
+- `cargo test --workspace` passed with `666` workspace tests.
+- Final gates passed:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `cargo clippy -p actingcommand-actinglab -- -D warnings`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo build --release -p actingcommand-actinglab`
+
+### Current blocker
+
+- No blocker for the Runtime default-retry code fix.
+- Live AK `open_depot` rerun from home is blocked by device/resource state: the 16416 instance was not on AK home, and the current `return_home` route did not successfully reset from the observed non-home screen.
+
+### Next step
+
+1. Commit and push this Runtime follow-up without closing issue #30.
+2. Comment on issue #30 with the implementation and validation evidence, leaving the issue open for Alice acceptance.
+3. Treat the fresh AK `open_depot` live rerun from a stable home page as acceptance follow-up once the device/resource route is ready.
+
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 
 ### Current status

@@ -2790,9 +2790,12 @@ impl Operation {
 
     fn is_navigation_only(&self) -> bool {
         self.effect.as_deref() == Some("navigation_only")
-            || (self.consumes.is_empty()
-                && self.produces.is_empty()
-                && self.purpose.to_ascii_lowercase().contains("navigation"))
+            || (self
+                .to
+                .as_deref()
+                .is_some_and(|page| !page.trim().is_empty())
+                && self.consumes.is_empty()
+                && self.produces.is_empty())
     }
 }
 
@@ -3127,7 +3130,12 @@ impl OperationClick {
                     matched_rect
                 };
                 validate_click_rect(rect, resolution, false)?;
-                Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
+                let point = if self.kind == "target_center" {
+                    actual_center_point(rect, seed)
+                } else {
+                    actual_click_point(rect, seed)
+                };
+                Ok(LabInputAction::Tap(point))
             }
             "drag" => {
                 let declared_from = self
@@ -3312,6 +3320,16 @@ fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
         rect,
         x: rect.x,
         y: rect.y,
+    }
+}
+
+fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
+    ActualClickPoint {
+        seed,
+        algorithm: "center_point_v1",
+        rect,
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
     }
 }
 
@@ -5590,7 +5608,7 @@ mod tests {
     }
 
     #[test]
-    fn target_click_uses_matched_rect_center_with_optional_offset() {
+    fn target_click_uses_matched_rect_with_optional_offset() {
         let control = test_control();
         let mut operation = test_operation(Some("terminal"), None);
         operation.unguarded_trusted_coordinate = false;
@@ -5647,6 +5665,73 @@ mod tests {
                 assert_eq!(point.rect.y, 403);
                 assert_eq!(point.rect.width, 10);
                 assert_eq!(point.rect.height, 8);
+                assert_eq!(point.algorithm, "xorshift64_uniform_rect_v1");
+            }
+            _ => panic!("expected tap"),
+        }
+    }
+
+    #[test]
+    fn target_center_click_uses_matched_rect_center_with_optional_offset() {
+        let control = test_control();
+        let mut operation = test_operation(Some("terminal"), None);
+        operation.unguarded_trusted_coordinate = false;
+        operation.guard = Some(OperationGuard {
+            page_id: "home".to_string(),
+            target_id: "target/button".to_string(),
+            expected_rect: PackRect {
+                x: 100,
+                y: 200,
+                width: 20,
+                height: 30,
+            },
+            verify_template: Some("target/button".to_string()),
+            color_probe: None,
+        });
+        operation.click = OperationClick {
+            kind: "target_center".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: Some(PackRect {
+                x: 2,
+                y: 3,
+                width: 10,
+                height: 8,
+            }),
+            target_id: Some("target/button".to_string()),
+        };
+
+        operation.validate(&control).expect("target center valid");
+        let action = operation
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&template_target_evaluation(
+                    "target/button",
+                    PackRect {
+                        x: 300,
+                        y: 400,
+                        width: 20,
+                        height: 30,
+                    },
+                )),
+            )
+            .expect("target center input action");
+
+        match action {
+            LabInputAction::Tap(point) => {
+                assert_eq!(point.rect.x, 302);
+                assert_eq!(point.rect.y, 403);
+                assert_eq!(point.rect.width, 10);
+                assert_eq!(point.rect.height, 8);
+                assert_eq!(point.algorithm, "center_point_v1");
+                assert_eq!(point.x, 307);
+                assert_eq!(point.y, 407);
             }
             _ => panic!("expected tap"),
         }
@@ -6106,6 +6191,25 @@ mod tests {
 
         assert!(!side_effect_policy.retryable);
         assert_eq!(side_effect_policy.max_attempts, 1);
+    }
+
+    #[test]
+    fn flow_policy_treats_structural_page_transition_as_navigation() {
+        let defaults = OperationDefaults::default();
+        let mut navigation = test_operation(Some("depot"), None);
+        navigation.purpose = "Navigate from home to the Depot page".to_string();
+
+        let navigation_policy = navigation.flow_policy(defaults);
+
+        assert!(navigation_policy.retryable);
+        assert_eq!(navigation_policy.max_attempts, 3);
+
+        let mut no_target_page = test_operation(None, None);
+        no_target_page.purpose = "Navigate from home to nowhere".to_string();
+        let no_target_policy = no_target_page.flow_policy(defaults);
+
+        assert!(!no_target_policy.retryable);
+        assert_eq!(no_target_policy.max_attempts, 1);
     }
 
     #[test]
