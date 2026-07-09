@@ -28,6 +28,7 @@ Implemented direction:
 - Resolve `{env:<key>}` markers during selected `package build-task` pack/operation assembly when an instance result exists, so instance-specific dry-run packages validate with concrete assets.
 - Support `target` / `target_center` navigation clicks that resolve at execution time through a recognition target match, with destructive-overlap checks applied to the resolved concrete click point before device input.
 - Record `env_detected` and `env_resolved` stages through the existing semantic ledger path when a run root is configured.
+- Surface implicit `{env:<key>}` consumption in normal semantic command and Lab2 outputs through `env_resolved`, and record `env_resolved` drive records when those commands write a runtime ledger.
 - Use atomic JSON publication plus a per-result lock file for concurrent detection writes.
 
 Current boundary:
@@ -36,7 +37,7 @@ Current boundary:
 - Scheduler auto-triggering, SwitchTheme recovery, OCR, SQLite, UI, and game-specific logic remain out of scope.
 - Interactive touch-based detection steps are not implemented yet; current detection candidates use recognition templates.
 - The current mirrored Arknights resource repository now contains `ours/env-detection` and `ours/hometheme`.
-- Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, `{env:ui_theme}` resolution to an existing theme resource path, direct `recognize` loading of an env-backed target, fail-loud missing-env loading, and `package build-task --dry-run` for the AK env-backed home routes.
+- Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, `{env:ui_theme}` resolution to an existing theme resource path, direct `recognize` loading of an env-backed target, fail-loud missing-env loading, `package build-task --dry-run` for the AK env-backed home routes, and a `detect-page --run-root ... --capture` smoke that wrote `env_resolved` into the runtime ledger.
 - Resource repositories were mirrored before this resource-dependent task. The Arknights resource repository required a small catalog correction for Dreamland/LoneTrail Day/Night template paths; Runtime remains game-agnostic.
 
 ## Current guarded-click and retry/recovery execution node

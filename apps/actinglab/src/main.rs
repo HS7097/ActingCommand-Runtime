@@ -6303,25 +6303,29 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let target = flags.required("--target")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
-    let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
+    let loaded =
+        load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
+    let evaluator = loaded.evaluator;
     if is_click_only_target(&evaluator, &target)? {
         let click = evaluator
             .get_click_target(&target)
             .map_err(|err| CliError::usage(err.to_string()))?;
-        return Ok(json!({
+        let mut payload = json!({
             "target": target,
             "kind": "click_only",
             "evaluated": false,
             "click": rect_json(click),
             "match_metric": match_metric_name(evaluator.default_match_metric())
-        }));
+        });
+        attach_env_resolved(&mut payload, &loaded.env_resolved);
+        return Ok(payload);
     }
     let scene = load_scene_from_flags(global, &flags)?;
     let evaluation = evaluator
         .evaluate_target(&scene, &target)
         .map_err(|err| CliError::usage(err.to_string()))?;
     let evaluation_json = target_eval_json(&evaluation);
-    Ok(json!({
+    let mut payload = json!({
         "target": target,
         "passed": evaluation.passed,
         "message": evaluation.message,
@@ -6330,7 +6334,9 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "color": evaluation_json.get("color").cloned(),
         "evaluation": evaluation_json,
         "match_metric": match_metric_name(evaluator.default_match_metric())
-    }))
+    });
+    attach_env_resolved(&mut payload, &loaded.env_resolved);
+    Ok(payload)
 }
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6345,13 +6351,14 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
             CliError::usage("detect-page requires --pages or --resource-root --game")
         })?;
-        let (evaluator, detector) = load_evaluator_and_detector(
+        let (evaluator, detector, env_resolved) = load_evaluator_and_detector_with_env(
             global,
             &flags,
             &resources.pack_path,
             &resources.pack_root,
             pages_path,
         )?;
+        record_env_resolved(&mut ledger, "detect-page", &env_resolved);
         detector
             .validate(&evaluator)
             .map_err(|err| CliError::usage(err.to_string()))?;
@@ -6364,6 +6371,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         let mut payload = page_detection_json(&outcome);
         payload["req_id"] = json!(ledger.req_id.clone());
         payload["reco_id"] = json!(reco_id.clone());
+        attach_env_resolved(&mut payload, &env_resolved);
         ledger.record_drive(json!({
             "stage": "recognition",
             "command": "detect-page",
@@ -6383,10 +6391,13 @@ fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value
         return submit_readonly_session_request(global, &flags, "current_page", args);
     }
     let config = read_user_config()?;
-    let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+    let (evaluator, detector, env_resolved) =
+        load_semantic_detector_with_env(global, &config, &flags)?;
     let scene = load_scene_from_flags(global, &flags)?;
     let outcome = detect_current_page(&evaluator, &detector, &scene)?;
-    Ok(page_detection_json(&outcome))
+    let mut payload = page_detection_json(&outcome);
+    attach_env_resolved(&mut payload, &env_resolved);
+    Ok(payload)
 }
 
 fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6397,7 +6408,9 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
     let target = target_argument(&flags, "is-visible")?;
     let config = read_user_config()?;
     let resources = recognition_resources(global, &config, &flags, false)?;
-    let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
+    let loaded =
+        load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
+    let evaluator = loaded.evaluator;
     if evaluator
         .target_kind(&target)
         .map_err(|err| CliError::usage(err.to_string()))?
@@ -6411,12 +6424,14 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
     let evaluation = evaluator
         .evaluate_target(&scene, &target)
         .map_err(|err| CliError::usage(err.to_string()))?;
-    Ok(json!({
+    let mut payload = json!({
         "target": target,
         "visible": evaluation.passed,
         "evaluation": target_eval_json(&evaluation),
         "match_metric": match_metric_name(evaluator.default_match_metric())
-    }))
+    });
+    attach_env_resolved(&mut payload, &loaded.env_resolved);
+    Ok(payload)
 }
 
 fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -6502,6 +6517,45 @@ impl SemanticLedgerContext {
             payload,
         ));
     }
+}
+
+fn env_resolved_json(values: &[env_detection::ResolvedEnvValue]) -> Value {
+    Value::Array(
+        values
+            .iter()
+            .map(|value| {
+                json!({
+                    "key": value.key,
+                    "value": value.value,
+                    "confidence": value.confidence,
+                    "source": value.source,
+                    "source_result": value.source_result
+                })
+            })
+            .collect(),
+    )
+}
+
+fn attach_env_resolved(payload: &mut Value, values: &[env_detection::ResolvedEnvValue]) {
+    if values.is_empty() {
+        return;
+    }
+    payload["env_resolved"] = env_resolved_json(values);
+}
+
+fn record_env_resolved(
+    ledger: &mut SemanticLedgerContext,
+    command: &str,
+    values: &[env_detection::ResolvedEnvValue],
+) {
+    if values.is_empty() {
+        return;
+    }
+    ledger.record_drive(json!({
+        "stage": "env_resolved",
+        "command": command,
+        "keys": env_resolved_json(values)
+    }));
 }
 
 fn finish_semantic_result_with_ledger(
@@ -6742,7 +6796,10 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
 
         let config = read_user_config()?;
         let resources = recognition_resources(global, &config, &flags, false)?;
-        let evaluator = load_evaluator(global, &flags, &resources.pack_path, &resources.pack_root)?;
+        let loaded =
+            load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
+        let evaluator = loaded.evaluator;
+        record_env_resolved(&mut ledger, "tap-target", &loaded.env_resolved);
         if evaluator
             .target_kind(&target)
             .map_err(|err| CliError::usage(err.to_string()))?
@@ -6780,7 +6837,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
         let point = rect_center(click)?;
         let action_id = ledger.issue(IdKind::Action);
         if dry_run {
-            let payload = json!({
+            let mut payload = json!({
                 "status": "planned",
                 "executed": false,
                 "target": target.clone(),
@@ -6792,6 +6849,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
                 "evaluation": target_eval_json(&evaluation),
                 "safety_gate": "navigation_only_default"
             });
+            attach_env_resolved(&mut payload, &loaded.env_resolved);
             ledger.record_drive(json!({
                 "stage": "action_plan",
                 "command": "tap-target",
@@ -6805,7 +6863,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
         }
 
         let action_result = send_semantic_tap(global, &config, point)?;
-        let payload = json!({
+        let mut payload = json!({
             "status": "sent",
             "executed": true,
             "target": target.clone(),
@@ -6818,6 +6876,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
             "safety_gate": "navigation_only_default",
             "device": action_result
         });
+        attach_env_resolved(&mut payload, &loaded.env_resolved);
         ledger.record_drive(json!({
             "stage": "action",
             "command": "tap-target",
@@ -6850,7 +6909,9 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         }
 
         let config = read_user_config()?;
-        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let (evaluator, detector, env_resolved) =
+            load_semantic_detector_with_env(global, &config, &flags)?;
+        record_env_resolved(&mut ledger, "navigate", &env_resolved);
         let graph = load_navigation_graph(global, &config, &flags)?;
         let scene = load_scene_from_flags(global, &flags)?;
         let start = detect_current_page(&evaluator, &detector, &scene)?;
@@ -6872,7 +6933,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         }
         let target_page = canonical_navigation_page(&graph, &to);
         if start.page == target_page {
-            return Ok(json!({
+            let mut payload = json!({
                 "status": "already_at_target",
                 "executed": false,
                 "req_id": ledger.req_id.clone(),
@@ -6880,7 +6941,9 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
                 "from": start.page,
                 "to": target_page,
                 "route": []
-            }));
+            });
+            attach_env_resolved(&mut payload, &env_resolved);
+            return Ok(payload);
         }
         let route =
             find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
@@ -6905,7 +6968,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             .map(|(edge, action_id)| navigation_edge_json_with_action_id(edge, action_id))
             .collect::<Vec<_>>();
         if dry_run {
-            let payload = json!({
+            let mut payload = json!({
                 "status": "planned",
                 "executed": false,
                 "req_id": ledger.req_id.clone(),
@@ -6915,6 +6978,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
                 "route": route_json,
                 "safety_gate": "navigation_only_default"
             });
+            attach_env_resolved(&mut payload, &env_resolved);
             ledger.record_drive(json!({
                 "stage": "action_plan",
                 "command": "navigate",
@@ -6941,7 +7005,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         for (step, action_id) in executed.iter_mut().zip(action_ids.iter()) {
             step["action_id"] = json!(action_id);
         }
-        let payload = json!({
+        let mut payload = json!({
             "status": "arrived",
             "executed": true,
             "req_id": ledger.req_id.clone(),
@@ -6950,6 +7014,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "steps": executed,
             "safety_gate": "navigation_only_default"
         });
+        attach_env_resolved(&mut payload, &env_resolved);
         ledger.record_drive(json!({
             "stage": "action",
             "command": "navigate",
@@ -7336,11 +7401,24 @@ fn load_semantic_detector(
     config: &UserConfig,
     flags: &FlagArgs,
 ) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {
+    let (evaluator, detector, _) = load_semantic_detector_with_env(global, config, flags)?;
+    Ok((evaluator, detector))
+}
+
+fn load_semantic_detector_with_env(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    flags: &FlagArgs,
+) -> CliOutcome<(
+    RecognitionEvaluator,
+    PageDetector,
+    Vec<env_detection::ResolvedEnvValue>,
+)> {
     let resources = recognition_resources(global, config, flags, true)?;
     let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
         CliError::usage("semantic page commands require --pages or --resource-root --game")
     })?;
-    let (evaluator, detector) = load_evaluator_and_detector(
+    let (evaluator, detector, env_resolved) = load_evaluator_and_detector_with_env(
         global,
         flags,
         &resources.pack_path,
@@ -7350,7 +7428,7 @@ fn load_semantic_detector(
     detector
         .validate(&evaluator)
         .map_err(|err| CliError::usage(err.to_string()))?;
-    Ok((evaluator, detector))
+    Ok((evaluator, detector, env_resolved))
 }
 
 fn detect_current_page(
@@ -26476,18 +26554,24 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
         .map_err(|err| CliError::device(err.to_string()))
 }
 
-fn load_evaluator(
+struct LoadedEvaluator {
+    evaluator: RecognitionEvaluator,
+    env_resolved: Vec<env_detection::ResolvedEnvValue>,
+}
+
+fn load_evaluator_with_env(
     global: &GlobalOptions,
     flags: &FlagArgs,
     pack_path: &Path,
     pack_root: &Path,
-) -> CliOutcome<RecognitionEvaluator> {
+) -> CliOutcome<LoadedEvaluator> {
     let pack_json = fs::read_to_string(pack_path)
         .map_err(|err| CliError::usage(format!("failed to read {}: {err}", pack_path.display())))?;
     let mut pack_value: Value = serde_json::from_str(&pack_json).map_err(|err| {
         CliError::usage(format!("failed to parse {}: {err}", pack_path.display()))
     })?;
-    env_detection::resolve_env_markers_in_value(global, flags, pack_root, &mut pack_value)?;
+    let env_resolved =
+        env_detection::resolve_env_markers_in_value(global, flags, pack_root, &mut pack_value)?;
     let pack_json = serde_json::to_string(&pack_value).map_err(|err| {
         CliError::usage(format!(
             "failed to serialize resolved recognition pack {}: {err}",
@@ -26496,25 +26580,33 @@ fn load_evaluator(
     })?;
     let pack =
         load_pack_from_json_str(&pack_json).map_err(|err| CliError::usage(err.to_string()))?;
-    RecognitionEvaluator::new(pack_root.to_path_buf(), pack)
-        .map_err(|err| CliError::usage(err.to_string()))
+    let evaluator = RecognitionEvaluator::new(pack_root.to_path_buf(), pack)
+        .map_err(|err| CliError::usage(err.to_string()))?;
+    Ok(LoadedEvaluator {
+        evaluator,
+        env_resolved,
+    })
 }
 
-fn load_evaluator_and_detector(
+fn load_evaluator_and_detector_with_env(
     global: &GlobalOptions,
     flags: &FlagArgs,
     pack_path: &Path,
     pack_root: &Path,
     pages_path: &Path,
-) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {
-    let evaluator = load_evaluator(global, flags, pack_path, pack_root)?;
+) -> CliOutcome<(
+    RecognitionEvaluator,
+    PageDetector,
+    Vec<env_detection::ResolvedEnvValue>,
+)> {
+    let loaded = load_evaluator_with_env(global, flags, pack_path, pack_root)?;
     let pages_json = fs::read_to_string(pages_path).map_err(|err| {
         CliError::usage(format!("failed to read {}: {err}", pages_path.display()))
     })?;
     let pages =
         load_page_set_from_json_str(&pages_json).map_err(|err| CliError::usage(err.to_string()))?;
     let detector = PageDetector::new(pages).map_err(|err| CliError::usage(err.to_string()))?;
-    Ok((evaluator, detector))
+    Ok((loaded.evaluator, detector, loaded.env_resolved))
 }
 
 fn is_click_only_target(evaluator: &RecognitionEvaluator, target: &str) -> CliOutcome<bool> {

@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env-resolved ledger completion audit
+
+### Current status
+
+- Reopened issue #31 after the interrupted-session recovery and audited the local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` against current Runtime/resource state.
+- Confirmed the previous Runtime and Arknights resource commits were pushed:
+  - Runtime `ca78ab9` with tag `checkpoint/20260709-issue31-env-pointer-consumption`
+  - Arknights resources `2364644`
+- Found one remaining fidelity gap: implicit `{env:<key>}` consumption during recognition-pack loading resolved env values but did not expose the resolution through normal semantic/Lab outputs or ledger records.
+- Added `env_resolved` output projection for implicit env consumption in `recognize`, `detect-page`, `current-page`, `is-visible`, `tap-target`, `navigate`, and Lab2 `observe` / `do` / `ensure` / `wait`.
+- Added semantic ledger `env_resolved` drive records for `detect-page`, `tap-target`, and `navigate` when a run root is configured.
+- Added Lab2 ledger `env_resolved` drive records via existing payload-to-ledger projection.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/lab2_cli.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-actinglab`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- `cargo test -p actingcommand-actinglab package_build -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_center -- --nocapture`
+- `cargo run -q -p actingcommand-actinglab -- --json --run-root target\issue31-env-resolved-smoke --game arknights --server cn --instance 127.0.0.1:16416 --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --capture-backend adb detect-page --capture`
+- `Get-ChildItem ... target\issue31-env-resolved-smoke\sessions -Recurse -Filter ledger.jsonl | Select-String -Pattern 'env_resolved'`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab` passed with no warnings.
+- Focused env-detection tests passed: `9` tests.
+- Focused package-build tests passed: `6` tests.
+- Focused target-center test passed.
+- Read-only AK `detect-page --run-root ... --capture` on `127.0.0.1:16416` matched `arknights/home`.
+- The command output included `env_resolved` for `ui_theme=Siege`.
+- The generated runtime ledger contained a `drive` record with `stage=env_resolved`, `key=ui_theme`, `value=Siege`, confidence `0.9673871994018555`, and source result `detect_ui_theme@1783598095171`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo test --workspace` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+
+### Current blocker
+
+- No blocker for the current issue #31 env-resolved ledger completion gap.
+- Scheduler-triggered redetection, SwitchTheme fallback, touch-interactive detection tasks, BA/AzurLane detection catalogs, UI, OCR, and SQLite remain future work outside this node.
+
+### Next step
+
+1. Commit and push this Runtime fidelity fix with updated planning files.
+2. Update GitHub issue #31 with final evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env pointer runtime consumption and AK target-center routes
 
 ### Current status

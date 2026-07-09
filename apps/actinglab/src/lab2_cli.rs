@@ -105,7 +105,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     )?;
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let (evaluator, detector, env_resolved) =
+            load_semantic_detector_with_env(global, &config, &flags)?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
         let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
         let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
@@ -138,6 +139,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         if let Some(path) = frame_path {
             payload["frame_path"] = json!(path.display().to_string());
         }
+        attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
     finish_lab2_result_with_ledger(
@@ -221,7 +223,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let (evaluator, detector, env_resolved) =
+            load_semantic_detector_with_env(global, &config, &flags)?;
         guard_evaluable_target(&evaluator, &target, "do")?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
         let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
@@ -316,6 +319,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         if let Some(recovery_wait) = recovery_wait {
             payload["recovery_wait"] = recovery_wait;
         }
+        attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
     let mut records = arbitration.ledger_records;
@@ -400,7 +404,8 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let (evaluator, detector, env_resolved) =
+            load_semantic_detector_with_env(global, &config, &flags)?;
         let graph = load_navigation_graph(global, &config, &flags)?;
         let scene = load_lab2_scene(global, &flags)?;
         let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
@@ -421,6 +426,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             if let Some(recovery_wait) = recovery_wait {
                 payload["recovery_wait"] = recovery_wait;
             }
+            attach_env_resolved(&mut payload, &env_resolved);
             return Ok(payload);
         }
         if !start.matched {
@@ -469,6 +475,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             if let Some(recovery_wait) = recovery_wait {
                 payload["recovery_wait"] = recovery_wait;
             }
+            attach_env_resolved(&mut payload, &env_resolved);
             return Ok(payload);
         }
 
@@ -501,6 +508,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         if let Some(recovery_wait) = recovery_wait {
             payload["recovery_wait"] = recovery_wait;
         }
+        attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
     let mut records = arbitration.ledger_records;
@@ -548,7 +556,8 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     )?;
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector) = load_semantic_detector(global, &config, &flags)?;
+        let (evaluator, detector, env_resolved) =
+            load_semantic_detector_with_env(global, &config, &flags)?;
         let timeout = parse_optional_duration_ms(&flags, "--timeout-ms", 5_000)?;
         let poll = parse_optional_duration_ms(&flags, "--poll-ms", 200)?;
         let wait_ids = WaitIds {
@@ -570,6 +579,7 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         let mut payload = payload;
         payload["instance"] = json!(instance);
         payload["arbitration"] = arbitration_json(&arbitration.decision);
+        attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
     finish_lab2_result_with_ledger(
@@ -1631,6 +1641,20 @@ fn cli_error_details_or_projection(
 
 fn lab2_drive_records_from_payload(req_id: &str, payload: &Value) -> Vec<LedgerRecord> {
     let mut records = Vec::new();
+    if let Some(env_resolved) = payload.get("env_resolved") {
+        records.push(with_lab2_id_chain(
+            LedgerRecord::new(
+                LedgerRecordKind::Drive,
+                Some(req_id.to_string()),
+                json!({
+                    "stage": "env_resolved",
+                    "keys": env_resolved
+                }),
+            ),
+            req_id,
+            &[payload],
+        ));
+    }
     if let Some(guard) = payload.get("guard_result") {
         records.push(with_lab2_id_chain(
             LedgerRecord::new(
