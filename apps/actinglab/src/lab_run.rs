@@ -388,20 +388,17 @@ fn execute_lab_run(
             break;
         }
 
-        let operation = state
-            .resources
-            .operation_bundle
-            .operations
-            .iter()
-            .find(|operation| {
-                page_anchor_matches(&state.control.game, &current_page, &operation.from)
-            })
-            .ok_or_else(|| {
-                CliError::device(format!(
-                    "no operation can continue from page '{current_page}'"
-                ))
-            })?
-            .clone();
+        let operation = select_operation_for_page(
+            &state.control.game,
+            &current_page,
+            &state.resources.operation_bundle.operations,
+        )
+        .ok_or_else(|| {
+            CliError::device(format!(
+                "no operation can continue from page '{current_page}'"
+            ))
+        })?
+        .clone();
 
         match execute_operation_with_retries(
             ctx,
@@ -622,6 +619,23 @@ fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &s
         || observed_or_anchor == expected_anchor
         || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
         || observed_or_anchor == format!("{game}/{expected_anchor}")
+}
+
+fn select_operation_for_page<'a>(
+    game: &str,
+    current_page: &str,
+    operations: &'a [Operation],
+) -> Option<&'a Operation> {
+    operations
+        .iter()
+        .find(|operation| {
+            operation.from != "any" && page_anchor_matches(game, current_page, &operation.from)
+        })
+        .or_else(|| {
+            operations
+                .iter()
+                .find(|operation| page_anchor_matches(game, current_page, &operation.from))
+        })
 }
 
 fn matched_page_matches_anchor(
@@ -1223,14 +1237,25 @@ fn actionable_page_ids_for_bundle(
     if let Some(target_page) = &bundle.target_page {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
     }
+    for page_key in bundle.page_rules.keys() {
+        // Selected task packages may retain source page_rules for pages whose
+        // recognition assets were intentionally not packaged.
+        if let Ok(page) = resolve_detector_page_id(resources, &control.game, page_key)
+            && seen.insert(page.clone())
+        {
+            pages.push(page);
+        }
+    }
     for operation in &bundle.operations {
-        push_resolved_page_id(
-            &mut pages,
-            &mut seen,
-            resources,
-            &control.game,
-            &operation.from,
-        )?;
+        if operation.from != "any" {
+            push_resolved_page_id(
+                &mut pages,
+                &mut seen,
+                resources,
+                &control.game,
+                &operation.from,
+            )?;
+        }
         if let Some(to) = &operation.to {
             push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, to)?;
         }
@@ -1843,15 +1868,13 @@ fn run_recovery_bundle(
         {
             return Ok(Some(page));
         }
-        let operation = recovery_bundle
-            .operations
-            .iter()
-            .find(|operation| page_anchor_matches(&control.game, &page, &operation.from))
-            .ok_or_else(|| {
-                CliError::device(format!(
-                    "return_home recovery cannot continue from page '{page}'"
-                ))
-            })?;
+        let operation =
+            select_operation_for_page(&control.game, &page, &recovery_bundle.operations)
+                .ok_or_else(|| {
+                    CliError::device(format!(
+                        "return_home recovery cannot continue from page '{page}'"
+                    ))
+                })?;
         match execute_operation_with_retries(
             ctx,
             capture,
@@ -2295,6 +2318,8 @@ struct OperationBundle {
     max_task_retries: Option<u32>,
     #[serde(default)]
     on_exhausted: Option<String>,
+    #[serde(default)]
+    page_rules: BTreeMap<String, Value>,
     operations: Vec<Operation>,
 }
 
@@ -6498,6 +6523,29 @@ mod tests {
             "bluearchive/home",
             "home"
         ));
+    }
+
+    #[test]
+    fn operation_selection_prefers_specific_page_before_any_fallback() {
+        let generic = Operation {
+            id: "open_quickswitch".to_string(),
+            from: "any".to_string(),
+            to: Some("quickswitch_dropdown".to_string()),
+            ..test_operation(Some("quickswitch_dropdown"), None)
+        };
+        let specific = Operation {
+            id: "quickswitch_to_home".to_string(),
+            from: "quickswitch_dropdown".to_string(),
+            to: Some("home".to_string()),
+            ..test_operation(Some("home"), None)
+        };
+        let operations = vec![generic, specific];
+
+        let selected =
+            select_operation_for_page("arknights", "arknights/quickswitch_dropdown", &operations)
+                .unwrap();
+
+        assert_eq!(selected.id, "quickswitch_to_home");
     }
 
     #[test]

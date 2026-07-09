@@ -26,13 +26,17 @@ Implemented direction:
 - Navigation-only or explicitly retryable operations use bounded L0/L1 retry.
 - Retry, recovery, task retry exhaustion, and `paused_needs_human` states emit ledger/light-event records.
 - `return_home` recovery is loaded as a contained operation bundle and is bounded; recovery failure or exhausted task retry fails loud with `paused_needs_human`.
+- Selected task packages prune non-resident `page_rules` pages and soft optional/forbidden targets while keeping full-pack validation strict.
+- Runtime candidate-page discovery includes package-resident `page_rules` pages, allowing recovery bundles to recognize error/current pages that are not direct operation `from` pages.
+- Runtime operation selection prefers page-specific operations before `from: any` fallback operations so universal recovery steps do not loop over generic actions.
 - Recognition-target click modes (`target` and `target_center`) provide the Phase 3 explicit recognition-after-click path without changing absolute coordinate semantics.
 - The retry/recovery branch policy is factored and covered by regression tests for retry, recover, fail, error-page recovery, exhausted attempts, and non-retryable side effects.
 
 Current boundary:
 
 - Deterministic failures such as package validation errors, guard mismatch, resource drift, invalid coordinates, lease/security failures, and missing recovery packages remain fail-loud and are not hidden behind fake success.
-- Runtime implementation is covered by unit/workspace verification; live AK `home -> depot` revalidation has not been run in this local node and remains the next optional device acceptance step if required.
+- Runtime implementation is covered by unit/workspace verification; live AK `home -> depot` with recovery resources and full-pack `return_home` from depot were revalidated on `127.0.0.1:16416` with MaaTouch.
+- Current AK non-edge smoke using `open_friends` / `open_operator` did not pass with current resource routes and should be treated as resource-route follow-up evidence, not as a Runtime pass.
 - No UI, SQLite, OCR, new capture backend, scheduler, game logic, resource-repository modification, or upstream source import is part of this node.
 
 ## Current runtime-ledger unified fact source chain

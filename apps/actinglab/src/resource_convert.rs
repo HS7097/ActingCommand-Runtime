@@ -282,6 +282,7 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
+        let selected = self.prune_page_rules_for_selected_build(selected);
         let subset = Self {
             root: self.root.clone(),
             game: self.game.clone(),
@@ -296,6 +297,23 @@ impl OperationConverter {
         };
         subset.validate_bundles()?;
         subset.build_all()
+    }
+
+    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> Vec<Bundle> {
+        let available_pages = selected_available_page_ids(&self.game, &bundles);
+        let available_targets = selected_available_target_ids(&bundles);
+        bundles
+            .into_iter()
+            .map(|mut bundle| {
+                bundle.data = prune_selected_page_rules(
+                    &self.game,
+                    bundle.data,
+                    &available_pages,
+                    &available_targets,
+                );
+                bundle
+            })
+            .collect()
     }
 
     fn validate_bundles(&self) -> CliOutcome<()> {
@@ -1448,6 +1466,94 @@ fn add_page(
     order.push(page_id);
 }
 
+fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> BTreeSet<String> {
+    let mut pages = BTreeSet::new();
+    for bundle in bundles {
+        for key in ["entry_page", "target_page"] {
+            if let Some(page) = bundle.data.get(key).and_then(Value::as_str) {
+                insert_selected_page_id(game, page, &mut pages);
+            }
+        }
+        for operation in array_field(&bundle.data, "operations") {
+            for key in ["from", "to"] {
+                if let Some(page) = operation.get(key).and_then(Value::as_str) {
+                    insert_selected_page_id(game, page, &mut pages);
+                }
+            }
+        }
+    }
+    pages
+}
+
+fn insert_selected_page_id(game: &str, page: &str, pages: &mut BTreeSet<String>) {
+    if page.is_empty() || page == "any" {
+        return;
+    }
+    pages.insert(normalize_page_rule_id(game, page));
+}
+
+fn selected_available_target_ids(bundles: &[Bundle]) -> BTreeSet<String> {
+    let mut targets = BTreeSet::new();
+    for bundle in bundles {
+        for anchor in array_field(&bundle.data, "anchors") {
+            if let Some(anchor_id) = anchor.get("id").and_then(Value::as_str) {
+                targets.insert(anchor_target_id(anchor_id));
+            }
+        }
+        for operation in array_field(&bundle.data, "operations") {
+            if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
+                targets.insert(template_target_id(template));
+            }
+        }
+    }
+    targets
+}
+
+fn prune_selected_page_rules(
+    game: &str,
+    mut data: Value,
+    available_pages: &BTreeSet<String>,
+    available_targets: &BTreeSet<String>,
+) -> Value {
+    let Some(object) = data.as_object_mut() else {
+        return data;
+    };
+    let Some(rules_value) = object.remove("page_rules") else {
+        return data;
+    };
+    let Value::Object(rules) = rules_value else {
+        object.insert("page_rules".to_string(), rules_value);
+        return data;
+    };
+    let mut filtered = Map::new();
+    for (page_key, mut rule) in rules {
+        if !available_pages.contains(&normalize_page_rule_id(game, &page_key)) {
+            continue;
+        }
+        filter_selected_rule_targets(&mut rule, available_targets);
+        filtered.insert(page_key, rule);
+    }
+    if !filtered.is_empty() {
+        object.insert("page_rules".to_string(), Value::Object(filtered));
+    }
+    data
+}
+
+fn filter_selected_rule_targets(rule: &mut Value, available_targets: &BTreeSet<String>) {
+    let Some(object) = rule.as_object_mut() else {
+        return;
+    };
+    for field in ["optional", "forbidden"] {
+        if let Some(values) = object.get_mut(field).and_then(Value::as_array_mut) {
+            values.retain(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|target| available_targets.contains(target))
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PageRequirements {
     required: Vec<String>,
@@ -2302,6 +2408,96 @@ mod tests {
 
         let err = validate_page_rule_targets(&pack, &bundles).expect_err("missing target");
         assert!(err.message.contains("page/missing"));
+    }
+
+    #[test]
+    fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
+        let converter = OperationConverter {
+            root: PathBuf::from("."),
+            game: "arknights".to_string(),
+            server: "cn".to_string(),
+            locale: "zh-CN".to_string(),
+            coordinate_space: json!({"width":1280,"height":720}),
+            defaults: json!({"template_threshold":0.9}),
+            resource_ids: HashSet::new(),
+            bundles: vec![
+                Bundle {
+                    task_id: "open_depot".to_string(),
+                    dir: PathBuf::from("operations/open_depot"),
+                    data: json!({
+                        "schema_version": "0.5",
+                        "task_id": "open_depot",
+                        "anchors": [
+                            {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}},
+                            {"id":"depot","template":"assets/DEPOT.png","region":{"mode":"rect","rect":{"x":5,"y":6,"width":7,"height":8}}}
+                        ],
+                        "entry_page": "home",
+                        "target_page": "depot",
+                        "operations": [
+                            {"id":"home_to_depot","from":"home","to":"depot"}
+                        ]
+                    }),
+                },
+                Bundle {
+                    task_id: "return_home".to_string(),
+                    dir: PathBuf::from("operations/return_home"),
+                    data: json!({
+                        "schema_version": "0.5",
+                        "task_id": "return_home",
+                        "anchors": [
+                            {"id":"quickswitch_dropdown","template":"assets/QUICKSWITCH.png","region":{"mode":"rect","rect":{"x":9,"y":10,"width":11,"height":12}}}
+                        ],
+                        "entry_page": "any",
+                        "target_page": "home",
+                        "page_rules": {
+                            "depot": {"forbidden": ["page/home", "page/recruit"]},
+                            "recruit": {"forbidden": ["page/home"]},
+                            "quickswitch_dropdown": {"optional": ["page/depot", "page/friends"]}
+                        },
+                        "operations": [
+                            {"id":"open_quickswitch","from":"any","to":"quickswitch_dropdown"},
+                            {"id":"quickswitch_to_home","from":"quickswitch_dropdown","to":"home"}
+                        ]
+                    }),
+                },
+            ],
+            existing_navigation: None,
+            maa_task_overlays: HashMap::new(),
+        };
+
+        let bundles = converter.prune_page_rules_for_selected_build(converter.bundles.clone());
+        let recovery = bundles
+            .iter()
+            .find(|bundle| bundle.task_id == "return_home")
+            .unwrap();
+        let rules = recovery
+            .data
+            .get("page_rules")
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        assert!(rules.get("recruit").is_none());
+        assert_eq!(
+            rules
+                .get("depot")
+                .unwrap()
+                .get("forbidden")
+                .unwrap()
+                .as_array()
+                .unwrap(),
+            &vec![json!("page/home")]
+        );
+        assert_eq!(
+            rules
+                .get("quickswitch_dropdown")
+                .unwrap()
+                .get("optional")
+                .unwrap()
+                .as_array()
+                .unwrap(),
+            &vec![json!("page/depot")]
+        );
     }
 
     #[test]
