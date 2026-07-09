@@ -24,6 +24,7 @@
 - `{env:ui_theme}` resolved from the live result to `hometheme/Siege/DepotEnter.png`, and that resource file exists.
 - Runtime compatibility implementation was committed and pushed as `1e4dcaaeba30b7867fe2e39e18ee566a7c61f00f`.
 - Checkpoint tag `checkpoint/20260709-issue31-env-detection-ak-validation` was created and pushed for the Runtime implementation commit.
+- GitHub issue #31 was updated with validation comment `https://github.com/HS7097/ActingCommand-Runtime/issues/31#issuecomment-4924496336` and intentionally left open for Alice acceptance.
 
 ### Files changed
 
@@ -77,8 +78,8 @@
 
 ### Next step
 
-1. Comment issue #31 with the Runtime/resource commits and validation evidence, leaving the issue open for Alice acceptance unless explicitly asked to close it.
-2. Record the issue comment URL in this checkpoint.
+1. Await Alice acceptance of issue #31.
+2. Later phases can add scheduler auto-triggering, SwitchTheme recovery, touch-based interactive detection, and BA/AzurLane detection items when explicitly approved.
 
 ## 2026-07-09 issue 31 environment detection memory P1
 
