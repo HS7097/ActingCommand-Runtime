@@ -21,6 +21,8 @@
 - Added semantic ledger drive stages `env_detected` and `env_resolved` when a run root is configured.
 - Added atomic result writes with a per-result lock file and focused tests for lock conflict, stale hash, low confidence, pointer resolution, instance id safety, value validation, and write/read.
 - Runtime validation gates passed for formatting, diff whitespace, focused env-detection tests, `actingcommand-actinglab` clippy, full workspace tests, and full workspace clippy.
+- Implementation commit `b74b2cb711afba3b0297a48172f73a55b768585a` was created and pushed.
+- Checkpoint tag `checkpoint/20260709-issue31-env-detection-p1` was created and pushed.
 
 ### Files changed
 
