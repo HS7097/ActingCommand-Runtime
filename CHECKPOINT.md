@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 text consistency closeout
+
+### Current status
+
+- Continued issue #31 after code-level stale diagnostics were pushed.
+- Applied the suggestion screenshot's text-consistency cleanup to the local thick spec:
+  - `ours/env-detection/<instance>/result.json` -> `ours/env-detection/<instance_id>/result.json`;
+  - schema example now uses `instance_id` and no longer shows raw `127.0.0.1:16416`;
+  - chapter order is now `七、边界 / 设计点`, `八、Codex 硬化建议`, `九、分期`;
+  - ambiguous `五连全绿` wording is expanded into explicit validation commands and focused checks.
+- Updated GitHub issue #31 body with the same `instance_id`, result schema, Runtime constraints, current-state, and explicit validation wording.
+- Updated Arknights resource env-detection docs and catalog note to use `<instance_id>` instead of `<instance>`.
+- Pushed Arknights resource text closeout commit: `72e33fc Clarify env detection instance id docs`.
+- No Runtime source code was changed by this text closeout.
+
+### Files changed
+
+- Runtime:
+  - `CHECKPOINT.md`
+- Arknights resources:
+  - `ours/env-detection/README.md`
+  - `ours/env-detection/detections.json`
+- Cooperation workspace task file, not committed to Runtime:
+  - `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+
+### Resource mirrors used
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `2364644`, already up to date with `origin/main` before editing; pushed text-only update `72e33fc`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `58ed4b4c`, already up to date with `origin/main`; no files changed.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `d4288fa`, already up to date with `origin/main`; no files changed.
+
+### Commands run
+
+- `git fetch --prune --tags origin` in Runtime.
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments`
+- `git fetch origin --prune --tags; git pull --ff-only` in Arknights, AzurLane, and BlueArchive resource repositories.
+- `rg -n '<instance>|"instance"\s*:|五连全绿|## 七|## 八|## 九' ...`
+- `gh issue edit 31 --repo HS7097/ActingCommand-Runtime --body-file target\issue31-body-updated.md`
+- `Get-Content -Raw ours\env-detection\detections.json | ConvertFrom-Json`
+- `git diff --check` in Arknights resources.
+
+### Test results
+
+- Local thick spec no longer contains the stale `<instance>` path, raw endpoint schema example, or `五连全绿` wording.
+- GitHub issue #31 body no longer contains the stale `<instance>` path, raw endpoint schema example, or `五连全绿` wording.
+- Arknights `ours/env-detection/detections.json` still parses as JSON after the note-only update.
+- Arknights resource `git diff --check` passed.
+- Runtime source was not changed in this closeout; previous source validation remains from the `9ca4c28` / `8909e15` stale-diagnostics increment.
+
+### Current blocker
+
+- No blocker for text consistency closeout.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Arknights resource text consistency changes.
+2. Commit and push Runtime checkpoint update.
+3. Update GitHub issue #31 with the closeout evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env status/resolve stale diagnostics
 
 ### Current status
