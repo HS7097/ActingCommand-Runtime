@@ -10,6 +10,7 @@ members = [
     "crates/arbitrator",
     "crates/device",
     "crates/ledger",
+    "crates/lab",
     "crates/page-detector",
     "crates/pack-containment",
     "crates/onnx-provider-support",
@@ -34,6 +35,7 @@ actingcommand-contract = { path = "crates/actingcommand-contract" }
 actingcommand-arbitrator = { path = "crates/arbitrator" }
 actingcommand-device = { path = "crates/device" }
 actingcommand-ledger = { path = "crates/ledger" }
+actingcommand-lab = { path = "crates/lab" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }

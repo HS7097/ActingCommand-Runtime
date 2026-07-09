@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A2a is frozen; A2b implementation is next.
+Current node: A2b is implemented and verified; A3 environment detection migration is next.
 
 A1 delivers:
 
@@ -59,6 +59,15 @@ A2a interface freeze:
 - add only the missing ledger, clock, and config ports in Lab;
 - keep semantic errors in contract and the process exit-code table in the CLI adapter;
 - expose typed Lab use-case request/response methods and claim I5a state ownership only.
+
+A2b implementation:
+
+- promotes `actingcommand-contract` with the frozen generic envelope, semantic error classes, environment, drive, lease, arbitration, and ledger-projection DTOs;
+- adds `crates/lab` with the sole `Lab::new` construction path, explicit arbitrator/environment/session state domains, semantic request context, and typed projection facility;
+- freezes the Lab effect boundary as input/capture factories over existing device traits plus ledger, clock, and config ports;
+- routes ActingLab envelope construction, semantic errors, semantic ledger context, and receipt projection through the contract/Lab crates while leaving process exit-code mapping in the CLI adapter;
+- preserves every A1 golden protocol case and lowers the `main.rs` ratchet from `60161` to `59967` lines;
+- adds no runtime behavior, schema-version, scheduler, resident-process, UI, device, or game-logic change.
 
 ## Current environment detection memory and env pointer node
 

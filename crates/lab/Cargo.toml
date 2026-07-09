@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 [package]
-name = "actingcommand-contract"
+name = "actingcommand-lab"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -9,5 +9,11 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-contract = { workspace = true }
+actingcommand-device = { workspace = true }
+actingcommand-ledger = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A2b application-core skeleton complete
+
+### Current status
+
+- Added the frozen Lab protocol surface to `actingcommand-contract`: generic envelopes, semantic errors/classes, environment facts, needs-detection facts, drive records/stages, lease/arbitration facts, and ledger projection.
+- Added `crates/lab` as the application-core package with `Lab`, `LabState`, explicit arbitrator/environment/session stores, the five frozen port boundaries, semantic request/ledger context, and typed semantic projection.
+- Reused `actingcommand_device::InputBackend` and `CaptureBackend`; no competing input or capture operation interface was introduced.
+- Moved ActingLab envelope construction and semantic error definitions to contract, and moved semantic ledger context/projection facilities to Lab.
+- Kept the process exit-code mapping exclusively in the ActingLab CLI adapter.
+- Preserved `CLI_SCHEMA_VERSION=0.2`, all A1 output fields, all process exit codes, and all golden success/failure behavior.
+- Lowered the `apps/actinglab/src/main.rs` ratchet from `60161` to `59967` lines.
+- Added a scoped Clippy `result_large_err` allowance because the A2a-frozen public error DTO deliberately keeps unboxed protocol fields; no process behavior is affected.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/actingcommand-contract/Cargo.toml`
+- `crates/actingcommand-contract/src/lib.rs`
+- `crates/actingcommand-contract/src/lab.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/context.rs`
+- `crates/lab/src/ports.rs`
+- `crates/lab/src/projection.rs`
+- `crates/lab/src/state.rs`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/lab2_cli.rs`
+- `ratchet/main_rs_lines.txt`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check --workspace`.
+- `cargo fmt --all`.
+- `cargo test -p actingcommand-contract -p actingcommand-lab -p actingcommand-actinglab-architecture`.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo clippy -p actingcommand-contract -p actingcommand-lab -p actingcommand-actinglab -- -D warnings`.
+- `cargo fmt --all -- --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace --quiet`.
+- `git diff --check`.
+
+### Test results
+
+- Contract, Lab, and architecture focused suites passed.
+- All 30 static A1 protocol goldens passed, including exact exit codes and output-channel assertions.
+- The structural Lab source/API guards, contract dependency budget, app-dependency direction, command inventory, and line ratchet passed.
+- Focused Clippy passed with warnings denied.
+- Full workspace formatting and Clippy passed with warnings denied.
+- The complete workspace suite passed, including the 690-test ActingLab unit suite, integration suites, architecture guards, protocol goldens, and compile-time UI checks.
+- Final diff whitespace validation passed.
+
+### Current blocker
+
+- No implementation blocker remains.
+
+### Next step
+
+1. Commit, tag, push, and report A2b in GitHub issue #34.
+2. Continue directly to A3 environment detection migration under the approved chain authorization.
+
 ## 2026-07-10 issue 33 A2a interface freeze complete
 
 ### Current status

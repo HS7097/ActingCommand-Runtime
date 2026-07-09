@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#![allow(clippy::result_large_err)]
+
+use actingcommand_contract::{
+    CLI_SCHEMA_VERSION, Envelope, EnvelopeError, LabError as CliError, LabErrorClass as ErrorKind,
+    LedgerProjection,
+};
 use actingcommand_device::{
     Adb, AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceTarget, Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat,
     TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
     create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
     vendor_stdio_session_diagnostic,
+};
+use actingcommand_lab::{
+    InstanceConfig, SemanticLedgerContext, SemanticRequestContext, UserConfig,
+    project_semantic_payload,
 };
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRead, LedgerRecord, LedgerRecordKind,
@@ -48,7 +58,7 @@ pub mod project_interface;
 pub mod recovery_exec;
 mod resource_convert;
 
-const SCHEMA_VERSION: &str = "0.2";
+const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
 const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
@@ -117,7 +127,7 @@ fn main() -> ExitCode {
 #[derive(Debug)]
 struct CliResult {
     print_json: bool,
-    envelope: Envelope,
+    envelope: Envelope<Value>,
     human: String,
     exit_code: i32,
 }
@@ -126,7 +136,13 @@ impl CliResult {
     fn ok(command: String, data: Value, print_json: bool, human: String) -> Self {
         Self {
             print_json,
-            envelope: Envelope::ok(command, data),
+            envelope: Envelope::ok(
+                SCHEMA_VERSION,
+                env!("CARGO_PKG_VERSION"),
+                RUNTIME_VERSION,
+                command,
+                data,
+            ),
             human,
             exit_code: 0,
         }
@@ -137,7 +153,13 @@ impl CliResult {
         let human = format!("{}: {}", err.code, err.message);
         Self {
             print_json,
-            envelope: Envelope::err(command, err),
+            envelope: Envelope::err(
+                SCHEMA_VERSION,
+                env!("CARGO_PKG_VERSION"),
+                RUNTIME_VERSION,
+                command,
+                err,
+            ),
             human,
             exit_code,
         }
@@ -158,163 +180,20 @@ impl CliResult {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct Envelope {
-    schema_version: &'static str,
-    cli_version: &'static str,
-    runtime_version: &'static str,
-    ok: bool,
-    command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<EnvelopeError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    run_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    artifacts: Option<Value>,
+trait CliErrorExitCode {
+    fn exit_code(&self) -> i32;
 }
 
-impl Envelope {
-    fn ok(command: String, data: Value) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            cli_version: env!("CARGO_PKG_VERSION"),
-            runtime_version: RUNTIME_VERSION,
-            ok: true,
-            command,
-            data: Some(data),
-            error: None,
-            run_id: None,
-            artifacts: None,
-        }
-    }
-
-    fn err(command: String, err: CliError) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            cli_version: env!("CARGO_PKG_VERSION"),
-            runtime_version: RUNTIME_VERSION,
-            ok: false,
-            command,
-            data: None,
-            error: Some(EnvelopeError {
-                code: err.code,
-                message: err.message,
-                blocked_by: err.blocked_by,
-                details: err.details,
-            }),
-            run_id: None,
-            artifacts: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EnvelopeError {
-    code: String,
-    message: String,
-    blocked_by: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<Box<Value>>,
-}
-
-#[derive(Debug, Clone)]
-struct CliError {
-    kind: ErrorKind,
-    code: String,
-    message: String,
-    blocked_by: Vec<String>,
-    details: Option<Box<Value>>,
-}
-
-impl CliError {
-    fn usage(message: impl Into<String>) -> Self {
-        Self::new(
-            ErrorKind::UsageValidation,
-            "validation_failed",
-            message,
-            &[],
-        )
-    }
-
-    fn package_invalid(message: impl Into<String>) -> Self {
-        Self::new(ErrorKind::UsageValidation, "package_invalid", message, &[])
-    }
-
-    fn safety_blocked(code: &'static str, message: impl Into<String>, blocked_by: &[&str]) -> Self {
-        Self::new(ErrorKind::SafetyBlocked, code, message, blocked_by)
-    }
-
-    fn instance(message: impl Into<String>) -> Self {
-        Self::new(
-            ErrorKind::DeviceInstance,
-            "instance_not_found",
-            message,
-            &["instance"],
-        )
-    }
-
-    fn device(message: impl Into<String>) -> Self {
-        Self::new(
-            ErrorKind::DeviceInstance,
-            "device_error",
-            message,
-            &["device"],
-        )
-    }
-
-    fn runtime_not_running(message: impl Into<String>) -> Self {
-        Self::new(
-            ErrorKind::RuntimeNotRunning,
-            "runtime_not_running",
-            message,
-            &["running_runtime"],
-        )
-    }
-
-    fn not_implemented(code: &'static str, message: impl Into<String>) -> Self {
-        Self::new(ErrorKind::NotImplemented, code, message, &[])
-    }
-
-    fn new(
-        kind: ErrorKind,
-        code: &'static str,
-        message: impl Into<String>,
-        blocked_by: &[&str],
-    ) -> Self {
-        Self {
-            kind,
-            code: code.to_string(),
-            message: message.into(),
-            blocked_by: blocked_by.iter().map(|value| value.to_string()).collect(),
-            details: None,
-        }
-    }
-
-    fn with_details(mut self, details: Value) -> Self {
-        self.details = Some(Box::new(details));
-        self
-    }
-
+impl CliErrorExitCode for CliError {
     fn exit_code(&self) -> i32 {
-        match self.kind {
+        match self.class {
             ErrorKind::UsageValidation => 2,
             ErrorKind::SafetyBlocked => 3,
             ErrorKind::DeviceInstance => 4,
-            ErrorKind::RuntimeNotRunning => 5,
+            ErrorKind::RuntimeUnavailable => 5,
             ErrorKind::NotImplemented => 6,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ErrorKind {
-    UsageValidation,
-    SafetyBlocked,
-    DeviceInstance,
-    RuntimeNotRunning,
-    NotImplemented,
 }
 
 type CliOutcome<T> = Result<T, CliError>;
@@ -340,27 +219,6 @@ struct GlobalOptions {
     // Daemon request handlers must execute local command implementations instead of
     // re-submitting work into the same resident request queue.
     inside_session_daemon: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct UserConfig {
-    adb_path: Option<String>,
-    runtime_endpoint: Option<String>,
-    run_root: Option<String>,
-    resource_root: Option<String>,
-    #[serde(default)]
-    instances: BTreeMap<String, InstanceConfig>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct InstanceConfig {
-    serial: Option<String>,
-    game: Option<String>,
-    server: Option<String>,
-    package: Option<String>,
-    adb_path: Option<String>,
-    capture_backend: Option<String>,
-    touch_backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6369,7 +6227,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     if should_route_readonly_via_session_daemon(global, &flags)? {
         return submit_readonly_session_request(global, &flags, "detect_page", args);
     }
-    let mut ledger = SemanticLedgerContext::new("detect-page", global, args);
+    let mut ledger = semantic_ledger_context("detect-page", global, args);
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
         let resources = recognition_resources(global, &config, &flags, true)?;
@@ -6383,7 +6241,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
             &resources.pack_root,
             pages_path,
         )?;
-        record_env_resolved(&mut ledger, "detect-page", &env_resolved);
+        record_env_resolved(&mut ledger, "detect-page", &env_resolved)?;
         detector
             .validate(&evaluator)
             .map_err(|err| CliError::usage(err.to_string()))?;
@@ -6411,7 +6269,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                 "current_page_unknown",
                 &outcome.page,
                 &env_resolved,
-            );
+            )?;
         }
         ledger.record_drive(json!({
             "stage": "recognition",
@@ -6420,7 +6278,7 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
             "page": outcome.page,
             "matched": outcome.matched,
             "standby": outcome.standby
-        }));
+        }))?;
         Ok(payload)
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
@@ -6523,59 +6381,25 @@ fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
-struct SemanticLedgerContext {
-    command: &'static str,
-    instance: String,
-    issuer: IdIssuer,
-    req_id: String,
-    records: Vec<LedgerRecord>,
-}
-
 struct SemanticLedgerWrite {
-    summary: Value,
+    summary: LedgerProjection,
     receipt_payload: Option<Value>,
 }
 
-impl SemanticLedgerContext {
-    fn new(command: &'static str, global: &GlobalOptions, args: &[String]) -> Self {
-        let issuer = IdIssuer::new();
-        let req_id = issuer.issue(IdKind::Req).value;
-        let instance = global
+fn semantic_ledger_context(
+    command: &'static str,
+    global: &GlobalOptions,
+    args: &[String],
+) -> SemanticLedgerContext {
+    SemanticLedgerContext::new(SemanticRequestContext {
+        command: command.to_string(),
+        instance: global
             .instance
             .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let records = vec![LedgerRecord::new(
-            LedgerRecordKind::Dispatch,
-            Some(req_id.clone()),
-            json!({
-                "stage": "request",
-                "command": command,
-                "instance": instance,
-                "args": args,
-                "args_count": args.len(),
-                "dry_run": global.dry_run
-            }),
-        )];
-        Self {
-            command,
-            instance,
-            issuer,
-            req_id,
-            records,
-        }
-    }
-
-    fn issue(&self, kind: IdKind) -> String {
-        self.issuer.issue(kind).value
-    }
-
-    fn record_drive(&mut self, payload: Value) {
-        self.records.push(LedgerRecord::new(
-            LedgerRecordKind::Drive,
-            Some(self.req_id.clone()),
-            payload,
-        ));
-    }
+            .unwrap_or_else(|| "default".to_string()),
+        arguments: args.to_vec(),
+        dry_run: global.dry_run,
+    })
 }
 
 fn env_resolved_json(values: &[env_detection::ResolvedEnvValue]) -> Value {
@@ -6645,29 +6469,31 @@ fn record_env_needs_detection(
     reason: &str,
     subject: &str,
     values: &[env_detection::ResolvedEnvValue],
-) {
+) -> CliOutcome<()> {
     if let Some(needs_detection) = env_needs_detection_json(command, reason, subject, values) {
         ledger.record_drive(json!({
             "stage": "env_needs_detection",
             "command": command,
             "needs_detection": needs_detection
-        }));
+        }))?;
     }
+    Ok(())
 }
 
 fn record_env_resolved(
     ledger: &mut SemanticLedgerContext,
     command: &str,
     values: &[env_detection::ResolvedEnvValue],
-) {
+) -> CliOutcome<()> {
     if values.is_empty() {
-        return;
+        return Ok(());
     }
     ledger.record_drive(json!({
         "stage": "env_resolved",
         "command": command,
         "keys": env_resolved_json(values)
-    }));
+    }))?;
+    Ok(())
 }
 
 fn finish_semantic_result_with_ledger(
@@ -6694,18 +6520,21 @@ fn finish_semantic_payload_with_ledger(
             .entry("instance")
             .or_insert_with(|| json!(ctx.instance.clone()));
     }
+    let records = ctx.take_records();
     let ledger = write_semantic_ledger(
         global,
-        ctx.command,
+        &ctx.command,
         &ctx.instance,
         &ctx.req_id,
         &payload,
-        &mut ctx.records,
+        records,
     )?;
     if let Some(receipt_payload) = ledger.receipt_payload {
-        project_semantic_ledger_payload(&receipt_payload, ledger.summary)
+        project_semantic_payload(receipt_payload, ledger.summary)
     } else {
-        payload["ledger"] = ledger.summary;
+        payload["ledger"] = serde_json::to_value(ledger.summary).map_err(|err| {
+            CliError::device(format!("failed to serialize ledger summary: {err}"))
+        })?;
         Ok(payload)
     }
 }
@@ -6718,7 +6547,7 @@ fn return_semantic_error_with_ledger(
     let mut payload = json!({
         "req_id": ctx.req_id.clone(),
         "instance": ctx.instance.clone(),
-        "command": ctx.command,
+        "command": ctx.command.clone(),
         "error": error.code.clone(),
         "state": "failed",
         "blocked_error": {
@@ -6726,22 +6555,25 @@ fn return_semantic_error_with_ledger(
             "message": error.message.clone(),
             "blocked_by": error.blocked_by.clone()
         },
-        "details": error.details.as_deref().cloned().unwrap_or(Value::Null)
+        "details": error.details.clone().unwrap_or(Value::Null)
     });
+    let records = ctx.take_records();
     payload = match write_semantic_ledger(
         global,
-        ctx.command,
+        &ctx.command,
         &ctx.instance,
         &ctx.req_id,
         &payload,
-        &mut ctx.records,
+        records,
     ) {
         Ok(ledger) => {
             if let Some(receipt_payload) = ledger.receipt_payload {
-                project_semantic_ledger_payload(&receipt_payload, ledger.summary)?
+                project_semantic_payload(receipt_payload, ledger.summary)?
             } else {
                 let mut payload = payload;
-                payload["ledger"] = ledger.summary;
+                payload["ledger"] = serde_json::to_value(ledger.summary).map_err(|err| {
+                    CliError::device(format!("failed to serialize ledger summary: {err}"))
+                })?;
                 payload
             }
         }
@@ -6764,12 +6596,12 @@ fn write_semantic_ledger(
     instance: &str,
     req_id: &str,
     payload: &Value,
-    records: &mut Vec<LedgerRecord>,
+    records: Vec<LedgerRecord>,
 ) -> CliOutcome<SemanticLedgerWrite> {
     let config = read_user_config()?;
     let Some(run_root) = effective_run_root(global, &config) else {
         return Ok(SemanticLedgerWrite {
-            summary: json!({"written": false, "reason": "run_root_not_configured"}),
+            summary: LedgerProjection::skipped("run_root_not_configured"),
             receipt_payload: None,
         });
     };
@@ -6784,7 +6616,7 @@ fn write_semantic_ledger(
         SessionHeader::new(RUNTIME_VERSION, game, server, instance),
     )
     .map_err(|err| CliError::device(err.to_string()))?;
-    for record in records.drain(..) {
+    for record in records {
         ledger
             .append(with_semantic_id_chain(record, req_id, &[payload]))
             .map_err(|err| CliError::device(err.to_string()))?;
@@ -6803,10 +6635,7 @@ fn write_semantic_ledger(
         .map_err(|err| CliError::device(err.to_string()))?;
     let receipt_payload = read_semantic_receipt_payload_from_ledger(ledger.ledger_path(), req_id)?;
     Ok(SemanticLedgerWrite {
-        summary: json!({
-            "written": true,
-            "path": ledger.ledger_path().display().to_string()
-        }),
+        summary: LedgerProjection::written(ledger.ledger_path().display().to_string()),
         receipt_payload: Some(receipt_payload),
     })
 }
@@ -6825,29 +6654,6 @@ fn read_semantic_receipt_payload_from_ledger(path: &Path, req_id: &str) -> CliOu
                 "runtime ledger receipt for semantic req_id '{req_id}' was not readable after write"
             ))
         })
-}
-
-fn project_semantic_ledger_payload(
-    receipt_payload: &Value,
-    ledger_summary: Value,
-) -> CliOutcome<Value> {
-    let mut projected = receipt_payload.clone();
-    let Some(object) = projected.as_object_mut() else {
-        return Err(CliError::device(
-            "semantic ledger projection returned non-object",
-        ));
-    };
-    object.insert("ledger".to_string(), ledger_summary.clone());
-    object.insert(
-        "projection_source".to_string(),
-        json!({
-            "kind": "runtime_ledger",
-            "record_kind": "receipt",
-            "path": ledger_summary.get("path").cloned().unwrap_or(Value::Null),
-            "req_id": receipt_payload.get("req_id").cloned().unwrap_or(Value::Null)
-        }),
-    );
-    Ok(projected)
 }
 
 fn with_semantic_id_chain(
@@ -6893,7 +6699,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
         return submit_control_session_request(global, &flags, "tap_target", args);
     }
     let target = target_argument(&flags, "tap-target")?;
-    let mut ledger = SemanticLedgerContext::new("tap-target", global, args);
+    let mut ledger = semantic_ledger_context("tap-target", global, args);
     let result = (|| -> CliOutcome<Value> {
         let allow_destructive = flags.bool("--allow-destructive");
         let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -6911,7 +6717,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
         let loaded =
             load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
         let evaluator = loaded.evaluator;
-        record_env_resolved(&mut ledger, "tap-target", &loaded.env_resolved);
+        record_env_resolved(&mut ledger, "tap-target", &loaded.env_resolved)?;
         if evaluator
             .target_kind(&target)
             .map_err(|err| CliError::usage(err.to_string()))?
@@ -6932,7 +6738,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
             "target": target.clone(),
             "reco_id": reco_id.clone(),
             "evaluation": target_eval_json(&evaluation)
-        }));
+        }))?;
         if !evaluation.passed {
             record_env_needs_detection(
                 &mut ledger,
@@ -6940,7 +6746,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
                 "target_below_threshold",
                 &target,
                 &loaded.env_resolved,
-            );
+            )?;
             let mut details = json!({
                 "target": target,
                 "evaluation": target_eval_json(&evaluation)
@@ -6990,7 +6796,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
                 "executed": false,
                 "click": rect_json(click),
                 "point": point_json(point)
-            }));
+            }))?;
             return Ok(payload);
         }
 
@@ -7018,7 +6824,7 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
             "click": rect_json(click),
             "point": point_json(point),
             "device": payload.get("device").cloned().unwrap_or(Value::Null)
-        }));
+        }))?;
         Ok(payload)
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
@@ -7030,7 +6836,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         return submit_control_session_request(global, &flags, "navigate", args);
     }
     let to = flags.required("--to")?;
-    let mut ledger = SemanticLedgerContext::new("navigate", global, args);
+    let mut ledger = semantic_ledger_context("navigate", global, args);
     let result = (|| -> CliOutcome<Value> {
         let allow_destructive = flags.bool("--allow-destructive");
         let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -7043,7 +6849,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         let config = read_user_config()?;
         let (evaluator, detector, env_resolved) =
             load_semantic_detector_with_env(global, &config, &flags)?;
-        record_env_resolved(&mut ledger, "navigate", &env_resolved);
+        record_env_resolved(&mut ledger, "navigate", &env_resolved)?;
         let graph = load_navigation_graph(global, &config, &flags)?;
         let scene = load_scene_from_flags(global, &flags)?;
         let start = detect_current_page(&evaluator, &detector, &scene)?;
@@ -7055,7 +6861,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "page": start.page.clone(),
             "matched": start.matched,
             "standby": start.standby
-        }));
+        }))?;
         if start.standby {
             record_env_needs_detection(
                 &mut ledger,
@@ -7063,7 +6869,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
                 "current_page_unknown",
                 &start.page,
                 &env_resolved,
-            );
+            )?;
             let mut details = page_detection_json(&start);
             attach_env_resolved(&mut details, &env_resolved);
             attach_env_needs_detection(
@@ -7134,7 +6940,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
                 "executed": false,
                 "action_ids": action_ids,
                 "route": payload.get("route").cloned().unwrap_or(Value::Null)
-            }));
+            }))?;
             return Ok(payload);
         }
 
@@ -7170,7 +6976,7 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "executed": true,
             "action_ids": action_ids,
             "steps": payload.get("steps").cloned().unwrap_or(Value::Null)
-        }));
+        }))?;
         Ok(payload)
     })();
     finish_semantic_result_with_ledger(global, ledger, result)
@@ -10884,7 +10690,7 @@ fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| {
             CliError::new(
-                ErrorKind::RuntimeNotRunning,
+                ErrorKind::RuntimeUnavailable,
                 "session_queue_status_missing",
                 "session queue could not read queue health status",
                 &["request_queue"],
@@ -10895,7 +10701,7 @@ fn session_queue_payload(state_dir: &Path) -> CliOutcome<Value> {
         "needs_attention" => false,
         other => {
             return Err(CliError::new(
-                ErrorKind::RuntimeNotRunning,
+                ErrorKind::RuntimeUnavailable,
                 "session_queue_status_unknown",
                 format!("session queue received unknown queue health status: {other}"),
                 &["request_queue"],
@@ -11937,7 +11743,7 @@ fn session_readiness_instance_summary(
         .pointer("/diagnostics/instances")
         .ok_or_else(|| {
             CliError::new(
-                ErrorKind::RuntimeNotRunning,
+                ErrorKind::RuntimeUnavailable,
                 "readiness_status_view_missing_field",
                 "session readiness could not find diagnostics.instances in status view",
                 &["session_status", "readiness"],
@@ -12027,7 +11833,7 @@ fn readiness_instance_missing_required_fields(entry: &Value) -> Option<Value> {
 fn session_readiness_queue_summary(status_view: &Value) -> CliOutcome<Value> {
     let queues = status_view.pointer("/diagnostics/queues").ok_or_else(|| {
         CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "readiness_status_view_missing_field",
             "session readiness could not find diagnostics.queues in status view",
             &["session_status", "readiness"],
@@ -12047,7 +11853,7 @@ fn session_readiness_queue_summary(status_view: &Value) -> CliOutcome<Value> {
 fn session_readiness_required_queue_field(queues: &Value, field: &str) -> CliOutcome<Value> {
     queues.get(field).cloned().ok_or_else(|| {
         CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "readiness_status_view_missing_field",
             format!("session readiness could not find diagnostics.queues.{field} in status view"),
             &["session_status", "readiness"],
@@ -12289,7 +12095,7 @@ fn session_bootstrap_diagnostics_summary(
     let status = session_status_payload_with_config(state_dir, true, config)?;
     let diagnostics = status.get("diagnostics").ok_or_else(|| {
         CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "session_diagnostics_missing",
             "session status diagnostics were requested but not produced",
             &["session_diagnostics"],
@@ -13444,7 +13250,7 @@ fn session_command_check_queue_gate(state_dir: &Path, check_queue: bool) -> CliO
     )?;
     let Some(status) = health.get("status").and_then(Value::as_str) else {
         return Err(CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "command_check_queue_status_missing",
             "session command-check could not read queue health status",
             &["request_queue", "command_check"],
@@ -13466,7 +13272,7 @@ fn session_command_check_queue_gate(state_dir: &Path, check_queue: bool) -> CliO
             "health": health
         })),
         other => Err(CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "command_check_queue_status_unknown",
             format!("session command-check received unknown queue health status: {other}"),
             &["request_queue", "command_check"],
@@ -17365,7 +17171,7 @@ fn session_request_cancel_payload(
     let response_path = session_responses_dir(state_dir).join(format!("{request_id}.json"));
     if response_path.exists() {
         return Err(CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "request_not_cancellable",
             format!("session request {request_id} already has an available response"),
             &["request_queue"],
@@ -17374,7 +17180,7 @@ fn session_request_cancel_payload(
     let running_path = session_running_request_path(state_dir, request_id);
     if read_running_session_request(&running_path)?.is_some() {
         return Err(CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "request_not_cancellable",
             format!("session request {request_id} is already running"),
             &["request_queue"],
@@ -17428,7 +17234,7 @@ fn session_request_cancel_payload(
     fs::remove_file(&request_path).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             CliError::new(
-                ErrorKind::RuntimeNotRunning,
+                ErrorKind::RuntimeUnavailable,
                 "request_not_cancellable",
                 format!("session request {request_id} disappeared before cancellation"),
                 &["request_queue"],
@@ -17533,7 +17339,7 @@ fn session_request_cancel_not_found_error(
         format!("session request {request_id} is not queued and cannot be cancelled")
     };
     Ok(CliError::new(
-        ErrorKind::RuntimeNotRunning,
+        ErrorKind::RuntimeUnavailable,
         "request_not_cancellable",
         message,
         &["request_queue"],
@@ -17868,7 +17674,7 @@ fn validate_session_request_queue_admission(state_dir: &Path) -> CliOutcome<()> 
         .and_then(Value::as_str)
         .ok_or_else(|| {
             CliError::new(
-                ErrorKind::RuntimeNotRunning,
+                ErrorKind::RuntimeUnavailable,
                 "request_queue_status_missing",
                 "session request admission could not read queue health status",
                 &["request_queue"],
@@ -17882,7 +17688,7 @@ fn validate_session_request_queue_admission(state_dir: &Path) -> CliOutcome<()> 
             &["request_queue"],
         )),
         other => Err(CliError::new(
-            ErrorKind::RuntimeNotRunning,
+            ErrorKind::RuntimeUnavailable,
             "request_queue_status_unknown",
             format!("session request admission received unknown queue health status: {other}"),
             &["request_queue"],

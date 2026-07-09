@@ -1634,7 +1634,7 @@ fn cli_error_details_or_projection(
 ) -> Value {
     error
         .details
-        .as_deref()
+        .as_ref()
         .cloned()
         .unwrap_or_else(|| error_projection(req_id, default_error, default_state, default_hint))
 }

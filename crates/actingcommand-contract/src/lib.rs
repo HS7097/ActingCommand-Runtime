@@ -9,11 +9,13 @@
 #![allow(clippy::result_large_err)]
 
 pub mod game_engine;
+pub mod lab;
 pub mod primitive;
 pub mod taskflow;
 pub mod types;
 
 pub use game_engine::*;
+pub use lab::*;
 pub use primitive::*;
 pub use taskflow::*;
 pub use types::*;

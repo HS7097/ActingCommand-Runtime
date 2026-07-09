@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, DirectTouchCommand, FlagArgs, GlobalOptions, SemanticLedgerContext,
-    app_state_root, canonical_game, current_unix_ms, default_server_for_game,
-    effective_resource_root, finish_semantic_result_with_ledger, hex_sha256, load_scene_from_flags,
-    read_json_file, read_user_config, resolve_resource_root, send_direct_touch_command,
+    CliError, CliOutcome, DirectTouchCommand, FlagArgs, GlobalOptions, app_state_root,
+    canonical_game, current_unix_ms, default_server_for_game, effective_resource_root,
+    finish_semantic_result_with_ledger, hex_sha256, load_scene_from_flags, read_json_file,
+    read_user_config, resolve_resource_root, semantic_ledger_context, send_direct_touch_command,
     write_json_file_atomic,
 };
 use actingcommand_recognition::Scene;
@@ -30,7 +30,7 @@ const ENV_DETECTION_MAX_STEP_DURATION_MS: u64 = 60_000;
 
 pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    let mut ledger = SemanticLedgerContext::new("detect", global, args);
+    let mut ledger = semantic_ledger_context("detect", global, args);
     let result = (|| -> CliOutcome<Value> {
         let context = EnvCommandContext::from_flags(global, &flags)?;
         let detector_id = flags.required("--task")?;
@@ -45,7 +45,7 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "detector_version": detector.version(),
                 "instance_id": context.instance_id,
                 "steps": step_run.steps
-            }));
+            }))?;
             return Ok(json!({
                 "schema_version": "env-detect-command.v1",
                 "status": "planned",
@@ -81,7 +81,7 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                     "source": value.source
                 })
             }).collect::<Vec<_>>()
-        }));
+        }))?;
         Ok(json!({
             "schema_version": "env-detect-command.v1",
             "status": "detected",
@@ -117,7 +117,7 @@ pub(super) fn run_env(
 
 fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    let mut ledger = SemanticLedgerContext::new("env-resolve", global, args);
+    let mut ledger = semantic_ledger_context("env-resolve", global, args);
     let result = (|| -> CliOutcome<Value> {
         let context = EnvCommandContext::from_flags(global, &flags)?;
         let detector_id = flags.required("--task")?;
@@ -184,7 +184,7 @@ fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
                     "source": value.source
                 })
             }).collect::<Vec<_>>()
-        }));
+        }))?;
         Ok(json!({
             "schema_version": "env-resolve-command.v1",
             "status": "resolved",
