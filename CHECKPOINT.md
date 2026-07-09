@@ -16,8 +16,12 @@
 - Follow-up live/resource audit found two Runtime recovery plumbing gaps and fixed them:
   - selected task package generation now prunes non-resident `page_rules` pages and soft optional/forbidden targets so `--include-recovery` packages can be built without requiring every upstream page asset;
   - runtime candidate-page discovery now includes package-resident `page_rules` pages, and operation selection now prefers page-specific operations before `from: any` fallback operations.
+- Final completion audit found one more #30 error-signal gap and fixed it: passed forbidden targets that represent explicit `error_pages` or `negative_*` targets now trigger recovery even when page detection returns no matched page.
 - Live AK `home -> depot` with `--include-recovery` was revalidated on `127.0.0.1:16416` with MaaTouch: run `run-26ba7980fb59f6c2-1`, result zip `target\issues29-30-live\ak-open-depot-recovery-out.zip`, sha256 `968fbb1ec986d8184a056720560348e5b84f89d86402c91688735b147b91ca27`.
+- Live AK non-edge `home -> mission` was revalidated on `127.0.0.1:16416` with MaaTouch: run `run-985dc35d369acd4b-1`, result zip `target\issues29-30-live\ak-open-mission-before-forced-recovery-2-out.zip`, sha256 `c92cae5777b36182e9b97391a7b8818ec814e1bd8870e496d59e76cd5166b8a8`.
 - Live AK full-pack `return_home` from depot was revalidated on `127.0.0.1:16416` with MaaTouch: run `run-3c0be44d7466748f-1`, result zip `target\issues29-30-live\ak-full-return-home-out-3.zip`, sha256 `31745f6acc6358031468df6628afa4c3b71742deba001f6d8cef3d210d7e1d78`.
+- Forced live AK `error_page -> return_home -> retry original task` was revalidated on `127.0.0.1:16416` with MaaTouch using a target-only synthetic package under `target`: run `run-53deee8c32c8d62e-1`, result zip `target\issues29-30-live\ak-forced-error-home-recovery-open-depot-2-out.zip`, sha256 `91d342dd52a4eb4c638e9b3b6791a9738a23d79af244ca0d8c8e7f7ac05cd3f6`.
+- Live AK full-pack `return_home` final reset passed on `127.0.0.1:16416` with MaaTouch: run `run-91f8a3330918a22d-1`, result zip `target\issues29-30-live\ak-full-return-home-final-out.zip`, sha256 `17f7a2cbbe66052eaf9de204335d2a06b8c914f31ee3b0464825e89a27ae2cfe`.
 - Current page after live recovery closeout was confirmed as `arknights/home`.
 - This node changes only Runtime `actinglab` execution/package conversion logic and documentation.
 - Implementation commit `80c98f194ba6d9f868c56aaaa20901814c04464a` was created for this milestone.
@@ -52,6 +56,8 @@
 - `cargo test -p actingcommand-actinglab flow_policy_ -- --nocapture`
 - `cargo test -p actingcommand-actinglab operation_bundle_accepts_schema_0_6_retry_recovery_fields -- --nocapture`
 - `cargo test -p actingcommand-actinglab error_page_detection_matches_explicit_and_negative_pages -- --nocapture`
+- `cargo test -p actingcommand-actinglab error_page_detection_ -- --nocapture`
+- `cargo test -p actingcommand-actinglab explicit_error_pages_can_match_forbidden_page_targets -- --nocapture`
 - `cargo test -p actingcommand-actinglab target_click_ -- --nocapture`
 - `cargo test -p actingcommand-actinglab operation_failure_decision_ -- --nocapture`
 - `cargo test -p actingcommand-actinglab selected_build_prunes_nonresident_page_rules_and_soft_targets -- --nocapture`
@@ -65,9 +71,16 @@
 - `cargo build --release`
 - `git fetch --prune --tags origin; git pull --ff-only origin main; git status --short --branch` for Runtime and the three resource repositories.
 - `target\release\actinglab.exe --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_depot --game arknights --server cn --include-recovery --out target\issues29-30-live\ak-open-depot-recovery.zip`
+- `target\release\actinglab.exe --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_mission --game arknights --server cn --include-recovery --out target\issues29-30-live\ak-open-mission-recovery.zip`
 - `target\release\actinglab.exe --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --entry-task return_home --execution-mode navigable_route --out target\issues29-30-live\ak-full-return-home.zip`
+- `target\release\actinglab.exe --json package build-pack --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn --entry-task open_depot --execution-mode navigable_route --out target\issues29-30-live\ak-full-open-depot.zip`
+- Built target-only synthetic package `target\issues29-30-live\ak-forced-error-home-recovery-open-depot.zip` by patching the generated full open-depot package and updating its manifest hash.
+- `target\release\actinglab.exe --json lab validate --zip target\issues29-30-live\ak-forced-error-home-recovery-open-depot.zip`
 - `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-open-depot-recovery lab run --zip target\issues29-30-live\ak-open-depot-recovery.zip --out target\issues29-30-live\ak-open-depot-recovery-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-open-mission-before-forced-recovery-2 lab run --zip target\issues29-30-live\ak-open-mission-recovery.zip --out target\issues29-30-live\ak-open-mission-before-forced-recovery-2-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-full-return-home-3 lab run --zip target\issues29-30-live\ak-full-return-home.zip --out target\issues29-30-live\ak-full-return-home-out-3.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-forced-error-home-recovery-open-depot-2 lab run --zip target\issues29-30-live\ak-forced-error-home-recovery-open-depot.zip --out target\issues29-30-live\ak-forced-error-home-recovery-open-depot-2-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-full-return-home-final lab run --zip target\issues29-30-live\ak-full-return-home.zip --out target\issues29-30-live\ak-full-return-home-final-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `target\release\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn current-page --capture`
 - `git commit -m "Fix recovery package page rules and any-operation selection"`
 - `git tag checkpoint/20260709-issues29-30-live-recovery-closeout`
@@ -80,15 +93,18 @@
 
 - Focused issue #29 coordinate semantics tests passed.
 - Focused issue #30 retry/recovery/schema/target-click tests passed.
+- Focused forbidden-target error-signal tests passed.
 - Focused retry/recover/fail branch decision tests passed.
 - Selected package page-rule pruning regression test passed.
 - Specific-before-`any` operation-selection regression test passed.
 - `package build-task --include-recovery` for AK `open_depot` now passes.
 - Live MaaTouch AK `home -> depot` with recovery resources passed; ledger recorded actual click rect `{x:1109,y:560,width:171,height:160}` and point `{x:1245,y:691}`, then `page_guard_passed` to `arknights/depot`.
+- Live MaaTouch AK non-edge `home -> mission` passed; ledger recorded target page confirmation without the old absolute-coordinate drift path.
 - Live MaaTouch full-pack AK `return_home` from depot passed; ledger recorded `open_quickswitch` followed by `quickswitch_to_home`, both `page_guard_passed`, then `finish_ok`.
+- Forced live MaaTouch AK `error_page -> return_home -> retry original task` passed; ledger recorded `page_guard_failed` with `error_page=true`, `operation_recovery_required`, `recovery_started`, `recovery_result` with `status=ok`, then retried `home_to_depot` and finished `ok`.
 - Live current-page check after recovery passed with `page=arknights/home`.
 - `cargo test -p actingcommand-actinglab lab_run::tests:: -- --nocapture` passed with all lab-run tests.
-- `cargo test --workspace` passed with `662` workspace tests after the live-recovery follow-up regression tests.
+- `cargo test --workspace` passed with `664` workspace tests after the final forbidden-target error-signal regression tests.
 - Final gates passed:
   - `cargo fmt --all -- --check`
   - `git diff --check`
@@ -99,15 +115,14 @@
 
 ### Current blocker
 
-- No blocker for #29 AK `home -> depot` live revalidation or the #30 `return_home` recovery path.
-- Non-edge AK smoke using current `open_friends` and `open_operator` resources failed to reach the target page; current evidence points to resource-route behavior rather than the guarded absolute coordinate drift fixed by #29.
-- A fully forced live `error_page -> return_home -> retry original task` scenario has not been simulated end-to-end yet; branch behavior is covered by automated tests and live recovery primitives now pass.
+- No blocker for #29/#30 implemented Runtime scope after the final completion audit.
+- Current `open_friends` / `open_operator` resource routes still need resource-route follow-up, but #29 has separate live non-edge evidence through `open_mission`.
 
 ### Next step
 
-1. Push this final checkpoint-doc update.
-2. Use resource-route follow-up work to repair `open_friends` / `open_operator` before treating those as non-edge acceptance.
-3. If required for final #30 closure, run a forced live `error_page -> return_home -> retry original task` scenario after a safe fixture exists.
+1. Commit and push the final Runtime closeout.
+2. Comment on and close GitHub issues #29 and #30 with the final live evidence.
+3. Record the final issue-close URLs and commit hash in this checkpoint.
 
 ## 2026-07-09 runtime-ledger L8 acceptance closeout
 

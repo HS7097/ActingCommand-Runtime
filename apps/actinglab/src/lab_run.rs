@@ -22,7 +22,7 @@ use actingcommand_ledger::{
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
 };
-use actingcommand_page_detector::{PageDetector, PageEvaluation};
+use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetRole};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
@@ -1365,6 +1365,31 @@ fn page_is_error_page(game: &str, page: Option<&str>, error_pages: &[String]) ->
         || page.starts_with("forbidden")
 }
 
+fn scene_hits_error_page(game: &str, scene: &CapturedScene, error_pages: &[String]) -> bool {
+    if page_is_error_page(game, scene.matched_page.as_deref(), error_pages) {
+        return true;
+    }
+    scene.page_evaluations.iter().any(|evaluation| {
+        evaluation.target_results.iter().any(|target| {
+            target.role == PageTargetRole::Forbidden
+                && target.passed
+                && target_is_error_signal(game, &target.target_id, error_pages)
+        })
+    })
+}
+
+fn target_is_error_signal(game: &str, target_id: &str, error_pages: &[String]) -> bool {
+    let anchor = target_id
+        .strip_prefix("page/")
+        .or_else(|| target_id.strip_prefix(&format!("{game}/")))
+        .unwrap_or(target_id);
+    anchor.starts_with("negative_")
+        || anchor.starts_with("forbidden")
+        || error_pages
+            .iter()
+            .any(|error_page| page_anchor_matches(game, anchor, error_page))
+}
+
 #[derive(Clone, Copy)]
 struct DeviceInputRequest<'a> {
     target: &'a DeviceTarget,
@@ -1714,8 +1739,7 @@ fn execute_operation_with_retries(
         let verification = operation_verification_status(&control.game, operation, &after);
         if verification == OperationVerification::Failed || !after_result.stable_confirmed {
             let after_page = after.matched_page.clone();
-            let hit_error_page =
-                page_is_error_page(&control.game, after_page.as_deref(), &bundle.error_pages);
+            let hit_error_page = scene_hits_error_page(&control.game, &after, &bundle.error_pages);
             let failure_reason = if !after_result.stable_confirmed {
                 "after_page_not_stable"
             } else {
@@ -3903,6 +3927,7 @@ impl LabRunContext {
         Ok(CapturedScene {
             scene,
             matched_page,
+            page_evaluations: evaluations,
             verify_template_matched: false,
             width,
             height,
@@ -3981,6 +4006,7 @@ impl LabRunContext {
         Ok(CapturedScene {
             scene,
             matched_page,
+            page_evaluations: evaluations,
             verify_template_matched: false,
             width,
             height,
@@ -4704,6 +4730,7 @@ impl LabRunContext {
 struct CapturedScene {
     scene: Scene,
     matched_page: Option<String>,
+    page_evaluations: Vec<PageEvaluation>,
     verify_template_matched: bool,
     width: u32,
     height: u32,
@@ -5209,6 +5236,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_page_detector::PageTargetEvaluation;
     use actingcommand_recognition_pack::load_pack_from_json_str;
     use tempfile::TempDir;
     use zip::ZipArchive;
@@ -6217,6 +6245,75 @@ mod tests {
             Some("arknights/home"),
             &explicit
         ));
+    }
+
+    #[test]
+    fn error_page_detection_uses_passed_forbidden_targets() {
+        let scene = CapturedScene {
+            scene: Scene::from_png(one_pixel_png()).expect("scene"),
+            matched_page: None,
+            page_evaluations: vec![PageEvaluation {
+                page_id: "arknights/home".to_string(),
+                matched: false,
+                required_passed: 0,
+                required_total: 1,
+                any_of_passed: 0,
+                any_of_total: 0,
+                optional_passed: 0,
+                optional_total: 0,
+                forbidden_passed: 1,
+                forbidden_total: 1,
+                target_results: vec![PageTargetEvaluation {
+                    target_id: "page/negative_announcement".to_string(),
+                    role: PageTargetRole::Forbidden,
+                    passed: true,
+                    message: "template passed".to_string(),
+                }],
+                message: "forbidden target passed".to_string(),
+            }],
+            verify_template_matched: false,
+            width: 1,
+            height: 1,
+        };
+
+        assert!(scene_hits_error_page("arknights", &scene, &[]));
+    }
+
+    #[test]
+    fn explicit_error_pages_can_match_forbidden_page_targets() {
+        let scene = CapturedScene {
+            scene: Scene::from_png(one_pixel_png()).expect("scene"),
+            matched_page: None,
+            page_evaluations: vec![PageEvaluation {
+                page_id: "arknights/depot".to_string(),
+                matched: false,
+                required_passed: 1,
+                required_total: 1,
+                any_of_passed: 0,
+                any_of_total: 0,
+                optional_passed: 0,
+                optional_total: 0,
+                forbidden_passed: 1,
+                forbidden_total: 1,
+                target_results: vec![PageTargetEvaluation {
+                    target_id: "page/home".to_string(),
+                    role: PageTargetRole::Forbidden,
+                    passed: true,
+                    message: "template passed".to_string(),
+                }],
+                message: "forbidden target passed".to_string(),
+            }],
+            verify_template_matched: false,
+            width: 1,
+            height: 1,
+        };
+
+        assert!(scene_hits_error_page(
+            "arknights",
+            &scene,
+            &["home".to_string()]
+        ));
+        assert!(!scene_hits_error_page("arknights", &scene, &[]));
     }
 
     #[test]
@@ -7331,6 +7428,7 @@ mod tests {
         CapturedScene {
             scene: Scene::from_png(one_pixel_png()).expect("scene"),
             matched_page: page.map(str::to_string),
+            page_evaluations: Vec::new(),
             verify_template_matched,
             width: 1,
             height: 1,
@@ -7341,6 +7439,7 @@ mod tests {
         CapturedScene {
             scene: Scene::from_pixels(1, 1, &rgb, ScenePixelFormat::Rgb8).expect("scene"),
             matched_page: page.map(str::to_string),
+            page_evaluations: Vec::new(),
             verify_template_matched: false,
             width: 1,
             height: 1,
