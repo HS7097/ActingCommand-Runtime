@@ -19,6 +19,7 @@
 - Checkpoint tag target: `checkpoint/20260709-issues29-30-guarded-retry-recovery`.
 - GitHub issue #29 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921623260`.
 - GitHub issue #30 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921624073`.
+- Additional retry/recovery branch-decision test commit `cc808c24fb235eeaecf77528574518d6d00954b4` was created after self-review.
 
 ### Files changed
 
