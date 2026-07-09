@@ -1,0 +1,1393 @@
+[
+  {
+    "name": "recognize_success",
+    "command": "recognize",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "recognize",
+      "data": {
+        "color": {
+          "distance": 0.0,
+          "expected": [
+            255,
+            0,
+            0
+          ],
+          "max_distance": 20.0,
+          "mean": [
+            255,
+            0,
+            0
+          ]
+        },
+        "evaluation": {
+          "color": {
+            "distance": 0.0,
+            "expected": [
+              255,
+              0,
+              0
+            ],
+            "max_distance": 20.0,
+            "mean": [
+              255,
+              0,
+              0
+            ]
+          },
+          "kind": "Color",
+          "matched_rect": null,
+          "message": "color passed",
+          "passed": true,
+          "target": "home_anchor",
+          "template": null
+        },
+        "match_metric": "ccorr_normed",
+        "matched_rect": null,
+        "message": "color passed",
+        "passed": true,
+        "target": "home_anchor",
+        "template": null
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "recognize_failure",
+    "command": "recognize",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "recognize",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "message": "missing --target <value>"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "detect_page_success",
+    "command": "detect-page",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "detect-page",
+      "data": {
+        "evaluations": [
+          {
+            "any_of_passed": 0,
+            "any_of_total": 0,
+            "matched": true,
+            "message": "page matched",
+            "page": "arknights/home",
+            "targets": [
+              {
+                "id": "home_anchor",
+                "message": "color passed",
+                "passed": true,
+                "role": "Required"
+              }
+            ]
+          },
+          {
+            "any_of_passed": 0,
+            "any_of_total": 0,
+            "matched": false,
+            "message": "required target failed: target_anchor",
+            "page": "arknights/target",
+            "targets": [
+              {
+                "id": "target_anchor",
+                "message": "color failed",
+                "passed": false,
+                "role": "Required"
+              }
+            ]
+          }
+        ],
+        "instance": "default",
+        "ledger": {
+          "path": "<PATH>",
+          "written": true
+        },
+        "matched": true,
+        "page": "arknights/home",
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "reco_id": "<RECO_ID>",
+        "req_id": "<REQ_ID>",
+        "standby": false
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "detect_page_failure",
+    "command": "detect-page",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "detect-page",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [],
+            "code": "validation_failed",
+            "message": "fatal page detector error: failed to parse page set JSON: expected ident at line 1 column 2"
+          },
+          "command": "detect-page",
+          "details": null,
+          "error": "validation_failed",
+          "instance": "default",
+          "ledger": {
+            "path": "<PATH>",
+            "written": true
+          },
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "fatal page detector error: failed to parse page set JSON: expected ident at line 1 column 2"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "current_page_success",
+    "command": "current-page",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "current-page",
+      "data": {
+        "evaluations": [
+          {
+            "any_of_passed": 0,
+            "any_of_total": 0,
+            "matched": true,
+            "message": "page matched",
+            "page": "arknights/home",
+            "targets": [
+              {
+                "id": "home_anchor",
+                "message": "color passed",
+                "passed": true,
+                "role": "Required"
+              }
+            ]
+          },
+          {
+            "any_of_passed": 0,
+            "any_of_total": 0,
+            "matched": false,
+            "message": "required target failed: target_anchor",
+            "page": "arknights/target",
+            "targets": [
+              {
+                "id": "target_anchor",
+                "message": "color failed",
+                "passed": false,
+                "role": "Required"
+              }
+            ]
+          }
+        ],
+        "matched": true,
+        "page": "arknights/home",
+        "standby": false
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "current_page_failure",
+    "command": "current-page",
+    "exit_code": 4,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "current-page",
+      "error": {
+        "blocked_by": [
+          "device"
+        ],
+        "code": "device_error",
+        "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "is_visible_success",
+    "command": "is-visible",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "is-visible",
+      "data": {
+        "evaluation": {
+          "color": {
+            "distance": 0.0,
+            "expected": [
+              255,
+              0,
+              0
+            ],
+            "max_distance": 20.0,
+            "mean": [
+              255,
+              0,
+              0
+            ]
+          },
+          "kind": "Color",
+          "matched_rect": null,
+          "message": "color passed",
+          "passed": true,
+          "target": "home_button",
+          "template": null
+        },
+        "match_metric": "ccorr_normed",
+        "target": "home_button",
+        "visible": true
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "is_visible_failure",
+    "command": "is-visible",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "is-visible",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "message": "is-visible requires <target> or --target <id>"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "tap_target_success",
+    "command": "tap-target",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "tap-target",
+      "data": {
+        "action_id": "<ACTION_ID>",
+        "click": {
+          "height": 6,
+          "width": 4,
+          "x": 10,
+          "y": 20
+        },
+        "evaluation": {
+          "color": {
+            "distance": 0.0,
+            "expected": [
+              255,
+              0,
+              0
+            ],
+            "max_distance": 20.0,
+            "mean": [
+              255,
+              0,
+              0
+            ]
+          },
+          "kind": "Color",
+          "matched_rect": null,
+          "message": "color passed",
+          "passed": true,
+          "target": "home_button",
+          "template": null
+        },
+        "executed": false,
+        "instance": "default",
+        "ledger": {
+          "path": "<PATH>",
+          "written": true
+        },
+        "point": {
+          "x": 12,
+          "y": 23
+        },
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "reco_id": "<RECO_ID>",
+        "req_id": "<REQ_ID>",
+        "safety_gate": "navigation_only_default",
+        "status": "planned",
+        "target": "home_button"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "tap_target_failure",
+    "command": "tap-target",
+    "exit_code": 3,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "tap-target",
+      "error": {
+        "blocked_by": [
+          "visible_target"
+        ],
+        "code": "target_not_visible",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [
+              "visible_target"
+            ],
+            "code": "target_not_visible",
+            "message": "target 'home_button' did not pass recognition: color failed"
+          },
+          "command": "tap-target",
+          "details": {
+            "evaluation": {
+              "color": {
+                "distance": 360.62445068359375,
+                "expected": [
+                  255,
+                  0,
+                  0
+                ],
+                "max_distance": 20.0,
+                "mean": [
+                  0,
+                  0,
+                  255
+                ]
+              },
+              "kind": "Color",
+              "matched_rect": null,
+              "message": "color failed",
+              "passed": false,
+              "target": "home_button",
+              "template": null
+            },
+            "target": "home_button"
+          },
+          "error": "target_not_visible",
+          "instance": "default",
+          "ledger": {
+            "path": "<PATH>",
+            "written": true
+          },
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "target 'home_button' did not pass recognition: color failed"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "navigate_success",
+    "command": "navigate",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "navigate",
+      "data": {
+        "executed": false,
+        "from": "arknights/home",
+        "instance": "default",
+        "ledger": {
+          "path": "<PATH>",
+          "written": true
+        },
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "reco_id": "<RECO_ID>",
+        "req_id": "<REQ_ID>",
+        "route": [
+          {
+            "action_id": "<ACTION_ID>",
+            "from_page": "arknights/home",
+            "id": "home_to_target",
+            "input": {
+              "point": {
+                "x": 12,
+                "y": 23
+              },
+              "rect": {
+                "height": 6,
+                "width": 4,
+                "x": 10,
+                "y": 20
+              },
+              "type": "tap"
+            },
+            "source": null,
+            "to_page": "arknights/target"
+          }
+        ],
+        "safety_gate": "navigation_only_default",
+        "status": "planned",
+        "to": "arknights/target"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "navigate_failure",
+    "command": "navigate",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "navigate",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [],
+            "code": "validation_failed",
+            "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
+          },
+          "command": "navigate",
+          "details": null,
+          "error": "validation_failed",
+          "instance": "default",
+          "ledger": {
+            "path": "<PATH>",
+            "written": true
+          },
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "package_validate_success",
+    "command": "package validate",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "package validate",
+      "data": {
+        "dangerous_entries": [],
+        "entries": null,
+        "entry_count": 3,
+        "ledger_event": {
+          "event_type": "package.validate.ok",
+          "path": "<PATH>",
+          "written": true
+        },
+        "manifest": {
+          "schema_version": "0.2"
+        },
+        "manifest_path": "module/manifest.json",
+        "module": "module",
+        "recognition_pack_diagnostics": [],
+        "req_id": "<REQ_ID>",
+        "status": "valid",
+        "task_count": 1
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "package_validate_failure",
+    "command": "package validate",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "package validate",
+      "error": {
+        "blocked_by": [],
+        "code": "package_invalid",
+        "message": "fatal containment error: invalid sha256 hash '0000'; hash mismatch cannot be evaluated"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "package_build_task_success",
+    "command": "package build-task",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "package build-task",
+      "data": {
+        "dry_run": true,
+        "execution_mode": "navigable_route",
+        "from_remote": null,
+        "game": "arknights",
+        "included_tasks": [
+          "operator_task"
+        ],
+        "mode": "build-task",
+        "out": null,
+        "package_id": "arknights.cn.operator_task",
+        "repo": "<PATH>",
+        "resource_layout": "direct",
+        "resource_root": "<PATH>",
+        "server": "cn",
+        "status": "validated",
+        "task_id": "operator_task",
+        "validation": {
+          "control": {
+            "entry_task_id": "operator_task",
+            "execution_mode": "navigable_route",
+            "game": "arknights",
+            "package_id": "arknights.cn.operator_task",
+            "resolution": {
+              "height": 720,
+              "width": 1280
+            },
+            "server": "cn"
+          },
+          "entry_count": 10,
+          "resources": {
+            "manifest": "resources/manifest.json",
+            "navigation": "resources/navigation/arknights.cn.navigation.json",
+            "operation": "resources/operations/operator_task/task.json",
+            "operation_count": 1,
+            "pack": "resources/recognition/arknights.cn.pack.json",
+            "pages": "resources/recognition/arknights.cn.pages.json",
+            "recognition_unsupported_target_count": 0,
+            "recognition_unsupported_targets": [],
+            "resource_root": "resources"
+          },
+          "status": "valid",
+          "zip": "<PATH>"
+        }
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "package_build_task_failure",
+    "command": "package build-task",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "package build-task",
+      "error": {
+        "blocked_by": [],
+        "code": "package_invalid",
+        "message": "none of the selected tasks exist: missing_task"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "lab_validate_success",
+    "command": "lab validate",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "lab validate",
+      "data": {
+        "control": {
+          "entry_task_id": "task",
+          "execution_mode": "recognize_only",
+          "game": "arknights",
+          "package_id": "golden.task",
+          "resolution": {
+            "height": 2,
+            "width": 2
+          },
+          "server": "cn"
+        },
+        "entry_count": 6,
+        "resources": {
+          "manifest": "resources/manifest.json",
+          "navigation": null,
+          "operation": "resources/operations/task/task.json",
+          "operation_count": 1,
+          "pack": "resources/recognition/arknights.cn.pack.json",
+          "pages": "resources/recognition/arknights.cn.pages.json",
+          "recognition_unsupported_target_count": 0,
+          "recognition_unsupported_targets": [],
+          "resource_root": "resources"
+        },
+        "status": "valid",
+        "zip": "<PATH>"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "lab_validate_failure",
+    "command": "lab validate",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "lab validate",
+      "error": {
+        "blocked_by": [],
+        "code": "package_invalid",
+        "message": "Lab package must include control.json"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "lab_run_success",
+    "command": "lab run",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "lab run",
+      "data": {
+        "executed_step_count": 0,
+        "ledger": {
+          "path": "<PATH>",
+          "projection_source": "runtime_ledger",
+          "terminal_receipt": "finish_ok"
+        },
+        "ok": true,
+        "out": "<PATH>",
+        "output_zip_sha256": "<OUTPUT_SHA256>",
+        "result_zip": "<PATH>",
+        "run_dir": "<PATH>",
+        "run_dir_cleaned": true,
+        "run_id": "<RUN_ID>",
+        "screenshot_count": 1,
+        "status": "ok"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "lab_run_failure",
+    "command": "lab run",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "lab run",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "message": "lab run requires --zip <input.zip>"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "detect_success",
+    "command": "detect",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "detect",
+      "data": {
+        "detector_id": "detect_resolution",
+        "detector_version": "1",
+        "game_id": "arknights",
+        "instance": "fixture:5555",
+        "instance_id": "<IID>",
+        "ledger": {
+          "path": "<PATH>",
+          "written": true
+        },
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "req_id": "<REQ_ID>",
+        "resource_root": "<PATH>",
+        "result": {
+          "detections": {
+            "resolution": {
+              "confidence": 1.0,
+              "detected_at_unix_ms": "<TIME>",
+              "detector_id": "detect_resolution",
+              "source": "golden-scene",
+              "value": "1x1"
+            }
+          },
+          "detector_id": "detect_resolution",
+          "detector_version": "1",
+          "game_id": "arknights",
+          "generated_at_unix_ms": "<TIME>",
+          "instance_id": "<IID>",
+          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_id": "golden-pack",
+          "schema_version": "env-detect-result.v1",
+          "server_id": "cn"
+        },
+        "result_path": "<PATH>",
+        "schema_version": "env-detect-command.v1",
+        "server_id": "cn",
+        "status": "detected",
+        "steps": [],
+        "steps_executed": false,
+        "task": "detect_resolution"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "detect_failure",
+    "command": "detect",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "detect",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [],
+            "code": "validation_failed",
+            "message": "env detector 'missing_detector' was not found"
+          },
+          "command": "detect",
+          "details": null,
+          "error": "validation_failed",
+          "instance": "fixture:5555",
+          "ledger": {
+            "path": "<PATH>",
+            "written": true
+          },
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "env detector 'missing_detector' was not found"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "env_resolve_success",
+    "command": "env resolve",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "env resolve",
+      "data": {
+        "detector_id": "detect_resolution",
+        "instance": "fixture:5555",
+        "instance_id": "<IID>",
+        "keys": [
+          {
+            "confidence": 1.0,
+            "detector_id": "detect_resolution",
+            "key": "resolution",
+            "source": "golden-scene",
+            "source_result": "detect_resolution@<TIME>",
+            "value": "1x1"
+          }
+        ],
+        "ledger": {
+          "path": "<PATH>",
+          "written": true
+        },
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "req_id": "<REQ_ID>",
+        "resolved": "1x1",
+        "schema_version": "env-resolve-command.v1",
+        "source_result": "<PATH>",
+        "status": "resolved",
+        "task": "detect_resolution"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "env_resolve_failure",
+    "command": "env resolve",
+    "exit_code": 2,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "env resolve",
+      "error": {
+        "blocked_by": [],
+        "code": "validation_failed",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [],
+            "code": "validation_failed",
+            "message": "env detection result <PATH>\\resources\\env-detection\\<IID>\\result.json is missing; run detect first"
+          },
+          "command": "env-resolve",
+          "details": {
+            "detections": [],
+            "detector_id": "detect_resolution",
+            "detector_version": "1",
+            "game_id": "arknights",
+            "instance_id": "<IID>",
+            "reason": "missing_result",
+            "recommended_action": "run_detect",
+            "result_path": "<PATH>",
+            "server_id": "cn",
+            "status": "needs_detection",
+            "task": "detect_resolution"
+          },
+          "error": "validation_failed",
+          "instance": "fixture:5555",
+          "ledger": {
+            "path": "<PATH>",
+            "written": true
+          },
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "env detection result <PATH>\\resources\\env-detection\\<IID>\\result.json is missing; run detect first"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "env_status_success",
+    "command": "env status",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "env status",
+      "data": {
+        "instance_id": "<IID>",
+        "result": {
+          "detections": {
+            "resolution": {
+              "confidence": 1.0,
+              "detected_at_unix_ms": "<TIME>",
+              "detector_id": "detect_resolution",
+              "source": "golden-scene",
+              "value": "1x1"
+            }
+          },
+          "detector_id": "detect_resolution",
+          "detector_version": "1",
+          "game_id": "arknights",
+          "generated_at_unix_ms": "<TIME>",
+          "instance_id": "<IID>",
+          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_id": "golden-pack",
+          "schema_version": "env-detect-result.v1",
+          "server_id": "cn"
+        },
+        "result_path": "<PATH>",
+        "schema_version": "env-status-command.v1",
+        "status": "fresh",
+        "task": "detect_resolution"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "env_status_failure",
+    "command": "env status",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "env status",
+      "data": {
+        "instance_id": "<IID>",
+        "needs_detection": {
+          "detections": [
+            {
+              "confidence": 1.0,
+              "detector_id": "detect_resolution",
+              "key": "resolution",
+              "source": "golden-scene",
+              "source_result": "detect_resolution@<TIME>",
+              "value": "1x1"
+            }
+          ],
+          "detector_id": "detect_resolution",
+          "detector_version": "2",
+          "error": "env detection result detector is stale: result detect_resolution@1 command detect_resolution@2",
+          "game_id": "arknights",
+          "instance_id": "<IID>",
+          "reason": "detector_mismatch",
+          "recommended_action": "run_detect",
+          "result_generated_at_unix_ms": "<TIME>",
+          "result_path": "<PATH>",
+          "result_resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "server_id": "cn",
+          "source_result": "detect_resolution@<TIME>",
+          "status": "needs_detection",
+          "task": "detect_resolution"
+        },
+        "reason": "detector_mismatch",
+        "result": {
+          "detections": {
+            "resolution": {
+              "confidence": 1.0,
+              "detected_at_unix_ms": "<TIME>",
+              "detector_id": "detect_resolution",
+              "source": "golden-scene",
+              "value": "1x1"
+            }
+          },
+          "detector_id": "detect_resolution",
+          "detector_version": "1",
+          "game_id": "arknights",
+          "generated_at_unix_ms": "<TIME>",
+          "instance_id": "<IID>",
+          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_id": "golden-pack",
+          "schema_version": "env-detect-result.v1",
+          "server_id": "cn"
+        },
+        "result_path": "<PATH>",
+        "schema_version": "env-status-command.v1",
+        "status": "stale",
+        "task": "detect_resolution"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "observe_success",
+    "command": "observe",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "observe",
+      "data": {
+        "actions": [
+          {
+            "id": "home_to_target"
+          }
+        ],
+        "arbitration": {
+          "decision": "readonly_accepted",
+          "details": {
+            "instance": "default",
+            "kind": "readonly_accepted",
+            "req_id": "<REQ_ID>"
+          }
+        },
+        "backend": "scene_file",
+        "frame_age_ms": 0,
+        "frame_path": "<PATH>",
+        "frame_source": {
+          "delay_ms": null,
+          "kind": "scene",
+          "path": "<PATH>"
+        },
+        "instance": "default",
+        "ledger": {
+          "path": "<PATH>",
+          "retention": {
+            "deleted_count": 0,
+            "deleted_paths": [],
+            "max_bytes": 2147483648,
+            "protected_over_budget": false,
+            "total_after_bytes": "<BYTES>",
+            "total_before_bytes": "<BYTES>"
+          },
+          "written": true
+        },
+        "matched": true,
+        "page": "arknights/home",
+        "projection_schema_version": "actingcommand.projection.v0.1",
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "req_id": "<REQ_ID>",
+        "standby": false,
+        "state": "observed",
+        "targets": [
+          {
+            "id": "home_button",
+            "passed": true,
+            "score": 1.0
+          }
+        ]
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "observe_failure",
+    "command": "observe",
+    "exit_code": 4,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "observe",
+      "error": {
+        "blocked_by": [
+          "device"
+        ],
+        "code": "device_error",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [
+              "device"
+            ],
+            "code": "device_error",
+            "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
+          },
+          "details": {
+            "error": "fatal",
+            "hint": "inspect-lab2-ledger",
+            "req_id": "<REQ_ID>",
+            "state": "failed"
+          },
+          "error": "fatal",
+          "hint": "inspect-lab2-ledger",
+          "instance": "default",
+          "ledger": {
+            "path": "<PATH>",
+            "retention": {
+              "deleted_count": 0,
+              "deleted_paths": [],
+              "max_bytes": 2147483648,
+              "protected_over_budget": false,
+              "total_after_bytes": "<BYTES>",
+              "total_before_bytes": "<BYTES>"
+            },
+            "written": true
+          },
+          "projection_schema_version": "actingcommand.projection.v0.1",
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "failed"
+        },
+        "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "do_success",
+    "command": "do",
+    "exit_code": 0,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "do",
+      "data": {
+        "action_id": "<ACTION_ID>",
+        "actual_click": {
+          "coordinate_derivation": {
+            "mode": "declared_rect"
+          },
+          "declared_rect": {
+            "height": 6,
+            "width": 4,
+            "x": 10,
+            "y": 20
+          },
+          "kind": "target_rect_center",
+          "point": {
+            "x": 12,
+            "y": 23
+          },
+          "rect": {
+            "height": 6,
+            "width": 4,
+            "x": 10,
+            "y": 20
+          }
+        },
+        "arbitration": {
+          "decision": "lease_granted",
+          "details": {
+            "instance": "default",
+            "kind": "lease_granted",
+            "lease": {
+              "acquired_at_ms": "<TIME>",
+              "alive": true,
+              "destructive_step_active": false,
+              "holder": "cli",
+              "holder_pid": "<PID>",
+              "instance": "default",
+              "lease_id": "<LEASE_ID>",
+              "preempt_requested": false,
+              "priority": "normal",
+              "req_id": "<REQ_ID>",
+              "schema_version": "actingcommand.arbitrator.v0.1",
+              "updated_at_ms": "<TIME>"
+            },
+            "req_id": "<REQ_ID>"
+          }
+        },
+        "backend": "scene_file",
+        "device": {
+          "executed": false,
+          "mode": "dry_run"
+        },
+        "executed": false,
+        "frame_age_ms": 0,
+        "guard_result": {
+          "evaluation": {
+            "color": {
+              "distance": 0.0,
+              "expected": [
+                255,
+                0,
+                0
+              ],
+              "max_distance": 20.0,
+              "mean": [
+                255,
+                0,
+                0
+              ]
+            },
+            "kind": "Color",
+            "matched_rect": null,
+            "message": "color passed",
+            "passed": true,
+            "target": "home_button",
+            "template": null
+          },
+          "passed": true,
+          "reco_id": "<RECO_ID>",
+          "target": "home_button"
+        },
+        "instance": "default",
+        "ledger": {
+          "path": "<PATH>",
+          "retention": {
+            "deleted_count": 0,
+            "deleted_paths": [],
+            "max_bytes": 2147483648,
+            "protected_over_budget": false,
+            "total_after_bytes": "<BYTES>",
+            "total_before_bytes": "<BYTES>"
+          },
+          "written": true
+        },
+        "observation": {
+          "evaluations": [
+            {
+              "any_of_passed": 0,
+              "any_of_total": 0,
+              "matched": true,
+              "message": "page matched",
+              "page": "arknights/home",
+              "targets": [
+                {
+                  "id": "home_anchor",
+                  "message": "color passed",
+                  "passed": true,
+                  "role": "Required"
+                }
+              ]
+            },
+            {
+              "any_of_passed": 0,
+              "any_of_total": 0,
+              "matched": false,
+              "message": "required target failed: target_anchor",
+              "page": "arknights/target",
+              "targets": [
+                {
+                  "id": "target_anchor",
+                  "message": "color failed",
+                  "passed": false,
+                  "role": "Required"
+                }
+              ]
+            }
+          ],
+          "matched": true,
+          "page": "arknights/home",
+          "standby": false
+        },
+        "page": "arknights/home",
+        "projection_schema_version": "actingcommand.projection.v0.1",
+        "projection_source": {
+          "kind": "runtime_ledger",
+          "path": "<PATH>",
+          "record_kind": "receipt",
+          "req_id": "<REQ_ID>"
+        },
+        "reco_id": "<RECO_ID>",
+        "req_id": "<REQ_ID>",
+        "state": "planned",
+        "target": "home_button"
+      },
+      "ok": true,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  },
+  {
+    "name": "do_failure",
+    "command": "do",
+    "exit_code": 3,
+    "envelope": {
+      "cli_version": "0.1.0",
+      "command": "do",
+      "error": {
+        "blocked_by": [
+          "guard_target"
+        ],
+        "code": "target_not_visible",
+        "details": {
+          "blocked_error": {
+            "blocked_by": [
+              "guard_target"
+            ],
+            "code": "target_not_visible",
+            "message": "target 'home_button' did not pass guard recognition: color failed"
+          },
+          "details": {
+            "error": "resource_drift",
+            "hint": "observe-current-page-and-refresh-resource-or-target",
+            "projection_schema_version": "actingcommand.projection.v0.1",
+            "req_id": "<REQ_ID>",
+            "state": "arknights/target",
+            "suspicion": {
+              "actual": "color failed",
+              "expected": "home_button",
+              "reason": "guard_rejected"
+            }
+          },
+          "error": "resource_drift",
+          "hint": "observe-current-page-and-refresh-resource-or-target",
+          "instance": "default",
+          "ledger": {
+            "path": "<PATH>",
+            "retention": {
+              "deleted_count": 0,
+              "deleted_paths": [],
+              "max_bytes": 2147483648,
+              "protected_over_budget": false,
+              "total_after_bytes": "<BYTES>",
+              "total_before_bytes": "<BYTES>"
+            },
+            "written": true
+          },
+          "projection_schema_version": "actingcommand.projection.v0.1",
+          "projection_source": {
+            "kind": "runtime_ledger",
+            "path": "<PATH>",
+            "record_kind": "receipt",
+            "req_id": "<REQ_ID>"
+          },
+          "req_id": "<REQ_ID>",
+          "state": "arknights/target"
+        },
+        "message": "target 'home_button' did not pass guard recognition: color failed"
+      },
+      "ok": false,
+      "runtime_version": "runtime-embedded-p1g",
+      "schema_version": "0.2"
+    }
+  }
+]

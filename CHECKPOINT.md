@@ -1,5 +1,62 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A1 protocol golden guard complete
+
+### Current status
+
+- Alice directed that A0-A9 continue in one work round and enter acceptance only after the complete chain; A1-A9 updates remain comments in issue #34 rather than separate issues.
+- Continued from A0 checkpoint `bfb46a7ffa177916a36e8c27c9c32fb01f3d55e2` on branch `issue-34-lab-extraction-chain`.
+- Added a production-binary integration harness with 30 static cases: 15 required command families, each with one success and one failure path.
+- The matrix covers `recognize`, `detect-page`, `current-page`, `is-visible`, `tap-target --dry-run`, `navigate --dry-run`, `package validate`, `package build-task --dry-run`, `lab validate`, scene-backed `lab run`, `detect --task`, `env resolve`, `env status`, `observe`, and `do --dry-run`.
+- All fixture state is sealed under a fresh temporary root. Child processes receive explicit isolated config, app-state, Session-state, resource-root, run-root, scene, package, and fake-ADB paths.
+- `lab run` executes the real production path against a local fake ADB that returns a fixed synthetic PNG; no real device, emulator, user config, or user resource repository is read.
+- Normal tests only read checked-in `expected.json`. Baseline regeneration requires the explicit `scripts/actinglab/record-goldens.ps1` maintainer command.
+- No Runtime behavior file changed in A1.
+
+### Files changed
+
+- `apps/actinglab/tests/golden_protocol.rs`
+- `apps/actinglab/tests/golden/expected.json`
+- `apps/actinglab/tests/golden/README.md`
+- `apps/actinglab/tests/golden/EXIT_CODES.md`
+- `apps/actinglab/tests/golden/REVIEW.md`
+- `scripts/actinglab/record-goldens.ps1`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-actinglab --test golden_protocol protocol_goldens_match_current_cli -- --exact --nocapture` for the empty-baseline RED check.
+- `scripts/actinglab/record-goldens.ps1` for explicit baseline recording.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- Deliberate `cli_version` expectation mutation followed by the focused golden test, then restoration and a passing rerun.
+- `cargo fmt --all`.
+- `cargo fmt --all -- --check`.
+- `git diff --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test -p actingcommand-actinglab-architecture`.
+- `cargo test --workspace --quiet`.
+
+### Test results
+
+- Empty static baseline failed with `0` expected cases versus `30` required cases.
+- The final golden suite passed all three tests: full protocol matrix, 15-family coverage, and normalizer behavior.
+- All success cases return a successful envelope and exit code `0`.
+- Failure cases cover exit codes `2`, `3`, and `4`, plus the existing exit-code-`0` stale `env status` semantic state.
+- Every case emits exactly one complete JSON envelope on stdout; stderr contains no protocol envelope.
+- Deliberately changing retained `cli_version` from `0.1.0` to `0.1.0-tampered` failed the golden test; restoring it passed.
+- Architecture guard tests passed.
+- Formatting, diff, workspace Clippy, and the complete workspace test suite passed.
+
+### Current blocker
+
+- No A1 blocker remains.
+
+### Next step
+
+1. Commit and push A1 to `origin/issue-34-lab-extraction-chain` and report the node in issue #34.
+2. Complete A2a interface inventory, freeze its document and SHA-256 in issue #34, then continue directly to A2b under Alice's chain-level authorization.
+
 ## 2026-07-10 issue 33 A0 implementation complete
 
 ### Current status
@@ -70,14 +127,11 @@
 
 ### Current blocker
 
-- A0 implementation has no technical blocker. Per issue #32 and the frozen chain, independent sign-off and explicit authorization are still required before closing #34 and starting A1.
+- Superseded: Alice subsequently authorized continuous A0-A9 implementation with final-chain acceptance.
 
 ### Next step
 
-1. Push the A0 task branch and checkpoint tag.
-2. Post the implementation delivery report to #34 with base/final commits, frozen specification hash, and verification evidence.
-3. Wait for the independent A0 sign-off/closure authorization required by issue #32.
-4. After A0 is accepted, open and execute A1 without starting any migration work early.
+1. Superseded by the A1 checkpoint above.
 
 ## 2026-07-09 issue 31 readiness audit
 

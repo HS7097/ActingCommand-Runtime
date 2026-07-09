@@ -19,7 +19,7 @@ The chain is strictly linear:
 
 `A0 -> A1 -> A2a -> A2b -> A3 -> A4 -> A5 -> A6 -> A7 -> A8a -> A8b -> A9`
 
-Current node: A0, tracked by GitHub issue #34 on branch `issue-33-a0`.
+Current tracking surface: GitHub issue #34 on branch `issue-34-lab-extraction-chain`.
 
 A0 delivers:
 
@@ -36,7 +36,18 @@ A0 implementation is complete and verified on its task branch:
 - deliberate line growth and stale command-count mutations both failed before restoration;
 - focused tests, formatting, diff checks, workspace Clippy, and workspace tests pass.
 
-A1 must not begin until A0 receives the independent sign-off required by issue #32 and child issue #34 is authorized for closure.
+Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
+
+Current node: A1 is implemented and verified; A2a interface inventory and freeze is next.
+
+A1 delivers:
+
+- a static 30-case protocol baseline covering 15 required command families with success and failure paths;
+- sealed synthetic resource, scene, package, app-state, Session-state, and fake-ADB fixtures;
+- canonical JSON comparison, exact process exit-code comparison, and stdout/stderr protocol-channel assertions;
+- deterministic normalization for generated IDs, timestamps, absolute paths, env instance IDs, lease/process facts, retention byte counts, and the generated Lab output artifact hash;
+- a checked-in CLI exit-code table, baseline review record, and explicit recorder script that is never used during normal comparison;
+- deliberate baseline tampering evidence: changing a retained `cli_version` field makes the golden suite fail, and restoration returns it to green.
 
 ## Current environment detection memory and env pointer node
 
