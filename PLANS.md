@@ -6,6 +6,34 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current environment detection memory and env pointer node
+
+The active approved Runtime work is GitHub issue #31:
+
+- `[新功能] 环境检测任务 + 每实例检测内存/落盘 + {env:} 指针解析(通用运行时状态探测,首用例=AK 16 主题)`
+- Technical source of truth: `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+
+Implemented direction:
+
+- Add a generic `detect` command for environment detection tasks authored in resource data under `env-detection/detections.json`.
+- Keep Runtime logic game-agnostic: detector ids, keys, candidates, thresholds, `allowed_values`, and TTL are data-defined.
+- Persist per-instance detection results to `env-detection/<instance_id>/result.json` below the resolved resource root.
+- Derive `instance_id` from a salted hash of the normalized instance identity; result files do not include raw ADB endpoints by default.
+- Store required result provenance: schema version, instance id, game/server, detector id/version, resource pack id/hash, generated time, and per-key detection facts.
+- Validate env values against `allowed_values` and path-safety rules before writing or resolving them.
+- Treat missing, stale, expired, low-confidence, schema-mismatched, detector-mismatched, or resource-hash-mismatched env results as visible failures instead of defaulting.
+- Add `env resolve` and `env status` commands for `{env:<key>}` pointer resolution and freshness inspection.
+- Record `env_detected` and `env_resolved` stages through the existing semantic ledger path when a run root is configured.
+- Use atomic JSON publication plus a per-result lock file for concurrent detection writes.
+
+Current boundary:
+
+- This node implements the generic Runtime P1 mechanism only.
+- Scheduler auto-triggering, SwitchTheme recovery, OCR, SQLite, UI, and game-specific logic remain out of scope.
+- Interactive touch-based detection steps are not implemented yet; current detection candidates use recognition templates.
+- The current mirrored Arknights resource repository does not contain `ours/env-detection` or `ours/hometheme`, so AK 16-theme P2 resource integration and live validation remain blocked until the resource definitions land.
+- Resource repositories were mirrored before this resource-dependent task; no resource repository files were modified in this Runtime node.
+
 ## Current guarded-click and retry/recovery execution node
 
 The active user-approved Runtime work covers GitHub issues #29 and #30:

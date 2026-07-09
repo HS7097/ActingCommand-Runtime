@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 environment detection memory P1
+
+### Current status
+
+- GitHub issue #31 was read and confirmed as approved.
+- Local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` was used as the source of truth.
+- Resource repositories were mirrored/verified before this resource-dependent Runtime work:
+  - Arknights `d711f0b`
+  - AzurLane `8885eee4`
+  - BlueArchive `1cbcf3f`
+- The current Arknights resource mirror does not yet contain `ours/env-detection` or `ours/hometheme`; AK 16-theme P2 resource integration and live validation are blocked until those resource definitions land.
+- Added generic Runtime environment detection support in `actinglab` without game-specific theme logic.
+- Added `detect --task <id>` to load `env-detection/detections.json`, evaluate data-authored recognition candidates, and write `env-detection/<instance_id>/result.json`.
+- Added salted, desensitized `instance_id` generation so result paths and result JSON do not expose raw ADB endpoints by default.
+- Added result provenance fields: schema version, instance id, game/server, detector id/version, resource pack id/hash, generated time, and per-key detection facts.
+- Added `allowed_values` and path-safety validation for env values before write/resolve.
+- Added stale detection for schema mismatch, scope mismatch, detector/version mismatch, resource hash mismatch, low confidence, expired keys, missing keys, unsafe values, and non-allowed values.
+- Added `env resolve` for `{env:<key>}` pointer resolution and `env status` for freshness inspection.
+- Added semantic ledger drive stages `env_detected` and `env_resolved` when a run root is configured.
+- Added atomic result writes with a per-result lock file and focused tests for lock conflict, stale hash, low confidence, pointer resolution, instance id safety, value validation, and write/read.
+- Runtime validation gates passed for formatting, diff whitespace, focused env-detection tests, `actingcommand-actinglab` clippy, full workspace tests, and full workspace clippy.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/env_detection.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --comments --json number,title,state,labels,body,comments,url`
+- `Get-Content C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `git -C <resource-repo> status --short --branch`
+- `git -C <resource-repo> rev-parse --short HEAD`
+- `Test-Path C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours\env-detection`
+- `Test-Path C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours\hometheme`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- `cargo clippy -p actingcommand-actinglab -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root target\issue31-env-cli\ours --game arknights --server cn --instance 127.0.0.1:16416 detect --task detect_ui_theme --scene target\issue31-env-cli\ours\scene.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root target\issue31-env-cli\ours --game arknights --server cn --instance 127.0.0.1:16416 env resolve --task detect_ui_theme --path hometheme/{env:ui_theme}/DepotEnter.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root target\issue31-env-cli\ours --game arknights --server cn --instance 127.0.0.1:16416 env resolve --task detect_ui_theme --path hometheme/{env:ui_theme}/DepotEnter.png` after mutating the template to verify stale hash failure.
+
+### Test results
+
+- Focused unit tests passed: `8` env-detection tests.
+- `cargo clippy -p actingcommand-actinglab -- -D warnings` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo test --workspace` passed with the env-detection tests included.
+- `cargo clippy --workspace -- -D warnings` passed.
+- CLI smoke `detect` passed on a synthetic resource root and wrote `env-detection/<instance_id>/result.json`.
+- CLI smoke `env resolve` resolved `hometheme/{env:ui_theme}/DepotEnter.png` to `hometheme/Default/DepotEnter.png`.
+- CLI stale-hash smoke failed visibly after the referenced template changed: `env detection result is stale because detector resource hash changed`.
+
+### Current blocker
+
+- AK P2 resource/live validation is blocked because the mirrored Arknights resource repository currently lacks `ours/env-detection` and `ours/hometheme`.
+
+### Next step
+
+1. Commit and push the Runtime P1 implementation with `PLANS.md` and `CHECKPOINT.md`.
+2. Add a GitHub issue #31 progress comment and keep the issue open for AK P2 resource integration/live validation.
+
 ## 2026-07-09 issue 30 navigation retry default follow-up
 
 ### Current status

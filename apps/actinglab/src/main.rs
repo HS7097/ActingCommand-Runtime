@@ -38,6 +38,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipWriter;
 use zip::write::FileOptions;
 
+mod env_detection;
 mod frame_store;
 mod lab2_cli;
 mod lab_run;
@@ -1270,8 +1271,10 @@ fn require_raw(
 fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
-        "config" | "lab" | "package" | "operation" | "control" | "scheduler" | "resource"
-        | "run" | "report" | "session" | "ledger" => rest.get(1).map(|_| 2).unwrap_or(1),
+        "config" | "env" | "lab" | "package" | "operation" | "control" | "scheduler"
+        | "resource" | "run" | "report" | "session" | "ledger" => {
+            rest.get(1).map(|_| 2).unwrap_or(1)
+        }
         _ => 1,
     };
     let command = rest.iter().take(path_len).cloned().collect::<Vec<_>>();
@@ -1311,6 +1314,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "key" => run_direct_input(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "text" => run_direct_input(&invocation.global, cmd, &invocation.args),
         [cmd] if cmd == "capture" => run_capture(&invocation.global, &invocation.args),
+        [cmd] if cmd == "detect" => env_detection::run_detect(&invocation.global, &invocation.args),
         [cmd] if cmd == "detect-page" => run_detect_page(&invocation.global, &invocation.args),
         [cmd] if cmd == "recognize" => run_recognize(&invocation.global, &invocation.args),
         [cmd] if cmd == "observe" => lab2_cli::run_observe(&invocation.global, &invocation.args),
@@ -1327,6 +1331,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
         [group, sub] if group == "config" => run_config(sub, &invocation.args),
+        [group, sub] if group == "env" => {
+            env_detection::run_env(sub, &invocation.global, &invocation.args)
+        }
         [group, sub] if group == "lab" => run_lab(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "package" => {
             run_package(sub, &invocation.global, &invocation.args)
@@ -5253,6 +5260,7 @@ fn command_requires_session_throat(invocation: &Invocation) -> bool {
                 | "key"
                 | "text"
                 | "capture"
+                | "detect"
                 | "detect-page"
                 | "recognize"
                 | "current-page"
@@ -26925,6 +26933,9 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
         command_cap("capture diagnose", ["device"], "available"),
+        command_cap("detect", ["device"], "available"),
+        command_cap("env resolve", ["offline"], "available"),
+        command_cap("env status", ["offline"], "available"),
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),
         command_cap(
