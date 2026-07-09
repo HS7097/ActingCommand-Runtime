@@ -25,6 +25,10 @@
 - GitHub issue #29 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921623260`.
 - GitHub issue #30 was updated with closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921624073`.
 - Additional retry/recovery branch-decision test commit `cc808c24fb235eeaecf77528574518d6d00954b4` was created after self-review.
+- Live recovery follow-up commit `f216f4593f9b72b9b2d8d5b76c5d722b1d724b27` was created and pushed for this milestone.
+- Live recovery checkpoint tag `checkpoint/20260709-issues29-30-live-recovery-closeout` was created and pushed.
+- GitHub issue #29 was updated with live closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921815900`.
+- GitHub issue #30 was updated with live closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921815989`.
 
 ### Files changed
 
@@ -65,6 +69,12 @@
 - `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-open-depot-recovery lab run --zip target\issues29-30-live\ak-open-depot-recovery.zip --out target\issues29-30-live\ak-open-depot-recovery-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `target\release\actinglab.exe --json --run-root target\issues29-30-live\runs-full-return-home-3 lab run --zip target\issues29-30-live\ak-full-return-home.zip --out target\issues29-30-live\ak-full-return-home-out-3.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `target\release\actinglab.exe --json --instance 127.0.0.1:16416 --capture-backend adb --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --game arknights --server cn current-page --capture`
+- `git commit -m "Fix recovery package page rules and any-operation selection"`
+- `git tag checkpoint/20260709-issues29-30-live-recovery-closeout`
+- `git push origin main`
+- `git push origin checkpoint/20260709-issues29-30-live-recovery-closeout`
+- `gh issue comment 29 --repo HS7097/ActingCommand-Runtime --body-file -`
+- `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body-file -`
 
 ### Test results
 
@@ -95,10 +105,9 @@
 
 ### Next step
 
-1. Commit and push this Runtime milestone.
-2. Add a checkpoint tag for rollback/provenance.
-3. Comment on GitHub issues #29 and #30 with the live evidence and remaining non-edge/forced-error caveat.
-4. Use resource-route follow-up work to repair `open_friends` / `open_operator` before treating those as non-edge acceptance.
+1. Push this final checkpoint-doc update.
+2. Use resource-route follow-up work to repair `open_friends` / `open_operator` before treating those as non-edge acceptance.
+3. If required for final #30 closure, run a forced live `error_page -> return_home -> retry original task` scenario after a safe fixture exists.
 
 ## 2026-07-09 runtime-ledger L8 acceptance closeout
 
