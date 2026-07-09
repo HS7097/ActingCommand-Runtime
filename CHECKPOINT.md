@@ -23,6 +23,7 @@
 - Runtime validation gates passed for formatting, diff whitespace, focused env-detection tests, `actingcommand-actinglab` clippy, full workspace tests, and full workspace clippy.
 - Implementation commit `b74b2cb711afba3b0297a48172f73a55b768585a` was created and pushed.
 - Checkpoint tag `checkpoint/20260709-issue31-env-detection-p1` was created and pushed.
+- GitHub issue #31 was updated with Runtime P1 progress comment `https://github.com/HS7097/ActingCommand-Runtime/issues/31#issuecomment-4924299600` and intentionally left open for AK P2 resource integration/live validation.
 
 ### Files changed
 
@@ -70,8 +71,8 @@
 
 ### Next step
 
-1. Commit and push the Runtime P1 implementation with `PLANS.md` and `CHECKPOINT.md`.
-2. Add a GitHub issue #31 progress comment and keep the issue open for AK P2 resource integration/live validation.
+1. Wait for Alice acceptance of the Runtime P1 generic mechanism.
+2. Add resource-side `ours/env-detection` and `ours/hometheme` definitions before attempting AK 16-theme P2 integration/live validation.
 
 ## 2026-07-09 issue 30 navigation retry default follow-up
 
