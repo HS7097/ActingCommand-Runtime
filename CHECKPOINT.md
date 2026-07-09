@@ -28,6 +28,7 @@
 - AK `127.0.0.1:16416` was manually returned to `arknights/home` after the smoke run.
 - Implementation commit for the recovery-recognition package follow-up: `817edb3d0b02db9822a66152e299d18bf410ad60`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-recovery-recognition-context`.
+- GitHub issue #30 was updated with recovery-recognition follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922837565` and intentionally left open for Alice acceptance.
 - Implementation commit for the implicit recovery follow-up: `c107aca72193f56738ae16fec99ceaf723f798bc`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
 - GitHub issue #30 was updated with implicit-recovery follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922673056` and intentionally left open for Alice acceptance/resource-route follow-up.
@@ -86,6 +87,12 @@
 - `git push origin main`
 - `git push origin checkpoint/20260709-issue30-navigation-retry-default`
 - `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body-file -`
+- `git commit -m "Keep recovery recognition context in task packages"`
+- `git commit -m "Record issue 30 recovery recognition checkpoint"`
+- `git tag checkpoint/20260709-issue30-recovery-recognition-context`
+- `git push origin main`
+- `git push origin checkpoint/20260709-issue30-recovery-recognition-context`
+- `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body-file -`
 
 ### Test results
 
@@ -116,8 +123,8 @@
 ### Next step
 
 1. Keep issue #30 open until Alice accepts the Runtime behavior.
-2. Commit and push the package-recognition follow-up with this checkpoint.
-3. Add a GitHub issue #30 comment with the new run evidence, without closing the issue.
+2. Wait for Alice acceptance or a new issue #30 follow-up.
+3. Do not close #30 automatically.
 
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 
