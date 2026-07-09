@@ -23,16 +23,16 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     let converter = load_converter(global, flags, &resource_root.root)?;
     let task_id = flags.required("--task")?;
     let mut task_ids = vec![task_id.clone()];
-    if flags.bool("--include-recovery")
+    let includes_recovery = flags.bool("--include-recovery")
         && task_id != "return_home"
         && converter
             .bundles
             .iter()
-            .any(|bundle| bundle.task_id == "return_home")
-    {
+            .any(|bundle| bundle.task_id == "return_home");
+    if includes_recovery {
         task_ids.push("return_home".to_string());
     }
-    let outputs = converter.build_selected(&task_ids)?;
+    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
     let entry_bundle = find_bundle(&converter, &task_id)?;
     let resolution = parse_resolution(flags, entry_bundle)?;
     let package_id = flags
@@ -64,6 +64,7 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     )?;
     add_selected_operations(&mut entries, &converter, &task_ids)?;
     add_generated_outputs(&mut entries, &converter, &outputs)?;
+    add_recognition_target_assets(&mut entries, &resource_root.root, &outputs.pack)?;
     entries.add_manifest(&task_id)?;
 
     let dry_run = global.dry_run || flags.bool("--dry-run");
@@ -134,6 +135,7 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
             )?;
             add_selected_operations(&mut entries, &converter, &task_ids)?;
             add_generated_outputs(&mut entries, &converter, &outputs)?;
+            add_recognition_target_assets(&mut entries, &resource_root.root, &outputs.pack)?;
             entries.add_manifest(&bundle.task_id)?;
             let final_out = split_dir.join(format!("{}.zip", package_id));
             let build_out = build_dir.join(format!("{}.zip", package_id));
@@ -235,6 +237,27 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         "out": if dry_run { Value::Null } else { Value::String(out.display().to_string()) },
         "validation": write.validation
     }))
+}
+
+fn build_task_outputs(
+    converter: &OperationConverter,
+    task_ids: &[String],
+    includes_recovery: bool,
+) -> CliOutcome<ConvertOutputs> {
+    let selected = converter.build_selected(task_ids)?;
+    if !includes_recovery {
+        return Ok(selected);
+    }
+    // Recovery may start from pages outside the entry task, so keep the
+    // recognition context broad while leaving executable operations selected.
+    let full = converter.build_all()?;
+    Ok(ConvertOutputs {
+        pack: full.pack,
+        pages: full.pages,
+        navigation: selected.navigation,
+        index: selected.index,
+        primitives: selected.primitives,
+    })
 }
 
 fn load_converter(
@@ -439,6 +462,29 @@ fn add_generated_outputs(
     )
 }
 
+fn add_recognition_target_assets(
+    entries: &mut PackageEntries,
+    repo: &Path,
+    pack: &Value,
+) -> CliOutcome<()> {
+    for target in pack
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(template_path) = target.get("template_path").and_then(Value::as_str) else {
+            continue;
+        };
+        let zip_path = format!("resources/{template_path}");
+        if entries.contains(&zip_path) {
+            continue;
+        }
+        entries.add_file(&repo.join(template_path), &zip_path)?;
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct PackageEntries {
     files: BTreeMap<String, Vec<u8>>,
@@ -504,6 +550,10 @@ impl PackageEntries {
             )));
         }
         Ok(())
+    }
+
+    fn contains(&self, path: &str) -> bool {
+        self.files.contains_key(path)
     }
 }
 
@@ -952,6 +1002,63 @@ mod tests {
     }
 
     #[test]
+    fn build_task_with_recovery_keeps_recovery_recognition_context() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        add_recruit_fixture(&repo);
+        add_return_home_recruit_rule(&repo);
+        let out = temp.path().join("task.zip");
+
+        let result = super::super::run_cli(
+            [
+                "--json",
+                "package",
+                "build-task",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--task",
+                "operator_task",
+                "--include-recovery",
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let entries = read_zip_entries(&out);
+        assert!(entries.contains_key("resources/operations/recruit_task/assets/RECRUIT.png"));
+        assert!(!entries.contains_key("resources/operations/recruit_task/task.json"));
+        let pages: Value = serde_json::from_slice(
+            entries
+                .get("resources/recognition/arknights.cn.pages.json")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            pages["pages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|page| page["id"] == "arknights/recruit")
+        );
+        let pack: Value = serde_json::from_slice(
+            entries
+                .get("resources/recognition/arknights.cn.pack.json")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            pack["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["id"] == "page/recruit")
+        );
+    }
+
+    #[test]
     fn build_pack_package_validates() {
         let temp = TempDir::new().expect("temp");
         let repo = temp.path().join("repo");
@@ -1134,6 +1241,48 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    fn add_recruit_fixture(root: &Path) {
+        fs::create_dir_all(root.join("operations/recruit_task/assets")).unwrap();
+        fs::write(
+            root.join("operations/recruit_task/assets/RECRUIT.png"),
+            one_pixel_png(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("operations/recruit_task/task.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": "0.3",
+                "task_id": "recruit_task",
+                "game": "arknights",
+                "server_scope": ["cn"],
+                "goal": "fixture",
+                "coordinate_space": {"width": 1280, "height": 720},
+                "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
+                "anchors": [
+                    {"id": "recruit", "template": "assets/RECRUIT.png", "region": {"mode": "rect", "rect": {"x": 40, "y": 40, "width": 50, "height": 50}}, "threshold": 0.8, "color_check": null}
+                ],
+                "entry_page": "recruit",
+                "target_page": "recruit",
+                "operations": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn add_return_home_recruit_rule(root: &Path) {
+        let path = root.join("operations/return_home/task.json");
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "page_rules".to_string(),
+            json!({
+                "home": {"required": ["page/home"]},
+                "recruit": {"required": ["page/recruit"], "forbidden": ["page/home"]}
+            }),
+        );
+        fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
     }
 
     fn one_pixel_png() -> &'static [u8] {

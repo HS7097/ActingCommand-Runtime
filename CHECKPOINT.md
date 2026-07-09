@@ -21,6 +21,13 @@
 - Selected packages that contain `operations/return_home/task.json` now use that contained bundle as implicit recovery even when the schema `0.3` entry task has no `recovery` or operation-level `on_error`.
 - Live AK `open_depot` rerun with the updated Runtime reached the intended fail-loud recovery path: run `run-db75ef7bf0e6686f-1` recorded `operation_retry_scheduled`, `pre_execution_guard_failed(page_guard_mismatch)`, `operation_recovery_required`, `recovery_started(return_home)`, `recovery_result(status=failed, reason=return_home_failed)`, `paused_needs_human`, and `run_failed`.
 - The live failure reason was explicit: `return_home recovery failed for operation 'home_to_depot'; paused_needs_human`. No fake success or silent fallback occurred.
+- Follow-up packaging gap fixed: `package build-task --include-recovery` now uses full recognition pack/page context for recovery while keeping executable operation bundles limited to the selected entry task plus `return_home`.
+- Fresh AK `open_depot --include-recovery` package `target\issue30-retry-inert\ak-open-depot-recovery-fullctx.zip` now contains broad page recognition, including `arknights/recruit`, `arknights/gacha`, `arknights/infrast`, `arknights/mall`, and `arknights/terminal`, while not copying unrelated operation `task.json` files.
+- Live AK `open_depot` rerun with the full recovery-recognition selected package reached the issue #30 target path: run `run-af98796c0b15f8cd-1` recorded `operation_retry_scheduled`, `operation_recovery_required`, `recovery_started(return_home)`, recovery operations `open_quickswitch` and `quickswitch_to_home`, `recovery_result(status=ok,page=home)`, whole-task rerun of `home_to_depot`, and final `paused_needs_human` after the one allowed task retry was exhausted.
+- The live final failure remained explicit: `operation 'home_to_depot' exhausted recovery after 1 task retry/retries; paused_needs_human; failure report written to target\issue30-retry-inert\ak-open-depot-fullctx-out.zip`.
+- AK `127.0.0.1:16416` was manually returned to `arknights/home` after the smoke run.
+- Implementation commit for the recovery-recognition package follow-up: `bfc19579164decaa0037bc6fdcee348987a50f8b`.
+- Checkpoint tag target: `checkpoint/20260709-issue30-recovery-recognition-context`.
 - Implementation commit for the implicit recovery follow-up: `c107aca72193f56738ae16fec99ceaf723f798bc`.
 - Checkpoint tag target: `checkpoint/20260709-issue30-implicit-return-home-recovery`.
 - GitHub issue #30 was updated with implicit-recovery follow-up comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4922673056` and intentionally left open for Alice acceptance/resource-route follow-up.
@@ -31,6 +38,7 @@
 ### Files changed
 
 - `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/package_build.rs`
 - `PLANS.md`
 - `CHECKPOINT.md`
 
@@ -60,6 +68,10 @@
 - `cargo test -p actingcommand-actinglab pre_execution_guard_failure_recovers_only_after_a_real_attempt -- --nocapture`
 - `cargo build --release -p actingcommand-actinglab`
 - `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-open-depot-preexec-recovery lab run --zip target\issue30-retry-inert\ak-open-depot-recovery-fresh.zip --out target\issue30-retry-inert\ak-open-depot-preexec-recovery-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
+- `cargo test -p actingcommand-actinglab package_build::tests::build_task_with_recovery_keeps_recovery_recognition_context -- --nocapture`
+- `target\release\actinglab.exe --json package build-task --repo C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights --task open_depot --game arknights --server cn --include-recovery --out target\issue30-retry-inert\ak-open-depot-recovery-fullctx.zip`
+- `target\release\actinglab.exe --json --instance 127.0.0.1:16416 --game arknights --server cn current-page --resource-root C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights\ours --capture --capture-backend adb`
+- `target\release\actinglab.exe --json --run-root target\issue30-retry-inert\runs-open-depot-fullctx lab run --zip target\issue30-retry-inert\ak-open-depot-recovery-fullctx.zip --out target\issue30-retry-inert\ak-open-depot-fullctx-out.zip --instance 127.0.0.1:16416 --capture-backend adb --touch-backend maatouch --capture-interval-ms 300`
 - `cargo fmt --all`
 - `cargo fmt --all -- --check`
 - `git diff --check`
@@ -83,9 +95,11 @@
 - Focused `target` / `target_center` regressions passed; `target_center` now records `center_point_v1` and clicks the matched rectangle center.
 - Focused recovery configuration regression passed: a contained `return_home` bundle makes recovery available for schema `0.3` tasks without explicit recovery fields.
 - Focused retry-pre-execution regression passed: only a retryable operation after a real attempt can route a guard mismatch into recovery; first-attempt guard mismatch and non-retryable operations still fail.
+- Focused package-build regression passed: selected `--include-recovery` packages keep recovery page recognition context and required template assets without copying unrelated operation task files.
 - Live AK `open_depot` rerun from home reached bounded retry and recovery instead of one-shot failure: `run-db75ef7bf0e6686f-1`, input zip sha256 `6d13a1af256b2cba33d15239eb4a06c2f1cb6092949b16c1bf9cd5389cd0f6bb`, screenshot count `48`.
 - Live recovery result was fail-loud and visible because the current `return_home` resource route could not identify the observed post-click page; the run emitted `paused_needs_human`.
-- `cargo test --workspace` passed with `668` workspace tests.
+- Live AK `open_depot` rerun with full recovery-recognition selected package reached `retry -> implicit return_home recovery -> whole task rerun -> paused_needs_human`: `run-af98796c0b15f8cd-1`, result zip `target\issue30-retry-inert\ak-open-depot-fullctx-out.zip`, screenshot count `45`.
+- `cargo test --workspace` passed with `669` workspace tests.
 - Final gates passed:
   - `cargo fmt --all -- --check`
   - `git diff --check`
@@ -96,14 +110,14 @@
 
 ### Current blocker
 
-- No blocker for the Runtime default-retry and implicit-recovery code fix.
-- Remaining live issue is resource-route/page-recognition data: AK `return_home` could not identify the observed post-click recruit/gacha page inside the selected recovery package, so the Runtime correctly paused with `paused_needs_human`.
+- No blocker for the Runtime default-retry, implicit-recovery, and recovery-recognition package fix.
+- Issue #30 remains open only for Alice acceptance because the user explicitly said not to close the downloaded/approved issue automatically.
 
 ### Next step
 
 1. Keep issue #30 open until Alice accepts the Runtime behavior.
-2. Track the remaining AK `return_home` resource-route/page-recognition gap as a resource follow-up.
-3. Do not close #30 automatically.
+2. Commit and push the package-recognition follow-up with this checkpoint.
+3. Add a GitHub issue #30 comment with the new run evidence, without closing the issue.
 
 ## 2026-07-09 issues 29-30 guarded absolute click and retry recovery
 
