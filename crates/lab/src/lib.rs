@@ -9,11 +9,15 @@
 #![allow(clippy::result_large_err)]
 
 mod context;
+mod env_api;
+mod env_detection;
 mod ports;
 mod projection;
 mod state;
 
 pub use context::*;
+pub use env_api::*;
+pub use env_detection::*;
 pub use ports::*;
 pub use projection::*;
 pub use state::*;

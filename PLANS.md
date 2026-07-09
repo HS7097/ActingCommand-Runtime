@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A2b is implemented and verified; A3 environment detection migration is next.
+Current node: A3 environment detection migration is implemented and verified; A4 read-only recognition/page migration is next.
 
 A1 delivers:
 
@@ -68,6 +68,16 @@ A2b implementation:
 - routes ActingLab envelope construction, semantic errors, semantic ledger context, and receipt projection through the contract/Lab crates while leaving process exit-code mapping in the CLI adapter;
 - preserves every A1 golden protocol case and lowers the `main.rs` ratchet from `60161` to `59967` lines;
 - adds no runtime behavior, schema-version, scheduler, resident-process, UI, device, or game-logic change.
+
+A3 environment-detection migration:
+
+- moves the environment catalog, detector evaluation, result persistence/locking, freshness checks, marker resolution, and all 20 established tests into `crates/lab`;
+- exposes typed `detect_env`, `resolve_env`, `env_status`, and generic typed marker-resolution APIs without public `serde_json::Value` signatures;
+- uses the contract `EnvDetected`, `EnvResolved`, and `NeedsDetection` DTOs for load-bearing facts;
+- executes capture and touch effects only through the frozen Lab factories, with injected clock and state roots and no behavioral environment reads in Lab;
+- leaves a thin app adapter for flags, production port construction, semantic-ledger projection, serialization, and process behavior;
+- preserves all A1 protocol goldens and existing Runtime behavior while keeping all three dispatch arms below the S3 limit;
+- keeps implementation and test files below the 2600-line module limit.
 
 ## Current environment detection memory and env pointer node
 

@@ -7,10 +7,79 @@ use actingcommand_device::{
 };
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub struct InputBackendRequest {
     pub config: TouchBackendConfig,
+    pub observation: Option<InputBackendObservation>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InputBackendObservation {
+    report: Arc<Mutex<Option<InputBackendReport>>>,
+}
+
+impl InputBackendObservation {
+    pub fn record(&self, report: InputBackendReport) -> LabResult<()> {
+        let mut slot = self.report.lock().map_err(|_| {
+            actingcommand_contract::LabError::device("input backend observation lock poisoned")
+        })?;
+        *slot = Some(report);
+        Ok(())
+    }
+
+    pub fn snapshot(&self) -> LabResult<InputBackendReport> {
+        self.report
+            .lock()
+            .map_err(|_| {
+                actingcommand_contract::LabError::device("input backend observation lock poisoned")
+            })?
+            .clone()
+            .ok_or_else(|| {
+                actingcommand_contract::LabError::device(
+                    "input backend did not publish execution diagnostics",
+                )
+            })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InputBackendReport {
+    pub backend: String,
+    #[serde(rename = "touch_backend_requested")]
+    pub requested_backend: String,
+    pub adb_source: String,
+    pub adb_warning: Option<String>,
+    #[serde(rename = "touch_backend_attempts")]
+    pub attempts: Vec<InputBackendAttemptReport>,
+    #[serde(rename = "touch_backend_warnings")]
+    pub warnings: Vec<String>,
+    pub serial: String,
+    pub device_state: String,
+    pub screen_size: String,
+    pub handshake: Option<InputHandshakeReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InputBackendAttemptReport {
+    pub attempt_id: u64,
+    pub backend: String,
+    pub ok: bool,
+    pub elapsed_ms: u128,
+    pub action: Option<String>,
+    pub fallback_backend: Option<String>,
+    pub error_reason: Option<String>,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InputHandshakeReport {
+    pub max_contacts: i32,
+    pub max_x: i32,
+    pub max_y: i32,
+    pub max_pressure: i32,
+    pub pid: String,
 }
 
 pub trait InputBackendFactory {

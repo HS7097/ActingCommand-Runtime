@@ -1,5 +1,70 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A3 environment detection migration complete
+
+### Current status
+
+- Moved environment catalog parsing/normalization, detector validation/evaluation, interactive-step planning/execution, result locking/persistence, freshness validation, needs-detection construction, instance-id derivation, and marker resolution into `crates/lab`.
+- Moved all 20 pre-existing environment-detection tests into `crates/lab/src/env_detection/tests.rs`; no test was deleted or replaced with a mock-only assertion.
+- Added typed environment request/response models and generic typed marker resolution with no public `serde_json::Value` signature.
+- Reused `EnvDetected`, `EnvResolved`, and `NeedsDetection` from `actingcommand-contract`.
+- Routed input and capture through the frozen factory ports and time through the injected `Clock`; Lab contains no `FlagArgs`, direct process exit, stdout/stderr printing, or behavioral environment-variable read.
+- Replaced the app-owned implementation with a production adapter that parses flags, resolves existing CLI configuration, constructs Lab ports, preserves semantic ledger records, serializes typed responses, and maps existing errors.
+- Preserved lazy marker semantics: game/instance scope is validated only when a payload actually contains an env pointer.
+- `detect`, `env resolve`, and `env status` dispatch through one- to three-line CLI arms.
+- Kept `crates/lab/src/env_detection.rs` at 2064 lines and its extracted test module at 809 lines, both below the 2600-line limit.
+- `apps/actinglab/src/main.rs` remains at the A2b ratchet value of 59967 lines.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/env_detection.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/ports.rs`
+- `crates/lab/src/env_api.rs`
+- `crates/lab/src/env_detection.rs`
+- `crates/lab/src/env_detection/tests.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-lab`.
+- `cargo check --workspace`.
+- `cargo test -p actingcommand-lab --lib --quiet`.
+- `cargo test -p actingcommand-actinglab --bin actinglab --quiet`.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo test -p actingcommand-actinglab-architecture --quiet`.
+- `cargo clippy -p actingcommand-lab -p actingcommand-actinglab -- -D warnings`.
+- `cargo fmt --all -- --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace --quiet`.
+- Lab forbidden-token/public-API scans and file-line counts.
+- `git diff --check`.
+
+### Test results
+
+- Lab suite passed 25 tests: the existing 5 Lab tests plus all 20 migrated environment tests.
+- ActingLab binary suite passed all 670 remaining app-owned tests after the 20-test ownership transfer.
+- All 30 static protocol golden cases passed unchanged.
+- Architecture source/API, dependency-law, command-inventory, and line-ratchet guards passed.
+- Focused Clippy passed with warnings denied.
+- Full workspace formatting and Clippy passed with warnings denied.
+- The complete workspace test suite passed after the ownership transfer, including 670 app tests, 25 Lab tests, protocol goldens, architecture guards, integration tests, and compile-time UI tests.
+- Final diff whitespace validation passed.
+
+### Current blocker
+
+- No implementation blocker remains.
+
+### Next step
+
+1. Commit, tag, push, and report A3 in GitHub issue #34.
+2. Continue directly to A4 read-only recognition/page migration.
+
 ## 2026-07-10 issue 33 A2b application-core skeleton complete
 
 ### Current status

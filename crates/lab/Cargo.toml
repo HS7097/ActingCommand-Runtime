@@ -12,8 +12,11 @@ publish = false
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-ledger = { workspace = true }
+actingcommand-recognition = { workspace = true }
+actingcommand-recognition-pack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

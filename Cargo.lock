@@ -95,8 +95,11 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-ledger",
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

@@ -24,7 +24,7 @@ actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
