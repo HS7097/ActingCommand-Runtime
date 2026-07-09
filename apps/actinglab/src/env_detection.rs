@@ -2080,6 +2080,32 @@ mod tests {
     }
 
     #[test]
+    fn stored_unlisted_env_value_blocks_resolution() {
+        let temp = TempDir::new().unwrap();
+        let context = context(temp.path(), "envinst_a");
+        let detector = detector();
+        let result = result(&context, &detector, "hash", "Other", 0.95, None);
+        let err = ensure_result_fresh(&result, &detector, &context, "hash", current_unix_ms())
+            .expect_err("unlisted result value rejected");
+
+        assert!(err.message.contains("not in allowed_values"));
+        assert_eq!(env_stale_reason(&err), "unallowed_value");
+    }
+
+    #[test]
+    fn stored_unsafe_env_value_blocks_resolution() {
+        let temp = TempDir::new().unwrap();
+        let context = context(temp.path(), "envinst_a");
+        let detector = detector();
+        let result = result(&context, &detector, "hash", "../Default", 0.95, None);
+        let err = ensure_result_fresh(&result, &detector, &context, "hash", current_unix_ms())
+            .expect_err("unsafe result value rejected");
+
+        assert!(err.message.contains("unsafe value"));
+        assert_eq!(env_stale_reason(&err), "unsafe_value");
+    }
+
+    #[test]
     fn stale_result_payload_reports_machine_readable_needs_detection() {
         let temp = TempDir::new().unwrap();
         let context = context(temp.path(), "envinst_a");

@@ -26,6 +26,7 @@ Implemented direction:
 - Concurrent env result writes are covered by a focused test proving the lock/atomic-write path leaves a readable `result.json` and no stale lock file even when one writer hits a lock conflict.
 - Add `env resolve` and `env status` commands for `{env:<key>}` pointer resolution and freshness inspection.
 - `env status` and `env resolve` now surface machine-readable `needs_detection` diagnostics for missing or stale env results, including reason, detector id/version, instance id, result path, stale detection summary when present, and `recommended_action=run_detect`.
+- Stored env result values that are unsafe for paths or outside detector `allowed_values` are covered by focused stale-resolution tests and must fail visibly instead of resolving to a resource path.
 - Allow detection tasks to declare generic pre-recognition interaction steps (`tap`, `long_tap`, `swipe`, and `wait`) in resource data; Runtime executes those steps through the existing touch backend only when the detector is run with `--capture`.
 - Allow detection candidates to be template-based or scene-size based, so resource data can declare non-template environment facts such as resolution without adding game-specific Runtime logic.
 - Resolve `{env:<key>}` markers during runtime recognition-pack loading so normal `recognize`, `detect-page`, `is-visible`, `tap-target`, and semantic navigation paths consume the detected per-instance value instead of requiring a separate manual path rewrite.
@@ -44,7 +45,7 @@ Current boundary:
 - The current mirrored Arknights resource repository now contains `ours/env-detection` and `ours/hometheme`.
 - The current mirrored BlueArchive and AzurLane resource repositories now contain server-neutral `ours/env-detection/detect_resolution` catalogs that use resource-authored scene-size candidates.
 - Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, `{env:ui_theme}` resolution to an existing theme resource path, direct `recognize` loading of an env-backed target, fail-loud missing-env loading, `package build-task --dry-run` for the AK env-backed home routes, and a `detect-page --run-root ... --capture` smoke that wrote `env_resolved` into the runtime ledger.
-- Runtime validation now also covers missing-result and stale-result `env status`/`env resolve` diagnostics through unit tests and a CLI smoke using a synthetic temporary resource root under `target`, plus concurrent result-write safety through a focused test.
+- Runtime validation now also covers missing-result and stale-result `env status`/`env resolve` diagnostics through unit tests and a CLI smoke using a synthetic temporary resource root under `target`, stored unsafe/unlisted env result values through focused tests, plus concurrent result-write safety through a focused test.
 - Resource repositories were mirrored before this resource-dependent task. The Arknights resource repository required a small catalog correction for Dreamland/LoneTrail Day/Night template paths; Runtime remains game-agnostic.
 
 ## Current guarded-click and retry/recovery execution node

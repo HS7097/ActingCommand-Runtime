@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 stored env value safety focused tests
+
+### Current status
+
+- Continued issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Rechecked the resource repositories after the earlier stale Arknights mirror question; Arknights, AzurLane, and BlueArchive are all aligned with `origin/main`.
+- Closed another explicit acceptance gap from the thick spec: stored env result values outside `allowed_values`, or unsafe as resource-path segments, must fail loudly when resolved.
+- Added focused tests proving `ensure_result_fresh` rejects a persisted unlisted env value with stale reason `unallowed_value` and a persisted unsafe env value with stale reason `unsafe_value`.
+- No scheduler auto-trigger, SwitchTheme fallback, UI, OCR, SQLite, or game-specific logic was added.
+
+### Files changed
+
+- `apps/actinglab/src/env_detection.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource mirrors used
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `72e33fc`, up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `58ed4b4c`, up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `d4288fa`, up to date with `origin/main`.
+- No resource repository files were modified by this increment.
+
+### Commands run
+
+- `Get-Content -Raw C:\Users\Alice\.codex\skills\implement\SKILL.md`
+- `rg -n "ActingCommand|env-detection|issue31|detection-task|allowed_values|resource repos" C:\Users\Alice\.codex\memories\MEMORY.md`
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `git status --short --branch`
+- `git diff -- apps/actinglab/src/env_detection.rs`
+- `git fetch --prune --tags` and `git pull --ff-only` in the Arknights, AzurLane, and BlueArchive resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab env_detection::tests::stored_unlisted_env_value_blocks_resolution -- --nocapture`
+- `cargo test -p actingcommand-actinglab env_detection::tests::stored_unsafe_env_value_blocks_resolution -- --nocapture`
+- `cargo test -p actingcommand-actinglab env_detection::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused stored-value tests passed:
+  - `stored_unlisted_env_value_blocks_resolution`
+  - `stored_unsafe_env_value_blocks_resolution`
+- Focused env-detection test module passed: `20` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed with `690` `actinglab` tests.
+
+### Current blocker
+
+- No blocker for this stored env value safety focused test increment.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Runtime changes with updated planning files.
+2. Tag the milestone as a rollback/provenance checkpoint.
+3. Update GitHub issue #31 with validation evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env result concurrency focused test
 
 ### Current status
