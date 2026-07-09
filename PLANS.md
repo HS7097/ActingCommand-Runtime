@@ -6,6 +6,38 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
+## Current CLI-to-Lab extraction chain
+
+The active approved architecture work is GitHub issue #33:
+
+- `[架构] CLI=管道 · lab=应用核 抽层任务链(A0–A9)`
+- Frozen technical source of truth: `TASK-lab-extraction-chain.md`
+- Frozen specification SHA-256: `efb9e37f10807ce2a615205e3924021ad91eb073a54e4c65cd178e14b0aeab3b`
+- Runtime baseline: `6941b9a046da182185b1a64745f77651e0aec5f0`
+
+The chain is strictly linear:
+
+`A0 -> A1 -> A2a -> A2b -> A3 -> A4 -> A5 -> A6 -> A7 -> A8a -> A8b -> A9`
+
+Current node: A0, tracked by GitHub issue #34 on branch `issue-33-a0`.
+
+A0 delivers:
+
+- structured dependency-law guards for S1 G-a through G-e;
+- a checked-in `apps/actinglab/src/main.rs` line ratchet;
+- a source-derived command inventory and checked-in denominator snapshot;
+- no Runtime behavior changes and no A1 golden-test work.
+
+A0 implementation is complete and verified on its task branch:
+
+- S1 guards cover G-a through G-e, including AST inspection for public `serde_json::Value` signatures and Cargo metadata dependency direction;
+- the exact `main.rs` ratchet baseline is `60161` lines;
+- the checked-in denominator is `44` top-level dispatch arms, expanded to `119` concrete commands;
+- deliberate line growth and stale command-count mutations both failed before restoration;
+- focused tests, formatting, diff checks, workspace Clippy, and workspace tests pass.
+
+A1 must not begin until A0 receives the independent sign-off required by issue #32 and child issue #34 is authorized for closure.
+
 ## Current environment detection memory and env pointer node
 
 The active approved Runtime work is GitHub issue #31:

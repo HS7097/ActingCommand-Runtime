@@ -37,6 +37,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-actinglab-architecture"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "syn",
+ "toml",
+]
+
+[[package]]
 name = "actingcommand-arbitrator"
 version = "0.1.0"
 dependencies = [

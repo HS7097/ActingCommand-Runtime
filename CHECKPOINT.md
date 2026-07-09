@@ -1,5 +1,83 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A0 implementation complete
+
+### Current status
+
+- Read approved Runtime issue #33 and the frozen `TASK-lab-extraction-chain.md` v2 specification.
+- Verified the local specification SHA-256 is `efb9e37f10807ce2a615205e3924021ad91eb073a54e4c65cd178e14b0aeab3b`, matching the approved freeze record in issue #33.
+- Confirmed Runtime `main` was clean and aligned with `origin/main` at `6941b9a046da182185b1a64745f77651e0aec5f0` before creating an isolated worktree.
+- Created branch `issue-33-a0` in an isolated worktree and opened child issue #34 for A0.
+- Baseline `cargo build --workspace` and `cargo test --workspace` passed before edits.
+- Added a development-only architecture guard package. It is a workspace test/tool dependency and is not linked into the ActingLab runtime binary.
+- Added S1 G-a through G-e enforcement: future `crates/lab` source restrictions, AST inspection of public JSON-value APIs, contract dependency-budget parsing, and Cargo metadata dependency-direction checks.
+- Added the exact `60161`-line ratchet for `apps/actinglab/src/main.rs`.
+- Added a source-derived command inventory with `44` top-level dispatch arms and `119` concrete commands, plus the A0 exemption table.
+- Added a PowerShell extractor/check wrapper under the existing `scripts/actinglab` tool surface.
+- No Runtime behavior, game resource, resource repository, or emulator state was changed.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `tools/actinglab-architecture/Cargo.toml`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/src/main.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `tools/actinglab-architecture/README.md`
+- `ratchet/main_rs_lines.txt`
+- `ratchet/actinglab_commands.json`
+- `scripts/actinglab/command-inventory.ps1`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 33 --repo HS7097/ActingCommand-Runtime ...`
+- `Get-FileHash -Algorithm SHA256 TASK-lab-extraction-chain.md`
+- `git fetch --prune --tags origin`
+- `git worktree add ... -b issue-33-a0 origin/main`
+- `gh issue create ...` -> issue #34
+- `cargo build --workspace`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-actinglab-architecture ...` for each RED/GREEN cycle and the complete focused suite
+- `cargo run -q -p actingcommand-actinglab-architecture --bin actinglab-command-inventory`
+- `cargo run -q -p actingcommand-actinglab-architecture --bin actinglab-command-inventory -- --check`
+- `scripts/actinglab/command-inventory.ps1`
+- `scripts/actinglab/command-inventory.ps1 -Check`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo tree -p actingcommand-actinglab` with an assertion that the architecture tool is absent
+- Deliberate one-line `main.rs` mutation followed by the ratchet focused test, then restoration and a passing rerun
+- Deliberate `command_count` snapshot mutation followed by `--check`, then restoration and a passing rerun
+
+### Test results
+
+- Baseline workspace build passed.
+- Baseline workspace test suite passed.
+- All seven architecture tool unit tests passed, including negative fixtures for forbidden source tokens, public JSON-value API shapes, renamed contract dependencies, app dependency edges, line-ratchet direction, and grouped command extraction.
+- Five workspace guard tests passed: lab placeholder/guard wiring, command snapshot agreement, contract budget, Cargo metadata direction, and line ratchet.
+- Ratchet mutation failed with `main.rs grew from 60161 to 60162 lines`; restoration passed.
+- Snapshot mutation failed with `FATAL: command snapshot command_count is stale`; restoration passed with `119 commands across 44 dispatch arms`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed.
+- `cargo tree -p actingcommand-actinglab` confirmed the development-only architecture package is not linked into the Runtime application.
+
+### Current blocker
+
+- A0 implementation has no technical blocker. Per issue #32 and the frozen chain, independent sign-off and explicit authorization are still required before closing #34 and starting A1.
+
+### Next step
+
+1. Commit and push the A0 task branch.
+2. Post the implementation delivery report to #34 with base/final commits, frozen specification hash, and verification evidence.
+3. Wait for the independent A0 sign-off/closure authorization required by issue #32.
+4. After A0 is accepted, open and execute A1 without starting any migration work early.
+
 ## 2026-07-09 issue 31 readiness audit
 
 ### Current status
