@@ -12,6 +12,8 @@
 - Stale reasons are classified for schema mismatch, instance mismatch, scope mismatch, detector mismatch, detector resource hash changes, missing keys, low confidence, expiration, unsafe values, and values outside `allowed_values`.
 - Runtime still does not auto-rerun detection or make scheduler decisions; this increment only exposes the recovery handoff evidence for #30 recovery or the future scheduler trigger.
 - Runtime baseline before this increment: `7831e26`.
+- Milestone source commit: `9ca4c28 Add env stale diagnostics`.
+- Checkpoint tag: `checkpoint/20260709-issue31-env-stale-diagnostics`.
 
 ### Files changed
 
