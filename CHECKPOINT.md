@@ -1,5 +1,94 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 readiness audit
+
+### Current status
+
+- Performed a current-HEAD completion audit for issue #31 against local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` and the referenced suggestion image.
+- Refreshed Runtime and all three resource repositories before the audit.
+- Confirmed the earlier stale Arknights mirror conclusion is no longer current: the Arknights resource repository now contains `ours/env-detection` and `ours/hometheme`, while AzurLane and BlueArchive contain resource-authored `detect_resolution` catalogs under `ours/env-detection`.
+- Re-ran a current synthetic CLI detect/resolve smoke on the current Runtime HEAD. `detect` wrote a desensitized `envinst_.../result.json`, `env resolve` returned `hometheme/Default/DepotEnter.png`, and the generated result remained under ignored `target/`.
+- Rechecked the Arknights env-detection `.gitignore`; runtime-local per-instance result files are ignored and the resource worktree only shows ignored result artifacts, not commit pollution.
+- Rechecked the stale `{detected:}` prefix; current resource/runtime scan did not find a `{detected:...}` pointer.
+- Rechecked local thick-spec text consistency: it now uses `<instance_id>`, does not include the stale raw endpoint schema example, and no longer uses the ambiguous `五连全绿` wording.
+- Corrected one audit-path assumption during inspection: AzurLane and BlueArchive env catalogs are directly at `ours/env-detection/detections.json`, not under `ours/env-detection/detect_resolution/detections.json`.
+- Current in-scope issue #31 Runtime/resource acceptance evidence is sufficient for Alice acceptance. Scheduler-triggered redetection and SwitchTheme fallback remain explicitly future-scope and were not implemented.
+
+### Acceptance evidence matrix
+
+| Requirement | Current evidence |
+| --- | --- |
+| Generic env detection mechanism, not AK-only/theme-only | `apps/actinglab/src/env_detection.rs` supports data-defined detector ids, keys, candidates, thresholds, `allowed_values`, scene-size candidates, and generic interaction steps; BlueArchive/AzurLane resource catalogs use the same mechanism for resolution. |
+| Result memory path under `ours/env-detection/<instance_id>/result.json` | Current CLI smoke output wrote `target\issue31-env-cli\ours\env-detection\envinst_edp6byu2hmqb5jdee65cn4nl\result.json`; resource docs use `<instance_id>`. |
+| Runtime-local generated result files are not committed | Runtime `git status` showed only ignored `target/`; Arknights resource `git status --ignored` showed ignored `ours/env-detection/envinst_.../`, with no tracked resource changes. |
+| Windows-safe/desensitized instance id | Existing focused test `instance_id_is_stable_safe_and_desensitized`; current CLI smoke produced `envinst_edp6byu2hmqb5jdee65cn4nl`, not a raw endpoint path. |
+| Result schema includes generated time and provenance | Current CLI smoke output includes `schema_version`, `instance_id`, `game_id`, `server_id`, `detector_id`, `detector_version`, `resource_pack_id`, `resource_pack_hash`, `generated_at_unix_ms`, and per-key detection fields. |
+| `{env:<key>}` only pointer prefix | Resource/runtime scan did not find `{detected:...}` pointers; current env resolve uses `hometheme/{env:ui_theme}/DepotEnter.png`. |
+| `{env}` resolves to concrete resource path | Current CLI smoke resolved `hometheme/{env:ui_theme}/DepotEnter.png` to `hometheme/Default/DepotEnter.png`; previous live AK smoke resolved `hometheme/Siege/DepotEnter.png`. |
+| Stale detector/resource hash fails visibly | `stale_resource_hash_blocks_resolution`, stale diagnostics tests, and previous CLI stale smoke prove stale results return `needs_detection` instead of silently resolving. |
+| Unsafe/unlisted values fail loudly | `stored_unlisted_env_value_blocks_resolution` and `stored_unsafe_env_value_blocks_resolution` passed on current HEAD. |
+| Concurrent detect/result writes do not corrupt JSON | `concurrent_result_writes_leave_readable_json` passed on current HEAD; final JSON is readable/fresh and `.json.lock` does not remain. |
+| Detection and resolution produce ledger evidence | Existing live AK `detect-page --run-root ... --capture` evidence recorded `env_resolved` in the runtime ledger; code emits `env_detected`, `env_resolved`, and `env_needs_detection` stages. |
+| P1 does not auto-schedule redetection | Current implementation returns `needs_detection` diagnostics and records handoff evidence; it does not auto-rerun detection or implement scheduler timing. |
+
+### Files changed
+
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource mirrors used
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `72e33fc`, up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `58ed4b4c`, up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `d4288fa`, up to date with `origin/main`.
+- No resource repository files were modified by this audit.
+
+### Commands run
+
+- `git fetch --prune --tags origin` in Runtime.
+- `git fetch --prune --tags origin; git pull --ff-only` in Arknights, AzurLane, and BlueArchive resource repositories.
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --json number,title,state,body,comments`
+- `Get-Content -Raw AGENTS.md`
+- `Get-Content -Raw PLANS.md`
+- `Get-Content -Raw CHECKPOINT.md`
+- `Get-Content -Raw NOTICE.md`
+- `Get-ChildItem -Recurse -File target\issue31-env-cli`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root target\issue31-env-cli\ours --game arknights --server cn --instance 127.0.0.1:16416 detect --task detect_ui_theme --scene target\issue31-env-cli\ours\scene.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --resource-root target\issue31-env-cli\ours --game arknights --server cn --instance 127.0.0.1:16416 env resolve --task detect_ui_theme --path 'hometheme/{env:ui_theme}/DepotEnter.png'`
+- `git status --short --branch`
+- `git status --ignored --short target\issue31-env-cli\ours\env-detection`
+- `git status --ignored --short ours\env-detection` in Arknights resources.
+- `rg -n "\{detected:|detected:" ...`
+- `Get-Content -Raw ours\env-detection\.gitignore`
+- `Get-Content -Raw ours\env-detection\README.md`
+- Initial incorrect audit probe `Get-Content -Raw ours\env-detection\detect_resolution\detections.json` in AzurLane and BlueArchive resources failed because those catalogs live at `ours\env-detection\detections.json`; the corrected command below was then used.
+- `Get-Content -Raw ours\env-detection\detections.json | ConvertFrom-Json | ConvertTo-Json -Depth 20` in Arknights, AzurLane, and BlueArchive resources.
+- Initial text-scan regex with a quoted JSON-field alternative failed due to PowerShell/regex escaping; the corrected scan below was then used.
+- `rg -n '<instance>|127\.0\.0\.1:16416|五连全绿|ours/env-detection/<instance>' C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md CHECKPOINT.md PLANS.md`
+
+### Test results
+
+- Current CLI detect smoke passed and wrote `ui_theme=Default` with confidence `1.0`.
+- Current CLI env resolve smoke passed and returned `hometheme/Default/DepotEnter.png`.
+- Current generated CLI result path used `envinst_.../result.json`.
+- Runtime `git status` remained clean except ignored `target/`.
+- Arknights resource worktree remained clean except ignored runtime-local env result artifacts.
+- AzurLane and BlueArchive `detections.json` files parsed as JSON and declare `detect_resolution` with `allowed_values` `1280x720` and `1920x1080`.
+- The broad `{detected:...}` pointer scan returned no actual env pointer usages; only unrelated diagnostic strings such as `detected:` in error messages were present.
+- The local thick-spec text scan only found the intentional requirement text mentioning the raw endpoint as a prohibited example, and historical CHECKPOINT notes documenting the earlier text cleanup.
+
+### Current blocker
+
+- No in-scope Runtime/resource blocker remains for issue #31 readiness.
+- Scheduler-triggered redetection and SwitchTheme fallback remain explicitly future work.
+
+### Next step
+
+1. Commit and push this readiness audit with updated planning files.
+2. Add a final GitHub issue #31 comment with current HEAD audit evidence.
+3. Leave GitHub issue #31 open for Alice acceptance unless Alice asks to close it.
+
 ## 2026-07-09 issue 31 stored env value safety focused tests
 
 ### Current status

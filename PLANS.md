@@ -47,6 +47,7 @@ Current boundary:
 - Runtime validation covered the current Arknights `detect_ui_theme` catalog, offline synthetic-scene detection, live read-only AK capture detection on `127.0.0.1:16416`, `env status`, `{env:ui_theme}` resolution to an existing theme resource path, direct `recognize` loading of an env-backed target, fail-loud missing-env loading, `package build-task --dry-run` for the AK env-backed home routes, and a `detect-page --run-root ... --capture` smoke that wrote `env_resolved` into the runtime ledger.
 - Runtime validation now also covers missing-result and stale-result `env status`/`env resolve` diagnostics through unit tests and a CLI smoke using a synthetic temporary resource root under `target`, stored unsafe/unlisted env result values through focused tests, plus concurrent result-write safety through a focused test.
 - Resource repositories were mirrored before this resource-dependent task. The Arknights resource repository required a small catalog correction for Dreamland/LoneTrail Day/Night template paths; Runtime remains game-agnostic.
+- Current HEAD has an issue #31 readiness audit recorded in `CHECKPOINT.md`: Runtime and all three resource repositories are aligned with `origin/main`, the local thick-spec acceptance items have direct evidence, and the remaining scheduler-triggered redetection and SwitchTheme fallback work is intentionally future-scope.
 
 ## Current guarded-click and retry/recovery execution node
 
