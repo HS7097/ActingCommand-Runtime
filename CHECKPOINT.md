@@ -33,6 +33,10 @@
 - Live recovery checkpoint tag `checkpoint/20260709-issues29-30-live-recovery-closeout` was created and pushed.
 - GitHub issue #29 was updated with live closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921815900`.
 - GitHub issue #30 was updated with live closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921815989`.
+- Final Runtime closeout commit `df0ad4b941f3de082eead2f0b27a32087141493a` was created and pushed.
+- Final checkpoint tag `checkpoint/20260709-issues29-30-final-closeout` was created and pushed.
+- GitHub issue #29 was updated with final closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/29#issuecomment-4921930850` and closed as completed.
+- GitHub issue #30 was updated with final closeout comment `https://github.com/HS7097/ActingCommand-Runtime/issues/30#issuecomment-4921932103` and closed as completed.
 
 ### Files changed
 
@@ -88,6 +92,12 @@
 - `git push origin checkpoint/20260709-issues29-30-live-recovery-closeout`
 - `gh issue comment 29 --repo HS7097/ActingCommand-Runtime --body-file -`
 - `gh issue comment 30 --repo HS7097/ActingCommand-Runtime --body-file -`
+- `git commit -m "Detect forbidden error targets during recovery"`
+- `git tag checkpoint/20260709-issues29-30-final-closeout`
+- `git push origin main`
+- `git push origin checkpoint/20260709-issues29-30-final-closeout`
+- `gh issue close 29 --repo HS7097/ActingCommand-Runtime --reason completed`
+- `gh issue close 30 --repo HS7097/ActingCommand-Runtime --reason completed`
 
 ### Test results
 
@@ -120,9 +130,8 @@
 
 ### Next step
 
-1. Commit and push the final Runtime closeout.
-2. Comment on and close GitHub issues #29 and #30 with the final live evidence.
-3. Record the final issue-close URLs and commit hash in this checkpoint.
+1. Push this checkpoint update documenting final issue closure.
+2. Treat Runtime issues #29 and #30 as complete; keep `open_friends` / `open_operator` as separate resource-route follow-up.
 
 ## 2026-07-09 runtime-ledger L8 acceptance closeout
 
