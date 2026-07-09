@@ -6014,7 +6014,23 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
     }
     let command = DirectTouchCommand::parse(command, &flags)?;
     let config = read_user_config()?;
-    let device_config = device_config(global, &config)?;
+    send_direct_touch_command(
+        global,
+        &config,
+        &command,
+        "direct_trusted_manual",
+        "not_required_for_manual_control",
+    )
+}
+
+fn send_direct_touch_command(
+    global: &GlobalOptions,
+    config: &UserConfig,
+    command: &DirectTouchCommand,
+    control_mode: &str,
+    safety_gate: &str,
+) -> CliOutcome<Value> {
+    let device_config = device_config(global, config)?;
     let mut backend = create_touch_backend(device_config.touch_backend_config())
         .map_err(|err| CliError::device(err.to_string()))?;
     let serial = backend.serial().to_string();
@@ -6032,8 +6048,8 @@ fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> C
         "adb_warning": device_config.adb_warning,
         "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
         "touch_backend_warnings": backend.diagnostics().warnings.clone(),
-        "control_mode": "direct_trusted_manual",
-        "safety_gate": "not_required_for_manual_control",
+        "control_mode": control_mode,
+        "safety_gate": safety_gate,
         "serial": serial,
         "device_state": device.state,
         "screen_size": device.screen_size,

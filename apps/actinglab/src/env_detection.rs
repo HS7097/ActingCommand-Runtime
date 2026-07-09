@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, SemanticLedgerContext, app_state_root,
-    canonical_game, current_unix_ms, default_server_for_game, effective_resource_root,
-    finish_semantic_result_with_ledger, hex_sha256, load_scene_from_flags, read_json_file,
-    read_user_config, resolve_resource_root, write_json_file_atomic,
+    CliError, CliOutcome, DirectTouchCommand, FlagArgs, GlobalOptions, SemanticLedgerContext,
+    app_state_root, canonical_game, current_unix_ms, default_server_for_game,
+    effective_resource_root, finish_semantic_result_with_ledger, hex_sha256, load_scene_from_flags,
+    read_json_file, read_user_config, resolve_resource_root, send_direct_touch_command,
+    write_json_file_atomic,
 };
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
@@ -17,6 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 const ENV_DETECTION_DIR: &str = "env-detection";
 const ENV_DETECTION_CATALOG: &str = "detections.json";
@@ -25,6 +28,7 @@ const ENV_DETECTION_SALT: &str = ".local_salt";
 const ENV_RESULT_SCHEMA_VERSION: &str = "env-detect-result.v1";
 const ENV_INSTANCE_ID_PREFIX: &str = "envinst_";
 const ENV_INSTANCE_ID_HASH_LEN: usize = 24;
+const ENV_DETECTION_MAX_STEP_DURATION_MS: u64 = 60_000;
 
 pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
@@ -35,6 +39,30 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         let catalog = load_env_catalog(&context.env_dir)?;
         let detector = catalog.detector(&detector_id)?;
         validate_detector_scope(detector, &context)?;
+        let step_run = run_detection_steps(global, &flags, detector)?;
+        if step_run.planned_only {
+            ledger.record_drive(json!({
+                "stage": "env_detection_steps_planned",
+                "detector_id": detector.id,
+                "detector_version": detector.version(),
+                "instance_id": context.instance_id,
+                "steps": step_run.steps
+            }));
+            return Ok(json!({
+                "schema_version": "env-detect-command.v1",
+                "status": "planned",
+                "dry_run": true,
+                "task": detector.id,
+                "detector_id": detector.id,
+                "detector_version": detector.version(),
+                "instance_id": context.instance_id,
+                "game_id": context.game_id,
+                "server_id": context.server_id,
+                "resource_root": context.resource_root.display().to_string(),
+                "steps_executed": false,
+                "steps": step_run.steps
+            }));
+        }
         let scene = load_scene_from_flags(global, &flags)?;
         let now_ms = current_unix_ms();
         let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
@@ -67,6 +95,8 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             "server_id": context.server_id,
             "resource_root": context.resource_root.display().to_string(),
             "result_path": result_path.display().to_string(),
+            "steps_executed": step_run.executed,
+            "steps": step_run.steps,
             "result": result
         }))
     })();
@@ -288,6 +318,8 @@ struct EnvDetector {
     resource_pack_id: Option<String>,
     #[serde(default)]
     match_metric: Option<String>,
+    #[serde(default, alias = "actions", alias = "pre_actions", alias = "pre_steps")]
+    steps: Vec<EnvDetectionStep>,
     #[serde(alias = "outputs", alias = "items")]
     keys: Vec<EnvDetectionKey>,
 }
@@ -301,6 +333,141 @@ impl EnvDetector {
         self.resource_pack_id
             .clone()
             .unwrap_or_else(|| format!("{}.{}", context.game_id, context.server_id))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct EnvDetectionStep {
+    #[serde(alias = "type", alias = "action")]
+    kind: String,
+    #[serde(default)]
+    x: Option<i32>,
+    #[serde(default)]
+    y: Option<i32>,
+    #[serde(default)]
+    x1: Option<i32>,
+    #[serde(default)]
+    y1: Option<i32>,
+    #[serde(default)]
+    x2: Option<i32>,
+    #[serde(default)]
+    y2: Option<i32>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+}
+
+impl EnvDetectionStep {
+    fn canonical_kind(&self) -> CliOutcome<&'static str> {
+        match self.kind.trim() {
+            "tap" => Ok("tap"),
+            "long_tap" | "long-tap" | "longtap" => Ok("long_tap"),
+            "swipe" => Ok("swipe"),
+            "wait" | "sleep" => Ok("wait"),
+            other => Err(CliError::usage(format!(
+                "unsupported env detection step kind '{other}'"
+            ))),
+        }
+    }
+
+    fn requires_touch(&self) -> CliOutcome<bool> {
+        Ok(match self.canonical_kind()? {
+            "tap" | "long_tap" | "swipe" => true,
+            "wait" => false,
+            _ => unreachable!(),
+        })
+    }
+
+    fn to_direct_touch_command(&self) -> CliOutcome<Option<DirectTouchCommand>> {
+        match self.canonical_kind()? {
+            "tap" => Ok(Some(DirectTouchCommand::Tap {
+                x: self.required_coord("x")?,
+                y: self.required_coord("y")?,
+            })),
+            "long_tap" => Ok(Some(DirectTouchCommand::LongTap {
+                x: self.required_coord("x")?,
+                y: self.required_coord("y")?,
+                duration_ms: self.required_duration()?,
+            })),
+            "swipe" => Ok(Some(DirectTouchCommand::Swipe {
+                x1: self.required_coord("x1")?,
+                y1: self.required_coord("y1")?,
+                x2: self.required_coord("x2")?,
+                y2: self.required_coord("y2")?,
+                duration_ms: self.required_duration()?,
+            })),
+            "wait" => Ok(None),
+            _ => unreachable!(),
+        }
+    }
+
+    fn required_coord(&self, name: &str) -> CliOutcome<i32> {
+        let value = match name {
+            "x" => self.x,
+            "y" => self.y,
+            "x1" => self.x1,
+            "y1" => self.y1,
+            "x2" => self.x2,
+            "y2" => self.y2,
+            _ => None,
+        }
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "env detection step '{}' is missing coordinate {name}",
+                self.kind
+            ))
+        })?;
+        if value < 0 {
+            return Err(CliError::usage(format!(
+                "env detection step '{}' coordinate {name} must be non-negative",
+                self.kind
+            )));
+        }
+        Ok(value)
+    }
+
+    fn required_duration(&self) -> CliOutcome<u64> {
+        let duration_ms = self.duration_ms.ok_or_else(|| {
+            CliError::usage(format!(
+                "env detection step '{}' is missing duration_ms",
+                self.kind
+            ))
+        })?;
+        if duration_ms == 0 || duration_ms > ENV_DETECTION_MAX_STEP_DURATION_MS {
+            return Err(CliError::usage(format!(
+                "env detection step '{}' duration_ms must be in 1..={ENV_DETECTION_MAX_STEP_DURATION_MS}",
+                self.kind
+            )));
+        }
+        Ok(duration_ms)
+    }
+
+    fn to_plan_json(&self) -> CliOutcome<Value> {
+        Ok(match self.canonical_kind()? {
+            "tap" => json!({
+                "type": "tap",
+                "x": self.required_coord("x")?,
+                "y": self.required_coord("y")?
+            }),
+            "long_tap" => json!({
+                "type": "long_tap",
+                "x": self.required_coord("x")?,
+                "y": self.required_coord("y")?,
+                "duration_ms": self.required_duration()?
+            }),
+            "swipe" => json!({
+                "type": "swipe",
+                "x1": self.required_coord("x1")?,
+                "y1": self.required_coord("y1")?,
+                "x2": self.required_coord("x2")?,
+                "y2": self.required_coord("y2")?,
+                "duration_ms": self.required_duration()?
+            }),
+            "wait" => json!({
+                "type": "wait",
+                "duration_ms": self.required_duration()?
+            }),
+            _ => unreachable!(),
+        })
     }
 }
 
@@ -576,6 +743,8 @@ struct FlatEnvDetectionItem {
     resource_pack_id: Option<String>,
     #[serde(default)]
     match_metric: Option<String>,
+    #[serde(default, alias = "actions", alias = "pre_actions", alias = "pre_steps")]
+    steps: Vec<EnvDetectionStep>,
     #[serde(flatten)]
     key: EnvDetectionKey,
 }
@@ -598,6 +767,7 @@ fn normalize_flat_env_catalog(value: Value) -> Result<EnvDetectionCatalog, Strin
                 .resource_pack_id
                 .or_else(|| flat.resource_pack_id.clone()),
             match_metric: item.match_metric.or_else(|| flat.match_metric.clone()),
+            steps: item.steps,
             keys: Vec::new(),
         };
         let detector = detectors
@@ -651,6 +821,12 @@ fn ensure_flat_detector_metadata_matches(
             ));
         }
     }
+    if current.steps != candidate.steps {
+        return Err(format!(
+            "flat env detector '{}' has conflicting steps",
+            current.id
+        ));
+    }
     Ok(())
 }
 
@@ -680,6 +856,9 @@ fn validate_catalog(catalog: &EnvDetectionCatalog) -> CliOutcome<()> {
                 detector.id
             )));
         }
+        for (index, step) in detector.steps.iter().enumerate() {
+            validate_detection_step(detector, index, step)?;
+        }
         let mut key_ids = BTreeSet::new();
         for key in &detector.keys {
             validate_detection_key(detector, key)?;
@@ -691,6 +870,22 @@ fn validate_catalog(catalog: &EnvDetectionCatalog) -> CliOutcome<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn validate_detection_step(
+    detector: &EnvDetector,
+    index: usize,
+    step: &EnvDetectionStep,
+) -> CliOutcome<()> {
+    step.to_plan_json().map_err(|err| {
+        CliError::usage(format!(
+            "env detector '{}' step {} is invalid: {}",
+            detector.id,
+            index + 1,
+            err.message
+        ))
+    })?;
     Ok(())
 }
 
@@ -812,6 +1007,100 @@ fn validate_detector_scope(detector: &EnvDetector, context: &EnvCommandContext) 
         )));
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct EnvDetectionStepRun {
+    planned_only: bool,
+    executed: bool,
+    steps: Vec<Value>,
+}
+
+fn run_detection_steps(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    detector: &EnvDetector,
+) -> CliOutcome<EnvDetectionStepRun> {
+    let planned_steps = detector
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            Ok(json!({
+                "index": index,
+                "step": step.to_plan_json()?
+            }))
+        })
+        .collect::<CliOutcome<Vec<_>>>()?;
+    if detector.steps.is_empty() {
+        return Ok(EnvDetectionStepRun {
+            planned_only: false,
+            executed: false,
+            steps: planned_steps,
+        });
+    }
+    if global.dry_run || flags.bool("--dry-run") {
+        return Ok(EnvDetectionStepRun {
+            planned_only: true,
+            executed: false,
+            steps: planned_steps,
+        });
+    }
+    if flags.optional_path("--scene").is_some() || !flags.bool("--capture") {
+        return Err(CliError::usage(format!(
+            "env detector '{}' has interactive steps; execute it with --capture so recognition evaluates the post-step frame",
+            detector.id
+        )));
+    }
+
+    let needs_touch = detector
+        .steps
+        .iter()
+        .map(EnvDetectionStep::requires_touch)
+        .collect::<CliOutcome<Vec<_>>>()?
+        .into_iter()
+        .any(|value| value);
+    let config = if needs_touch {
+        Some(read_user_config()?)
+    } else {
+        None
+    };
+    let mut steps = Vec::new();
+    for (index, step) in detector.steps.iter().enumerate() {
+        let planned = step.to_plan_json()?;
+        let status = if let Some(command) = step.to_direct_touch_command()? {
+            let config = config.as_ref().ok_or_else(|| {
+                CliError::device("env detection touch step requires device configuration")
+            })?;
+            let result = send_direct_touch_command(
+                global,
+                config,
+                &command,
+                "env_detection_step",
+                "declared_env_detection_step",
+            )?;
+            json!({
+                "index": index,
+                "status": "executed",
+                "step": planned,
+                "result": result
+            })
+        } else {
+            let duration_ms = step.required_duration()?;
+            thread::sleep(Duration::from_millis(duration_ms));
+            json!({
+                "index": index,
+                "status": "executed",
+                "step": planned
+            })
+        };
+        steps.push(status);
+    }
+    Ok(EnvDetectionStepRun {
+        planned_only: false,
+        executed: true,
+        steps,
+    })
 }
 
 fn evaluate_detector(
@@ -1426,6 +1715,116 @@ mod tests {
     }
 
     #[test]
+    fn interactive_steps_are_data_defined_and_validated() {
+        let mut detector = detector();
+        detector.steps = vec![
+            EnvDetectionStep {
+                kind: "tap".to_string(),
+                x: Some(100),
+                y: Some(200),
+                x1: None,
+                y1: None,
+                x2: None,
+                y2: None,
+                duration_ms: None,
+            },
+            EnvDetectionStep {
+                kind: "long-tap".to_string(),
+                x: Some(110),
+                y: Some(210),
+                x1: None,
+                y1: None,
+                x2: None,
+                y2: None,
+                duration_ms: Some(500),
+            },
+            EnvDetectionStep {
+                kind: "swipe".to_string(),
+                x: None,
+                y: None,
+                x1: Some(10),
+                y1: Some(20),
+                x2: Some(30),
+                y2: Some(40),
+                duration_ms: Some(300),
+            },
+            EnvDetectionStep {
+                kind: "wait".to_string(),
+                x: None,
+                y: None,
+                x1: None,
+                y1: None,
+                x2: None,
+                y2: None,
+                duration_ms: Some(1),
+            },
+        ];
+        for (index, step) in detector.steps.iter().enumerate() {
+            validate_detection_step(&detector, index, step).unwrap();
+        }
+        assert_eq!(
+            detector.steps[1].to_plan_json().unwrap()["type"],
+            "long_tap"
+        );
+    }
+
+    #[test]
+    fn invalid_interactive_steps_fail_loud() {
+        let detector = detector();
+        let missing_coordinate = EnvDetectionStep {
+            kind: "tap".to_string(),
+            x: Some(100),
+            y: None,
+            x1: None,
+            y1: None,
+            x2: None,
+            y2: None,
+            duration_ms: None,
+        };
+        let err = validate_detection_step(&detector, 0, &missing_coordinate)
+            .expect_err("missing coordinate rejected");
+        assert!(err.message.contains("missing coordinate y"));
+
+        let invalid_duration = EnvDetectionStep {
+            kind: "wait".to_string(),
+            x: None,
+            y: None,
+            x1: None,
+            y1: None,
+            x2: None,
+            y2: None,
+            duration_ms: Some(0),
+        };
+        let err = validate_detection_step(&detector, 1, &invalid_duration)
+            .expect_err("zero duration rejected");
+        assert!(err.message.contains("duration_ms"));
+    }
+
+    #[test]
+    fn dry_run_detection_steps_plan_without_device_work() {
+        let mut detector = detector();
+        detector.steps = vec![EnvDetectionStep {
+            kind: "tap".to_string(),
+            x: Some(100),
+            y: Some(200),
+            x1: None,
+            y1: None,
+            x2: None,
+            y2: None,
+            duration_ms: None,
+        }];
+        let global = GlobalOptions {
+            dry_run: true,
+            ..GlobalOptions::default()
+        };
+        let flags = FlagArgs::parse(&[]).unwrap();
+        let run = run_detection_steps(&global, &flags, &detector).unwrap();
+        assert!(run.planned_only);
+        assert!(!run.executed);
+        assert_eq!(run.steps[0]["step"]["type"], "tap");
+    }
+
+    #[test]
     fn stale_resource_hash_blocks_resolution() {
         let temp = TempDir::new().unwrap();
         let context = context(temp.path(), "envinst_a");
@@ -1517,6 +1916,7 @@ mod tests {
             server_id: Some("cn".to_string()),
             resource_pack_id: Some("test-pack".to_string()),
             match_metric: Some("ccorr_normed".to_string()),
+            steps: Vec::new(),
             keys: vec![EnvDetectionKey {
                 key: "ui_theme".to_string(),
                 min_confidence: 0.7,

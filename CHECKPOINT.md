@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 generic interactive env detection steps
+
+### Current status
+
+- Continued issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Rechecked Runtime and resource repositories after the interrupted session; all were clean and aligned with remote before editing.
+- Implemented generic resource-defined environment detection pre-steps in Runtime:
+  - `tap`
+  - `long_tap`
+  - `swipe`
+  - `wait`
+- Detection steps are data-defined on env detectors, validated at catalog load, and remain game-agnostic.
+- Non-dry-run detectors with interactive steps must use `--capture`, so recognition evaluates the post-step device frame instead of a stale file.
+- `--dry-run` plans interactive detection steps without touching the device or writing a detection result.
+- Direct touch execution was factored into a reusable helper so env detection steps use the same MaaTouch-backed direct touch path without adding an ADB input fallback.
+
+### Files changed
+
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git status -sb`
+- `git fetch --prune --tags` for Runtime, Arknights resources, AzurLane resources, and BlueArchive resources.
+- `Get-Content C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab package_build -- --nocapture`
+- `cargo test -p actingcommand-actinglab target_center -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --game arknights --server cn --instance issue31-step-smoke detect --task probe_menu --resource-root target\issue31-step-catalog`
+- `cargo run -q -p actingcommand-actinglab -- --json --game arknights --server cn --instance issue31-step-smoke detect --task probe_menu --resource-root target\issue31-step-catalog`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+
+### Test results
+
+- Focused env-detection tests passed: `12` tests.
+- Focused package-build tests passed: `6` tests.
+- Focused target-center test passed.
+- `cargo check -p actingcommand-actinglab` passed.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- Dry-run CLI smoke returned `status=planned`, `steps_executed=false`, and the declared tap/wait steps without requiring a scene/capture or touching a device.
+- Non-dry-run CLI smoke without `--capture` failed loudly with `validation_failed`, proving interactive detector steps cannot silently evaluate a stale pre-step scene.
+- `cargo test --workspace` passed.
+- Initial `cargo clippy --workspace -- -D warnings` found a local `needless_borrow` in the new direct touch helper; it was fixed before final validation.
+- Final `cargo clippy --workspace -- -D warnings` passed.
+
+### Current blocker
+
+- No blocker for the current issue #31 generic interactive detection-step update.
+- Scheduler-triggered redetection, SwitchTheme fallback, BA/AzurLane detection catalogs, UI, OCR, and SQLite remain future work outside this node.
+
+### Next step
+
+1. Commit and push this Runtime issue #31 interactive-step completion with updated planning files.
+2. Update GitHub issue #31 with the final validation summary and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 env-resolved ledger completion audit
 
 ### Current status
