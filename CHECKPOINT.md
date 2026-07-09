@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env result concurrency focused test
+
+### Current status
+
+- Continued issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Audited the suggestion screenshot and issue body after the text consistency closeout.
+- Identified one remaining explicit acceptance gap that was safe and aligned to close in Runtime: the thick spec asks for concurrency focused coverage that concurrent detect/result writes do not corrupt JSON.
+- Added focused coverage for concurrent env result writes.
+- The new test starts two writers on the same env result path through a barrier, allows one writer to fail visibly with a lock conflict, and verifies that at least one write succeeds, the final `result.json` is readable/fresh, and the `.json.lock` file does not remain.
+- No scheduler auto-trigger, SwitchTheme fallback, UI, OCR, SQLite, or game-specific logic was added.
+
+### Files changed
+
+- `apps/actinglab/src/env_detection.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Resource mirrors used
+
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-Arknights`: `72e33fc`, already up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-AzurLane`: `58ed4b4c`, already up to date with `origin/main`.
+- `C:\Users\Alice\Documents\Azur\ActingCommand-Resources-BlueArchive`: `d4288fa`, already up to date with `origin/main`.
+- No resource repository files were modified by this increment.
+
+### Commands run
+
+- `git fetch --prune --tags origin` in Runtime.
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `gh issue view 31 --repo HS7097/ActingCommand-Runtime --json number,title,state,body,comments`
+- `git fetch origin --prune --tags; git pull --ff-only` in Arknights, AzurLane, and BlueArchive resource repositories.
+- `cargo fmt --all`
+- `cargo test -p actingcommand-actinglab env_detection::tests::concurrent_result_writes_leave_readable_json -- --nocapture`
+- `cargo test -p actingcommand-actinglab env_detection::tests -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+
+### Test results
+
+- Focused concurrency test passed: `concurrent_result_writes_leave_readable_json`.
+- Focused env-detection test module passed: `18` tests.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed with `688` `actinglab` tests.
+
+### Current blocker
+
+- No blocker for this concurrency focused test increment.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Runtime changes with updated planning files.
+2. Tag the milestone as a rollback/provenance checkpoint.
+3. Update GitHub issue #31 with validation evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 text consistency closeout
 
 ### Current status

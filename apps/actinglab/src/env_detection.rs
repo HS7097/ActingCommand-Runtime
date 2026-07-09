@@ -2268,6 +2268,46 @@ mod tests {
         assert_eq!(loaded.detections["ui_theme"].value, "Default");
     }
 
+    #[test]
+    fn concurrent_result_writes_leave_readable_json() {
+        let temp = TempDir::new().unwrap();
+        let context = context(temp.path(), "envinst_a");
+        let detector = detector();
+        let path = env_result_path(&context.env_dir, &context.instance_id);
+        let first = result(&context, &detector, "hash", "Default", 0.95, None);
+        let mut second = result(&context, &detector, "hash", "Default", 0.96, None);
+        second.detections.get_mut("ui_theme").unwrap().source = "concurrent-second".to_string();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let path_a = path.clone();
+        let path_b = path.clone();
+        let barrier_a = std::sync::Arc::clone(&barrier);
+        let barrier_b = std::sync::Arc::clone(&barrier);
+        let first_writer = std::thread::spawn(move || {
+            barrier_a.wait();
+            write_env_result(&path_a, &first)
+        });
+        let second_writer = std::thread::spawn(move || {
+            barrier_b.wait();
+            write_env_result(&path_b, &second)
+        });
+
+        barrier.wait();
+        let outcomes = [first_writer.join().unwrap(), second_writer.join().unwrap()];
+        assert!(outcomes.iter().any(Result::is_ok));
+        for err in outcomes.iter().filter_map(|outcome| outcome.as_ref().err()) {
+            assert!(err.message.contains("lock conflict"));
+        }
+
+        let loaded = load_env_result(&path).unwrap();
+        ensure_result_fresh(&loaded, &detector, &context, "hash", current_unix_ms()).unwrap();
+        assert!(loaded.detections.contains_key("ui_theme"));
+        assert!(
+            !path.with_extension("json.lock").exists(),
+            "env detection lock file should not remain after concurrent writes"
+        );
+    }
+
     fn candidate(value: &str) -> EnvDetectionCandidate {
         EnvDetectionCandidate {
             value: value.to_string(),
