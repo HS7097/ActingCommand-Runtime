@@ -28,6 +28,7 @@ Implemented direction:
 - Allow detection candidates to be template-based or scene-size based, so resource data can declare non-template environment facts such as resolution without adding game-specific Runtime logic.
 - Resolve `{env:<key>}` markers during runtime recognition-pack loading so normal `recognize`, `detect-page`, `is-visible`, `tap-target`, and semantic navigation paths consume the detected per-instance value instead of requiring a separate manual path rewrite.
 - Resolve `{env:<key>}` markers during selected `package build-task` pack/operation assembly when an instance result exists, so instance-specific dry-run packages validate with concrete assets.
+- Surface `needs_detection` hints when env-backed recognition or page detection fails, and record `env_needs_detection` drive records for semantic control/read paths that can feed #30 recovery or future scheduler redetection without Runtime making a scheduling decision itself.
 - Support `target` / `target_center` navigation clicks that resolve at execution time through a recognition target match, with destructive-overlap checks applied to the resolved concrete click point before device input.
 - Record `env_detected` and `env_resolved` stages through the existing semantic ledger path when a run root is configured.
 - Surface implicit `{env:<key>}` consumption in normal semantic command and Lab2 outputs through `env_resolved`, and record `env_resolved` drive records when those commands write a runtime ledger.

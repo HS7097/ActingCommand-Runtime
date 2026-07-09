@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-09 issue 31 env-backed recognition failure needs-detection hints
+
+### Current status
+
+- Continued issue #31 using local thick spec `C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md` as the source of truth.
+- Rechecked Runtime and resource repositories before editing; all were clean and aligned with remote.
+- Added machine-readable `needs_detection` hints when env-backed recognition/page detection fails after resolving `{env:<key>}` values.
+- `recognize`, `current-page`, `detect-page`, `is-visible`, `tap-target`, and `navigate` now expose the affected env keys and detector ids when an env-backed match is below threshold or the current page is unknown.
+- `tap-target`, `navigate`, and `detect-page` record `env_needs_detection` drive records in the semantic ledger when a run root is configured.
+- Runtime still does not auto-rerun detection or make scheduler decisions; this increment only exposes the recovery handoff evidence for #30 recovery or the future scheduler trigger.
+
+### Files changed
+
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` for Runtime, Arknights resources, AzurLane resources, and BlueArchive resources.
+- `Get-Content -Raw C:\合作工作区\ActingCommand\TASK-detection-task-and-detected-memory.md`
+- `cargo fmt --all`
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab env_needs_detection -- --nocapture`
+- `cargo test -p actingcommand-actinglab env_detection -- --nocapture`
+- Created a synthetic env-backed recognition resource root under `target\issue31-needs-detection-smoke`.
+- `cargo run -q -p actingcommand-actinglab -- --json --game bluearchive --server jp --instance issue31-needs-detection-smoke detect --task detect_resolution --resource-root target\issue31-needs-detection-smoke --scene target\issue31-needs-detection-smoke\scene-1280x720.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --game bluearchive --server jp --instance issue31-needs-detection-smoke recognize --target button/test --resource-root target\issue31-needs-detection-smoke --scene target\issue31-needs-detection-smoke\scene-blue.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --game bluearchive --server jp --instance issue31-needs-detection-smoke tap-target button/test --resource-root target\issue31-needs-detection-smoke --scene target\issue31-needs-detection-smoke\scene-blue.png`
+- `cargo run -q -p actingcommand-actinglab -- --json --dry-run --run-root target\issue31-needs-detection-ledger --game bluearchive --server jp --instance issue31-needs-detection-smoke tap-target button/test --resource-root target\issue31-needs-detection-smoke --scene target\issue31-needs-detection-smoke\scene-blue.png`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-device vendor_stdio::tests::session_captures_win32_noise_across_snapshots -- --nocapture`
+- `cargo test --workspace` rerun after the transient vendor-stdio failure
+
+### Test results
+
+- `cargo check -p actingcommand-actinglab` passed.
+- `cargo test -p actingcommand-actinglab env_needs_detection -- --nocapture` passed.
+- Focused env-detection tests passed: `14` tests.
+- Synthetic `detect_resolution` wrote a local env result for `resolution=1280x720`.
+- Env-backed `recognize` with a deliberately mismatched target returned `passed=false` and a `needs_detection` object with `detector_ids=["detect_resolution"]`.
+- Env-backed `tap-target --dry-run` with the same mismatch failed visibly with exit code `3`, error `target_not_visible`, and nested `details.needs_detection`.
+- Env-backed `tap-target --dry-run --run-root ...` wrote a semantic ledger record with `stage=env_needs_detection`.
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- Initial `cargo test --workspace` hit a transient Windows vendor stdio capture failure in `actingcommand-device`; the failing test passed when rerun directly, and the full workspace rerun passed.
+
+### Current blocker
+
+- No blocker for this env-backed failure handoff increment.
+- Scheduler-triggered redetection and SwitchTheme fallback remain future work outside the current local thick-spec boundary.
+
+### Next step
+
+1. Commit and push Runtime changes with updated planning files.
+2. Update GitHub issue #31 with validation evidence and leave it open unless Alice explicitly asks to close it.
+
 ## 2026-07-09 issue 31 generic scene-size env detection and BA/AzurLane catalogs
 
 ### Current status

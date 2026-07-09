@@ -6352,6 +6352,15 @@ fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         "match_metric": match_metric_name(evaluator.default_match_metric())
     });
     attach_env_resolved(&mut payload, &loaded.env_resolved);
+    if !evaluation.passed {
+        attach_env_needs_detection(
+            &mut payload,
+            "recognize",
+            "target_below_threshold",
+            &target,
+            &loaded.env_resolved,
+        );
+    }
     Ok(payload)
 }
 
@@ -6388,6 +6397,22 @@ fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         payload["req_id"] = json!(ledger.req_id.clone());
         payload["reco_id"] = json!(reco_id.clone());
         attach_env_resolved(&mut payload, &env_resolved);
+        if outcome.standby {
+            attach_env_needs_detection(
+                &mut payload,
+                "detect-page",
+                "current_page_unknown",
+                &outcome.page,
+                &env_resolved,
+            );
+            record_env_needs_detection(
+                &mut ledger,
+                "detect-page",
+                "current_page_unknown",
+                &outcome.page,
+                &env_resolved,
+            );
+        }
         ledger.record_drive(json!({
             "stage": "recognition",
             "command": "detect-page",
@@ -6413,6 +6438,15 @@ fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value
     let outcome = detect_current_page(&evaluator, &detector, &scene)?;
     let mut payload = page_detection_json(&outcome);
     attach_env_resolved(&mut payload, &env_resolved);
+    if outcome.standby {
+        attach_env_needs_detection(
+            &mut payload,
+            "current-page",
+            "current_page_unknown",
+            &outcome.page,
+            &env_resolved,
+        );
+    }
     Ok(payload)
 }
 
@@ -6447,6 +6481,15 @@ fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
         "match_metric": match_metric_name(evaluator.default_match_metric())
     });
     attach_env_resolved(&mut payload, &loaded.env_resolved);
+    if !evaluation.passed {
+        attach_env_needs_detection(
+            &mut payload,
+            "is-visible",
+            "target_below_threshold",
+            &target,
+            &loaded.env_resolved,
+        );
+    }
     Ok(payload)
 }
 
@@ -6545,6 +6588,7 @@ fn env_resolved_json(values: &[env_detection::ResolvedEnvValue]) -> Value {
                     "value": value.value,
                     "confidence": value.confidence,
                     "source": value.source,
+                    "detector_id": value.detector_id,
                     "source_result": value.source_result
                 })
             })
@@ -6557,6 +6601,58 @@ fn attach_env_resolved(payload: &mut Value, values: &[env_detection::ResolvedEnv
         return;
     }
     payload["env_resolved"] = env_resolved_json(values);
+}
+
+fn env_needs_detection_json(
+    command: &str,
+    reason: &str,
+    subject: &str,
+    values: &[env_detection::ResolvedEnvValue],
+) -> Option<Value> {
+    if values.is_empty() {
+        return None;
+    }
+    let detector_ids = values
+        .iter()
+        .map(|value| value.detector_id.clone())
+        .collect::<BTreeSet<_>>();
+    Some(json!({
+        "status": "needs_detection",
+        "reason": reason,
+        "command": command,
+        "subject": subject,
+        "detector_ids": detector_ids.into_iter().collect::<Vec<_>>(),
+        "keys": env_resolved_json(values),
+        "recommended_action": "run_detect"
+    }))
+}
+
+fn attach_env_needs_detection(
+    payload: &mut Value,
+    command: &str,
+    reason: &str,
+    subject: &str,
+    values: &[env_detection::ResolvedEnvValue],
+) {
+    if let Some(needs_detection) = env_needs_detection_json(command, reason, subject, values) {
+        payload["needs_detection"] = needs_detection;
+    }
+}
+
+fn record_env_needs_detection(
+    ledger: &mut SemanticLedgerContext,
+    command: &str,
+    reason: &str,
+    subject: &str,
+    values: &[env_detection::ResolvedEnvValue],
+) {
+    if let Some(needs_detection) = env_needs_detection_json(command, reason, subject, values) {
+        ledger.record_drive(json!({
+            "stage": "env_needs_detection",
+            "command": command,
+            "needs_detection": needs_detection
+        }));
+    }
 }
 
 fn record_env_resolved(
@@ -6838,6 +6934,25 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
             "evaluation": target_eval_json(&evaluation)
         }));
         if !evaluation.passed {
+            record_env_needs_detection(
+                &mut ledger,
+                "tap-target",
+                "target_below_threshold",
+                &target,
+                &loaded.env_resolved,
+            );
+            let mut details = json!({
+                "target": target,
+                "evaluation": target_eval_json(&evaluation)
+            });
+            attach_env_resolved(&mut details, &loaded.env_resolved);
+            attach_env_needs_detection(
+                &mut details,
+                "tap-target",
+                "target_below_threshold",
+                &target,
+                &loaded.env_resolved,
+            );
             return Err(CliError::safety_blocked(
                 "target_not_visible",
                 format!(
@@ -6845,7 +6960,8 @@ fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> 
                     evaluation.message
                 ),
                 &["visible_target"],
-            ));
+            )
+            .with_details(details));
         }
         let click = evaluator
             .get_click_target(&target)
@@ -6941,11 +7057,28 @@ fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
             "standby": start.standby
         }));
         if start.standby {
+            record_env_needs_detection(
+                &mut ledger,
+                "navigate",
+                "current_page_unknown",
+                &start.page,
+                &env_resolved,
+            );
+            let mut details = page_detection_json(&start);
+            attach_env_resolved(&mut details, &env_resolved);
+            attach_env_needs_detection(
+                &mut details,
+                "navigate",
+                "current_page_unknown",
+                &start.page,
+                &env_resolved,
+            );
             return Err(CliError::safety_blocked(
                 "current_page_unknown",
                 "navigate requires a matched current page before clicking",
                 &["current_page"],
-            ));
+            )
+            .with_details(details));
         }
         let target_page = canonical_navigation_page(&graph, &to);
         if start.page == target_page {
@@ -42009,6 +42142,43 @@ mod tests {
             data.pointer("/evaluation/template/height")
                 .and_then(Value::as_i64),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn env_needs_detection_hint_is_machine_readable() {
+        let values = vec![env_detection::ResolvedEnvValue {
+            key: "ui_theme".to_string(),
+            value: "Siege".to_string(),
+            confidence: 0.72,
+            source: "detect_ui_theme@Siege".to_string(),
+            detector_id: "detect_ui_theme".to_string(),
+            source_result: "detect_ui_theme@1783600000000".to_string(),
+        }];
+
+        let hint = env_needs_detection_json(
+            "recognize",
+            "target_below_threshold",
+            "button/depot_enter",
+            &values,
+        )
+        .expect("env hint");
+
+        assert_eq!(
+            hint.pointer("/status").and_then(Value::as_str),
+            Some("needs_detection")
+        );
+        assert_eq!(
+            hint.pointer("/detector_ids/0").and_then(Value::as_str),
+            Some("detect_ui_theme")
+        );
+        assert_eq!(
+            hint.pointer("/keys/0/key").and_then(Value::as_str),
+            Some("ui_theme")
+        );
+        assert_eq!(
+            hint.pointer("/keys/0/detector_id").and_then(Value::as_str),
+            Some("detect_ui_theme")
         );
     }
 

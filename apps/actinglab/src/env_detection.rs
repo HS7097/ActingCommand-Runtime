@@ -602,6 +602,7 @@ pub(super) struct ResolvedEnvValue {
     pub(super) value: String,
     pub(super) confidence: f32,
     pub(super) source: String,
+    pub(super) detector_id: String,
     pub(super) source_result: String,
 }
 
@@ -1482,6 +1483,7 @@ fn resolve_single_env_key(
         value: value.value.clone(),
         confidence: value.confidence,
         source: value.source.clone(),
+        detector_id: result.detector_id.clone(),
         source_result: format!("{}@{}", result.detector_id, result.generated_at_unix_ms),
     })
 }
