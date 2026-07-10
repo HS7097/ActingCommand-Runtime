@@ -361,7 +361,7 @@ Commit message: `feat(ledger): enforce critical event ordering`
 - Consumes: Tasks 1-4 public interfaces only.
 - Produces: process-level proof and dependency-law enforcement.
 
-- [ ] **Step 1: Add RED process and architecture tests**
+- [x] **Step 1: Add RED process and architecture tests**
 
 Add tests named:
 
@@ -383,7 +383,7 @@ actingcommand-contract has no dependency path to actingcommand-ledger
 all non-Lab packages still have no dependency path to actingcommand-lab
 ```
 
-- [ ] **Step 2: Verify RED where applicable**
+- [x] **Step 2: Verify RED where applicable**
 
 Run:
 
@@ -394,11 +394,11 @@ cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --
 
 Expected: process acceptance initially fails until the complete public path is wired; unchanged architecture guards remain green.
 
-- [ ] **Step 3: Complete only the missing public wiring**
+- [x] **Step 3: Complete only the missing public wiring**
 
 Make the smallest corrections required for process-level use. Do not add daemon, IPC, scheduler state, device execution, or Lab adapters.
 
-- [ ] **Step 4: Verify GREEN and forbidden-source scans**
+- [x] **Step 4: Verify GREEN and forbidden-source scans**
 
 Run:
 
@@ -411,7 +411,7 @@ rg -n "actingcommand[_-]lab" crates/actingcommand-contract crates/ledger
 
 Expected: tests pass; any `EventDraft<` occurrence in ledger is limited to explicit compile-fail documentation or negative tests, never an ingress signature; no production Lab dependency exists.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `test(ledger): prove C1 process recovery and correlation`
 

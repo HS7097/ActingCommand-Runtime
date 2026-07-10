@@ -1,5 +1,61 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 Task 5 process recovery and cross-source acceptance
+
+### Current status
+
+- Added process-level acceptance for hard-killed writer recovery, OS-lock release, explicit recovery facts, and contiguous sequence continuation.
+- Added one ordered correlation query covering CLI command, scheduler decision, device input intent/outcome, UI action, and Lab request events.
+- Added redaction-boundary acceptance with distinct token, account, machine-path, and endpoint sentinels across durable files, a recovered indexed query, errors, and CLI/UI/Lab projections.
+- Added a real critical intent-append failure path proving the action closure is not called.
+- Added all-features dependency guards proving `actingcommand-contract` cannot reach `actingcommand-ledger` and non-Lab workspace packages cannot reach optional Lab packages.
+- Task review initially found incomplete secret classes, vacuous leak surfaces, feature-gated dependency gaps, and a weak failure diagnostic. The follow-up commit closed all findings.
+- Final Task 5 re-review approved the two-commit package with no Critical, Important, or Minor findings.
+
+### Files changed
+
+- `crates/ledger/tests/global_ledger_process.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commits
+
+- `a621f6d` `test(ledger): prove C1 process recovery and correlation`
+- `c2801a8` `test(ledger): strengthen C1 acceptance guards`
+
+### Commands run
+
+- `cargo test -p actingcommand-ledger --test global_ledger_process -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`
+- `cargo fmt --all -- --check`
+- `cargo clippy -p actingcommand-ledger --test global_ledger_process -- -D warnings`
+- `cargo clippy -p actingcommand-actinglab-architecture --test workspace_guards -- -D warnings`
+- `rg -n "EventDraft<" crates/ledger/src`
+- `rg -n "\\bEventDraft<" crates/ledger/src`
+- `rg -n "actingcommand[_-]lab" crates/actingcommand-contract crates/ledger`
+- `git diff --check`
+
+### Test results
+
+- Global-ledger process acceptance: 5 passed, 0 failed.
+- Workspace architecture guards with all features: 12 passed, 0 failed.
+- Focused Clippy with warnings denied, formatting check, and diff check passed.
+- The broad `EventDraft<` substring scan found only `SanitizedEventDraft`; the raw-word scan found no ledger ingress.
+- No Contract or Ledger source reference to an ActingLab package was found.
+- Final task-scoped review: APPROVED with 0 Critical, 0 Important, and 0 Minor findings.
+
+### Current blocker
+
+- None for C1 Task 5.
+
+### Next step
+
+1. Run the whole-branch C1 review over the complete Issue #35 C1 diff.
+2. Resolve any branch-level findings and rerun full workspace verification.
+3. Commit and push C1 closeout documentation, then publish C1 evidence to Issue #36.
+
 ## 2026-07-10 GitHub authority rule and Issue 35 C1 Task 4 critical ordering
 
 ### Current status
