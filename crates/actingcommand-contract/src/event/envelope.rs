@@ -124,6 +124,28 @@ pub struct EventLinksDraft {
 }
 
 impl EventLinksDraft {
+    pub(crate) fn from_verified_runtime(
+        instance_id: Option<InstanceId>,
+        request_id: RequestId,
+        correlation_id: CorrelationId,
+        causation_id: Option<CausationId>,
+        lease_id: Option<LeaseId>,
+        action_id: Option<ActionId>,
+    ) -> Self {
+        Self {
+            instance_id: instance_id.map(IssuedInstanceId::from_verified_transport),
+            request_id: Some(IssuedRequestId::from_verified_transport(request_id)),
+            correlation_id: Some(IssuedCorrelationId::from_verified_transport(correlation_id)),
+            causation_id: causation_id.map(IssuedCausationId::from_verified_transport),
+            task_id: None,
+            run_id: None,
+            lease_id: lease_id.map(IssuedLeaseId::from_verified_transport),
+            frame_id: None,
+            action_id: action_id.map(IssuedActionId::from_verified_transport),
+            recognition_id: None,
+        }
+    }
+
     pub fn with_instance_id(mut self, value: IssuedInstanceId) -> Self {
         self.instance_id = Some(value);
         self

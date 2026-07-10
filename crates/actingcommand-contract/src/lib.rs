@@ -12,6 +12,7 @@ pub mod event;
 pub mod game_engine;
 pub mod lab;
 pub mod primitive;
+pub mod runtime;
 pub mod taskflow;
 pub mod types;
 
@@ -19,6 +20,7 @@ pub use event::*;
 pub use game_engine::*;
 pub use lab::*;
 pub use primitive::*;
+pub use runtime::*;
 pub use taskflow::*;
 pub use types::{
     AcquisitionCapture, ContractResult, DurationMillis, ENGINE_DELEGATED, ENGINE_NATIVE,

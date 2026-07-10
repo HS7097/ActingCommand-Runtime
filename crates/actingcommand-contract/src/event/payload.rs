@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
+pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v2";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v2";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
@@ -549,6 +550,27 @@ enum CommandDraftKind {
     Rejected(DiagnosticOutcomeDraft),
 }
 
+enum RuntimeDraftKind {
+    Started(ObservationDraft),
+    Takeover(ObservationDraft),
+}
+
+pub struct RuntimePayloadDraft(RuntimeDraftKind);
+
+impl RuntimePayloadDraft {
+    pub fn started(action: EventAction, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::Started(ObservationDraft::new(
+            action, audit,
+        )))
+    }
+
+    pub fn takeover(action: EventAction, audit: AuditInput) -> Self {
+        Self(RuntimeDraftKind::Takeover(ObservationDraft::new(
+            action, audit,
+        )))
+    }
+}
+
 pub struct CommandPayloadDraft(CommandDraftKind);
 
 impl CommandPayloadDraft {
@@ -626,6 +648,7 @@ enum LeaseDraftKind {
     Requested(ObservationDraft),
     Granted(OutcomeDraft),
     Transferred(OutcomeDraft),
+    Renewed(OutcomeDraft),
     Released(OutcomeDraft),
     Expired(OutcomeDraft),
     TransitionIntent(ObservationDraft),
@@ -649,6 +672,12 @@ impl LeasePayloadDraft {
 
     pub fn transferred(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Transferred(OutcomeDraft::new(
+            action, effect, audit,
+        )))
+    }
+
+    pub fn renewed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
+        Self(LeaseDraftKind::Renewed(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
@@ -856,6 +885,7 @@ impl LedgerPayloadDraft {
 }
 
 pub enum EventPayloadDraft {
+    Runtime(RuntimePayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
     Lease(LeasePayloadDraft),
@@ -876,6 +906,7 @@ macro_rules! payload_draft_from {
 }
 
 payload_draft_from!(CommandPayloadDraft, Command);
+payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
@@ -903,6 +934,18 @@ pub enum CommandPayload {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+pub enum RuntimePayload {
+    Started(ObservationPayload),
+    Takeover(ObservationPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SchedulerPayload {
     Admitted(ObservationPayload),
     Queued(ObservationPayload),
@@ -921,6 +964,7 @@ pub enum LeasePayload {
     Requested(ObservationPayload),
     Granted(OutcomePayload),
     Transferred(OutcomePayload),
+    Renewed(OutcomePayload),
     Released(OutcomePayload),
     Expired(OutcomePayload),
     TransitionIntent(ObservationPayload),
@@ -1012,6 +1056,10 @@ family_payload!(CommandPayload, {
     Validated => EventType::CommandValidated,
     Rejected => EventType::CommandRejected,
 });
+family_payload!(RuntimePayload, {
+    Started => EventType::RuntimeStarted,
+    Takeover => EventType::RuntimeTakeover,
+});
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
     Queued => EventType::SchedulerQueued,
@@ -1022,6 +1070,7 @@ family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
     Granted => EventType::LeaseGranted,
     Transferred => EventType::LeaseTransferred,
+    Renewed => EventType::LeaseRenewed,
     Released => EventType::LeaseReleased,
     Expired => EventType::LeaseExpired,
     TransitionIntent => EventType::LeaseTransitionIntent,
@@ -1061,6 +1110,7 @@ family_payload!(LedgerPayload, {
     deny_unknown_fields
 )]
 pub enum EventPayload {
+    Runtime(RuntimePayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
     Lease(LeasePayload),
@@ -1076,6 +1126,14 @@ impl EventPayloadDraft {
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<EventPayload, SanitizationError> {
         Ok(match self {
+            Self::Runtime(value) => EventPayload::Runtime(match value.0 {
+                RuntimeDraftKind::Started(detail) => {
+                    RuntimePayload::Started(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::Takeover(detail) => {
+                    RuntimePayload::Takeover(detail.sanitize(fingerprinter)?)
+                }
+            }),
             Self::Command(value) => EventPayload::Command(match value.0 {
                 CommandDraftKind::Received(detail) => {
                     CommandPayload::Received(detail.sanitize(fingerprinter)?)
@@ -1110,6 +1168,9 @@ impl EventPayloadDraft {
                 }
                 LeaseDraftKind::Transferred(detail) => {
                     LeasePayload::Transferred(detail.sanitize(fingerprinter)?)
+                }
+                LeaseDraftKind::Renewed(detail) => {
+                    LeasePayload::Renewed(detail.sanitize(fingerprinter)?)
                 }
                 LeaseDraftKind::Released(detail) => {
                     LeasePayload::Released(detail.sanitize(fingerprinter)?)
@@ -1198,6 +1259,7 @@ impl EventPayload {
 
     pub fn schema(&self) -> &'static str {
         match self {
+            Self::Runtime(_) => RUNTIME_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
@@ -1256,6 +1318,7 @@ impl EventPayload {
             },
         };
         match self {
+            Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
@@ -1268,6 +1331,7 @@ impl EventPayload {
 
     fn family_payload(&self) -> &dyn FamilyPayload {
         match self {
+            Self::Runtime(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
             Self::Lease(value) => value,
@@ -1322,6 +1386,7 @@ impl PublicPayload {
     deny_unknown_fields
 )]
 pub enum PublicEventPayload {
+    Runtime(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
     Lease(PublicPayload),

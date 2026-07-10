@@ -98,7 +98,7 @@ macro_rules! typed_id {
                 &self.0
             }
 
-            #[cfg_attr(not(test), allow(dead_code))]
+            #[allow(dead_code)]
             pub(super) const fn into_transport(self) -> $name {
                 self.0
             }
@@ -145,6 +145,25 @@ typed_id!(
     mint_recognition_id
 );
 typed_id!(ArtifactId, IssuedArtifactId, "artifact_", mint_artifact_id);
+typed_id!(OwnerEpoch, IssuedOwnerEpoch, "epoch_", mint_owner_epoch);
+typed_id!(HolderId, IssuedHolderId, "holder_", mint_holder_id);
+
+macro_rules! verified_transport {
+    ($issued:ident, $transport:ident) => {
+        impl $issued {
+            pub(crate) const fn from_verified_transport(value: $transport) -> Self {
+                Self(value)
+            }
+        }
+    };
+}
+
+verified_transport!(IssuedInstanceId, InstanceId);
+verified_transport!(IssuedRequestId, RequestId);
+verified_transport!(IssuedCorrelationId, CorrelationId);
+verified_transport!(IssuedCausationId, CausationId);
+verified_transport!(IssuedLeaseId, LeaseId);
+verified_transport!(IssuedActionId, ActionId);
 
 /// Mints producer capabilities without accepting caller-selected identifier bytes or strings.
 pub struct IdentifierIssuer {

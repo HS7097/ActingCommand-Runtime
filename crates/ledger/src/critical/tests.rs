@@ -220,6 +220,9 @@ fn lease_success(
         LeaseTransitionTarget::Transferred => {
             LeasePayloadDraft::transferred(EventAction::CriticalTest, effect, AuditInput::new())
         }
+        LeaseTransitionTarget::Renewed => {
+            LeasePayloadDraft::renewed(EventAction::CriticalTest, effect, AuditInput::new())
+        }
         LeaseTransitionTarget::Released => {
             LeasePayloadDraft::released(EventAction::CriticalTest, effect, AuditInput::new())
         }
@@ -832,6 +835,7 @@ fn lease_transition_role_map_is_complete() {
             LeaseTransitionTarget::Transferred,
             EventType::LeaseTransferred,
         ),
+        (LeaseTransitionTarget::Renewed, EventType::LeaseRenewed),
         (LeaseTransitionTarget::Released, EventType::LeaseReleased),
         (LeaseTransitionTarget::Expired, EventType::LeaseExpired),
     ] {

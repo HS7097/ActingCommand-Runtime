@@ -148,6 +148,7 @@ pub enum Sensitivity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventFamily {
+    Runtime,
     Command,
     Scheduler,
     Lease,
@@ -159,6 +160,10 @@ pub enum EventFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventType {
+    #[serde(rename = "runtime.started")]
+    RuntimeStarted,
+    #[serde(rename = "runtime.takeover")]
+    RuntimeTakeover,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -179,6 +184,8 @@ pub enum EventType {
     LeaseGranted,
     #[serde(rename = "lease.transferred")]
     LeaseTransferred,
+    #[serde(rename = "lease.renewed")]
+    LeaseRenewed,
     #[serde(rename = "lease.released")]
     LeaseReleased,
     #[serde(rename = "lease.expired")]
@@ -226,6 +233,7 @@ pub enum EventType {
 impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
+            Self::RuntimeStarted | Self::RuntimeTakeover => EventFamily::Runtime,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }
@@ -236,6 +244,7 @@ impl EventType {
             Self::LeaseRequested
             | Self::LeaseGranted
             | Self::LeaseTransferred
+            | Self::LeaseRenewed
             | Self::LeaseReleased
             | Self::LeaseExpired
             | Self::LeaseTransitionIntent

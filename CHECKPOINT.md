@@ -1,5 +1,82 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 1 typed Runtime contract
+
+### Current status
+
+- Completed the typed C3a Runtime/scheduler/DeviceProxy contract without adding transport, daemon, scheduler state, device execution, capture ownership, or task behavior.
+- Added opaque `OwnerEpoch` and `HolderId` identifiers plus a validated local Runtime request envelope carrying request/correlation identity, actor/source, submitted wall-clock time, and tagged operation.
+- Added acquire/renew/release/read-only/input/query operations, complete fencing `LeaseToken`, typed receipts/results/errors, loopback-only Runtime discovery info, and every current `InputBackend` action variant.
+- Runtime request Debug output redacts instance aliases, keys, text, coordinates, and tokens. Input text remains available only on the typed local wire and is never placed in ledger payloads.
+- Added a verified Runtime-request boundary for event links without exposing a generic public transport-ID promotion API.
+- Extended the event contract with Runtime start/takeover and lease renewal types and schema-owned action/diagnostic codes.
+- Extended C1 critical lease transition role coverage with `LeaseRenewed`.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/runtime.rs`
+- `crates/actingcommand-contract/src/runtime/tests.rs`
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/codes.rs`
+- `crates/actingcommand-contract/src/event/envelope.rs`
+- `crates/actingcommand-contract/src/event/ids.rs`
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/actingcommand-contract/src/lib.rs`
+- `crates/ledger/src/critical.rs`
+- `crates/ledger/src/critical/tests.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-contract --lib -- --nocapture`
+- `cargo test -p actingcommand-ledger --lib critical::tests -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Contract library tests passed: 28.
+- Critical ordering tests passed: 16, including the complete lease role map with renewal.
+- Architecture library and workspace guards passed: 14 + 16.
+- Full workspace tests passed, including unchanged A1 protocol goldens and C1 process/compile-fail suites.
+- Contract/ledger Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+
+### Current blocker
+
+- None for C3a Task 1.
+
+### Next step
+
+1. Commit and push Task 1 with its planning/checkpoint evidence.
+2. Implement Task 2 per-instance scheduler seed with monotonic lease expiry, idempotent renew/release, fencing, cooldown, and concurrency tests.
+
+## 2026-07-11 Issue 35 C3a resident Runtime seed start
+
+### Current status
+
+- C1 was pushed at `640b803` and tagged `checkpoint/20260711-c1-ledger-hardening`.
+- Began the approved C3a critical-path node after re-reading the frozen v3 and C0 contract.
+- Added `docs/plans/2026-07-11-c3a-runtime-seed.md` with seven implementation units and explicit non-goals.
+- Frozen defaults: heartbeat `5_000 ms`, cooldown `6_000 ms`, lease TTL `120_000 ms`, IPC frame maximum `1 MiB`, and IPC timeout `5_000 ms`.
+- C3a preserves client-side read-only capture only; every production input write moves behind daemon DeviceProxy.
+- Work remains direct and local; no subagents are in use.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Implement Task 1 typed Runtime/scheduler/DeviceProxy contracts and tests.
+2. Commit and push the verified Task 1 unit with updated planning/checkpoint evidence.
+
 ## 2026-07-11 Issue 35 C1 global-ledger hardening closeout
 
 ### Current status

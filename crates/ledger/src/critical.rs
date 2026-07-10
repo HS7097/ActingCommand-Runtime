@@ -82,6 +82,7 @@ impl<T, E> fmt::Debug for CriticalActionReport<T, E> {
 pub enum LeaseTransitionTarget {
     Granted,
     Transferred,
+    Renewed,
     Released,
     Expired,
 }
@@ -118,6 +119,7 @@ impl CriticalOperation {
             Self::LeaseTransition(target) => match target {
                 LeaseTransitionTarget::Granted => EventType::LeaseGranted,
                 LeaseTransitionTarget::Transferred => EventType::LeaseTransferred,
+                LeaseTransitionTarget::Renewed => EventType::LeaseRenewed,
                 LeaseTransitionTarget::Released => EventType::LeaseReleased,
                 LeaseTransitionTarget::Expired => EventType::LeaseExpired,
             },
