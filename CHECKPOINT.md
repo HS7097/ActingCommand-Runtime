@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 C1 Task 1 typed event contract
+
+### Current status
+
+- Added the storage-independent global event contract in `actingcommand-contract`.
+- Raw `EventDraft<P>` is deliberately nonserializable; only sealed `SanitizedEventDraft<P>` can be erased for ledger ingress.
+- Added typed event names and payload stages for command, scheduler, lease, task, input, client, and ledger recovery families.
+- Added all v3 correlation fields, event origin/actor, severity, sensitivity, artifact references, query filters, subscription cursor, and CLI/UI/Lab projection profiles.
+- Added field-level `public/internal/sensitive/secret` classification and `keep/mask/fingerprint/drop` policy validation.
+- Secret/account/path/endpoint negative tests prove originals are absent after sanitization and from sanitization errors.
+- Sanitized payload implementations are sealed and sanitized draft fields are private, preventing callers from forging the type-state transition.
+- Used `EventSeverity` rather than replacing the existing public legacy `Severity = String` alias.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/lib.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- RED: `cargo test -p actingcommand-contract event::tests -- --nocapture`
+- focused RED for external redactor failure construction
+- GREEN: `cargo test -p actingcommand-contract event::tests -- --nocapture`
+- `cargo test -p actingcommand-contract --doc`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-contract`
+- `cargo clippy -p actingcommand-contract -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- Initial RED failed with 42 missing event-contract symbols as intended.
+- Second RED failed because the safe public redactor-error factory did not yet exist.
+- Event contract: 11 unit tests passed, including 6 new event tests.
+- Compile-fail type-state test passed: external code cannot rewrite sanitized draft fields.
+- Contract doc tests passed.
+- Contract Clippy with warnings denied passed.
+- Diff check passed.
+
+### Current blocker
+
+- None for C1 Task 1.
+
+### Next step
+
+1. Commit and push the typed event contract.
+2. Run a task-scoped contract/security review.
+3. Start C1 Task 2 with RED tests for single-writer segmented storage and recovery.
+
 ## 2026-07-10 Issue 35 chain approval and Issue 36 tracking
 
 ### Current status

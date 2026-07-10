@@ -132,9 +132,9 @@ impl GlobalLedger {
 
 **Interfaces:**
 - Consumes: existing `serde` and `serde_json` workspace dependencies.
-- Produces: all types and traits in `Frozen Interfaces`, plus `EventType`, `EventFamily`, `Severity`, `Sensitivity`, `RedactionPolicy`, `ClassifiedField`, `SanitizedField`, `EventOrigin`, `EventLinks`, `ArtifactReference`, `EventQuery`, `SubscriptionCursor`, `ProjectionProfile`, `ProjectedEvent`, and `PersistedEvent`.
+- Produces: all types and traits in `Frozen Interfaces`, plus `EventType`, `EventFamily`, `EventSeverity`, `Sensitivity`, `RedactionPolicy`, `ClassifiedField`, `SanitizedField`, `EventOrigin`, `EventLinks`, `ArtifactReference`, `EventQuery`, `SubscriptionCursor`, `ProjectionProfile`, `ProjectedEvent`, and `PersistedEvent`. `EventSeverity` intentionally avoids colliding with the legacy public `Severity = String` alias.
 
-- [ ] **Step 1: Add RED tests for raw/sanitized separation and field policies**
+- [x] **Step 1: Add RED tests for raw/sanitized separation and field policies**
 
 Add module tests named:
 
@@ -148,13 +148,13 @@ identifier_fields_reject_paths_and_endpoints
 
 The secret test injects unique token, account, machine-path, and endpoint strings and asserts none occurs in serialized sanitized JSON or sanitization errors.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-contract event::tests -- --nocapture`
 
 Expected: compile failure because `event` types do not exist.
 
-- [ ] **Step 3: Implement the minimal event module**
+- [x] **Step 3: Implement the minimal event module**
 
 Implement exhaustive v3 event names as `EventType`, grouped by `EventFamily`. `ClassifiedField` constructors enforce:
 
@@ -167,7 +167,7 @@ secret   -> fingerprint | drop
 
 `EventDraft<P>` deliberately has no `Serialize` implementation. `SanitizedEventDraft<P>` and `PersistedEvent` are serializable. Identifier and module fields accept only bounded ASCII identifiers and reject separators used by local paths or device endpoints.
 
-- [ ] **Step 4: Verify GREEN and docs**
+- [x] **Step 4: Verify GREEN and docs**
 
 Run:
 
@@ -179,7 +179,7 @@ cargo clippy -p actingcommand-contract -- -D warnings
 
 Expected: all pass; injected originals are absent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat(contract): add typed global event contract`
 
