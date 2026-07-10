@@ -152,6 +152,7 @@ pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
     validate_lab_package_zip_with_expected(&zip_path, expected_input_sha256)
 }
 
+#[cfg(test)]
 pub(super) fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<Value> {
     validate_lab_package_zip_with_expected(zip_path, None)
 }

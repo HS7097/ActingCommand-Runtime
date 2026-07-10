@@ -14,21 +14,17 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
-    InstanceConfig, SemanticLedgerContext, SemanticRequestContext, UserConfig,
-    derive_absolute_coordinate_rect_from_match, project_semantic_payload,
+    InstanceConfig, PackageValidationResponse, SemanticLedgerContext, SemanticRequestContext,
+    UserConfig, derive_absolute_coordinate_rect_from_match, project_semantic_payload,
 };
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRead, LedgerRecord, LedgerRecordKind,
     LightEvent, SessionHeader,
 };
-use actingcommand_pack_containment::{
-    Containment, ContainmentError, InstanceId, RecognitionPackDiagnostics, Sha256Hash,
-};
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
-    load_pack_from_json_str,
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,6 +51,7 @@ mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
 mod package_build;
+mod package_cli;
 pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
@@ -109,9 +106,6 @@ const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
     "--lease-id",
 ];
 const SESSION_REQUEST_BOOL_FLAGS: &[&str] = &["--via-daemon", "--local", "--no-wait"];
-const DANGEROUS_EXTENSIONS: &[&str] = &[
-    "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
-];
 static JSON_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn main() -> ExitCode {
@@ -9749,24 +9743,11 @@ fn run_lab_release(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     match sub {
-        "validate" => {
-            let zip = flags.required_path("--zip")?;
-            let validation = validate_package_zip(&zip)?;
-            let mut payload = package_validation_json(&validation, false);
-            attach_package_event(
-                global,
-                "package.validate.ok",
-                "package-validate",
-                &zip,
-                &validation,
-                &mut payload,
-            )?;
-            Ok(payload)
-        }
+        "validate" => package_cli::run_validate(global, &flags),
         "inspect" => {
             let zip = flags.required_path("--zip")?;
-            let validation = validate_package_zip(&zip)?;
-            let mut payload = package_validation_json(&validation, true);
+            let validation = package_cli::validate_package(&zip, true)?;
+            let mut payload = package_cli::serialize_response(&validation)?;
             attach_package_event(
                 global,
                 "package.inspect.ok",
@@ -9783,7 +9764,7 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
             }
             let zip = flags.required_path("--zip")?;
             let out = flags.optional_path("--out");
-            let validation = validate_package_zip(&zip)?;
+            let validation = package_cli::validate_package(&zip, false)?;
             if global.instance.is_none() && global.game.is_none() {
                 return Err(CliError::instance(
                     "package run requires --instance or --game/--server selector",
@@ -9792,7 +9773,7 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
             let result_zip = out
                 .map(|out| create_package_blocked_result_zip(&out, &validation))
                 .transpose()?;
-            let mut details = package_validation_json(&validation, false);
+            let mut details = package_cli::serialize_response(&validation)?;
             details["status"] = json!("blocked");
             details["blocked_by"] = json!(["lab_lease", "exclusive_drain"]);
             details["result_zip"] =
@@ -9829,7 +9810,7 @@ fn attach_package_event(
     event_type: &str,
     instance: &str,
     zip: &Path,
-    validation: &PackageValidation,
+    validation: &PackageValidationResponse,
     payload: &mut Value,
 ) -> CliOutcome<()> {
     let req_id = IdIssuer::new().issue(IdKind::Req).value;
@@ -9845,7 +9826,7 @@ fn write_package_light_event(
     instance: &str,
     req_id: &str,
     zip: &Path,
-    validation: &PackageValidation,
+    validation: &PackageValidationResponse,
 ) -> CliOutcome<Value> {
     let config = read_user_config()?;
     let Some(run_root) = effective_run_root(global, &config) else {
@@ -25550,81 +25531,9 @@ fn default_server_for_game(game: &str) -> &'static str {
     }
 }
 
-#[derive(Debug)]
-struct PackageValidation {
-    module: String,
-    manifest_path: String,
-    task_count: usize,
-    entry_count: usize,
-    dangerous_entries: Vec<String>,
-    entries: Vec<String>,
-    manifest: Value,
-    recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
-}
-
-fn validate_package_zip(path: &Path) -> CliOutcome<PackageValidation> {
-    let bytes = fs::read(path).map_err(|err| {
-        CliError::package_invalid(format!("failed to open package {}: {err}", path.display()))
-    })?;
-    let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;
-    let expected = Sha256Hash::digest(&bytes);
-    let mut containment = Containment::new();
-    let bundle = containment
-        .load(&instance, &bytes, &expected)
-        .map_err(containment_package_error)?;
-    Ok(PackageValidation {
-        module: bundle.resource_root().to_string(),
-        manifest_path: bundle.manifest_path().to_string(),
-        task_count: bundle.task_count(),
-        entry_count: bundle.entry_count(),
-        dangerous_entries: Vec::new(),
-        entries: bundle.entry_paths().map(str::to_string).collect(),
-        manifest: bundle.manifest().clone(),
-        recognition_pack_diagnostics: bundle.recognition_pack_diagnostics().to_vec(),
-    })
-}
-
-fn containment_package_error(err: ContainmentError) -> CliError {
-    CliError::package_invalid(err.to_string())
-}
-
-fn package_validation_json(validation: &PackageValidation, include_entries: bool) -> Value {
-    json!({
-        "status": "valid",
-        "module": validation.module,
-        "manifest_path": validation.manifest_path,
-        "task_count": validation.task_count,
-        "entry_count": validation.entry_count,
-        "dangerous_entries": validation.dangerous_entries,
-        "recognition_pack_diagnostics": validation.recognition_pack_diagnostics.iter().map(recognition_pack_diagnostics_json).collect::<Vec<_>>(),
-        "manifest": validation.manifest,
-        "entries": if include_entries { json!(validation.entries) } else { Value::Null }
-    })
-}
-
-fn recognition_pack_diagnostics_json(diagnostics: &RecognitionPackDiagnostics) -> Value {
-    json!({
-        "path": diagnostics.path.as_str(),
-        "unsupported_target_count": diagnostics.unsupported_targets.len(),
-        "unsupported_targets": unsupported_targets_json(&diagnostics.unsupported_targets)
-    })
-}
-
-fn unsupported_targets_json(targets: &[UnsupportedRecognitionTarget]) -> Vec<Value> {
-    targets
-        .iter()
-        .map(|target| {
-            json!({
-                "id": target.id.as_str(),
-                "reason": target.reason.as_str()
-            })
-        })
-        .collect()
-}
-
 fn create_package_blocked_result_zip(
     out: &Path,
-    validation: &PackageValidation,
+    validation: &PackageValidationResponse,
 ) -> CliOutcome<PathBuf> {
     let target = if out.extension().and_then(|ext| ext.to_str()) == Some("zip") {
         out.to_path_buf()
@@ -25671,7 +25580,7 @@ fn create_package_blocked_result_zip(
     zip.start_file(format!("{prefix}/logs/validation.json"), options)
         .map_err(zip_write_error)?;
     zip.write_all(
-        serde_json::to_string_pretty(&package_validation_json(validation, false))
+        serde_json::to_string_pretty(validation)
             .map_err(|err| {
                 CliError::package_invalid(format!("failed to serialize validation: {err}"))
             })?
@@ -53821,196 +53730,6 @@ mod tests {
                 && event.ids.get("req_id").is_some()
                 && event.payload.get("module").and_then(Value::as_str) == Some("module")
         }));
-    }
-
-    #[test]
-    fn package_validate_reports_unsupported_recognition_targets() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                (
-                    "module/manifest.json",
-                    br#"{"schema_version":"0.2"}"#.as_slice(),
-                ),
-                (
-                    "module/operations/task/task.json",
-                    br#"{"id":"task"}"#.as_slice(),
-                ),
-                (
-                    "module/recognition/arknights.cn.pack.json",
-                    br#"{
-                        "schema_version":"0.5",
-                        "targets":[{
-                            "type":"template",
-                            "id":"page/home",
-                            "template_path":"templates/home.png",
-                            "region":{"x":0,"y":0,"width":1,"height":1},
-                            "method":"rgb_count",
-                            "mask":{"type":"range","lower":1,"upper":255}
-                        }]
-                    }"#
-                    .as_slice(),
-                ),
-            ],
-        );
-        let result = run_cli(
-            [
-                "--json",
-                "package",
-                "validate",
-                "--zip",
-                zip.to_str().unwrap(),
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            data.pointer("/recognition_pack_diagnostics/0/unsupported_target_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            data.pointer("/recognition_pack_diagnostics/0/unsupported_targets/0/id")
-                .and_then(Value::as_str),
-            Some("page/home")
-        );
-    }
-
-    #[test]
-    fn package_validate_rejects_zip_slip() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                ("module/manifest.json", br#"{}"#.as_slice()),
-                ("module/operations/task/task.json", br#"{}"#.as_slice()),
-                ("module/../escape.json", br#"{}"#.as_slice()),
-            ],
-        );
-        let result = run_cli(
-            [
-                "--json",
-                "package",
-                "validate",
-                "--zip",
-                zip.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 2);
-        assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "package_invalid"
-        );
-    }
-
-    #[test]
-    fn package_validate_rejects_executable_entry() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                ("module/manifest.json", br#"{}"#.as_slice()),
-                ("module/operations/task/task.json", br#"{}"#.as_slice()),
-                ("module/tools/run.ps1", b"Write-Host no"),
-            ],
-        );
-        let result = run_cli(
-            [
-                "--json",
-                "package",
-                "validate",
-                "--zip",
-                zip.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 2);
-        assert!(
-            result
-                .envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("executable")
-        );
-    }
-
-    #[test]
-    fn package_validate_rejects_hash_mismatch() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                (
-                    "module/manifest.json",
-                    br#"{"hashes":{"operations/resources.json":"sha256:0000"}}"#.as_slice(),
-                ),
-                ("module/operations/task/task.json", br#"{}"#.as_slice()),
-                ("module/operations/resources.json", br#"{}"#.as_slice()),
-            ],
-        );
-        let result = run_cli(
-            [
-                "--json",
-                "package",
-                "validate",
-                "--zip",
-                zip.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 2);
-        assert!(
-            result
-                .envelope
-                .error
-                .as_ref()
-                .unwrap()
-                .message
-                .contains("hash mismatch")
-        );
-    }
-
-    #[test]
-    fn package_validate_rejects_unsafe_manifest_hash_path_without_echoing_traversal() {
-        let temp = TempDir::new().unwrap();
-        let zip = temp.path().join("bundle.zip");
-        write_test_zip(
-            &zip,
-            &[
-                (
-                    "module/manifest.json",
-                    br#"{"hashes":{"../outside.json":"sha256:0000"}}"#.as_slice(),
-                ),
-                ("module/operations/task/task.json", br#"{}"#.as_slice()),
-                ("module/operations/resources.json", br#"{}"#.as_slice()),
-            ],
-        );
-
-        let result = run_cli(
-            [
-                "--json",
-                "package",
-                "validate",
-                "--zip",
-                zip.to_str().unwrap(),
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 2);
-        let message = &result.envelope.error.as_ref().unwrap().message;
-        assert!(message.contains("manifest hash path is unsafe"));
-        assert!(!message.contains(".."));
     }
 
     #[test]

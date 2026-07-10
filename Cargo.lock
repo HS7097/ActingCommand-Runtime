@@ -95,6 +95,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-ledger",
+ "actingcommand-pack-containment",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
@@ -102,6 +103,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
