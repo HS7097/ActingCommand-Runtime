@@ -9,6 +9,9 @@ use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
@@ -101,6 +104,50 @@ fn sha256_redactor_returns_fixed_lowercase_fingerprint() {
 }
 
 #[test]
+fn config_debug_hides_machine_path() {
+    let temp = TempDir::new().expect("temp");
+    let config = config(&temp, "writer-one");
+
+    let debug = format!("{config:?}");
+
+    assert!(!debug.contains(&temp.path().display().to_string()));
+    assert!(debug.contains("<redacted-root>"));
+}
+
+#[test]
+fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let (prefill_response, _prefill_receiver) = mpsc::sync_channel(1);
+    sender
+        .send(WriterCommand::Shutdown {
+            response: prefill_response,
+        })
+        .expect("fill queue");
+    let writer = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        let _ = receiver.recv().expect("prefill");
+        if let WriterCommand::Shutdown { response } = receiver.recv().expect("shutdown") {
+            response.send(Ok(())).expect("shutdown response");
+        }
+        Ok(())
+    });
+    let ledger = GlobalLedger {
+        sender: Some(sender),
+        writer: Some(writer),
+    };
+    let (done_sender, done_receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = done_sender.send(ledger.close());
+    });
+
+    let result = done_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("close must not deadlock");
+
+    result.expect("close");
+}
+
+#[test]
 fn second_writer_is_rejected_while_first_is_alive() {
     let temp = TempDir::new().expect("temp");
     let first = GlobalLedger::open(config(&temp, "writer-one")).expect("first writer");
@@ -126,6 +173,45 @@ fn malformed_writer_metadata_is_fatal_without_path_disclosure() {
             .to_string()
             .contains(&temp.path().display().to_string())
     );
+}
+
+#[test]
+fn contradictory_writer_metadata_is_fatal() {
+    let cases = [
+        serde_json::json!({
+            "schema_version": "actingcommand.ledger-writer.v1",
+            "owner_id": "previous-owner",
+            "pid": 42,
+            "active": true,
+            "started_at_unix_ms": 10,
+            "closed_at_unix_ms": 11
+        }),
+        serde_json::json!({
+            "schema_version": "actingcommand.ledger-writer.v1",
+            "owner_id": "previous-owner",
+            "pid": 42,
+            "active": false,
+            "started_at_unix_ms": 10,
+            "closed_at_unix_ms": Value::Null
+        }),
+        serde_json::json!({
+            "schema_version": "actingcommand.ledger-writer.v1",
+            "owner_id": "previous-owner",
+            "pid": 42,
+            "active": false,
+            "started_at_unix_ms": 10,
+            "closed_at_unix_ms": 9
+        }),
+    ];
+    for metadata in cases {
+        let temp = TempDir::new().expect("temp");
+        fs::write(temp.path().join("writer.lock"), metadata.to_string()).expect("metadata");
+
+        let error = GlobalLedger::open(config(&temp, "writer-new"))
+            .expect_err("contradictory metadata must fail");
+
+        assert_eq!(error.code(), "malformed_owner_metadata");
+    }
 }
 
 #[test]
@@ -220,6 +306,26 @@ fn complete_corrupt_line_is_fatal() {
 
     let error =
         GlobalLedger::open(config(&temp, "writer-two")).expect_err("complete corruption must fail");
+
+    assert_eq!(error.code(), "corrupt_segment");
+}
+
+#[test]
+fn complete_blank_line_is_fatal() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    ledger.append(event("evt-one")).expect("append");
+    ledger.close().expect("close");
+    let segment = segment_paths(temp.path()).pop().expect("segment");
+    OpenOptions::new()
+        .append(true)
+        .open(segment)
+        .expect("open segment")
+        .write_all(b"\n")
+        .expect("write blank record");
+
+    let error = GlobalLedger::open(config(&temp, "writer-two"))
+        .expect_err("blank complete record must fail");
 
     assert_eq!(error.code(), "corrupt_segment");
 }

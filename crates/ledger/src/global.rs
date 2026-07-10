@@ -109,12 +109,24 @@ impl From<EventContractError> for GlobalLedgerError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GlobalLedgerConfig {
     root: PathBuf,
     owner_id: String,
     segment_max_bytes: u64,
     ingress_capacity: usize,
+}
+
+impl fmt::Debug for GlobalLedgerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GlobalLedgerConfig")
+            .field("root", &"<redacted-root>")
+            .field("owner_id", &self.owner_id)
+            .field("segment_max_bytes", &self.segment_max_bytes)
+            .field("ingress_capacity", &self.ingress_capacity)
+            .finish()
+    }
 }
 
 impl GlobalLedgerConfig {
@@ -221,7 +233,7 @@ enum WriterCommand {
 }
 
 pub struct GlobalLedger {
-    sender: SyncSender<WriterCommand>,
+    sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
 }
 
@@ -260,7 +272,7 @@ impl GlobalLedger {
             })?;
         match startup_receiver.recv_timeout(COMMAND_TIMEOUT) {
             Ok(Ok(())) => Ok(Self {
-                sender,
+                sender: Some(sender),
                 writer: Some(writer),
             }),
             Ok(Err(error)) => {
@@ -290,8 +302,12 @@ impl GlobalLedger {
     ) -> GlobalLedgerResult<PersistedEvent> {
         let draft = draft.erase()?;
         let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "append_event"))?;
         send_command(
-            &self.sender,
+            sender,
             WriterCommand::Append {
                 draft: Box::new(draft),
                 response,
@@ -309,16 +325,18 @@ impl GlobalLedger {
         let Some(writer) = self.writer.take() else {
             return Ok(());
         };
-        let (response, receiver) = mpsc::sync_channel(1);
-        let send_result = send_command(
-            &self.sender,
-            WriterCommand::Shutdown { response },
-            "shutdown_writer",
-        );
-        let response_result = match send_result {
-            Ok(()) => receive_response(receiver, "shutdown_writer")?,
-            Err(error) => Err(error),
+        let Some(sender) = self.sender.take() else {
+            return writer
+                .join()
+                .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
         };
+        let (response, receiver) = mpsc::sync_channel(1);
+        let send_result = sender
+            .send(WriterCommand::Shutdown { response })
+            .map_err(|_| GlobalLedgerError::fatal("writer_unavailable", "shutdown_writer"));
+        drop(sender);
+        let response_result =
+            send_result.and_then(|()| receive_response(receiver, "shutdown_writer")?);
         let join_result = writer
             .join()
             .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;

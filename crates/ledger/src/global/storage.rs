@@ -93,6 +93,7 @@ impl SegmentStore {
         &mut self,
         draft: ErasedSanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        let following_sequence = increment_sequence(self.next_sequence)?;
         let event = PersistedEvent::from_draft(self.next_sequence, draft);
         event
             .validate()
@@ -123,7 +124,7 @@ impl SegmentStore {
             .sync_all()
             .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
         self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
-        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.next_sequence = following_sequence;
         self.event_ids.insert(event.event_id.clone());
         Ok(event)
     }
@@ -213,6 +214,7 @@ impl FieldRedactor for PublicOnlyRedactor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoredLine {
     line_type: String,
     event: PersistedEvent,
@@ -266,9 +268,23 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
                 bytes: tail.len() as u64,
             });
         }
-        for line in bytes[..complete_len].split(|byte| *byte == b'\n') {
+        let complete_records = if complete_len == 0 {
+            &bytes[..0]
+        } else {
+            &bytes[..complete_len - 1]
+        };
+        if complete_records.is_empty() && complete_len > 0 {
+            return Err(GlobalLedgerError::fatal(
+                "corrupt_segment",
+                "parse_blank_record",
+            ));
+        }
+        for line in complete_records.split(|byte| *byte == b'\n') {
             if line.is_empty() {
-                continue;
+                return Err(GlobalLedgerError::fatal(
+                    "corrupt_segment",
+                    "parse_blank_record",
+                ));
             }
             let stored = serde_json::from_slice::<StoredLine>(line).map_err(|error| {
                 GlobalLedgerError::json("corrupt_segment", "parse_segment", &error)
@@ -294,7 +310,7 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
                     "recover_event_ids",
                 ));
             }
-            next_sequence = next_sequence.saturating_add(1);
+            next_sequence = increment_sequence(next_sequence)?;
         }
     }
     Ok(RecoveryState {
@@ -377,6 +393,7 @@ fn quarantine_tail(root: &Path, segment_index: u64, tail: &[u8]) -> GlobalLedger
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WriterMetadata {
     schema_version: String,
     owner_id: String,
@@ -460,11 +477,16 @@ fn read_writer_metadata(file: &mut File) -> GlobalLedgerResult<Option<WriterMeta
     let metadata = serde_json::from_str::<WriterMetadata>(&content).map_err(|error| {
         GlobalLedgerError::json("malformed_owner_metadata", "parse_writer_metadata", &error)
     })?;
+    let lifecycle_valid = match (metadata.active, metadata.closed_at_unix_ms) {
+        (true, None) => true,
+        (false, Some(closed_at)) => closed_at >= metadata.started_at_unix_ms,
+        _ => false,
+    };
     let valid = metadata.schema_version == WRITER_SCHEMA_VERSION
         && is_identifier(&metadata.owner_id)
         && metadata.pid > 0
         && metadata.started_at_unix_ms > 0
-        && (metadata.active || metadata.closed_at_unix_ms.is_some());
+        && lifecycle_valid;
     if !valid {
         return Err(GlobalLedgerError::fatal(
             "malformed_owner_metadata",
@@ -498,4 +520,22 @@ fn unix_ms_now() -> GlobalLedgerResult<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .map_err(|_| GlobalLedgerError::fatal("clock_before_epoch", "read_clock"))
+}
+
+fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {
+    sequence
+        .checked_add(1)
+        .ok_or_else(|| GlobalLedgerError::fatal("sequence_exhausted", "increment_sequence"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sequence_increment_fails_at_u64_max() {
+        let error = increment_sequence(u64::MAX).expect_err("sequence must not wrap or repeat");
+
+        assert_eq!(error.code(), "sequence_exhausted");
+    }
 }

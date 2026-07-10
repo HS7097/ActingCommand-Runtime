@@ -2,7 +2,7 @@
 
 //! Typed global event contracts shared by Runtime producers and ledger adapters.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -241,6 +241,7 @@ pub enum EventActor {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventOrigin {
     source: EventSource,
     module: String,
@@ -291,6 +292,7 @@ impl fmt::Debug for EventOrigin {
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventLinks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
@@ -363,6 +365,7 @@ pub enum ArtifactRedactionState {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactReference {
     pub artifact_id: String,
     pub kind: String,
@@ -512,6 +515,7 @@ impl ClassifiedField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SanitizedField {
     name: String,
     sensitivity: Sensitivity,
@@ -937,6 +941,7 @@ pub struct ErasedSanitizedEventDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PersistedEvent {
     pub schema_version: String,
     pub event_id: String,
@@ -1005,6 +1010,24 @@ impl PersistedEvent {
             .payload
             .as_object()
             .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "payload"))?;
+        let required_keys = ["kind", "subject", "fields", "sensitivity"];
+        if payload.len() != required_keys.len()
+            || required_keys.iter().any(|key| !payload.contains_key(*key))
+        {
+            return Err(SanitizationError::new(
+                "invalid_sanitized_payload",
+                "payload",
+            ));
+        }
+        let payload_event_type = payload_kind_event_type(
+            &self.payload_schema,
+            payload
+                .get("kind")
+                .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "kind"))?,
+        )?;
+        if payload_event_type != self.event_type {
+            return Err(SanitizationError::new("payload_family_mismatch", "kind"));
+        }
         let subject = payload
             .get("subject")
             .and_then(Value::as_str)
@@ -1236,6 +1259,31 @@ fn payload_schema_family(schema: &str) -> Option<EventFamily> {
         "actingcommand.payload.ledger.v1" => Some(EventFamily::Ledger),
         _ => None,
     }
+}
+
+fn payload_kind_event_type(schema: &str, value: &Value) -> Result<EventType, SanitizationError> {
+    match schema {
+        "actingcommand.payload.command.v1" => decode_payload_kind::<CommandStage>(value),
+        "actingcommand.payload.scheduler.v1" => decode_payload_kind::<SchedulerDecision>(value),
+        "actingcommand.payload.lease.v1" => decode_payload_kind::<LeaseTransition>(value),
+        "actingcommand.payload.task.v1" => decode_payload_kind::<TaskTransition>(value),
+        "actingcommand.payload.input.v1" => decode_payload_kind::<InputTransition>(value),
+        "actingcommand.payload.client.v1" => decode_payload_kind::<ClientActionKind>(value),
+        "actingcommand.payload.ledger.v1" => decode_payload_kind::<LedgerTransition>(value),
+        _ => Err(SanitizationError::new(
+            "invalid_sanitized_payload",
+            "payload_schema",
+        )),
+    }
+}
+
+fn decode_payload_kind<K>(value: &Value) -> Result<EventType, SanitizationError>
+where
+    K: PayloadKind + DeserializeOwned,
+{
+    serde_json::from_value::<K>(value.clone())
+        .map(|kind| kind.event_type())
+        .map_err(|_| SanitizationError::new("invalid_sanitized_payload", "kind"))
 }
 
 #[cfg(test)]
@@ -1565,6 +1613,42 @@ mod tests {
         let error = forged
             .validate()
             .expect_err("secret value must be rejected");
+
+        assert_eq!(error.code(), "invalid_sanitized_payload");
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn persisted_event_rejects_kind_that_disagrees_with_event_type() {
+        let sanitized = command_draft(vec![])
+            .sanitize(&TestRedactor)
+            .expect("sanitize");
+        let persisted = PersistedEvent::from_draft(1, sanitized.erase().expect("erase"));
+        let mut value = serde_json::to_value(persisted).expect("value");
+        value["payload"]["kind"] = serde_json::json!("rejected");
+        let forged: PersistedEvent = serde_json::from_value(value).expect("forged event");
+
+        let error = forged
+            .validate()
+            .expect_err("mismatched kind must be rejected");
+
+        assert_eq!(error.code(), "payload_family_mismatch");
+    }
+
+    #[test]
+    fn persisted_event_rejects_unknown_payload_field_without_disclosure() {
+        let sanitized = command_draft(vec![])
+            .sanitize(&TestRedactor)
+            .expect("sanitize");
+        let persisted = PersistedEvent::from_draft(1, sanitized.erase().expect("erase"));
+        let secret = "unknown-payload-secret-f501";
+        let mut value = serde_json::to_value(persisted).expect("value");
+        value["payload"]["raw_debug"] = serde_json::json!(secret);
+        let forged: PersistedEvent = serde_json::from_value(value).expect("forged event");
+
+        let error = forged
+            .validate()
+            .expect_err("unknown payload field must fail");
 
         assert_eq!(error.code(), "invalid_sanitized_payload");
         assert!(!error.to_string().contains(secret));

@@ -14,6 +14,13 @@
 - Added persisted-event revalidation so forged origin metadata and a secret field carrying a raw value cannot be accepted during recovery.
 - Added `Sha256FieldRedactor` using a private salt and fixed lowercase `sha256:<64 hex>` output; its Debug representation hides the salt.
 - The only new production dependency edge is `actingcommand-ledger -> actingcommand-contract`; no new external crate was introduced.
+- Task review found five Important issues and one Minor issue: full-ingress shutdown deadlock, blank complete-record skipping, non-closed payload recovery, contradictory owner metadata, config Debug path disclosure, and sequence saturation.
+- Shutdown now takes its sender, uses ordered blocking delivery behind already queued commands, drops the final sender, then waits for the writer; a bounded regression test proves a full queue drains without deadlock.
+- Recovery treats every blank complete JSONL record as fatal and ignores only the split artifact after the one terminal newline.
+- Persisted event recovery uses deny-unknown-fields DTOs, an exact four-key payload schema, and typed payload-kind-to-event validation.
+- Writer metadata now requires exactly `active + no close time` or `inactive + close time at/after start`.
+- `GlobalLedgerConfig` Debug hides the machine root.
+- Sequence increments use checked arithmetic and fail with `sequence_exhausted` before reuse or wrap.
 
 ### Files changed
 
@@ -36,6 +43,7 @@
 - `cargo test -p actingcommand-contract -p actingcommand-ledger`
 - `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
 - `cargo tree -p actingcommand-ledger --depth 1`
+- review RED tests for full-queue shutdown, blank records, payload kind/unknown fields, contradictory owner metadata, config Debug, and sequence exhaustion
 - `git diff --check`
 
 ### Test results
@@ -43,8 +51,8 @@
 - Initial ledger RED failed with 19 missing storage symbols as intended.
 - Persisted-event RED failed because recovery validation did not yet exist.
 - Global-ledger focused suite: 10 tests passed.
-- Contract suite: 20 tests passed, including 2 new recovery-validation tests.
-- Full ledger crate: 29 tests passed; legacy tests remain green.
+- Contract suite after review fixes: 22 tests passed, including 4 recovery-validation tests.
+- Full ledger crate after review fixes: 34 tests passed; legacy tests remain green.
 - Two contract compile-fail tests and all doc tests passed.
 - Contract/ledger Clippy with warnings denied passed.
 - Diff check passed.
