@@ -1,5 +1,43 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 chain approval and Issue 36 tracking
+
+### Current status
+
+- Alice confirmed that the complete Issue #35 C0-C7 chain is approved and its internal tasks do not require separate approval.
+- C0 payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7` is now the binding architecture.
+- Created GitHub Issue #36 as the sole progress, result, evidence, commit, rollback, and implementation-detail tracker for the chain.
+- Added a clarification comment to Issue #35 linking Issue #36 and removing the per-node approval wait.
+- C1 may proceed immediately on `issue-35-runtime-ledger-v3`.
+
+### Files changed
+
+- `docs/architecture/runtime-ledger-v3-c0-freeze.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+- SHA-256 verification for `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`
+- `gh issue create ...` for Issue #36
+- `gh issue comment 35 ...` linking the approved chain to Issue #36
+
+### Test results
+
+- Source specification SHA-256 remains `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
+- No source code or Runtime behavior changed in this checkpoint.
+
+### Current blocker
+
+- None. The former C0 approval blocker is cleared.
+
+### Next step
+
+1. Commit and push this approval/tracking checkpoint.
+2. Write the detailed C1 implementation plan.
+3. Implement C1 test-first and record results on Issue #36.
+
 ## 2026-07-10 Issue 35 C0 approval candidate
 
 ### Current status
@@ -61,18 +99,17 @@
 - `git diff --check`: passed.
 - `cargo clippy --workspace -- -D warnings`: passed.
 - Final `cargo test --workspace`: passed.
-- C1 remains gated on explicit Alice approval rather than test status alone.
+- C1 was gated on explicit Alice approval at the time of this candidate checkpoint; that gate is now cleared by the newer approval record above.
 
-### Current blocker
+### Historical blocker
 
-- C0 requires Alice's explicit approval of payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7` before C1 production implementation may begin.
-- No technical blocker exists for the C0 candidate.
+- C0 previously required Alice's explicit approval of payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7` before C1 production implementation could begin.
+- The newer approval record above clears this blocker.
 
 ### Next step
 
-1. Commit and push the C0 approval candidate and record it on Issue #35.
-2. Obtain explicit Alice approval of the frozen C0 payload hash.
-3. Only after approval, create the C1 implementation plan and begin the typed event/global-ledger seed.
+1. Preserve the C0 candidate commits and Issue #35 record as provenance.
+2. Continue under the approved architecture using Issue #36 as the sole execution tracker.
 
 ## 2026-07-10 issue 33 A7 Lab run/validate migration complete
 
