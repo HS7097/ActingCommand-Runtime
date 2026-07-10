@@ -523,6 +523,44 @@ pub struct SanitizedField {
     redacted: bool,
 }
 
+impl SanitizedField {
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_identifier("payload_field", &self.name)?;
+        if !policy_allowed(self.sensitivity, self.policy) {
+            return Err(SanitizationError::new(
+                "invalid_sanitized_payload",
+                &self.name,
+            ));
+        }
+        let valid = match self.policy {
+            RedactionPolicy::Keep => {
+                self.value.is_some() && self.fingerprint.is_none() && !self.redacted
+            }
+            RedactionPolicy::Mask => {
+                self.value.as_deref() == Some("[redacted]")
+                    && self.fingerprint.is_none()
+                    && self.redacted
+            }
+            RedactionPolicy::Fingerprint => {
+                self.value.is_none()
+                    && self.fingerprint.as_deref().is_some_and(is_sha256)
+                    && self.redacted
+            }
+            RedactionPolicy::Drop => {
+                self.value.is_none() && self.fingerprint.is_none() && self.redacted
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(SanitizationError::new(
+                "invalid_sanitized_payload",
+                &self.name,
+            ))
+        }
+    }
+}
+
 mod sealed {
     pub trait PayloadKind {}
     pub trait SanitizedPayload {}
@@ -931,6 +969,72 @@ impl PersistedEvent {
             artifacts: draft.artifacts,
         }
     }
+
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if self.schema_version != GLOBAL_EVENT_SCHEMA_VERSION {
+            return Err(SanitizationError::new(
+                "invalid_event_schema",
+                "schema_version",
+            ));
+        }
+        validate_identifier("event_id", &self.event_id)?;
+        if self.sequence == 0 {
+            return Err(SanitizationError::new("invalid_sequence", "sequence"));
+        }
+        if self.timestamp_unix_ms == 0 {
+            return Err(SanitizationError::new(
+                "invalid_timestamp",
+                "timestamp_unix_ms",
+            ));
+        }
+        self.origin.validate()?;
+        self.links.validate()?;
+        validate_identifier("payload_schema", &self.payload_schema)?;
+        for artifact in &self.artifacts {
+            artifact.validate()?;
+        }
+        let expected_family = payload_schema_family(&self.payload_schema)
+            .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "payload_schema"))?;
+        if expected_family != self.event_type.family() {
+            return Err(SanitizationError::new(
+                "payload_family_mismatch",
+                "payload_schema",
+            ));
+        }
+        let payload = self
+            .payload
+            .as_object()
+            .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "payload"))?;
+        let subject = payload
+            .get("subject")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "subject"))?;
+        validate_identifier("payload_subject", subject)?;
+        let fields = serde_json::from_value::<Vec<SanitizedField>>(
+            payload
+                .get("fields")
+                .cloned()
+                .ok_or_else(|| SanitizationError::new("invalid_sanitized_payload", "fields"))?,
+        )
+        .map_err(|_| SanitizationError::new("invalid_sanitized_payload", "fields"))?;
+        let declared =
+            serde_json::from_value::<Sensitivity>(payload.get("sensitivity").cloned().ok_or_else(
+                || SanitizationError::new("invalid_sanitized_payload", "sensitivity"),
+            )?)
+            .map_err(|_| SanitizationError::new("invalid_sanitized_payload", "sensitivity"))?;
+        let mut computed = Sensitivity::Public;
+        for field in &fields {
+            field.validate()?;
+            computed = computed.max(field.sensitivity);
+        }
+        if declared != computed || self.sensitivity != computed {
+            return Err(SanitizationError::new(
+                "invalid_sanitized_payload",
+                "sensitivity",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1119,6 +1223,19 @@ fn is_sha256(value: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     })
+}
+
+fn payload_schema_family(schema: &str) -> Option<EventFamily> {
+    match schema {
+        "actingcommand.payload.command.v1" => Some(EventFamily::Command),
+        "actingcommand.payload.scheduler.v1" => Some(EventFamily::Scheduler),
+        "actingcommand.payload.lease.v1" => Some(EventFamily::Lease),
+        "actingcommand.payload.task.v1" => Some(EventFamily::Task),
+        "actingcommand.payload.input.v1" => Some(EventFamily::Input),
+        "actingcommand.payload.client.v1" => Some(EventFamily::Client),
+        "actingcommand.payload.ledger.v1" => Some(EventFamily::Ledger),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1407,6 +1524,50 @@ mod tests {
             assert!(!links_debug.contains(original));
             assert!(!artifact_debug.contains(original));
         }
+    }
+
+    #[test]
+    fn persisted_event_revalidates_origin_after_deserialization() {
+        let sanitized = command_draft(vec![])
+            .sanitize(&TestRedactor)
+            .expect("sanitize");
+        let persisted = PersistedEvent::from_draft(1, sanitized.erase().expect("erase"));
+        let injected = r"C:\private\persisted";
+        let mut value = serde_json::to_value(persisted).expect("value");
+        value["origin"]["module"] = serde_json::json!(injected);
+        let forged: PersistedEvent = serde_json::from_value(value).expect("forged event");
+
+        let error = forged.validate().expect_err("forged origin must fail");
+
+        assert_eq!(error.code(), "invalid_identifier");
+        assert!(!error.to_string().contains(injected));
+    }
+
+    #[test]
+    fn persisted_event_rejects_secret_field_with_a_value() {
+        let sanitized = command_draft(vec![])
+            .sanitize(&TestRedactor)
+            .expect("sanitize");
+        let persisted = PersistedEvent::from_draft(1, sanitized.erase().expect("erase"));
+        let secret = "persisted-secret-d902";
+        let mut value = serde_json::to_value(persisted).expect("value");
+        value["payload"]["fields"] = serde_json::json!([{
+            "name": "token",
+            "sensitivity": "secret",
+            "policy": "drop",
+            "value": secret,
+            "redacted": true
+        }]);
+        value["payload"]["sensitivity"] = serde_json::json!("secret");
+        value["sensitivity"] = serde_json::json!("secret");
+        let forged: PersistedEvent = serde_json::from_value(value).expect("forged event");
+
+        let error = forged
+            .validate()
+            .expect_err("secret value must be rejected");
+
+        assert_eq!(error.code(), "invalid_sanitized_payload");
+        assert!(!error.to_string().contains(secret));
     }
 
     #[test]

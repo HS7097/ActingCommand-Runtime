@@ -111,6 +111,7 @@ dependencies = [
 name = "actingcommand-ledger"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "serde",
  "serde_json",
  "sha2",

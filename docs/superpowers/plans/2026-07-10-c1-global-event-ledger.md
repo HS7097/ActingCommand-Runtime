@@ -198,7 +198,7 @@ Commit message: `feat(contract): add typed global event contract`
 - Consumes: Task 1 sanitized event types; existing `sha2`; standard `File::try_lock` and bounded `sync_channel`.
 - Produces: `Sha256FieldRedactor`, `GlobalLedgerConfig`, `GlobalLedger`, `GlobalLedgerError`, `LedgerSubscription`.
 
-- [ ] **Step 1: Add RED tests for redactor, ownership, append, recovery, and sequence**
+- [x] **Step 1: Add RED tests for redactor, ownership, append, recovery, and sequence**
 
 Add tests named:
 
@@ -216,23 +216,23 @@ duplicate_event_id_is_fatal
 
 Each failure assertion checks a stable error code and confirms the error display does not include configured root paths or injected secret values.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
 
 Expected: compile failure because `global` storage does not exist.
 
-- [ ] **Step 3: Implement writer ownership and recovery**
+- [x] **Step 3: Implement writer ownership and recovery**
 
 Use one retained OS file lock at `<root>/writer.lock`. Metadata contains schema version, owner id, pid, active state, and timestamps, but no machine path or endpoint. A locked file yields `writer_conflict`; an unlocked active record yields an explicit `ledger.recovered` event; malformed nonempty metadata is fatal.
 
 Persist events under `<root>/segments/segment-NNNNNN.jsonl`. Serialize a complete event before `write_all`, append one newline, and call `sync_all` before acknowledging. Rebuild sequence and in-memory indexes at startup. Quarantine only bytes after the last newline in the final segment. Any invalid complete line, sequence gap, duplicate sequence, duplicate event id, or corruption outside the final tail is fatal.
 
-- [ ] **Step 4: Implement the bounded writer thread and public handle**
+- [x] **Step 4: Implement the bounded writer thread and public handle**
 
 `GlobalLedger::open` starts one writer thread and waits for startup recovery. All append/query/subscribe/project/shutdown commands enter one bounded `sync_channel`. Startup or writer death returns a fatal error; no command returns fake empty success when the writer is unavailable.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -244,7 +244,7 @@ cargo clippy -p actingcommand-ledger -- -D warnings
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Commit message: `feat(ledger): add recoverable single writer storage`
 

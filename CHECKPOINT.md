@@ -1,5 +1,64 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 C1 Task 2 single-writer storage
+
+### Current status
+
+- Added `GlobalLedger` as a new production path while leaving legacy `LabLedger` behavior unchanged.
+- `GlobalLedger` owns one bounded-ingress writer thread; callers receive an acknowledgement only after append plus `sync_all` succeeds.
+- Added an OS-held `writer.lock` with validated owner metadata and explicit clean-close state.
+- A concurrent second writer fails with `writer_conflict`; an unlocked active owner record is treated as a crash and produces a durable `ledger.recovered` fact.
+- Added append-only `segment-NNNNNN.jsonl` files, contiguous sequence allocation, duplicate event-id rejection, rotation, startup scan, and in-memory event-id reconstruction.
+- A truncated final tail is copied into `quarantine/`, removed from the active segment, and followed by an explicit recovery event.
+- Any complete corrupt line, non-final tail corruption, invalid persisted event, segment gap, sequence discontinuity, or duplicate recovered event id is fatal.
+- Added persisted-event revalidation so forged origin metadata and a secret field carrying a raw value cannot be accepted during recovery.
+- Added `Sha256FieldRedactor` using a private salt and fixed lowercase `sha256:<64 hex>` output; its Debug representation hides the salt.
+- The only new production dependency edge is `actingcommand-ledger -> actingcommand-contract`; no new external crate was introduced.
+
+### Files changed
+
+- `Cargo.lock`
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/ledger/Cargo.toml`
+- `crates/ledger/src/lib.rs`
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/storage.rs`
+- `crates/ledger/src/global/tests.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- RED: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
+- RED: `cargo test -p actingcommand-contract persisted_event_ -- --nocapture`
+- GREEN: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-contract -p actingcommand-ledger`
+- `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
+- `cargo tree -p actingcommand-ledger --depth 1`
+- `git diff --check`
+
+### Test results
+
+- Initial ledger RED failed with 19 missing storage symbols as intended.
+- Persisted-event RED failed because recovery validation did not yet exist.
+- Global-ledger focused suite: 10 tests passed.
+- Contract suite: 20 tests passed, including 2 new recovery-validation tests.
+- Full ledger crate: 29 tests passed; legacy tests remain green.
+- Two contract compile-fail tests and all doc tests passed.
+- Contract/ledger Clippy with warnings denied passed.
+- Diff check passed.
+
+### Current blocker
+
+- None for C1 Task 2.
+
+### Next step
+
+1. Commit and push the recoverable single-writer storage.
+2. Run a task-scoped concurrency/recovery/security review.
+3. Start Task 3 query, subscribe, and CLI/UI/Lab projection RED tests.
+
 ## 2026-07-10 Issue 35 C1 Task 1 typed event contract
 
 ### Current status

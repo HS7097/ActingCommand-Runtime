@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod global;
+pub use global::*;
+
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
 const LEDGER_HEADER_SCHEMA_VERSION: &str = "actingcommand.ledger.session.v0.1";
 const LEDGER_RECORD_SCHEMA_VERSION: &str = "actingcommand.ledger.record.v0.1";
