@@ -396,6 +396,13 @@ impl GlobalLedger {
         draft: SanitizedEventDraft<P>,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let draft = draft.erase()?;
+        self.append_erased(draft)
+    }
+
+    pub(crate) fn append_erased(
+        &self,
+        draft: actingcommand_contract::ErasedSanitizedEventDraft,
+    ) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
