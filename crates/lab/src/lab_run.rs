@@ -13,14 +13,14 @@ use crate::{
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
-    InputBackend, PixelFormat, combine_operation_and_close,
+    InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
+};
+use actingcommand_ledger::{
+    CommitProof, EvidenceStore, IdIssuer, IdKind, LastResortError, LedgerRecord, LedgerRecordKind,
+    LightEvent, SessionHeader, commit_then_record, project_light_events,
 };
 #[cfg(test)]
-use actingcommand_ledger::LabLedger;
-use actingcommand_ledger::{
-    CommitProof, EvidenceStore, IdIssuer, IdKind, LabLogError, LastResortError, LedgerRecord,
-    LedgerRecordKind, LightEvent, SessionHeader, commit_then_record, project_light_events,
-};
+use actingcommand_ledger::{LabLedger, LabLogError};
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
 };

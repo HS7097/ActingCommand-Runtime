@@ -1963,9 +1963,8 @@ fn zip_io_error(error: io::Error) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LedgerSink};
-    use actingcommand_contract::{DriveRecord, LedgerProjection};
-    use serde::Serialize;
+    use crate::ports::DisabledLedger;
+    use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory};
     use std::io::Read;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -1995,26 +1994,6 @@ mod tests {
                 "capture must not be opened in package tests",
             ))
         }
-    }
-
-    struct DisabledLedger;
-
-    impl LedgerSink for DisabledLedger {
-        type RunSession = ();
-
-        fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> CliOutcome<()> {
-            Err(CliError::device(
-                "ledger must not be opened in package tests",
-            ))
-        }
-
-        fn finish<T: Serialize>(&mut self, _response: &T) -> CliOutcome<LedgerProjection> {
-            Err(CliError::device(
-                "ledger must not be opened in package tests",
-            ))
-        }
-
-        fn run_session(&mut self) -> Self::RunSession {}
     }
 
     struct FixedClock;

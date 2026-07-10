@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::ports::DisabledLedger;
 use crate::{
-    CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendReport, LedgerSink,
+    CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendReport,
     SemanticRequestContext,
 };
-use actingcommand_contract::{DriveRecord, LedgerProjection};
 use actingcommand_device::{
     AdbConfig, DeviceError, DeviceResult, DeviceTarget, InputBackend, MaaTouchConfig,
     TouchBackendConfig,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
-use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -321,22 +320,6 @@ impl CaptureBackendFactory for DisabledCaptureFactory {
     ) -> LabResult<Box<dyn actingcommand_device::CaptureBackend>> {
         Err(LabError::device("capture must not open in drive tests"))
     }
-}
-
-struct DisabledLedger;
-
-impl LedgerSink for DisabledLedger {
-    type RunSession = ();
-
-    fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> LabResult<()> {
-        Err(LabError::device("ledger port must not open in drive tests"))
-    }
-
-    fn finish<T: Serialize>(&mut self, _response: &T) -> LabResult<LedgerProjection> {
-        Err(LabError::device("ledger port must not open in drive tests"))
-    }
-
-    fn run_session(&mut self) -> Self::RunSession {}
 }
 
 struct FixedClock;

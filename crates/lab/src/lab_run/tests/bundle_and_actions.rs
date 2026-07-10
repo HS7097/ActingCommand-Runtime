@@ -14,7 +14,6 @@
             "fixture",
             resolver.clone(),
             temp.path().join("locks"),
-            true,
         );
         let mut lab = test_lab(temp.path());
 
@@ -24,50 +23,66 @@
         assert!(out.is_file());
         assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 1);
         assert_eq!(lab.ports().ledger.run_starts.load(Ordering::SeqCst), 1);
+        assert!(lab.ports().ledger.run_records.load(Ordering::SeqCst) >= 3);
+        assert!(lab.ports().ledger.run_events.load(Ordering::SeqCst) >= 1);
+        assert!(lab.ports().ledger.run_reads.load(Ordering::SeqCst) >= 2);
         assert_eq!(
             *resolver.resolved_ids.lock().expect("resolved ids"),
             vec!["fixture".to_string()]
         );
         assert_eq!(resolver.provenance.load(Ordering::SeqCst), 1);
         assert_eq!(resolver.capture.load(Ordering::SeqCst), 1);
-        assert_eq!(resolver.touch.load(Ordering::SeqCst), 0);
+        assert_eq!(resolver.touch.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn global_provenance_failure_keeps_selected_serial_in_failure_outputs() {
+    fn selected_provenance_failure_precedes_context_and_normal_ledger_creation() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
         write_minimal_lab_package(&zip);
         let out = temp.path().join("out.zip");
         let mut request = test_run_request(zip, out.clone(), temp.path());
         request.instance = Some("fixture".to_string());
+        let mut lab = test_lab(temp.path());
+        let ledger_starts = lab.ports().ledger.run_starts.clone();
         let counters = Arc::new(DeviceResolverCounters::default());
         request.device_resolver = Box::new(TestDeviceResolver {
-            selected: crate::LabRunSelectedDevice {
-                id: "fixture".to_string(),
-                serial: "fixture".to_string(),
-            },
-            counters,
+            selected: test_selected_device("fixture", "fixture"),
+            counters: counters.clone(),
             lease_root: temp.path().join("locks"),
-            require_lease_before_capture: false,
-            fail_provenance: true,
+            failure: Some(SelectedConfigFailure::Provenance),
+            ledger_starts: Some(ledger_starts),
         });
         let run_root = request.run_root.clone();
-        let mut lab = test_lab(temp.path());
 
         let error = lab.lab_run(request).expect_err("provenance failure");
 
         assert!(error.message.contains("synthetic global provenance failure"));
+        assert_eq!(
+            *counters
+                .validation_ledger_starts
+                .lock()
+                .expect("validation ledger starts"),
+            vec![0]
+        );
+        assert_eq!(
+            *counters
+                .validation_lease_present
+                .lock()
+                .expect("validation lease state"),
+            vec![false]
+        );
+        assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
         let file = File::open(&out).expect("failure zip");
         let mut archive = ZipArchive::new(file).expect("failure archive");
         let summary: Value =
             serde_json::from_reader(archive.by_name("logs/summary.json").expect("summary"))
                 .expect("summary json");
-        assert_eq!(summary.get("instance").and_then(Value::as_str), Some("fixture"));
+        assert!(summary.get("instance").expect("instance field").is_null());
         let shard_runs = run_root
             .join("runtime-ledger")
             .join("instances")
-            .join("fixture")
+            .join("unknown")
             .join("runs");
         let shard = fs::read_dir(shard_runs)
             .expect("ledger runs")
@@ -79,8 +94,142 @@
         let ledger = LabLedger::read(shard).expect("ledger readback");
         assert_eq!(
             ledger.header.as_ref().map(|header| header.instance.as_str()),
-            Some("fixture")
+            Some("unknown")
         );
+    }
+
+    #[test]
+    fn selected_invalid_touch_rejects_recognize_only_before_ledger_and_lease() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let out = temp.path().join("out.zip");
+        let mut request = test_run_request(zip, out.clone(), temp.path());
+        request.instance = Some("fixture".to_string());
+        let mut lab = test_lab(temp.path());
+        let ledger_starts = lab.ports().ledger.run_starts.clone();
+        let counters = Arc::new(DeviceResolverCounters::default());
+        request.device_resolver = Box::new(TestDeviceResolver {
+            selected: test_selected_device("fixture", "fixture"),
+            counters: counters.clone(),
+            lease_root: temp.path().join("locks"),
+            failure: Some(SelectedConfigFailure::Touch),
+            ledger_starts: Some(ledger_starts),
+        });
+
+        let error = lab
+            .lab_run(request)
+            .expect_err("selected touch configuration must be validated");
+
+        assert!(error.message.contains("synthetic selected touch failure"));
+        assert_eq!(
+            *counters
+                .validation_ledger_starts
+                .lock()
+                .expect("validation ledger starts"),
+            vec![0]
+        );
+        assert_eq!(
+            *counters
+                .validation_lease_present
+                .lock()
+                .expect("validation lease state"),
+            vec![false]
+        );
+        assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
+        assert!(out.is_file());
+    }
+
+    #[test]
+    fn selected_invalid_capture_preserves_pre_effect_failure_archive_and_ledger_order() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let out = temp.path().join("out.zip");
+        let mut request = test_run_request(zip, out.clone(), temp.path());
+        request.instance = Some("fixture".to_string());
+        let run_root = request.run_root.clone();
+        let mut lab = test_lab(temp.path());
+        let ledger_starts = lab.ports().ledger.run_starts.clone();
+        let counters = Arc::new(DeviceResolverCounters::default());
+        request.device_resolver = Box::new(TestDeviceResolver {
+            selected: test_selected_device("fixture", "fixture"),
+            counters: counters.clone(),
+            lease_root: temp.path().join("locks"),
+            failure: Some(SelectedConfigFailure::Capture),
+            ledger_starts: Some(ledger_starts),
+        });
+
+        let error = lab
+            .lab_run(request)
+            .expect_err("selected capture configuration must fail");
+
+        assert!(error.message.contains("synthetic selected capture failure"));
+        assert_eq!(
+            *counters
+                .validation_ledger_starts
+                .lock()
+                .expect("validation ledger starts"),
+            vec![0]
+        );
+        assert_eq!(
+            *counters
+                .validation_lease_present
+                .lock()
+                .expect("validation lease state"),
+            vec![false]
+        );
+        assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
+
+        let file = File::open(&out).expect("failure zip");
+        let mut archive = ZipArchive::new(file).expect("failure archive");
+        let summary: Value =
+            serde_json::from_reader(archive.by_name("logs/summary.json").expect("summary"))
+                .expect("summary json");
+        assert!(summary.get("instance").expect("instance field").is_null());
+
+        let shard = fs::read_dir(
+            run_root
+                .join("runtime-ledger")
+                .join("instances")
+                .join("unknown")
+                .join("runs"),
+        )
+        .expect("unknown ledger runs")
+        .next()
+        .expect("ledger shard")
+        .expect("ledger shard entry")
+        .path()
+        .join("ledger.jsonl");
+        let ledger = LabLedger::read(shard).expect("ledger readback");
+        assert_eq!(
+            ledger.header.as_ref().map(|header| header.instance.as_str()),
+            Some("unknown")
+        );
+        let events = ledger
+            .events
+            .iter()
+            .filter_map(|event| event.payload.get("event").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            [
+                "run_started",
+                "input_unpacked",
+                "producer_missing",
+                "control_loaded",
+                "resources_loaded",
+                "run_failed",
+                "frame_store_materialized",
+                "output_zip_written",
+            ]
+        );
+        let record_types = ledger
+            .records
+            .iter()
+            .filter_map(|record| record.payload.get("record_type").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(record_types, ["lab_run_dispatch", "finalizing", "finish_error"]);
     }
 
     #[test]
@@ -89,28 +238,18 @@
         let factory = TestInputFactory {
             opens: opens.clone(),
         };
-        let counters = Arc::new(DeviceResolverCounters::default());
-        let mut resolver = test_device_resolver(
-            "fixture",
-            "fixture",
-            counters.clone(),
-            PathBuf::from("locks"),
-            false,
+        let config = actingcommand_device::TouchBackendConfig::new(
+            actingcommand_device::AdbConfig::default(),
+            actingcommand_device::DeviceTarget::default(),
+            actingcommand_device::MaaTouchConfig::default(),
         );
-        let selected = crate::LabRunSelectedDevice {
-            id: "fixture".to_string(),
-            serial: "fixture".to_string(),
-        };
         let mut backend = None;
 
-        ensure_touch_backend(&mut backend, &factory, resolver.as_mut(), &selected)
-            .expect("first input backend");
-        ensure_touch_backend(&mut backend, &factory, resolver.as_mut(), &selected)
-            .expect("cached input backend");
+        ensure_touch_backend(&mut backend, &factory, &config).expect("first input backend");
+        ensure_touch_backend(&mut backend, &factory, &config).expect("cached input backend");
 
         assert!(backend.is_some());
         assert_eq!(opens.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.touch.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -212,19 +212,22 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         );
         let path = L::start_run_session(
             &mut self.ledger_session,
-            crate::RunLedgerSessionRequest {
-                run_root: self.run_root.clone(),
-                run_id: self.run_id.clone(),
+            crate::RunLedgerSessionRequest::new(
+                self.run_root.clone(),
+                self.run_id.clone(),
                 instance,
-                header,
-            },
+                crate::LedgerSessionHeader::from_storage(header),
+            ),
         )
-        .map_err(|err| self.ledger_failure(err, "ledger_create"))?;
+        .map_err(|err| self.ledger_failure(err.message, "ledger_create"))?;
         let backlog = self.events.clone();
         for event in backlog {
             let light_event = self.light_event_from_legacy_event(&event)?;
-            L::append_run_event(&mut self.ledger_session, light_event)
-                .map_err(|err| self.ledger_failure(err, "ledger_backfill_event"))?;
+            L::append_run_event(
+                &mut self.ledger_session,
+                crate::LedgerEventEntry::from_storage(light_event),
+            )
+            .map_err(|err| self.ledger_failure(err.message, "ledger_backfill_event"))?;
         }
         self.ledger_path = Some(path);
         self.ledger_started = true;
@@ -254,8 +257,11 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         if !self.ledger_started {
             return Ok(());
         }
-        L::append_run_event(&mut self.ledger_session, light_event)
-            .map_err(|err| self.ledger_failure(err, "ledger_event"))
+        L::append_run_event(
+            &mut self.ledger_session,
+            crate::LedgerEventEntry::from_storage(light_event),
+        )
+        .map_err(|err| self.ledger_failure(err.message, "ledger_event"))
     }
 
     fn append_ledger_record(
@@ -265,12 +271,15 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     ) -> CliOutcome<()> {
         if !self.ledger_started {
             return Err(self.ledger_failure(
-                LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string()),
+                "invalid lab logging input: runtime ledger handle is unavailable".to_string(),
                 failure_phase,
             ));
         }
-        L::append_run_record(&mut self.ledger_session, record)
-            .map_err(|err| self.ledger_failure(err, failure_phase))
+        L::append_run_record(
+            &mut self.ledger_session,
+            crate::LedgerRecordEntry::from_storage(record),
+        )
+        .map_err(|err| self.ledger_failure(err.message, failure_phase))
     }
 
     fn ledger_record(&self, kind: LedgerRecordKind, payload: Value) -> LedgerRecord {
@@ -312,28 +321,30 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             self.id_chain(),
             event.clone(),
         )
-        .map_err(|err| self.ledger_failure(err, "ledger_event_shape"))
+        .map_err(|err| self.ledger_failure(err.to_string(), "ledger_event_shape"))
     }
 
-    fn ledger_failure(&self, err: LabLogError, phase: &str) -> CliError {
+    fn ledger_failure(&self, message: String, phase: &str) -> CliError {
         let attempted_ledger_path = self
             .ledger_path
             .as_ref()
             .map(|path| path.display().to_string());
-        let message = err.to_string();
-        let last_resort = LastResortError::new(
+        let last_resort = crate::LedgerLastResort::from_storage(LastResortError::new(
             "lab run",
             phase,
             "runtime_ledger_failed",
             &message,
             self.input_summary(),
             attempted_ledger_path,
-        );
+        ));
         let last_resort_result = L::write_run_last_resort(Some(&self.run_root), &last_resort);
         let suffix = match last_resort_result {
             Ok(path) => format!("; last-resort error file written to {}", path.display()),
             Err(last_resort_err) => {
-                format!("; additionally failed to write last-resort error file: {last_resort_err}")
+                format!(
+                    "; additionally failed to write last-resort error file: {}",
+                    last_resort_err.message
+                )
             }
         };
         CliError::package_invalid(format!(
@@ -876,7 +887,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     ) -> CliOutcome<ArchiveResult> {
         let message = err.message.clone();
         let failure_reason = format!("terminal output failed: {message}");
-        let last_resort = LastResortError::new(
+        let last_resort = crate::LedgerLastResort::from_storage(LastResortError::new(
             "lab run",
             "terminal_output",
             &err.code,
@@ -891,13 +902,16 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             self.ledger_path
                 .as_ref()
                 .map(|path| path.display().to_string()),
-        );
+        ));
         let last_resort_result = L::write_run_last_resort(Some(&self.run_root), &last_resort);
         self.append_terminal_receipt(false, Some(&failure_reason), None, None)?;
         let suffix = match last_resort_result {
             Ok(path) => format!("; last-resort error file written to {}", path.display()),
             Err(last_resort_err) => {
-                format!("; additionally failed to write last-resort error file: {last_resort_err}")
+                format!(
+                    "; additionally failed to write last-resort error file: {}",
+                    last_resort_err.message
+                )
             }
         };
         Err(CliError::package_invalid(format!(
@@ -957,10 +971,11 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             )
         })?;
         L::sync_run_session(&self.ledger_session)
-            .map_err(|err| self.ledger_failure(err, "ledger_projection_sync"))?;
-        let read = L::read_run_session(&self.ledger_session)
-            .map_err(|err| self.ledger_failure(err, "ledger_projection_read"))?;
-        let events = project_light_events(&read);
+            .map_err(|err| self.ledger_failure(err.message, "ledger_projection_sync"))?;
+        let readback = L::read_run_session(&self.ledger_session)
+            .map_err(|err| self.ledger_failure(err.message, "ledger_projection_read"))?;
+        let read = readback.storage();
+        let events = project_light_events(read);
         if events.is_empty() {
             return Err(CliError::package_invalid(
                 "runtime ledger projection has no events",
@@ -1035,9 +1050,10 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             )
         })?;
         L::sync_run_session(&self.ledger_session)
-            .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_sync"))?;
-        let read = L::read_run_session(&self.ledger_session)
-            .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_read"))?;
+            .map_err(|err| self.ledger_failure(err.message, "ledger_completed_projection_sync"))?;
+        let readback = L::read_run_session(&self.ledger_session)
+            .map_err(|err| self.ledger_failure(err.message, "ledger_completed_projection_read"))?;
+        let read = readback.storage();
         let mut saw_finalizing = false;
         let mut terminal_receipt = None;
         for record in &read.records {

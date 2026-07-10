@@ -6414,7 +6414,7 @@ fn write_semantic_ledger(
     instance: &str,
     req_id: &str,
     payload: &Value,
-    records: Vec<LedgerRecord>,
+    records: Vec<actingcommand_lab::LedgerRecordEntry>,
 ) -> CliOutcome<SemanticLedgerWrite> {
     let config = read_user_config()?;
     let Some(run_root) = effective_run_root(global, &config) else {
@@ -6434,9 +6434,9 @@ fn write_semantic_ledger(
         SessionHeader::new(RUNTIME_VERSION, game, server, instance),
     )
     .map_err(|err| CliError::device(err.to_string()))?;
-    for record in records {
+    for record in records.into_iter().map(env_detection::decode_record) {
         ledger
-            .append(with_semantic_id_chain(record, req_id, &[payload]))
+            .append(with_semantic_id_chain(record?, req_id, &[payload]))
             .map_err(|err| CliError::device(err.to_string()))?;
     }
     let receipt = with_semantic_id_chain(

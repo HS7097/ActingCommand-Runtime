@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, effective_adb_path,
-    effective_adb_path_for_instance, effective_capture_backend_choice, effective_run_root,
-    effective_touch_backend_choice, enforce_path_adb_target_boundary, read_user_config,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, device_config_for_instance, effective_adb_path,
+    effective_run_root, read_user_config,
 };
-use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
-    TouchBackendConfig,
-};
+use actingcommand_device::CaptureBackendChoice;
 use actingcommand_lab::{
     FrameStoreControl, LabRunDeviceResolver, LabRunProcessContext, LabRunRequest,
     LabRunSelectedDevice, LabValidateRequest, MemorySampleSource,
@@ -81,7 +77,6 @@ pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
 struct AppLabRunDeviceResolver {
     global: GlobalOptions,
     config: actingcommand_lab::UserConfig,
-    capture_device: Option<(String, AdbConfig, DeviceTarget)>,
 }
 
 struct AppRuntimeCommitSource;
@@ -97,74 +92,21 @@ impl AppLabRunDeviceResolver {
         Self {
             global: global.clone(),
             config: config.clone(),
-            capture_device: None,
         }
-    }
-
-    fn target(&self, id: &str) -> DeviceTarget {
-        let instance = self.config.instances.get(id);
-        let mut target = DeviceTarget::default();
-        if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
-            target.serial = Some(serial);
-        } else if self.global.instance.as_deref() == Some(id) && instance.is_none() {
-            target.serial = Some(id.to_string());
-        }
-        target
     }
 }
 
 impl LabRunDeviceResolver for AppLabRunDeviceResolver {
-    fn resolve_serial(&mut self, instance_id: &str) -> CliOutcome<LabRunSelectedDevice> {
-        Ok(LabRunSelectedDevice {
-            id: instance_id.to_string(),
-            serial: self.target(instance_id).resolved_serial(),
-        })
-    }
-
-    fn global_adb_provenance(&mut self) -> CliOutcome<String> {
-        Ok(effective_adb_path(&self.config)?.path)
-    }
-
-    fn capture_config(
-        &mut self,
-        device: &LabRunSelectedDevice,
-    ) -> CliOutcome<CaptureBackendConfig> {
-        let instance = self.config.instances.get(&device.id);
-        let target = self.target(&device.id);
-        if target.resolved_serial() != device.serial {
-            return Err(CliError::device(
-                "selected device serial changed before capture configuration",
-            ));
-        }
-        let capture_backend = effective_capture_backend_choice(&self.global, &device.id, instance)?;
-        let resolved_adb = effective_adb_path_for_instance(&self.config, instance)?;
-        enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
-        let adb = AdbConfig {
-            adb_path: resolved_adb.path,
-            ..Default::default()
-        };
-        self.capture_device = Some((device.id.clone(), adb.clone(), target.clone()));
-        Ok(CaptureBackendConfig::new(adb, target).with_requested(capture_backend))
-    }
-
-    fn touch_config(&mut self, device: &LabRunSelectedDevice) -> CliOutcome<TouchBackendConfig> {
-        let (id, adb, target) = self.capture_device.as_ref().ok_or_else(|| {
-            CliError::device("touch configuration requested before capture configuration")
-        })?;
-        if id != &device.id || target.resolved_serial() != device.serial {
-            return Err(CliError::device(
-                "selected device changed before touch configuration",
-            ));
-        }
-        let touch_backend = effective_touch_backend_choice(
-            &self.global,
-            &device.id,
-            self.config.instances.get(&device.id),
-        )?;
-        Ok(
-            TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
-                .with_requested(touch_backend),
-        )
+    fn resolve_selected(&mut self, instance_id: &str) -> CliOutcome<LabRunSelectedDevice> {
+        let device = device_config_for_instance(&self.global, &self.config, Some(instance_id))?;
+        let adb_provenance = effective_adb_path(&self.config)?.path;
+        Ok(LabRunSelectedDevice::new(
+            instance_id,
+            device.target.resolved_serial(),
+            adb_provenance,
+            device.capture_backend_config(),
+            device.touch_backend_config(),
+        ))
     }
 }
 
@@ -343,14 +285,16 @@ mod tests {
         );
 
         let mut resolver = AppLabRunDeviceResolver::new(&GlobalOptions::default(), &config);
-        let selected = resolver.resolve_serial("b-valid").expect("selected serial");
-        let capture = resolver
-            .capture_config(&selected)
-            .expect("selected capture");
+        let selected = resolver
+            .resolve_selected("b-valid")
+            .expect("selected configuration");
 
-        assert_eq!(selected.id, "b-valid");
-        assert_eq!(selected.serial, "fixture:5555");
-        assert_eq!(capture.adb_config.adb_path, adb.display().to_string());
+        assert_eq!(selected.id(), "b-valid");
+        assert_eq!(selected.serial(), "fixture:5555");
+        assert_eq!(
+            selected.capture_config().adb_config.adb_path,
+            adb.display().to_string()
+        );
     }
 
     #[test]
@@ -377,15 +321,90 @@ mod tests {
 
         let mut resolver = AppLabRunDeviceResolver::new(&global, &config);
         let selected = resolver
-            .resolve_serial("selected")
-            .expect("selected serial");
-        let provenance = resolver.global_adb_provenance().expect("provenance");
-        let capture = resolver.capture_config(&selected).expect("capture config");
+            .resolve_selected("selected")
+            .expect("selected configuration");
 
-        assert_eq!(provenance, global_adb.display().to_string());
+        assert_eq!(selected.adb_provenance(), global_adb.display().to_string());
         assert_eq!(
-            capture.adb_config.adb_path,
+            selected.capture_config().adb_config.adb_path,
             instance_adb.display().to_string()
         );
+    }
+
+    #[test]
+    fn selected_capture_validation_precedes_touch_and_adb_failures() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let mut config = actingcommand_lab::UserConfig {
+            adb_path: Some(temp.path().join("missing-adb").display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "selected".to_string(),
+            actingcommand_lab::InstanceConfig {
+                capture_backend: Some("invalid-capture".to_string()),
+                touch_backend: Some("invalid-touch".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut resolver = AppLabRunDeviceResolver::new(&GlobalOptions::default(), &config);
+
+        let error = resolver
+            .resolve_selected("selected")
+            .expect_err("invalid selected capture");
+
+        assert!(error.message.contains("capture_backend"));
+        assert!(!error.message.contains("touch_backend"));
+    }
+
+    #[test]
+    fn selected_touch_validation_precedes_adb_failure() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let mut config = actingcommand_lab::UserConfig {
+            adb_path: Some(temp.path().join("missing-adb").display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "selected".to_string(),
+            actingcommand_lab::InstanceConfig {
+                capture_backend: Some("adb".to_string()),
+                touch_backend: Some("invalid-touch".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut resolver = AppLabRunDeviceResolver::new(&GlobalOptions::default(), &config);
+
+        let error = resolver
+            .resolve_selected("selected")
+            .expect_err("invalid selected touch");
+
+        assert!(error.message.contains("touch_backend"));
+        assert!(!error.message.contains("adb path"));
+    }
+
+    #[test]
+    fn selected_global_adb_provenance_is_validated_before_resolution_returns() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let instance_adb = temp.path().join("instance-adb");
+        std::fs::write(&instance_adb, b"fixture").expect("instance adb");
+        let mut config = actingcommand_lab::UserConfig {
+            adb_path: Some(temp.path().join("missing-global-adb").display().to_string()),
+            ..Default::default()
+        };
+        config.instances.insert(
+            "selected".to_string(),
+            actingcommand_lab::InstanceConfig {
+                adb_path: Some(instance_adb.display().to_string()),
+                capture_backend: Some("adb".to_string()),
+                touch_backend: Some("maatouch".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut resolver = AppLabRunDeviceResolver::new(&GlobalOptions::default(), &config);
+
+        let error = resolver
+            .resolve_selected("selected")
+            .expect_err("invalid global ADB provenance");
+
+        assert!(error.message.to_ascii_lowercase().contains("adb"));
     }
 }

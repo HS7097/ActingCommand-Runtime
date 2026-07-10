@@ -8,6 +8,7 @@ use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_lab_source,
     inspect_public_api, validate_line_ratchet, workspace_dependency_violations,
 };
+use sha2::{Digest, Sha256};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,6 +16,32 @@ fn workspace_root() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("architecture tool must live at tools/<name>")
         .to_path_buf()
+}
+
+#[test]
+fn a7_interface_amendment_matches_declared_freeze() {
+    let source = fs::read_to_string(
+        workspace_root().join("docs/architecture/actinglab-a7-interface-amendment.md"),
+    )
+    .expect("read A7 interface amendment");
+    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+    let declared = normalized
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Frozen payload SHA-256: `")
+                .and_then(|value| value.strip_suffix('`'))
+        })
+        .expect("A7 amendment declares frozen payload SHA-256");
+    let payload = normalized
+        .split_once("<!-- A7-INTERFACE-FREEZE-BEGIN -->\n")
+        .and_then(|(_, tail)| {
+            tail.split_once("<!-- A7-INTERFACE-FREEZE-END -->")
+                .map(|(payload, _)| payload)
+        })
+        .expect("A7 amendment contains freeze markers");
+    let actual = format!("{:x}", Sha256::digest(payload.as_bytes()));
+
+    assert_eq!(actual, declared, "A7 interface amendment freeze drifted");
 }
 
 #[test]

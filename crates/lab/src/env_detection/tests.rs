@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::{
-    CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts, LedgerSink,
-};
-use actingcommand_contract::{DriveRecord, LedgerProjection};
+use crate::ports::DisabledLedger;
+use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
 use actingcommand_recognition::ScenePixelFormat;
-use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
@@ -27,22 +24,6 @@ impl CaptureBackendFactory for DisabledCaptureFactory {
     ) -> EnvResult<Box<dyn actingcommand_device::CaptureBackend>> {
         Err(LabError::device("capture must not be opened in this test"))
     }
-}
-
-struct DisabledLedger;
-
-impl LedgerSink for DisabledLedger {
-    type RunSession = ();
-
-    fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> EnvResult<()> {
-        Err(LabError::device("ledger must not be opened in this test"))
-    }
-
-    fn finish<T: Serialize>(&mut self, _response: &T) -> EnvResult<LedgerProjection> {
-        Err(LabError::device("ledger must not be opened in this test"))
-    }
-
-    fn run_session(&mut self) -> Self::RunSession {}
 }
 
 struct FixedClock;

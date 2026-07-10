@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_contract::{DriveRecord, LedgerProjection};
 use actingcommand_page_detector::PageTargetEvaluation;
 use actingcommand_recognition_pack::load_pack_from_json_str;
-use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -73,14 +71,23 @@ struct DeviceResolverCounters {
     provenance: AtomicUsize,
     capture: AtomicUsize,
     touch: AtomicUsize,
+    validation_ledger_starts: Mutex<Vec<usize>>,
+    validation_lease_present: Mutex<Vec<bool>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectedConfigFailure {
+    Capture,
+    Touch,
+    Provenance,
 }
 
 struct TestDeviceResolver {
     selected: crate::LabRunSelectedDevice,
     counters: Arc<DeviceResolverCounters>,
     lease_root: PathBuf,
-    require_lease_before_capture: bool,
-    fail_provenance: bool,
+    failure: Option<SelectedConfigFailure>,
+    ledger_starts: Option<Arc<AtomicUsize>>,
 }
 
 struct SequencedRuntimeCommitSource {
@@ -111,65 +118,54 @@ impl crate::RuntimeCommitSource for SequencedRuntimeCommitSource {
 }
 
 impl crate::LabRunDeviceResolver for TestDeviceResolver {
-    fn resolve_serial(&mut self, instance_id: &str) -> CliOutcome<crate::LabRunSelectedDevice> {
+    fn resolve_selected(&mut self, instance_id: &str) -> CliOutcome<crate::LabRunSelectedDevice> {
         self.counters
             .resolved_ids
             .lock()
             .expect("resolver ids")
             .push(instance_id.to_string());
-        if instance_id != self.selected.id {
+        if instance_id != self.selected.id() {
             return Err(CliError::instance(format!(
                 "unexpected selected instance '{instance_id}'"
             )));
         }
-        Ok(self.selected.clone())
-    }
-
-    fn global_adb_provenance(&mut self) -> CliOutcome<String> {
+        self.record_validation_boundary();
+        self.counters.capture.fetch_add(1, Ordering::SeqCst);
+        if self.failure == Some(SelectedConfigFailure::Capture) {
+            return Err(CliError::device("synthetic selected capture failure"));
+        }
+        self.counters.touch.fetch_add(1, Ordering::SeqCst);
+        if self.failure == Some(SelectedConfigFailure::Touch) {
+            return Err(CliError::device("synthetic selected touch failure"));
+        }
         self.counters.provenance.fetch_add(1, Ordering::SeqCst);
-        if self.fail_provenance {
+        if self.failure == Some(SelectedConfigFailure::Provenance) {
             return Err(CliError::device("synthetic global provenance failure"));
         }
-        Ok("adb".to_string())
+        Ok(self.selected.clone())
     }
+}
 
-    fn capture_config(
-        &mut self,
-        device: &crate::LabRunSelectedDevice,
-    ) -> CliOutcome<actingcommand_device::CaptureBackendConfig> {
-        self.counters.capture.fetch_add(1, Ordering::SeqCst);
-        if self.require_lease_before_capture {
-            let lock = self
-                .lease_root
-                .join(format!("{}.lock", sanitize_path_segment(&device.serial)));
-            if !lock.is_file() {
-                return Err(CliError::device(
-                    "capture config resolved before the Lab lease was acquired",
-                ));
-            }
-        }
-        Ok(actingcommand_device::CaptureBackendConfig::new(
-            actingcommand_device::AdbConfig::default(),
-            actingcommand_device::DeviceTarget {
-                serial: Some(device.serial.clone()),
-                ..Default::default()
-            },
-        ))
-    }
-
-    fn touch_config(
-        &mut self,
-        device: &crate::LabRunSelectedDevice,
-    ) -> CliOutcome<actingcommand_device::TouchBackendConfig> {
-        self.counters.touch.fetch_add(1, Ordering::SeqCst);
-        Ok(actingcommand_device::TouchBackendConfig::new(
-            actingcommand_device::AdbConfig::default(),
-            actingcommand_device::DeviceTarget {
-                serial: Some(device.serial.clone()),
-                ..Default::default()
-            },
-            actingcommand_device::MaaTouchConfig::default(),
-        ))
+impl TestDeviceResolver {
+    fn record_validation_boundary(&self) {
+        let ledger_starts = self
+            .ledger_starts
+            .as_ref()
+            .map_or(0, |starts| starts.load(Ordering::SeqCst));
+        self.counters
+            .validation_ledger_starts
+            .lock()
+            .expect("validation ledger starts")
+            .push(ledger_starts);
+        let lock = self.lease_root.join(format!(
+            "{}.lock",
+            sanitize_path_segment(self.selected.serial())
+        ));
+        self.counters
+            .validation_lease_present
+            .lock()
+            .expect("validation lease state")
+            .push(lock.is_file());
     }
 }
 
@@ -178,26 +174,51 @@ fn test_device_resolver(
     serial: &str,
     counters: Arc<DeviceResolverCounters>,
     lease_root: PathBuf,
-    require_lease_before_capture: bool,
 ) -> Box<dyn crate::LabRunDeviceResolver> {
     Box::new(TestDeviceResolver {
-        selected: crate::LabRunSelectedDevice {
-            id: id.to_string(),
-            serial: serial.to_string(),
-        },
+        selected: test_selected_device(id, serial),
         counters,
         lease_root,
-        require_lease_before_capture,
-        fail_provenance: false,
+        failure: None,
+        ledger_starts: None,
     })
+}
+
+fn test_selected_device(id: &str, serial: &str) -> crate::LabRunSelectedDevice {
+    let adb = actingcommand_device::AdbConfig::default();
+    let target = actingcommand_device::DeviceTarget {
+        serial: Some(serial.to_string()),
+        ..Default::default()
+    };
+    crate::LabRunSelectedDevice::new(
+        id,
+        serial,
+        "adb",
+        actingcommand_device::CaptureBackendConfig::new(adb.clone(), target.clone()),
+        actingcommand_device::TouchBackendConfig::new(
+            adb,
+            target,
+            actingcommand_device::MaaTouchConfig::default(),
+        ),
+    )
 }
 
 struct TestCaptureFactory {
     opens: Arc<AtomicUsize>,
+    lease_root: PathBuf,
 }
 
 impl crate::CaptureBackendFactory for TestCaptureFactory {
     fn open(&self, request: crate::CaptureBackendRequest) -> CliOutcome<Box<dyn CaptureBackend>> {
+        let serial = request.config.target.resolved_serial();
+        let lock = self
+            .lease_root
+            .join(format!("{}.lock", sanitize_path_segment(&serial)));
+        if !lock.is_file() {
+            return Err(CliError::device(
+                "capture backend opened before the Lab lease was acquired",
+            ));
+        }
         self.opens.fetch_add(1, Ordering::SeqCst);
         if let Some(observation) = request.observation {
             observation.record(crate::CaptureBackendReport {
@@ -220,17 +241,26 @@ impl crate::CaptureBackendFactory for TestCaptureFactory {
 
 struct TestLedgerSink {
     run_starts: Arc<AtomicUsize>,
+    run_records: Arc<AtomicUsize>,
+    run_events: Arc<AtomicUsize>,
+    run_reads: Arc<AtomicUsize>,
 }
 
 struct TestRunLedgerSession {
     ledger: Option<LabLedger>,
     run_starts: Arc<AtomicUsize>,
+    run_records: Arc<AtomicUsize>,
+    run_events: Arc<AtomicUsize>,
+    run_reads: Arc<AtomicUsize>,
 }
 
 impl TestLedgerSink {
     fn new() -> Self {
         Self {
             run_starts: Arc::new(AtomicUsize::new(0)),
+            run_records: Arc::new(AtomicUsize::new(0)),
+            run_events: Arc::new(AtomicUsize::new(0)),
+            run_reads: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -238,37 +268,35 @@ impl TestLedgerSink {
 impl crate::LedgerSink for TestLedgerSink {
     type RunSession = TestRunLedgerSession;
 
-    fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> CliOutcome<()> {
-        Err(CliError::device("unexpected test ledger effect"))
-    }
-
-    fn finish<T: Serialize>(&mut self, _response: &T) -> CliOutcome<LedgerProjection> {
-        Err(CliError::device("unexpected test ledger effect"))
-    }
-
     fn run_session(&mut self) -> Self::RunSession {
         TestRunLedgerSession {
             ledger: None,
             run_starts: self.run_starts.clone(),
+            run_records: self.run_records.clone(),
+            run_events: self.run_events.clone(),
+            run_reads: self.run_reads.clone(),
         }
     }
 
     fn start_run_session(
         session: &mut Self::RunSession,
         request: crate::RunLedgerSessionRequest,
-    ) -> actingcommand_ledger::LabLogResult<PathBuf> {
+    ) -> CliOutcome<PathBuf> {
         session.run_starts.fetch_add(1, Ordering::SeqCst);
         if session.ledger.is_some() {
-            return Err(LabLogError::InvalidInput(
-                "runtime ledger session is already started".to_string(),
+            return Err(CliError::package_invalid(
+                "invalid lab logging input: runtime ledger session is already started",
             ));
         }
+        let header =
+            serde_json::from_str(&request.header().encoded_json()?).map_err(test_ledger_error)?;
         let ledger = LabLedger::create_runtime_shard(
-            request.run_root,
-            &request.run_id,
-            &request.instance,
-            request.header,
-        )?;
+            request.run_root(),
+            request.run_id(),
+            request.instance(),
+            header,
+        )
+        .map_err(test_ledger_error)?;
         let path = ledger.ledger_path().to_path_buf();
         session.ledger = Some(ledger);
         Ok(path)
@@ -276,50 +304,58 @@ impl crate::LedgerSink for TestLedgerSink {
 
     fn append_run_record(
         session: &mut Self::RunSession,
-        record: LedgerRecord,
-    ) -> actingcommand_ledger::LabLogResult<()> {
-        test_run_ledger_mut(session)?.append(record)
+        record: crate::LedgerRecordEntry,
+    ) -> CliOutcome<()> {
+        session.run_records.fetch_add(1, Ordering::SeqCst);
+        test_run_ledger_mut(session)?
+            .append(record.into_storage())
+            .map_err(test_ledger_error)
     }
 
     fn append_run_event(
         session: &mut Self::RunSession,
-        event: LightEvent,
-    ) -> actingcommand_ledger::LabLogResult<()> {
-        test_run_ledger_mut(session)?.append_event(event)
+        event: crate::LedgerEventEntry,
+    ) -> CliOutcome<()> {
+        session.run_events.fetch_add(1, Ordering::SeqCst);
+        test_run_ledger_mut(session)?
+            .append_event(event.into_storage())
+            .map_err(test_ledger_error)
     }
 
-    fn sync_run_session(session: &Self::RunSession) -> actingcommand_ledger::LabLogResult<()> {
-        test_run_ledger(session)?.sync()
+    fn sync_run_session(session: &Self::RunSession) -> CliOutcome<()> {
+        test_run_ledger(session)?.sync().map_err(test_ledger_error)
     }
 
-    fn read_run_session(
-        session: &Self::RunSession,
-    ) -> actingcommand_ledger::LabLogResult<actingcommand_ledger::LedgerRead> {
+    fn read_run_session(session: &Self::RunSession) -> CliOutcome<crate::LedgerReadback> {
+        session.run_reads.fetch_add(1, Ordering::SeqCst);
         LabLedger::read(test_run_ledger(session)?.ledger_path())
+            .map(crate::LedgerReadback::from_storage)
+            .map_err(test_ledger_error)
     }
 
     fn write_run_last_resort(
         run_root: Option<&Path>,
-        error: &LastResortError,
-    ) -> actingcommand_ledger::LabLogResult<PathBuf> {
-        actingcommand_ledger::write_last_resort_error(run_root, error)
+        error: &crate::LedgerLastResort,
+    ) -> CliOutcome<PathBuf> {
+        actingcommand_ledger::write_last_resort_error(run_root, error.storage())
+            .map_err(test_ledger_error)
     }
 }
 
-fn test_run_ledger(
-    session: &TestRunLedgerSession,
-) -> actingcommand_ledger::LabLogResult<&LabLedger> {
+fn test_run_ledger(session: &TestRunLedgerSession) -> CliOutcome<&LabLedger> {
     session.ledger.as_ref().ok_or_else(|| {
-        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+        CliError::package_invalid("invalid lab logging input: runtime ledger handle is unavailable")
     })
 }
 
-fn test_run_ledger_mut(
-    session: &mut TestRunLedgerSession,
-) -> actingcommand_ledger::LabLogResult<&mut LabLedger> {
+fn test_run_ledger_mut(session: &mut TestRunLedgerSession) -> CliOutcome<&mut LabLedger> {
     session.ledger.as_mut().ok_or_else(|| {
-        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+        CliError::package_invalid("invalid lab logging input: runtime ledger handle is unavailable")
     })
+}
+
+fn test_ledger_error(error: impl std::fmt::Display) -> CliError {
+    CliError::package_invalid(error.to_string())
 }
 
 impl LabRunContext<'static, TestLedgerSink> {
@@ -402,6 +438,7 @@ fn test_lab(root: &Path) -> Lab<TestPorts> {
             },
             capture: TestCaptureFactory {
                 opens: Arc::new(AtomicUsize::new(0)),
+                lease_root: root.join("locks"),
             },
             ledger: TestLedgerSink::new(),
             clock: TestClock,
@@ -425,7 +462,6 @@ fn test_run_request(zip: PathBuf, out: PathBuf, root: &Path) -> LabRunRequest {
             "127.0.0.1:1",
             Arc::new(DeviceResolverCounters::default()),
             root.join("locks"),
-            false,
         ),
         capture_interval_override: None,
         capture_backend_override: None,

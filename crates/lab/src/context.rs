@@ -85,8 +85,11 @@ impl SemanticLedgerContext {
         Ok(())
     }
 
-    pub fn take_records(&mut self) -> Vec<LedgerRecord> {
+    pub fn take_records(&mut self) -> Vec<crate::LedgerRecordEntry> {
         std::mem::take(&mut self.records)
+            .into_iter()
+            .map(crate::LedgerRecordEntry::from_storage)
+            .collect()
     }
 }
 
@@ -107,7 +110,7 @@ mod tests {
             .expect("drive");
         let records = context.take_records();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].payload["args_count"], 2);
-        assert_eq!(records[1].payload["stage"], "recognition");
+        assert_eq!(records[0].storage().payload["args_count"], 2);
+        assert_eq!(records[1].storage().payload["stage"], "recognition");
     }
 }

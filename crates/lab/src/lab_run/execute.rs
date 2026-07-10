@@ -807,7 +807,7 @@ fn target_is_error_signal(game: &str, target_id: &str, error_pages: &[String]) -
 #[derive(Clone, Copy)]
 struct DeviceInputRequest<'a> {
     factory: &'a dyn InputBackendFactory,
-    selected: &'a crate::LabRunSelectedDevice,
+    config: &'a TouchBackendConfig,
 }
 
 struct OperationExecutionRequest<'a> {
@@ -888,7 +888,6 @@ fn execute_operation_with_retries<L: LedgerSink>(
     ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     input: &mut Option<Box<dyn InputBackend>>,
-    resolver: &mut dyn crate::LabRunDeviceResolver,
     request: OperationExecutionRequest<'_>,
 ) -> CliOutcome<OperationRunOutcome> {
     let OperationExecutionRequest {
@@ -1116,12 +1115,7 @@ fn execute_operation_with_retries<L: LedgerSink>(
         let action =
             operation.input_action(&control.resolution, ctx.run_seed, action_target.as_ref())?;
         let action_id = ctx.id_issuer.issue(IdKind::Action).value;
-        let backend = ensure_touch_backend(
-            input,
-            device.factory,
-            resolver,
-            device.selected,
-        )?;
+        let backend = ensure_touch_backend(input, device.factory, device.config)?;
         match &action {
             LabInputAction::Tap(point) => {
                 let action_started = Instant::now();
@@ -1310,7 +1304,6 @@ fn run_recovery_bundle<L: LedgerSink>(
     ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     input: &mut Option<Box<dyn InputBackend>>,
-    resolver: &mut dyn crate::LabRunDeviceResolver,
     request: RecoveryRunRequest<'_>,
 ) -> CliOutcome<Option<String>> {
     let RecoveryRunRequest {
@@ -1359,7 +1352,6 @@ fn run_recovery_bundle<L: LedgerSink>(
             ctx,
             capture,
             input,
-            &mut *resolver,
             OperationExecutionRequest {
                 device,
                 resources,
@@ -1408,13 +1400,11 @@ fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {
 fn ensure_touch_backend<'a>(
     backend: &'a mut Option<Box<dyn InputBackend>>,
     factory: &dyn InputBackendFactory,
-    resolver: &mut dyn crate::LabRunDeviceResolver,
-    selected: &crate::LabRunSelectedDevice,
+    config: &TouchBackendConfig,
 ) -> CliOutcome<&'a mut Box<dyn InputBackend>> {
     if backend.is_none() {
-        let config = resolver.touch_config(selected)?;
         let created = factory.open(InputBackendRequest {
-            config,
+            config: config.clone(),
             observation: None,
         })?;
         *backend = Some(created);

@@ -72,25 +72,54 @@ pub struct LabRunRequest {
 }
 
 pub trait LabRunDeviceResolver {
-    fn resolve_serial(&mut self, instance_id: &str) -> Result<LabRunSelectedDevice, LabError>;
-
-    fn global_adb_provenance(&mut self) -> Result<String, LabError>;
-
-    fn capture_config(
-        &mut self,
-        device: &LabRunSelectedDevice,
-    ) -> Result<CaptureBackendConfig, LabError>;
-
-    fn touch_config(
-        &mut self,
-        device: &LabRunSelectedDevice,
-    ) -> Result<TouchBackendConfig, LabError>;
+    fn resolve_selected(&mut self, instance_id: &str) -> Result<LabRunSelectedDevice, LabError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LabRunSelectedDevice {
-    pub id: String,
-    pub serial: String,
+    id: String,
+    serial: String,
+    adb_provenance: String,
+    capture_config: CaptureBackendConfig,
+    touch_config: TouchBackendConfig,
+}
+
+impl LabRunSelectedDevice {
+    pub fn new(
+        id: impl Into<String>,
+        serial: impl Into<String>,
+        adb_provenance: impl Into<String>,
+        capture_config: CaptureBackendConfig,
+        touch_config: TouchBackendConfig,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            serial: serial.into(),
+            adb_provenance: adb_provenance.into(),
+            capture_config,
+            touch_config,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn serial(&self) -> &str {
+        &self.serial
+    }
+
+    pub fn adb_provenance(&self) -> &str {
+        &self.adb_provenance
+    }
+
+    pub fn capture_config(&self) -> &CaptureBackendConfig {
+        &self.capture_config
+    }
+
+    pub fn touch_config(&self) -> &TouchBackendConfig {
+        &self.touch_config
+    }
 }
 
 pub trait RuntimeCommitSource: Send + Sync {

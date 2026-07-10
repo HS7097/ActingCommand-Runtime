@@ -5,7 +5,6 @@ use super::{
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
     read_user_config, semantic_ledger_context,
 };
-use actingcommand_contract::{DriveRecord, LedgerProjection};
 use actingcommand_device::{
     CaptureBackend, DeviceError, InputBackend, SelectedTouchBackend, create_capture_backend,
     create_touch_backend,
@@ -14,14 +13,12 @@ use actingcommand_lab::{
     CaptureBackendFactory, CaptureBackendRequest, Clock, ConfigSource, EnvDetectRequest,
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
-    InputBackendRequest, InputHandshakeReport, Lab, LabError, LabPorts, LabState, LedgerSink,
+    InputBackendRequest, InputHandshakeReport, Lab, LabError, LabPorts, LabState, LedgerEventEntry,
+    LedgerLastResort, LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink,
     RunLedgerSessionRequest, UserConfig,
 };
-use actingcommand_ledger::{
-    LabLedger, LabLogError, LabLogResult, LastResortError, LedgerRead, LedgerRecord, LightEvent,
-    write_last_resort_error,
-};
-use serde::Serialize;
+use actingcommand_ledger::{LabLedger, LastResortError, LedgerRecord, write_last_resort_error};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -508,18 +505,6 @@ pub(super) struct AppRunLedgerSession {
 impl LedgerSink for AppLedgerSink {
     type RunSession = AppRunLedgerSession;
 
-    fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> Result<(), LabError> {
-        Err(LabError::device(
-            "semantic ledger is owned by the CLI adapter during A3 migration",
-        ))
-    }
-
-    fn finish<T: Serialize>(&mut self, _response: &T) -> Result<LedgerProjection, LabError> {
-        Err(LabError::device(
-            "semantic ledger is owned by the CLI adapter during A3 migration",
-        ))
-    }
-
     fn run_session(&mut self) -> Self::RunSession {
         AppRunLedgerSession { ledger: None }
     }
@@ -527,57 +512,119 @@ impl LedgerSink for AppLedgerSink {
     fn start_run_session(
         session: &mut Self::RunSession,
         request: RunLedgerSessionRequest,
-    ) -> LabLogResult<PathBuf> {
+    ) -> CliOutcome<PathBuf> {
         if session.ledger.is_some() {
-            return Err(LabLogError::InvalidInput(
-                "runtime ledger session is already started".to_string(),
+            return Err(LabError::package_invalid(
+                "invalid lab logging input: runtime ledger session is already started",
             ));
         }
+        let header =
+            decode_ledger_json(&request.header().encoded_json()?, "ledger session header")?;
         let ledger = LabLedger::create_runtime_shard(
-            request.run_root,
-            &request.run_id,
-            &request.instance,
-            request.header,
-        )?;
+            request.run_root(),
+            request.run_id(),
+            request.instance(),
+            header,
+        )
+        .map_err(app_ledger_error)?;
         let path = ledger.ledger_path().to_path_buf();
         session.ledger = Some(ledger);
         Ok(path)
     }
 
-    fn append_run_record(session: &mut Self::RunSession, record: LedgerRecord) -> LabLogResult<()> {
-        app_run_ledger_mut(session)?.append(record)
+    fn append_run_record(
+        session: &mut Self::RunSession,
+        record: LedgerRecordEntry,
+    ) -> CliOutcome<()> {
+        let record = decode_record(record)?;
+        app_run_ledger_mut(session)?
+            .append(record)
+            .map_err(app_ledger_error)
     }
 
-    fn append_run_event(session: &mut Self::RunSession, event: LightEvent) -> LabLogResult<()> {
-        app_run_ledger_mut(session)?.append_event(event)
+    fn append_run_event(session: &mut Self::RunSession, event: LedgerEventEntry) -> CliOutcome<()> {
+        let event = decode_ledger_json(&event.encoded_json()?, "ledger event")?;
+        app_run_ledger_mut(session)?
+            .append_event(event)
+            .map_err(app_ledger_error)
     }
 
-    fn sync_run_session(session: &Self::RunSession) -> LabLogResult<()> {
-        app_run_ledger(session)?.sync()
+    fn sync_run_session(session: &Self::RunSession) -> CliOutcome<()> {
+        app_run_ledger(session)?.sync().map_err(app_ledger_error)
     }
 
-    fn read_run_session(session: &Self::RunSession) -> LabLogResult<LedgerRead> {
-        LabLedger::read(app_run_ledger(session)?.ledger_path())
+    fn read_run_session(session: &Self::RunSession) -> CliOutcome<LedgerReadback> {
+        let read =
+            LabLedger::read(app_run_ledger(session)?.ledger_path()).map_err(app_ledger_error)?;
+        let header = read
+            .header
+            .map(|header| {
+                let encoded = encode_ledger_json(&header, "ledger session header")?;
+                LedgerSessionHeader::from_json(&encoded)
+            })
+            .transpose()?;
+        let events = read
+            .events
+            .into_iter()
+            .map(|event| {
+                let encoded = encode_ledger_json(&event, "ledger event")?;
+                LedgerEventEntry::from_json(&encoded)
+            })
+            .collect::<CliOutcome<Vec<_>>>()?;
+        let records = read
+            .records
+            .into_iter()
+            .map(|record| {
+                let encoded = encode_ledger_json(&record, "ledger record")?;
+                LedgerRecordEntry::from_json(&encoded)
+            })
+            .collect::<CliOutcome<Vec<_>>>()?;
+        Ok(LedgerReadback::new(
+            header,
+            events,
+            records,
+            read.skipped_corrupt_lines,
+        ))
     }
 
     fn write_run_last_resort(
         run_root: Option<&Path>,
-        error: &LastResortError,
-    ) -> LabLogResult<PathBuf> {
-        write_last_resort_error(run_root, error)
+        error: &LedgerLastResort,
+    ) -> CliOutcome<PathBuf> {
+        let error: LastResortError =
+            decode_ledger_json(&error.encoded_json()?, "last-resort ledger error")?;
+        write_last_resort_error(run_root, &error).map_err(app_ledger_error)
     }
 }
 
-fn app_run_ledger(session: &AppRunLedgerSession) -> LabLogResult<&LabLedger> {
+fn app_run_ledger(session: &AppRunLedgerSession) -> CliOutcome<&LabLedger> {
     session.ledger.as_ref().ok_or_else(|| {
-        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+        LabError::package_invalid("invalid lab logging input: runtime ledger handle is unavailable")
     })
 }
 
-fn app_run_ledger_mut(session: &mut AppRunLedgerSession) -> LabLogResult<&mut LabLedger> {
+fn app_run_ledger_mut(session: &mut AppRunLedgerSession) -> CliOutcome<&mut LabLedger> {
     session.ledger.as_mut().ok_or_else(|| {
-        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+        LabError::package_invalid("invalid lab logging input: runtime ledger handle is unavailable")
     })
+}
+
+pub(super) fn decode_record(record: LedgerRecordEntry) -> CliOutcome<LedgerRecord> {
+    decode_ledger_json(&record.encoded_json()?, "ledger record")
+}
+
+fn encode_ledger_json<T: Serialize>(value: &T, label: &str) -> CliOutcome<String> {
+    serde_json::to_string(value)
+        .map_err(|error| LabError::package_invalid(format!("failed to encode {label}: {error}")))
+}
+
+fn decode_ledger_json<T: DeserializeOwned>(encoded: &str, label: &str) -> CliOutcome<T> {
+    serde_json::from_str(encoded)
+        .map_err(|error| LabError::package_invalid(format!("failed to decode {label}: {error}")))
+}
+
+fn app_ledger_error(error: impl std::fmt::Display) -> LabError {
+    LabError::package_invalid(error.to_string())
 }
 
 pub(super) struct SystemClock;

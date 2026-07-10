@@ -227,13 +227,13 @@ fn execute_lab_run<P: LabPorts>(
 
     let app_config = ports.config().load()?;
     let selected_id = select_device_id(request, &control, &app_config)?;
-    let device = request.device_resolver.resolve_serial(&selected_id)?;
-    ctx.instance = Some(device.serial.clone());
-    ctx.adb_path = Some(request.device_resolver.global_adb_provenance()?);
+    let device = request.device_resolver.resolve_selected(&selected_id)?;
+    ctx.instance = Some(device.serial().to_string());
+    ctx.adb_path = Some(device.adb_provenance().to_string());
     ctx.ensure_ledger()?;
 
     ctx.set_phase("lab_lease_acquired");
-    let _lease_guard = LabLeaseGuard::acquire(&request.process.lease_root, &device.serial)?;
+    let _lease_guard = LabLeaseGuard::acquire(&request.process.lease_root, device.serial())?;
     ctx.event(
         "lab_lease_acquired",
         json!({"mode": "trusted_execution", "instance": ctx.instance}),
@@ -245,9 +245,11 @@ fn execute_lab_run<P: LabPorts>(
         .or(control.capture_backend_choice()?)
         .unwrap_or_default();
     let capture_observation = CaptureBackendObservation::default();
-    let capture_config = request.device_resolver.capture_config(&device)?;
     let mut capture = ports.capture_factory().open(CaptureBackendRequest {
-        config: capture_config.with_requested(requested_capture_backend),
+        config: device
+            .capture_config()
+            .clone()
+            .with_requested(requested_capture_backend),
         observation: Some(capture_observation.clone()),
     })?;
     let capture_report = capture_observation.snapshot()?;
@@ -354,11 +356,10 @@ fn execute_lab_run<P: LabPorts>(
             ctx,
             capture.as_mut(),
             &mut input,
-            request.device_resolver.as_mut(),
             OperationExecutionRequest {
                 device: DeviceInputRequest {
                     factory: ports.input_factory(),
-                    selected: &device,
+                    config: device.touch_config(),
                 },
                 resources: &state.resources,
                 bundle: &state.resources.operation_bundle,
@@ -446,11 +447,10 @@ fn execute_lab_run<P: LabPorts>(
                     ctx,
                     capture.as_mut(),
                     &mut input,
-                    request.device_resolver.as_mut(),
                     RecoveryRunRequest {
                         device: DeviceInputRequest {
                             factory: ports.input_factory(),
-                            selected: &device,
+                            config: device.touch_config(),
                         },
                         resources: &state.resources,
                         control: &state.control,

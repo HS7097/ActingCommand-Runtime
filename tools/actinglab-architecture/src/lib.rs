@@ -459,12 +459,19 @@ fn inspect_public_items(
     violations: &mut Vec<String>,
 ) {
     let aliases = serde_json_value_aliases(items);
+    let ledger_aliases = ledger_storage_aliases(items);
     for item in items {
         match item {
             Item::Fn(function) if is_public(&function.vis) => {
                 if signature_uses_json_value(&function.sig, &aliases) {
                     violations.push(format!(
                         "{path}: public function {} uses serde_json::Value",
+                        qualified(module, &function.sig.ident.to_string())
+                    ));
+                }
+                if signature_uses_ledger_storage(&function.sig, &ledger_aliases) {
+                    violations.push(format!(
+                        "{path}: public function {} uses actingcommand_ledger storage types",
                         qualified(module, &function.sig.ident.to_string())
                     ));
                 }
@@ -477,6 +484,14 @@ fn inspect_public_items(
                     if is_public(&method.vis) && signature_uses_json_value(&method.sig, &aliases) {
                         violations.push(format!(
                             "{path}: public method {} uses serde_json::Value",
+                            qualified(module, &method.sig.ident.to_string())
+                        ));
+                    }
+                    if is_public(&method.vis)
+                        && signature_uses_ledger_storage(&method.sig, &ledger_aliases)
+                    {
+                        violations.push(format!(
+                            "{path}: public method {} uses actingcommand_ledger storage types",
                             qualified(module, &method.sig.ident.to_string())
                         ));
                     }
@@ -494,6 +509,13 @@ fn inspect_public_items(
                             qualified(module, &name)
                         ));
                     }
+                    if signature_uses_ledger_storage(&method.sig, &ledger_aliases) {
+                        let name = format!("{}::{}", item_trait.ident, method.sig.ident);
+                        violations.push(format!(
+                            "{path}: public trait method {} uses actingcommand_ledger storage types",
+                            qualified(module, &name)
+                        ));
+                    }
                 }
             }
             Item::Type(item_type)
@@ -503,6 +525,33 @@ fn inspect_public_items(
                     "{path}: public type alias {} points to serde_json::Value",
                     qualified(module, &item_type.ident.to_string())
                 ));
+            }
+            Item::Type(item_type)
+                if is_public(&item_type.vis)
+                    && type_uses_ledger_storage(&item_type.ty, &ledger_aliases) =>
+            {
+                violations.push(format!(
+                    "{path}: public type alias {} uses actingcommand_ledger storage types",
+                    qualified(module, &item_type.ident.to_string())
+                ));
+            }
+            Item::Struct(item_struct) if is_public(&item_struct.vis) => {
+                for (index, field) in item_struct.fields.iter().enumerate() {
+                    if !is_public(&field.vis)
+                        || !type_uses_ledger_storage(&field.ty, &ledger_aliases)
+                    {
+                        continue;
+                    }
+                    let field_name = field
+                        .ident
+                        .as_ref()
+                        .map_or_else(|| index.to_string(), ToString::to_string);
+                    let name = format!("{}::{field_name}", item_struct.ident);
+                    violations.push(format!(
+                        "{path}: public field {} uses actingcommand_ledger storage types",
+                        qualified(module, &name)
+                    ));
+                }
             }
             Item::Mod(item_mod) => {
                 if let Some((_, nested)) = &item_mod.content {
@@ -519,6 +568,128 @@ fn inspect_public_items(
 struct JsonValueAliases {
     values: HashSet<String>,
     modules: HashSet<String>,
+}
+
+const LEDGER_STORAGE_TYPES: &[&str] = &[
+    "LabLedger",
+    "LabLogError",
+    "LabLogResult",
+    "LastResortError",
+    "LedgerRead",
+    "LedgerRecord",
+    "LedgerRecordKind",
+    "LightEvent",
+    "SessionHeader",
+];
+
+#[derive(Default)]
+struct LedgerStorageAliases {
+    types: HashSet<String>,
+    modules: HashSet<String>,
+}
+
+fn ledger_storage_aliases(items: &[Item]) -> LedgerStorageAliases {
+    let mut aliases = LedgerStorageAliases::default();
+    for item in items {
+        if let Item::Use(item_use) = item {
+            collect_ledger_storage_alias(&mut Vec::new(), &item_use.tree, &mut aliases);
+        }
+    }
+    aliases
+}
+
+fn collect_ledger_storage_alias(
+    prefix: &mut Vec<String>,
+    tree: &UseTree,
+    aliases: &mut LedgerStorageAliases,
+) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_ledger_storage_alias(prefix, &path.tree, aliases);
+            prefix.pop();
+        }
+        UseTree::Name(name)
+            if prefix == &["actingcommand_ledger"]
+                && is_ledger_storage_type(&name.ident.to_string()) =>
+        {
+            aliases.types.insert(name.ident.to_string());
+        }
+        UseTree::Rename(rename)
+            if prefix == &["actingcommand_ledger"]
+                && is_ledger_storage_type(&rename.ident.to_string()) =>
+        {
+            aliases.types.insert(rename.rename.to_string());
+        }
+        UseTree::Rename(rename) if prefix.is_empty() && rename.ident == "actingcommand_ledger" => {
+            aliases.modules.insert(rename.rename.to_string());
+        }
+        UseTree::Rename(rename)
+            if prefix == &["actingcommand_ledger"] && rename.ident == "self" =>
+        {
+            aliases.modules.insert(rename.rename.to_string());
+        }
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_ledger_storage_alias(prefix, item, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn signature_uses_ledger_storage(
+    signature: &syn::Signature,
+    aliases: &LedgerStorageAliases,
+) -> bool {
+    let input_uses_storage = signature.inputs.iter().any(|input| match input {
+        FnArg::Receiver(_) => false,
+        FnArg::Typed(argument) => type_uses_ledger_storage(&argument.ty, aliases),
+    });
+    let output_uses_storage = match &signature.output {
+        ReturnType::Default => false,
+        ReturnType::Type(_, output) => type_uses_ledger_storage(output, aliases),
+    };
+    input_uses_storage || output_uses_storage
+}
+
+fn type_uses_ledger_storage(value_type: &Type, aliases: &LedgerStorageAliases) -> bool {
+    let mut visitor = LedgerStorageTypeVisitor {
+        aliases,
+        found: false,
+    };
+    visitor.visit_type(value_type);
+    visitor.found
+}
+
+struct LedgerStorageTypeVisitor<'a> {
+    aliases: &'a LedgerStorageAliases,
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for LedgerStorageTypeVisitor<'_> {
+    fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+        let segments = node
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let direct = segments.first().is_some_and(|segment| {
+            segment == "actingcommand_ledger" || self.aliases.modules.contains(segment)
+        }) && segments
+            .last()
+            .is_some_and(|segment| is_ledger_storage_type(segment));
+        let imported = segments.len() == 1 && self.aliases.types.contains(&segments[0]);
+        if direct || imported {
+            self.found = true;
+        }
+        syn::visit::visit_type_path(self, node);
+    }
+}
+
+fn is_ledger_storage_type(candidate: &str) -> bool {
+    LEDGER_STORAGE_TYPES.contains(&candidate)
 }
 
 fn serde_json_value_aliases(items: &[Item]) -> JsonValueAliases {
@@ -746,6 +917,43 @@ mod tests {
         assert!(violations.iter().any(|item| item.contains("module_alias")));
         assert!(violations.iter().any(|item| item.contains("Port::carry")));
         assert!(violations.iter().any(|item| item.contains("Payload")));
+        assert!(
+            !violations
+                .iter()
+                .any(|item| item.contains("private_helper"))
+        );
+    }
+
+    #[test]
+    fn public_api_guard_detects_ledger_storage_shapes() {
+        let source = r#"
+            use actingcommand_ledger::{LedgerRecord as StoredRecord, LedgerRead};
+            use actingcommand_ledger::LastResortError;
+
+            pub trait Port {
+                fn append(&mut self, record: StoredRecord);
+                fn read(&self) -> LedgerRead;
+            }
+            pub struct Request {
+                pub header: actingcommand_ledger::SessionHeader,
+                private: actingcommand_ledger::LightEvent,
+            }
+            impl Request {
+                pub fn last_resort(error: LastResortError) { let _ = error; }
+            }
+            fn private_helper() -> actingcommand_ledger::LedgerRecord { unreachable!() }
+        "#;
+
+        let violations = super::inspect_public_api("fixture.rs", source).unwrap();
+
+        assert!(violations.iter().any(|item| item.contains("Port::append")));
+        assert!(violations.iter().any(|item| item.contains("Port::read")));
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("Request::header"))
+        );
+        assert!(violations.iter().any(|item| item.contains("last_resort")));
         assert!(
             !violations
                 .iter()

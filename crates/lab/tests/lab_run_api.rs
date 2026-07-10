@@ -7,7 +7,9 @@ use actingcommand_device::{
 use actingcommand_lab::{
     CaptureBackendObservation, CaptureBackendReport, FrameStoreControl, LabRunDeviceResolver,
     LabRunProcessContext, LabRunRequest, LabRunResponse, LabRunSelectedDevice, LabValidateRequest,
-    LabValidateResponse, MemorySample, MemorySampleSource, RuntimeCommitSource,
+    LabValidateResponse, LedgerEventEntry, LedgerLastResort, LedgerReadback, LedgerRecordEntry,
+    LedgerSessionHeader, LedgerSink, MemorySample, MemorySampleSource, RunLedgerSessionRequest,
+    RuntimeCommitSource,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -26,40 +28,36 @@ impl RuntimeCommitSource for CompileCommitSource {
 }
 
 impl LabRunDeviceResolver for CompileDeviceResolver {
-    fn resolve_serial(
+    fn resolve_selected(
         &mut self,
         instance_id: &str,
     ) -> actingcommand_lab::LabResult<LabRunSelectedDevice> {
-        Ok(LabRunSelectedDevice {
-            id: instance_id.to_string(),
-            serial: "fixture".to_string(),
-        })
-    }
-
-    fn global_adb_provenance(&mut self) -> actingcommand_lab::LabResult<String> {
-        Ok("adb".to_string())
-    }
-
-    fn capture_config(
-        &mut self,
-        _device: &LabRunSelectedDevice,
-    ) -> actingcommand_lab::LabResult<CaptureBackendConfig> {
-        Ok(CaptureBackendConfig::new(
-            AdbConfig::default(),
-            DeviceTarget::default(),
+        let adb = AdbConfig::default();
+        let target = DeviceTarget::default();
+        Ok(LabRunSelectedDevice::new(
+            instance_id,
+            "fixture",
+            "adb",
+            CaptureBackendConfig::new(adb.clone(), target.clone()),
+            TouchBackendConfig::new(adb, target, MaaTouchConfig::default()),
         ))
     }
+}
 
-    fn touch_config(
-        &mut self,
-        _device: &LabRunSelectedDevice,
-    ) -> actingcommand_lab::LabResult<TouchBackendConfig> {
-        Ok(TouchBackendConfig::new(
-            AdbConfig::default(),
-            DeviceTarget::default(),
-            MaaTouchConfig::default(),
-        ))
-    }
+#[allow(dead_code)]
+fn assert_opaque_ledger_boundary<L: LedgerSink>(
+    session: &mut L::RunSession,
+    request: RunLedgerSessionRequest,
+    record: LedgerRecordEntry,
+    event: LedgerEventEntry,
+    last_resort: &LedgerLastResort,
+) {
+    let _: actingcommand_lab::LabResult<PathBuf> = L::start_run_session(session, request);
+    let _: actingcommand_lab::LabResult<()> = L::append_run_record(session, record);
+    let _: actingcommand_lab::LabResult<()> = L::append_run_event(session, event);
+    let _: actingcommand_lab::LabResult<()> = L::sync_run_session(session);
+    let _: actingcommand_lab::LabResult<LedgerReadback> = L::read_run_session(session);
+    let _: actingcommand_lab::LabResult<PathBuf> = L::write_run_last_resort(None, last_resort);
 }
 
 #[allow(dead_code)]
@@ -106,6 +104,7 @@ fn lab_run_family_exposes_typed_requests_and_responses() {
 
     assert_serializable::<LabRunResponse>();
     assert_serializable::<LabValidateResponse>();
+    let _ = std::mem::size_of::<LedgerSessionHeader>();
 }
 
 #[test]
