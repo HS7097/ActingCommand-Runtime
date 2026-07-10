@@ -27,7 +27,7 @@ The approved chain is:
 - C2 may proceed independently after C0;
 - expansion path: `C3b -> C5 -> C6 -> C7`.
 
-Current phase: C1 global event contract and ledger skeleton. Tasks 1-5 are complete and task-scoped review is approved; whole-branch C1 review and closeout are next. Alice approved the complete Issue #35 chain and clarified that C0-C7 nodes do not require separate approval. The approved C0 architecture is `docs/architecture/runtime-ledger-v3-c0-freeze.md`, payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
+Current phase: C1 global event contract and ledger skeleton. Tasks 1-5 are complete and each task-scoped review is approved, but the whole-branch C1 review is not approved: 2 Critical, 8 Important, and 3 Minor findings remain. C1 closeout is paused for Alice's decision on findings that conflict with or expand the approved C1 plan. Alice approved the complete Issue #35 chain and clarified that C0-C7 nodes do not require separate approval. The approved C0 architecture is `docs/architecture/runtime-ledger-v3-c0-freeze.md`, payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
 
 Issue #36 is the only execution-tracking Issue for this chain. Stage progress, implementation details, verification evidence, commits, and rollback anchors are recorded there; no additional subtask Issues are created.
 
@@ -53,7 +53,7 @@ C0 decisions include:
 - rewrite A8a requirements as global-ledger writer and daemon ownership/fencing tests instead of implementing per-command state-file locking;
 - treat the approved frozen C0 payload as the binding C1-C7 architecture.
 
-Current implementation: C1 Tasks 1-5 are complete and task-scoped review is approved: typed event/query/projection contracts, pre-persistence redaction, recoverable single-writer append storage, correlated ordered queries, recovered indexes, race-free replay-plus-live subscriptions with bounded nonblocking delivery, separate CLI/UI/Lab projections, validated critical intent/action/outcome ordering, hard-kill recovery proof, correlated five-source acceptance, redaction boundary coverage, and all-features dependency-law guards. Whole-branch C1 review remains before closeout.
+Current implementation: C1 Tasks 1-5 are complete and task-scoped review is approved: typed event/query/projection contracts, pre-persistence redaction, recoverable single-writer append storage, correlated ordered queries, recovered indexes, replay-plus-live subscriptions with bounded nonblocking live delivery, separate CLI/UI/Lab projections, validated critical intent/action/outcome ordering, hard-kill recovery proof, correlated five-source acceptance, redaction boundary coverage, and all-features dependency-law guards. Whole-branch review found unresolved security, lifecycle, recovery, subscription, and public-contract defects. The plan decision is whether to strengthen C1 now with schema-owned redaction, post-action outcome/effect semantics, non-forgeable typed persisted facts, and bounded replay paging, or explicitly defer those plan expansions while narrowing C1 guarantees; implementation defects remain mandatory fixes either way.
 
 ## Historical CLI-to-Lab extraction chain (superseded)
 

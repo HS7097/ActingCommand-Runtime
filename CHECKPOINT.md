@@ -1,5 +1,49 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 whole-branch review decision gate
+
+### Current status
+
+- Ran the required whole-C1 review over `3e65741..e2b0c25` after all five task reviews were approved.
+- Whole-branch verdict: NOT APPROVED with 2 Critical, 8 Important, and 3 Minor findings.
+- Critical findings: producer-selected field classification cannot enforce the promised redaction boundary, and a canonical `sha256:<hex>` secret can pass through a malicious/incorrect fingerprint implementation unchanged.
+- Important implementation findings: terminal subscription errors are not latched; startup timeout can leave a detached future ledger owner; critical-error `Debug` and process-global panic-hook ownership can leak or destabilize diagnostics; tail repair and its recovery fact are not crash-atomic; `ArtifactReference` is incomplete; persisted facts are publicly forgeable/untyped.
+- Important plan-expansion findings: the current critical API prebuilds outcomes and does not define retry/reconciliation semantics, while replay is unbounded and cloned in the sole writer loop.
+- Minor findings: backward wall-clock adjustment can invalidate owner metadata, empty non-final segments are accepted, and config `Debug` exposes `owner_id`.
+- Fresh full workspace tests, workspace Clippy with warnings denied, formatting check, and diff check passed at `e2b0c25`; passing tests do not override the final-review defects.
+- Task 5 commits and documentation were pushed to `origin/issue-35-runtime-ledger-v3`; no merge or C1 closeout is claimed.
+- The decision gate and Task 5 evidence were recorded in Issue #36.
+
+### Files changed
+
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- whole-branch review package: `3e65741..e2b0c25`
+
+### Test results
+
+- Full workspace test suite passed.
+- Full workspace Clippy with warnings denied passed.
+- Formatting and diff checks passed.
+- Whole-branch review failed the merge-readiness gate despite green automated checks.
+
+### Current blocker
+
+- Alice must choose whether the plan-defect findings become an approved C1 amendment or are explicitly deferred with narrower C1 guarantees. Implementation defects must be fixed in either path.
+
+### Next step
+
+1. Obtain Alice's architecture decision for the four plan-expanding findings.
+2. Dispatch one consolidated fix pass for all approved findings.
+3. Rerun focused and full validation, then repeat the whole-branch review.
+
 ## 2026-07-11 Issue 35 C1 Task 5 process recovery and cross-source acceptance
 
 ### Current status
