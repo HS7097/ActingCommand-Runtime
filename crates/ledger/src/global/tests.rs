@@ -290,6 +290,39 @@ fn dropped_subscription_response_does_not_register_a_live_sender() {
 }
 
 #[test]
+fn dropped_future_cursor_subscription_is_pruned_before_cursor_is_crossed() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    drop(
+        ledger
+            .subscribe(SubscriptionCursor {
+                after_sequence: 100,
+            })
+            .expect("future subscription"),
+    );
+
+    ledger
+        .append(event("evt-before-future-cursor"))
+        .expect("append before cursor");
+    let (count_response, count_receiver) = mpsc::sync_channel(1);
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestSubscriberCount {
+            response: count_response,
+        })
+        .expect("request subscriber count");
+
+    assert_eq!(
+        count_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("subscriber count"),
+        0
+    );
+}
+
+#[test]
 fn subscription_reports_terminal_writer_failure() {
     let temp = TempDir::new().expect("temp");
     let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");

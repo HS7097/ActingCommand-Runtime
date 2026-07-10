@@ -15,7 +15,10 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{
+    Arc, Weak,
+    mpsc::{self, Receiver, SyncSender, TrySendError},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -276,6 +279,7 @@ pub struct LedgerSubscription {
     replay: VecDeque<PersistedEvent>,
     live: Receiver<PersistedEvent>,
     terminal: Receiver<GlobalLedgerError>,
+    _liveness: Arc<()>,
 }
 
 impl LedgerSubscription {
@@ -312,6 +316,7 @@ struct ActiveSubscription {
     after_sequence: u64,
     live: SyncSender<PersistedEvent>,
     terminal: SyncSender<GlobalLedgerError>,
+    liveness: Weak<()>,
 }
 
 impl fmt::Debug for GlobalLedger {
@@ -529,16 +534,19 @@ fn writer_loop(
                 let replay = VecDeque::from(store.events_after(cursor.after_sequence));
                 let (live, live_receiver) = mpsc::sync_channel(subscription_capacity);
                 let (terminal, terminal_receiver) = mpsc::sync_channel(1);
+                let liveness = Arc::new(());
                 let subscription = LedgerSubscription {
                     replay,
                     live: live_receiver,
                     terminal: terminal_receiver,
+                    _liveness: Arc::clone(&liveness),
                 };
                 if response.send(Ok(subscription)).is_ok() {
                     subscribers.push(ActiveSubscription {
                         after_sequence: cursor.after_sequence,
                         live,
                         terminal,
+                        liveness: Arc::downgrade(&liveness),
                     });
                 }
             }
@@ -588,6 +596,9 @@ fn writer_loop(
 
 fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &PersistedEvent) {
     subscribers.retain(|subscriber| {
+        if subscriber.liveness.upgrade().is_none() {
+            return false;
+        }
         if event.sequence <= subscriber.after_sequence {
             return true;
         }
