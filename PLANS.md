@@ -6,9 +6,42 @@
 
 The runtime owns device/control primitives, capture primitives, recognition primitives, and later runtime orchestration components behind explicit interfaces.
 
-## Current CLI-to-Lab extraction chain
+## Current Runtime ledger and removable-Lab correction chain
 
-The active approved architecture work is GitHub issue #33:
+The active approved architecture target is GitHub Issue #35:
+
+- `[架构纠偏][P0] 全局事件账本核心与可移除 Lab 调试管道`
+- Technical source of truth: `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`
+- Specification SHA-256: `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`
+- Accepted implementation baseline: `981f61f650c51a62f3c6c22fda781d2b98b3ceb8`
+- Historical paused RED evidence: `ead23d2acb3752507b5c6110c1cbf049e878cbbd`
+- Implementation branch: `issue-35-runtime-ledger-v3`
+
+Issue #35 supersedes the goal that made Lab the application core. Lab is now an optional debug/sealed-test client. The long-lived Runtime host and scheduler own production state and device authority, and the global ledger is the shared production fact source.
+
+The approved chain is:
+
+- seed critical path: `C0 -> C1 -> C3a -> C4`;
+- C2 may proceed independently after C0;
+- expansion path: `C3b -> C5 -> C6 -> C7`.
+
+Current phase: C0 architecture freeze and supersession. The approval candidate is `docs/architecture/runtime-ledger-v3-c0-freeze.md`, payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
+
+C0 decisions include:
+
+- branch from the accepted A7 baseline without cherry-picking the paused A8a RED commit;
+- preserve A0/A1 and reusable A2b-A7 behavior while correcting ownership;
+- add production modules for runtime host, runtime client, scheduler, execution kernel, artifact store, and resource tooling in their scheduled phases;
+- retain and deepen the existing contract, ledger, device, recognition, and containment crates;
+- prohibit every non-Lab workspace package from directly or transitively depending on `actingcommand-lab`;
+- rewrite A8a requirements as global-ledger writer and daemon ownership/fencing tests instead of implementing per-command state-file locking;
+- require explicit Alice approval of the C0 payload hash before C1 begins.
+
+Next implementation after C0 approval: C1 typed event contract, pre-persistence redaction, single-writer global ledger, append/query seed, and critical intent/outcome ordering.
+
+## Historical CLI-to-Lab extraction chain (superseded)
+
+GitHub Issue #33/#34 is retained as implementation and audit history. Its original architecture target is no longer active:
 
 - `[架构] CLI=管道 · lab=应用核 抽层任务链(A0–A9)`
 - Frozen technical source of truth: `TASK-lab-extraction-chain.md`
@@ -36,9 +69,9 @@ A0 implementation is complete and verified on its task branch:
 - deliberate line growth and stale command-count mutations both failed before restoration;
 - focused tests, formatting, diff checks, workspace Clippy, and workspace tests pass.
 
-Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
+Alice previously authorized the A0-A9 chain. Issue #35 now suspends that chain after the accepted A7 checkpoint; its completed commits remain provenance and migration assets.
 
-Current node: A7 Lab run/validate migration is implemented and verified; A8a concurrency/crash-recovery and ledger-conflict repair is next.
+Historical stop point: A7 is implemented and verified. The old A8a/A8b/A8c/A9 targets are cancelled, and the paused A8a RED evidence is not part of this branch.
 
 Approved amendments:
 

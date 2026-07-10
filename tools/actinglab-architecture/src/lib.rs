@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Source-derived architecture guards for the issue #33 CLI-to-Lab extraction chain.
+//! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use syn::visit::Visit;
 use syn::{
@@ -148,6 +148,108 @@ pub fn workspace_dependency_violations(metadata: &str) -> Result<Vec<String>, St
     violations.sort();
     violations.dedup();
     Ok(violations)
+}
+
+/// Finds direct or transitive dependency paths from production workspace packages to Lab.
+pub fn lab_removability_violations(
+    metadata: &str,
+    optional_packages: &[&str],
+) -> Result<Vec<String>, String> {
+    let document: serde_json::Value = serde_json::from_str(metadata)
+        .map_err(|err| format!("failed to parse cargo metadata: {err}"))?;
+    let packages = document
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing packages".to_string())?;
+    let workspace_members = document
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing workspace_members".to_string())?
+        .iter()
+        .map(required_string)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut package_names = HashMap::new();
+    let mut lab_ids = Vec::new();
+    for package in packages {
+        let id = required_field_string(package, "id")?;
+        let name = required_field_string(package, "name")?;
+        if name == "actingcommand-lab" {
+            lab_ids.push(id.clone());
+        }
+        package_names.insert(id, name);
+    }
+    if lab_ids.len() > 1 {
+        return Err("cargo metadata contains multiple actingcommand-lab packages".to_string());
+    }
+    let Some(lab_id) = lab_ids.pop() else {
+        return Ok(Vec::new());
+    };
+
+    let nodes = document
+        .pointer("/resolve/nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata is missing resolve.nodes".to_string())?;
+    let mut dependencies = HashMap::<String, Vec<String>>::new();
+    for node in nodes {
+        let id = required_field_string(node, "id")?;
+        let node_dependencies = node
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| format!("cargo metadata node {id} is missing dependencies"))?
+            .iter()
+            .map(required_string)
+            .collect::<Result<Vec<_>, _>>()?;
+        dependencies.insert(id, node_dependencies);
+    }
+
+    let optional = optional_packages.iter().copied().collect::<HashSet<_>>();
+    let mut violations = Vec::new();
+    for root in workspace_members {
+        let root_name = package_names
+            .get(&root)
+            .ok_or_else(|| format!("workspace member has unknown package id {root}"))?;
+        if optional.contains(root_name.as_str()) {
+            continue;
+        }
+        let Some(path) = dependency_path(&root, &lab_id, &dependencies) else {
+            continue;
+        };
+        let names = path
+            .iter()
+            .map(|id| package_names.get(id).cloned().unwrap_or_else(|| id.clone()))
+            .collect::<Vec<_>>();
+        violations.push(format!(
+            "production package {root_name} reaches actingcommand-lab: {}",
+            names.join(" -> ")
+        ));
+    }
+    violations.sort();
+    Ok(violations)
+}
+
+fn dependency_path(
+    root: &str,
+    target: &str,
+    dependencies: &HashMap<String, Vec<String>>,
+) -> Option<Vec<String>> {
+    let mut queue = VecDeque::from([vec![root.to_string()]]);
+    let mut visited = HashSet::from([root.to_string()]);
+    while let Some(path) = queue.pop_front() {
+        let current = path.last()?;
+        if current == target {
+            return Some(path);
+        }
+        for dependency in dependencies.get(current).into_iter().flatten() {
+            if !visited.insert(dependency.clone()) {
+                continue;
+            }
+            let mut next = path.clone();
+            next.push(dependency.clone());
+            queue.push_back(next);
+        }
+    }
+    None
 }
 
 /// Derives the command denominator from ActingLab's real dispatch AST.
@@ -876,6 +978,46 @@ mod tests {
         assert_eq!(
             violations,
             vec!["crate actingcommand-lab depends on app actingcommand-actinglab"]
+        );
+    }
+
+    #[test]
+    fn lab_removability_guard_rejects_direct_and_transitive_production_dependencies() {
+        let metadata = serde_json::json!({
+            "packages": [
+                {"id": "lab", "name": "actingcommand-lab"},
+                {"id": "lab-cli", "name": "actingcommand-actinglab"},
+                {"id": "bridge", "name": "runtime-bridge"},
+                {"id": "direct", "name": "runtime-direct"},
+                {"id": "transitive", "name": "runtime-transitive"},
+                {"id": "clean", "name": "runtime-clean"}
+            ],
+            "workspace_members": ["lab", "lab-cli", "bridge", "direct", "transitive", "clean"],
+            "resolve": {
+                "nodes": [
+                    {"id": "lab", "dependencies": []},
+                    {"id": "lab-cli", "dependencies": ["lab"]},
+                    {"id": "bridge", "dependencies": ["lab"]},
+                    {"id": "direct", "dependencies": ["lab"]},
+                    {"id": "transitive", "dependencies": ["bridge"]},
+                    {"id": "clean", "dependencies": []}
+                ]
+            }
+        });
+
+        let violations = super::lab_removability_violations(
+            &metadata.to_string(),
+            &["actingcommand-lab", "actingcommand-actinglab"],
+        )
+        .unwrap();
+
+        assert_eq!(
+            violations,
+            vec![
+                "production package runtime-bridge reaches actingcommand-lab: runtime-bridge -> actingcommand-lab",
+                "production package runtime-direct reaches actingcommand-lab: runtime-direct -> actingcommand-lab",
+                "production package runtime-transitive reaches actingcommand-lab: runtime-transitive -> runtime-bridge -> actingcommand-lab"
+            ]
         );
     }
 

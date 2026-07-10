@@ -20,6 +20,16 @@ Before making Runtime changes, read these files if they exist:
 - Go runtime/contract materials are historical reference and benchmark material only.
 - Runtime work should stay behind explicit API, schema, and primitive boundaries.
 
+## Issue 35 architecture authority
+
+- GitHub Issue #35 and its approved v3 specification supersede the Issue #33/#34 direction that treated Lab as the application core.
+- Lab is an optional debug and sealed-test client. Production packages must not directly or transitively depend on `actingcommand-lab`.
+- The long-lived Runtime host and scheduler own production state, leases, device authority, and task lifecycle. Clients submit typed requests and consume ledger projections.
+- All state-changing input operations must ultimately pass through the Runtime-owned DeviceProxy with scheduler fencing. The C3a read-only capture exception does not grant input capability.
+- The global ledger is the production fact source. Critical intent must be durable before action, outcome must be appended after action, and secret values must be redacted before ledger ingress.
+- Keep Issue #33/#34 branches suspended. Do not resume their A8b/A8c/A9 migration targets or merge the paused RED branch under the old architecture.
+- Read `docs/architecture/runtime-ledger-v3-c0-freeze.md` before Issue #35 implementation after its C0 hash is approved.
+
 ## Error handling
 
 - Severe errors must never silently fail.

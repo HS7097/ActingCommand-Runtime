@@ -6,7 +6,8 @@ use std::process::Command;
 
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_lab_source,
-    inspect_public_api, validate_line_ratchet, workspace_dependency_violations,
+    inspect_public_api, lab_removability_violations, validate_line_ratchet,
+    workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -35,6 +36,16 @@ fn issue33_chain_amendment_matches_declared_freeze() {
         "<!-- ISSUE33-CHAIN-FREEZE-BEGIN -->\n",
         "<!-- ISSUE33-CHAIN-FREEZE-END -->",
         "issue 33 chain amendment",
+    );
+}
+
+#[test]
+fn issue35_c0_architecture_matches_declared_freeze() {
+    assert_frozen_payload(
+        "docs/architecture/runtime-ledger-v3-c0-freeze.md",
+        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-BEGIN -->\n",
+        "<!-- RUNTIME-LEDGER-V3-C0-FREEZE-END -->",
+        "issue 35 C0 architecture",
     );
 }
 
@@ -233,6 +244,32 @@ fn workspace_packages_do_not_depend_on_apps() {
     assert!(
         violations.is_empty(),
         "workspace dependency-law violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn production_workspace_does_not_depend_on_optional_lab() {
+    let root = workspace_root();
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["metadata", "--format-version", "1"])
+        .current_dir(&root)
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata = String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON");
+    let violations =
+        lab_removability_violations(&metadata, &["actingcommand-lab", "actingcommand-actinglab"])
+            .unwrap();
+
+    assert!(
+        violations.is_empty(),
+        "production-to-Lab dependency violations:\n{}",
         violations.join("\n")
     );
 }

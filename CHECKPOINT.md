@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 C0 approval candidate
+
+### Current status
+
+- Started Issue #35 from the accepted A7 baseline `981f61f650c51a62f3c6c22fda781d2b98b3ceb8` on isolated branch `issue-35-runtime-ledger-v3`.
+- Verified the approved v3 source specification SHA-256 as `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
+- Did not cherry-pick paused A8a RED commit `ead23d2acb3752507b5c6110c1cbf049e878cbbd`; it remains historical evidence on the suspended Issue #34 branch.
+- Created the C0 role, dependency, process-ownership, protocol, asset-disposition, branch, and RED-test freeze candidate in `docs/architecture/runtime-ledger-v3-c0-freeze.md`.
+- C0 candidate payload SHA-256 is `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
+- Added the Runtime domain glossary in `CONTEXT.md`.
+- Added a transitive Cargo graph guard: every package except the explicit optional Lab roots (`actingcommand-lab`, `actingcommand-actinglab`) fails if it reaches `actingcommand-lab`.
+- Updated project instructions and planning so Issue #35 v3 supersedes the old Lab-as-application-core direction.
+- No production behavior, wire schema, device behavior, resource data, game logic, UI, OCR, SQLite, or dependency was added.
+
+### Frozen C0 decisions
+
+- Lab is an optional debug/sealed-test client and cannot own production state, scheduler, ledger writer, device backend, or execution behavior.
+- `apps/actingd` remains a thin process entry over new deep modules: runtime host, runtime client, scheduler, execution kernel, artifact store, and resource tooling.
+- Existing contract, ledger, device, recognition, containment, and page-detection crates are retained and deepened in their scheduled phases.
+- Existing arbitrator is a legacy Lab2 authority, not the production C3a scheduler seed.
+- Existing runtime-core scheduler prototype is retired rather than promoted; capture-store behavior moves to artifact store in C2.
+- Task-loop remains only until its device-test consumer and production-worthy behavior migrate with evidence in C5.
+- Global-ledger persistence uses a single writer and segmented append-only JSONL in C1; critical paths follow durable intent before action and durable outcome after action.
+- C3a uses per-instance admission, `owner_epoch` fencing, connection-scoped backend guards, write-only daemon DeviceProxy ownership, a read-only client capture exception, and takeover cooldown.
+
+### Files changed
+
+- `AGENTS.md`
+- `CONTEXT.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+- `docs/architecture/runtime-ledger-v3-c0-freeze.md`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+
+### Commands run
+
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`.
+- SHA-256 verification for `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`.
+- `git fetch origin --prune --tags` and baseline/branch inspection.
+- Cargo metadata package and reverse-dependency inventory.
+- `cargo test --workspace` on the clean accepted A7 baseline.
+- Focused RED run for the missing Lab-removability guard.
+- Focused GREEN run after implementing direct/transitive dependency detection.
+- `cargo test -p actingcommand-actinglab-architecture -- --nocapture`.
+- `cargo test --workspace --exclude actingcommand-lab --exclude actingcommand-actinglab`.
+- Placeholder, ambiguity, and frozen-hash scans for the C0 documents.
+- Final formatting, diff, Clippy, full-workspace, and architecture verification listed below.
+
+### Test results
+
+- Clean A7 baseline: `cargo test --workspace` passed.
+- Lab-removability TDD RED: architecture test failed to compile because `lab_removability_violations` did not exist.
+- Lab-removability GREEN: focused test passed after the minimal graph traversal implementation.
+- Architecture suite: 9 unit tests and 9 workspace guards passed, including the C0 payload hash and current production-to-Lab graph guard.
+- Workspace excluding `actingcommand-lab` and `actingcommand-actinglab`: passed, including all remaining unit, integration, compile-fail, and doc tests.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- `cargo clippy --workspace -- -D warnings`: passed.
+- Final `cargo test --workspace`: passed.
+- C1 remains gated on explicit Alice approval rather than test status alone.
+
+### Current blocker
+
+- C0 requires Alice's explicit approval of payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7` before C1 production implementation may begin.
+- No technical blocker exists for the C0 candidate.
+
+### Next step
+
+1. Commit and push the C0 approval candidate and record it on Issue #35.
+2. Obtain explicit Alice approval of the frozen C0 payload hash.
+3. Only after approval, create the C1 implementation plan and begin the typed event/global-ledger seed.
+
 ## 2026-07-10 issue 33 A7 Lab run/validate migration complete
 
 ### Current status
