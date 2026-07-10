@@ -38,6 +38,41 @@
 2. Write the detailed C1 implementation plan.
 3. Implement C1 test-first and record results on Issue #36.
 
+## 2026-07-10 Issue 35 C1 implementation plan
+
+### Current status
+
+- Added the executable C1 plan at `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`.
+- Locked C1 to storage-independent typed contracts, raw-to-sanitized type transition, SHA-256 field redaction, one bounded-ingress writer, segmented JSONL recovery, correlation query/subscription/projection, and critical intent/action/outcome ordering.
+- Preserved the legacy `LabLedger` path and excluded daemon, scheduler behavior, DeviceProxy, artifact storage, Lab migration, UI, resources, SQLite, and game logic.
+- Planned six independently verifiable commits with mandatory RED/GREEN evidence and one final checkpoint tag.
+
+### Files changed
+
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Read the approved v3 C1, ledger, redaction, and execution-boundary sections.
+- Inspected current contract, ledger, Cargo dependency, C0 ownership, and architecture-guard surfaces.
+- Reviewed the `writing-plans`, `executing-plans`, TDD, and deep-module design instructions.
+
+### Test results
+
+- Plan self-review maps every C1 delivery and acceptance requirement to an implementation task.
+- No production source or Runtime behavior changed in this planning checkpoint.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the C1 plan.
+2. Execute Task 1 test-first.
+3. Record each completed C1 task on Issue #36 without creating additional Issues.
+
 ## 2026-07-10 Issue 35 C0 approval candidate
 
 ### Current status
