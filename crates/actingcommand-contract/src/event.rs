@@ -290,7 +290,7 @@ impl fmt::Debug for EventOrigin {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventLinks {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
@@ -312,6 +312,24 @@ pub struct EventLinks {
     pub action_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reco_id: Option<String>,
+}
+
+impl fmt::Debug for EventLinks {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EventLinks")
+            .field("instance_id", &self.instance_id.is_some())
+            .field("request_id", &self.request_id.is_some())
+            .field("correlation_id", &self.correlation_id.is_some())
+            .field("causation_id", &self.causation_id.is_some())
+            .field("task_id", &self.task_id.is_some())
+            .field("run_id", &self.run_id.is_some())
+            .field("lease_id", &self.lease_id.is_some())
+            .field("frame_id", &self.frame_id.is_some())
+            .field("action_id", &self.action_id.is_some())
+            .field("reco_id", &self.reco_id.is_some())
+            .finish()
+    }
 }
 
 impl EventLinks {
@@ -344,13 +362,23 @@ pub enum ArtifactRedactionState {
     Pending,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReference {
     pub artifact_id: String,
     pub kind: String,
     pub relative_ref: String,
     pub sha256: String,
     pub redaction_state: ArtifactRedactionState,
+}
+
+impl fmt::Debug for ArtifactReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ArtifactReference")
+            .field("identity", &"<unvalidated-artifact>")
+            .field("redaction_state", &self.redaction_state)
+            .finish()
+    }
 }
 
 impl ArtifactReference {
@@ -462,7 +490,10 @@ impl ClassifiedField {
                 let fingerprint = redactor
                     .fingerprint(&self.name, &self.value)
                     .map_err(|_| SanitizationError::new("redactor_failed", &self.name))?;
-                if !is_sha256(&fingerprint) || fingerprint.contains(&self.value) {
+                let echoed_original = fingerprint
+                    .strip_prefix("sha256:")
+                    .is_some_and(|digest| digest == self.value);
+                if !is_sha256(&fingerprint) || echoed_original {
                     return Err(SanitizationError::new("invalid_fingerprint", &self.name));
                 }
                 (None, Some(fingerprint))
@@ -493,10 +524,11 @@ pub struct SanitizedField {
 }
 
 mod sealed {
+    pub trait PayloadKind {}
     pub trait SanitizedPayload {}
 }
 
-pub trait PayloadKind: Serialize + Clone + Send + Sync + 'static {
+pub trait PayloadKind: sealed::PayloadKind + Serialize + Clone + Send + Sync + 'static {
     const SCHEMA: &'static str;
     const FAMILY: EventFamily;
 
@@ -622,6 +654,8 @@ macro_rules! payload_kind {
                 }
             }
         }
+
+        impl sealed::PayloadKind for $name {}
     };
 }
 
@@ -698,13 +732,13 @@ impl<P> fmt::Debug for EventDraft<P> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EventDraft")
-            .field("event_id", &self.event_id)
+            .field("event_id", &"<unvalidated-event-id>")
             .field("timestamp_unix_ms", &self.timestamp_unix_ms)
             .field("event_type", &self.event_type)
             .field("severity", &self.severity)
             .field("origin", &self.origin)
-            .field("links", &self.links)
-            .field("artifacts", &self.artifacts)
+            .field("links", &"<unvalidated-links>")
+            .field("artifact_count", &self.artifacts.len())
             .field("payload", &"<redacted-payload>")
             .finish()
     }
@@ -755,7 +789,9 @@ impl<P: RedactablePayload> EventDraft<P> {
         for artifact in &self.artifacts {
             artifact.validate()?;
         }
-        if self.payload.event_type() != self.event_type {
+        if self.payload.event_type() != self.event_type
+            || P::Sanitized::FAMILY != self.event_type.family()
+        {
             return Err(SanitizationError::new(
                 "payload_family_mismatch",
                 "event_type",
@@ -1115,6 +1151,34 @@ mod tests {
         }
     }
 
+    struct ValidShortSecretRedactor;
+
+    impl FieldRedactor for ValidShortSecretRedactor {
+        fn fingerprint(
+            &self,
+            _field_name: &str,
+            _value: &str,
+        ) -> Result<String, SanitizationError> {
+            Ok(format!("sha256:{}", "a1".repeat(32)))
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    enum MismatchedKind {
+        Command,
+    }
+
+    impl sealed::PayloadKind for MismatchedKind {}
+
+    impl PayloadKind for MismatchedKind {
+        const SCHEMA: &'static str = "actingcommand.payload.mismatch.v1";
+        const FAMILY: EventFamily = EventFamily::Input;
+
+        fn event_type(&self) -> EventType {
+            EventType::CommandReceived
+        }
+    }
+
     fn command_draft(fields: Vec<ClassifiedField>) -> EventDraft<CommandPayloadDraft> {
         let payload = CommandPayloadDraft::new(CommandStage::Received, "runtime.start", fields)
             .expect("command payload");
@@ -1240,6 +1304,41 @@ mod tests {
     }
 
     #[test]
+    fn valid_sha256_is_not_rejected_for_containing_a_short_secret() {
+        let draft = command_draft(vec![
+            ClassifiedField::secret_fingerprint("token", "a").expect("secret field"),
+        ]);
+
+        let sanitized = draft
+            .sanitize(&ValidShortSecretRedactor)
+            .expect("valid fixed fingerprint");
+        let json = serde_json::to_string(&sanitized).expect("serialize");
+
+        assert!(json.contains("sha256:"));
+    }
+
+    #[test]
+    fn payload_declared_family_must_match_its_event_type_family() {
+        let payload = StructuredPayloadDraft::new(MismatchedKind::Command, "runtime.start", vec![])
+            .expect("payload");
+        let draft = EventDraft::new(
+            "evt-mismatch-1",
+            1_752_147_200_000,
+            EventType::CommandReceived,
+            EventSeverity::Info,
+            EventOrigin::new(EventSource::Cli, "actingctl", EventActor::User).expect("origin"),
+            EventLinks::default(),
+            payload,
+        );
+
+        let error = draft
+            .sanitize(&TestRedactor)
+            .expect_err("declared family mismatch must fail");
+
+        assert_eq!(error.code(), "payload_family_mismatch");
+    }
+
+    #[test]
     fn redactor_error_is_mapped_to_the_declared_field_without_original() {
         let secret = "leaking-error-secret-7f3c";
         let draft = command_draft(vec![
@@ -1268,6 +1367,46 @@ mod tests {
         assert!(!debug.contains(secret));
         assert!(!debug.contains(path));
         assert!(debug.contains("<redacted-payload>"));
+    }
+
+    #[test]
+    fn raw_debug_hides_unvalidated_event_links_and_artifact_values() {
+        let event_secret = "event-secret-a102";
+        let link_secret = "link-secret-b203";
+        let artifact_secret = "artifact-secret-c304";
+        let payload = CommandPayloadDraft::new(CommandStage::Received, "runtime.start", vec![])
+            .expect("payload");
+        let links = EventLinks {
+            request_id: Some(link_secret.to_string()),
+            ..EventLinks::default()
+        };
+        let artifact = ArtifactReference {
+            artifact_id: artifact_secret.to_string(),
+            kind: "capture".to_string(),
+            relative_ref: artifact_secret.to_string(),
+            sha256: format!("sha256:{}", "c".repeat(64)),
+            redaction_state: ArtifactRedactionState::Pending,
+        };
+        let draft = EventDraft::new(
+            event_secret,
+            1_752_147_200_000,
+            EventType::CommandReceived,
+            EventSeverity::Info,
+            EventOrigin::new(EventSource::Cli, "actingctl", EventActor::User).expect("origin"),
+            links.clone(),
+            payload,
+        )
+        .with_artifacts(vec![artifact.clone()]);
+
+        let event_debug = format!("{draft:?}");
+        let links_debug = format!("{links:?}");
+        let artifact_debug = format!("{artifact:?}");
+
+        for original in [event_secret, link_secret, artifact_secret] {
+            assert!(!event_debug.contains(original));
+            assert!(!links_debug.contains(original));
+            assert!(!artifact_debug.contains(original));
+        }
     }
 
     #[test]

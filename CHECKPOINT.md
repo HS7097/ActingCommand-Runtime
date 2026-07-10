@@ -17,6 +17,10 @@
 - `ErasedSanitizedEventDraft` is neither constructible nor deserializable outside the contract transition.
 - Fingerprints must use lowercase `sha256:<64 hex>`, cannot embed the original, and redactor errors are remapped to the already validated field name.
 - Raw classified fields, origins, payload drafts, and event drafts use non-disclosing Debug output.
+- Re-review found two additional Important issues and one Minor issue: externally implementable payload-family declarations, short-secret fingerprint false rejection, and unvalidated link/artifact Debug output.
+- `PayloadKind` is now sealed, and sanitization independently verifies the payload's declared family against the event type family.
+- Fingerprint validation accepts any correctly encoded lowercase SHA-256 digest while rejecting exact raw-value echo; it no longer uses substring matching.
+- Raw `EventLinks`, `ArtifactReference`, and `EventDraft` Debug output now exposes only presence/count/state metadata, never unvalidated values.
 
 ### Files changed
 
@@ -30,6 +34,7 @@
 - RED: `cargo test -p actingcommand-contract event::tests -- --nocapture`
 - focused RED for external redactor failure construction
 - review RED tests for forged origin, erased deserialization, malicious fingerprint/error, and raw Debug
+- re-review RED tests for payload-family forgery, valid short-secret digest, and unvalidated link/artifact Debug
 - GREEN: `cargo test -p actingcommand-contract event::tests -- --nocapture`
 - `cargo test -p actingcommand-contract --doc`
 - `cargo fmt --all`
@@ -41,7 +46,7 @@
 
 - Initial RED failed with 42 missing event-contract symbols as intended.
 - Second RED failed because the safe public redactor-error factory did not yet exist.
-- Event contract after review fixes: 15 unit tests passed, including 10 event security/contract tests.
+- Event contract after two review-fix rounds: 18 unit tests passed, including 13 event security/contract tests.
 - Two compile-fail type-state tests passed: external code cannot rewrite sanitized draft fields or deserialize erased ingress.
 - Contract doc tests passed.
 - Contract Clippy with warnings denied passed.
