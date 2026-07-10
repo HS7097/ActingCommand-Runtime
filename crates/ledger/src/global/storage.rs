@@ -281,6 +281,9 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
                 "parse_blank_record",
             ));
         }
+        if complete_records.is_empty() {
+            continue;
+        }
         for line in complete_records.split(|byte| *byte == b'\n') {
             if line.is_empty() {
                 return Err(GlobalLedgerError::fatal(
@@ -416,13 +419,32 @@ struct WriterOwnership {
 
 impl WriterOwnership {
     fn acquire(root: &Path, owner_id: &str) -> GlobalLedgerResult<(Self, Option<String>)> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
+        let path = root.join("writer.lock");
+        let (mut file, created) = match OpenOptions::new()
+            .create_new(true)
             .read(true)
             .write(true)
-            .open(root.join("writer.lock"))
-            .map_err(|error| GlobalLedgerError::io("ledger_io", "open_writer_lock", &error))?;
+            .open(&path)
+        {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .map_err(|error| {
+                        GlobalLedgerError::io("ledger_io", "open_writer_lock", &error)
+                    })?;
+                (file, false)
+            }
+            Err(error) => {
+                return Err(GlobalLedgerError::io(
+                    "ledger_io",
+                    "create_writer_lock",
+                    &error,
+                ));
+            }
+        };
         file.try_lock().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => {
                 GlobalLedgerError::fatal("writer_conflict", "acquire_writer_lock")
@@ -431,7 +453,7 @@ impl WriterOwnership {
                 GlobalLedgerError::io("ledger_io", "acquire_writer_lock", &error)
             }
         })?;
-        let previous = read_writer_metadata(&mut file)?;
+        let previous = read_writer_metadata(&mut file, created)?;
         let stale_owner = previous
             .as_ref()
             .filter(|metadata| metadata.active)
@@ -470,17 +492,68 @@ impl WriterOwnership {
     }
 }
 
-fn read_writer_metadata(file: &mut File) -> GlobalLedgerResult<Option<WriterMetadata>> {
+fn read_writer_metadata(
+    file: &mut File,
+    created: bool,
+) -> GlobalLedgerResult<Option<WriterMetadata>> {
     file.seek(SeekFrom::Start(0))
         .map_err(|error| GlobalLedgerError::io("ledger_io", "seek_writer_metadata", &error))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)
         .map_err(|error| GlobalLedgerError::io("ledger_io", "read_writer_metadata", &error))?;
-    if content.trim().is_empty() {
-        return Ok(None);
+    if content.is_empty() {
+        return if created {
+            Ok(None)
+        } else {
+            Err(GlobalLedgerError::fatal(
+                "malformed_owner_metadata",
+                "parse_writer_metadata",
+            ))
+        };
     }
-    let metadata = serde_json::from_str::<WriterMetadata>(&content).map_err(|error| {
+
+    let (complete, tail_len) = match content.iter().rposition(|byte| *byte == b'\n') {
+        Some(last_newline) => (&content[..=last_newline], content.len() - last_newline - 1),
+        None => (&content[..], 0),
+    };
+    let records = if complete.last() == Some(&b'\n') {
+        &complete[..complete.len() - 1]
+    } else {
+        complete
+    };
+    if records.is_empty() {
+        return Err(GlobalLedgerError::fatal(
+            "malformed_owner_metadata",
+            "parse_writer_metadata",
+        ));
+    }
+    let mut metadata = None;
+    for record in records.split(|byte| *byte == b'\n') {
+        if record.is_empty() {
+            return Err(GlobalLedgerError::fatal(
+                "malformed_owner_metadata",
+                "parse_writer_metadata",
+            ));
+        }
+        metadata = Some(parse_writer_metadata(record)?);
+    }
+    if tail_len > 0 {
+        file.set_len(complete.len() as u64).map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "truncate_writer_metadata_tail", &error)
+        })?;
+        file.sync_all().map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "sync_writer_metadata_tail", &error)
+        })?;
+    }
+    Ok(metadata)
+}
+
+fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterMetadata> {
+    let unique = serde_json::from_slice::<UniqueJsonValue>(record).map_err(|error| {
         GlobalLedgerError::json("malformed_owner_metadata", "parse_writer_metadata", &error)
+    })?;
+    let metadata = serde_json::from_value::<WriterMetadata>(unique.0).map_err(|error| {
+        GlobalLedgerError::json("malformed_owner_metadata", "decode_writer_metadata", &error)
     })?;
     let lifecycle_valid = match (metadata.active, metadata.closed_at_unix_ms) {
         (true, None) => true,
@@ -498,21 +571,38 @@ fn read_writer_metadata(file: &mut File) -> GlobalLedgerResult<Option<WriterMeta
             "validate_writer_metadata",
         ));
     }
-    Ok(Some(metadata))
+    Ok(metadata)
 }
 
 fn write_writer_metadata(file: &mut File, metadata: &WriterMetadata) -> GlobalLedgerResult<()> {
-    let bytes = serde_json::to_vec(metadata).map_err(|error| {
+    let mut bytes = serde_json::to_vec(metadata).map_err(|error| {
         GlobalLedgerError::json(
             "owner_metadata_serialization_failed",
             "serialize_writer_metadata",
             &error,
         )
     })?;
-    file.set_len(0)
-        .map_err(|error| GlobalLedgerError::io("ledger_io", "truncate_writer_metadata", &error))?;
-    file.seek(SeekFrom::Start(0))
+    bytes.push(b'\n');
+    let end = file
+        .seek(SeekFrom::End(0))
         .map_err(|error| GlobalLedgerError::io("ledger_io", "seek_writer_metadata", &error))?;
+    if end > 0 {
+        file.seek(SeekFrom::End(-1)).map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "seek_writer_metadata_tail", &error)
+        })?;
+        let mut last = [0_u8; 1];
+        file.read_exact(&mut last).map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "read_writer_metadata_tail", &error)
+        })?;
+        file.seek(SeekFrom::End(0)).map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "seek_writer_metadata_append", &error)
+        })?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n").map_err(|error| {
+                GlobalLedgerError::io("ledger_io", "commit_legacy_writer_metadata", &error)
+            })?;
+        }
+    }
     file.write_all(&bytes)
         .map_err(|error| GlobalLedgerError::io("ledger_io", "write_writer_metadata", &error))?;
     file.sync_all()
@@ -631,6 +721,66 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn existing_empty_writer_metadata_is_not_treated_as_first_use() {
+        let temp = TempDir::new().expect("temp");
+        fs::write(temp.path().join("writer.lock"), []).expect("empty metadata");
+
+        let error = match WriterOwnership::acquire(temp.path(), "new-owner") {
+            Ok(_) => panic!("existing empty metadata must be fatal"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), "malformed_owner_metadata");
+    }
+
+    #[test]
+    fn interrupted_metadata_append_preserves_the_last_active_owner() {
+        let temp = TempDir::new().expect("temp");
+        let (mut first, stale) =
+            WriterOwnership::acquire(temp.path(), "previous-owner").expect("first owner");
+        assert!(stale.is_none());
+        first
+            .file
+            .seek(SeekFrom::End(0))
+            .expect("seek metadata tail");
+        first
+            .file
+            .write_all(br#"{"schema_version":"actingcommand.ledger-writer.v1"#)
+            .expect("partial metadata append");
+        first.file.sync_all().expect("sync partial append");
+        drop(first);
+
+        let (mut replacement, stale) =
+            WriterOwnership::acquire(temp.path(), "replacement-owner").expect("replacement owner");
+
+        assert_eq!(stale.as_deref(), Some("previous-owner"));
+        replacement.close().expect("close replacement owner");
+    }
+
+    #[test]
+    fn clean_close_appends_inactive_metadata_without_erasing_active_record() {
+        let temp = TempDir::new().expect("temp");
+        let (mut ownership, _) =
+            WriterOwnership::acquire(temp.path(), "writer-one").expect("owner");
+        ownership
+            .file
+            .seek(SeekFrom::Start(0))
+            .expect("seek active metadata");
+        let mut active_bytes = Vec::new();
+        ownership
+            .file
+            .read_to_end(&mut active_bytes)
+            .expect("read active metadata");
+
+        ownership.close().expect("close owner");
+        let closed_bytes = fs::read(temp.path().join("writer.lock")).expect("closed metadata");
+
+        assert!(closed_bytes.starts_with(&active_bytes));
+        assert!(closed_bytes.len() > active_bytes.len());
+    }
 
     #[test]
     fn sequence_increment_fails_at_u64_max() {

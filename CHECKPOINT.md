@@ -23,6 +23,12 @@
 - Sequence increments use checked arithmetic and fail with `sequence_exhausted` before reuse or wrap.
 - Re-review found one remaining Important bypass: duplicate JSON object keys could preserve a hidden first value in raw JSONL while `serde_json::Value` retained only the last value.
 - Segment recovery now uses a recursive duplicate-key rejecting JSON visitor before typed `StoredLine` decoding; duplicate keys at any nesting depth are fatal and the error omits key/value content.
+- Final re-review confirmed the duplicate-key bypass was closed and found two remaining Important lifecycle defects: startup timeout joined a writer that could wait forever, and in-place owner-metadata truncation could erase crash evidence.
+- Startup timeout now disconnects ingress and returns `writer_start_timeout` without joining the delayed startup thread; once startup finishes, the disconnected receiver makes that thread close and release ownership.
+- `writer.lock` metadata is now an append-only, newline-committed lifecycle log under the retained OS lock. Interrupted tail writes are truncated back to the last complete record, preserving the prior active owner for explicit recovery.
+- A pre-existing empty `writer.lock` is fatal instead of being mistaken for first use; only a file created by the current acquisition may begin empty.
+- Owner metadata also uses recursive duplicate-key rejection before typed decoding.
+- Empty segment files now reopen cleanly, while a complete blank JSONL record remains fatal.
 
 ### Files changed
 
@@ -43,10 +49,12 @@
 - GREEN: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
 - `cargo fmt --all`
 - `cargo test -p actingcommand-contract -p actingcommand-ledger`
+- `cargo test --workspace`
 - `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
 - `cargo tree -p actingcommand-ledger --depth 1`
 - review RED tests for full-queue shutdown, blank records, payload kind/unknown fields, contradictory owner metadata, config Debug, and sequence exhaustion
 - re-review RED with a valid complete JSONL record containing duplicate nested `subject` keys and a hidden machine path
+- final-review RED for bounded startup timeout, existing empty owner metadata, interrupted metadata append, append-only clean close, and empty-ledger reopen
 - `git diff --check`
 
 ### Test results
@@ -55,7 +63,8 @@
 - Persisted-event RED failed because recovery validation did not yet exist.
 - Global-ledger focused suite: 10 tests passed.
 - Contract suite after review fixes: 22 tests passed, including 4 recovery-validation tests.
-- Full ledger crate after review fixes: 35 tests passed; legacy tests remain green.
+- Full ledger crate after final review fixes: 40 tests passed; legacy tests remain green.
+- Full workspace test suite passed after the lifecycle fixes.
 - Two contract compile-fail tests and all doc tests passed.
 - Contract/ledger Clippy with warnings denied passed.
 - Diff check passed.
@@ -66,9 +75,9 @@
 
 ### Next step
 
-1. Commit and push the recoverable single-writer storage.
-2. Run a task-scoped concurrency/recovery/security review.
-3. Start Task 3 query, subscribe, and CLI/UI/Lab projection RED tests.
+1. Commit and push the final Task 2 lifecycle fixes.
+2. Obtain final task-scoped concurrency/recovery/security approval with no Critical or Important findings.
+3. Re-read the latest Issue #35 body and comments before entering Task 3.
 
 ## 2026-07-10 Issue 35 C1 Task 1 typed event contract
 

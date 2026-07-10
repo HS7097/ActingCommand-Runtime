@@ -248,6 +248,17 @@ impl fmt::Debug for GlobalLedger {
 
 impl GlobalLedger {
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
+        Self::open_with_store(config, COMMAND_TIMEOUT, SegmentStore::open)
+    }
+
+    fn open_with_store<F>(
+        config: GlobalLedgerConfig,
+        startup_timeout: Duration,
+        open_store: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: FnOnce(GlobalLedgerConfig) -> GlobalLedgerResult<SegmentStore> + Send + 'static,
+    {
         config.validate()?;
         let capacity = config.ingress_capacity;
         let (sender, receiver) = mpsc::sync_channel(capacity);
@@ -255,7 +266,7 @@ impl GlobalLedger {
         let writer = thread::Builder::new()
             .name("actingcommand-global-ledger".to_string())
             .spawn(move || {
-                let store = match SegmentStore::open(config) {
+                let store = match open_store(config) {
                     Ok(store) => {
                         let _ = startup_sender.send(Ok(()));
                         store
@@ -270,7 +281,7 @@ impl GlobalLedger {
             .map_err(|error| {
                 GlobalLedgerError::io("writer_spawn_failed", "spawn_writer", &error)
             })?;
-        match startup_receiver.recv_timeout(COMMAND_TIMEOUT) {
+        match startup_receiver.recv_timeout(startup_timeout) {
             Ok(Ok(())) => Ok(Self {
                 sender: Some(sender),
                 writer: Some(writer),
@@ -280,7 +291,8 @@ impl GlobalLedger {
                 Err(error)
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = writer.join();
+                drop(sender);
+                drop(writer);
                 Err(GlobalLedgerError::fatal(
                     "writer_start_timeout",
                     "start_writer",

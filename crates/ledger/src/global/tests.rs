@@ -11,13 +11,67 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
     GlobalLedgerConfig::new(temp.path(), owner_id)
         .with_segment_max_bytes(16 * 1024)
         .with_ingress_capacity(8)
+}
+
+#[test]
+fn startup_timeout_returns_before_delayed_store_open_finishes() {
+    let temp = TempDir::new().expect("temp");
+    let startup_config = config(&temp, "writer-timeout");
+    let delayed_config = startup_config.clone();
+    let started = Instant::now();
+
+    let error =
+        GlobalLedger::open_with_store(startup_config, Duration::from_millis(20), move |_| {
+            thread::sleep(Duration::from_millis(200));
+            SegmentStore::open(delayed_config)
+        })
+        .expect_err("delayed startup must time out");
+
+    assert_eq!(error.code(), "writer_start_timeout");
+    assert!(started.elapsed() < Duration::from_millis(150));
+
+    thread::sleep(Duration::from_millis(250));
+    let segment_lengths = segment_paths(temp.path())
+        .into_iter()
+        .map(|path| fs::metadata(path).expect("segment metadata").len())
+        .collect::<Vec<_>>();
+    assert!(
+        segment_lengths.iter().all(|length| *length == 0),
+        "timed-out startup wrote unexpected segment bytes: {segment_lengths:?}"
+    );
+    let replacement =
+        GlobalLedger::open(config(&temp, "writer-after-timeout")).unwrap_or_else(|error| {
+            let segments = segment_paths(temp.path())
+                .into_iter()
+                .map(|path| {
+                    let bytes = fs::read(&path).expect("segment bytes");
+                    (path, bytes)
+                })
+                .collect::<Vec<_>>();
+            panic!("timed-out writer must release ownership: {error:?}; segments={segments:?}");
+        });
+    replacement.close().expect("close replacement writer");
+}
+
+#[test]
+fn empty_ledger_reopens_without_treating_the_segment_as_a_blank_record() {
+    let temp = TempDir::new().expect("temp");
+    GlobalLedger::open(config(&temp, "first-owner"))
+        .expect("first owner")
+        .close()
+        .expect("close first owner");
+
+    GlobalLedger::open(config(&temp, "second-owner"))
+        .expect("reopen empty ledger")
+        .close()
+        .expect("close second owner");
 }
 
 fn event(
