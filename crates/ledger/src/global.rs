@@ -318,7 +318,7 @@ pub struct LedgerSubscription {
     live: Receiver<PersistedEvent>,
     terminal: Receiver<GlobalLedgerError>,
     terminal_error: Option<GlobalLedgerError>,
-    _liveness: Arc<()>,
+    liveness: Option<Arc<()>>,
 }
 
 impl LedgerSubscription {
@@ -453,6 +453,7 @@ impl LedgerSubscription {
     fn latch_terminal(&mut self, error: GlobalLedgerError) -> GlobalLedgerError {
         self.replay.clear();
         while self.live.try_recv().is_ok() {}
+        self.liveness.take();
         self.terminal_error = Some(error.clone());
         error
     }
@@ -596,7 +597,7 @@ impl GlobalLedger {
             live: registration.live,
             terminal: registration.terminal,
             terminal_error: None,
-            _liveness: registration.liveness,
+            liveness: Some(registration.liveness),
         })
     }
 

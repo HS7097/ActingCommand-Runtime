@@ -545,6 +545,33 @@ mod subscription {
         assert!(SubscriptionOptions::new(1).is_ok());
         assert!(SubscriptionOptions::new(1024).is_ok());
     }
+
+    #[test]
+    fn local_terminal_state_detaches_writer_registration() {
+        let (sender, _commands) = mpsc::sync_channel(1);
+        let (_live, live) = mpsc::sync_channel(1);
+        let (_terminal, terminal) = mpsc::sync_channel(1);
+        let liveness = Arc::new(());
+        let weak = Arc::downgrade(&liveness);
+        let mut subscription = LedgerSubscription {
+            sender,
+            replay: VecDeque::new(),
+            replay_fetch_after_sequence: 0,
+            last_delivered_sequence: 0,
+            replay_through_sequence: 0,
+            replay_page_events: 1,
+            live,
+            terminal,
+            terminal_error: None,
+            liveness: Some(liveness),
+        };
+
+        let terminal =
+            GlobalLedgerError::fatal("subscription_replay_invalid", "validate_replay_page");
+        assert_eq!(subscription.latch_terminal(terminal.clone()), terminal);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(subscription.terminal_error, Some(terminal));
+    }
 }
 
 #[test]
