@@ -138,7 +138,13 @@ impl PersistedEvent {
                 code: "payload_schema_mismatch",
             });
         }
-        if self.sensitivity != self.payload.sensitivity() || self.payload.validate().is_err() {
+        let expected_sensitivity = self
+            .artifacts
+            .iter()
+            .fold(self.payload.sensitivity(), |current, artifact| {
+                current.max(artifact.sensitivity())
+            });
+        if self.sensitivity != expected_sensitivity || self.payload.validate().is_err() {
             return Err(FactValidationError {
                 code: "invalid_typed_payload",
             });

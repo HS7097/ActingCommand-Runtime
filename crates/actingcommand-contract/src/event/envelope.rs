@@ -3,8 +3,10 @@
 use super::{
     ActionId, ArtifactReference, CausationId, CorrelationId, EventActor, EventId, EventPayload,
     EventPayloadDraft, EventSeverity, EventSource, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION,
-    InstanceId, LeaseId, RecognitionId, RequestId, RunId, SanitizationError, SecretFingerprinter,
-    Sensitivity, StaticCode, TaskId,
+    InstanceId, IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId,
+    IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId,
+    IssuedRunId, IssuedTaskId, LeaseId, OriginModule, RecognitionId, RequestId, RunId,
+    SanitizationError, SecretFingerprinter, Sensitivity, StoreIssuedArtifact, TaskId,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -13,12 +15,12 @@ use std::fmt;
 #[serde(deny_unknown_fields)]
 pub struct EventOrigin {
     source: EventSource,
-    module: StaticCode,
+    module: OriginModule,
     actor: EventActor,
 }
 
 impl EventOrigin {
-    pub const fn new(source: EventSource, module: StaticCode, actor: EventActor) -> Self {
+    pub const fn new(source: EventSource, module: OriginModule, actor: EventActor) -> Self {
         Self {
             source,
             module,
@@ -34,8 +36,8 @@ impl EventOrigin {
         self.actor
     }
 
-    pub fn module(&self) -> &StaticCode {
-        &self.module
+    pub const fn module(&self) -> OriginModule {
+        self.module
     }
 }
 
@@ -65,56 +67,6 @@ pub struct EventLinks {
 }
 
 impl EventLinks {
-    pub fn with_instance_id(mut self, value: InstanceId) -> Self {
-        self.instance_id = Some(value);
-        self
-    }
-
-    pub fn with_request_id(mut self, value: RequestId) -> Self {
-        self.request_id = Some(value);
-        self
-    }
-
-    pub fn with_correlation_id(mut self, value: CorrelationId) -> Self {
-        self.correlation_id = Some(value);
-        self
-    }
-
-    pub fn with_causation_id(mut self, value: CausationId) -> Self {
-        self.causation_id = Some(value);
-        self
-    }
-
-    pub fn with_task_id(mut self, value: TaskId) -> Self {
-        self.task_id = Some(value);
-        self
-    }
-
-    pub fn with_run_id(mut self, value: RunId) -> Self {
-        self.run_id = Some(value);
-        self
-    }
-
-    pub fn with_lease_id(mut self, value: LeaseId) -> Self {
-        self.lease_id = Some(value);
-        self
-    }
-
-    pub fn with_frame_id(mut self, value: FrameId) -> Self {
-        self.frame_id = Some(value);
-        self
-    }
-
-    pub fn with_action_id(mut self, value: ActionId) -> Self {
-        self.action_id = Some(value);
-        self
-    }
-
-    pub fn with_recognition_id(mut self, value: RecognitionId) -> Self {
-        self.recognition_id = Some(value);
-        self
-    }
-
     pub const fn instance_id(&self) -> Option<&InstanceId> {
         self.instance_id.as_ref()
     }
@@ -156,23 +108,149 @@ impl EventLinks {
     }
 }
 
+/// Producer-only links whose values can only come from an identifier issuer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventLinksDraft {
+    instance_id: Option<IssuedInstanceId>,
+    request_id: Option<IssuedRequestId>,
+    correlation_id: Option<IssuedCorrelationId>,
+    causation_id: Option<IssuedCausationId>,
+    task_id: Option<IssuedTaskId>,
+    run_id: Option<IssuedRunId>,
+    lease_id: Option<IssuedLeaseId>,
+    frame_id: Option<IssuedFrameId>,
+    action_id: Option<IssuedActionId>,
+    recognition_id: Option<IssuedRecognitionId>,
+}
+
+impl EventLinksDraft {
+    pub fn with_instance_id(mut self, value: IssuedInstanceId) -> Self {
+        self.instance_id = Some(value);
+        self
+    }
+
+    pub fn with_request_id(mut self, value: IssuedRequestId) -> Self {
+        self.request_id = Some(value);
+        self
+    }
+
+    pub fn with_correlation_id(mut self, value: IssuedCorrelationId) -> Self {
+        self.correlation_id = Some(value);
+        self
+    }
+
+    pub fn with_causation_id(mut self, value: IssuedCausationId) -> Self {
+        self.causation_id = Some(value);
+        self
+    }
+
+    pub fn with_task_id(mut self, value: IssuedTaskId) -> Self {
+        self.task_id = Some(value);
+        self
+    }
+
+    pub fn with_run_id(mut self, value: IssuedRunId) -> Self {
+        self.run_id = Some(value);
+        self
+    }
+
+    pub fn with_lease_id(mut self, value: IssuedLeaseId) -> Self {
+        self.lease_id = Some(value);
+        self
+    }
+
+    pub fn with_frame_id(mut self, value: IssuedFrameId) -> Self {
+        self.frame_id = Some(value);
+        self
+    }
+
+    pub fn with_action_id(mut self, value: IssuedActionId) -> Self {
+        self.action_id = Some(value);
+        self
+    }
+
+    pub fn with_recognition_id(mut self, value: IssuedRecognitionId) -> Self {
+        self.recognition_id = Some(value);
+        self
+    }
+
+    pub fn instance_id(&self) -> Option<&InstanceId> {
+        self.instance_id.as_ref().map(IssuedInstanceId::transport)
+    }
+
+    pub fn request_id(&self) -> Option<&RequestId> {
+        self.request_id.as_ref().map(IssuedRequestId::transport)
+    }
+
+    pub fn correlation_id(&self) -> Option<&CorrelationId> {
+        self.correlation_id
+            .as_ref()
+            .map(IssuedCorrelationId::transport)
+    }
+
+    pub fn causation_id(&self) -> Option<&CausationId> {
+        self.causation_id.as_ref().map(IssuedCausationId::transport)
+    }
+
+    pub fn task_id(&self) -> Option<&TaskId> {
+        self.task_id.as_ref().map(IssuedTaskId::transport)
+    }
+
+    pub fn run_id(&self) -> Option<&RunId> {
+        self.run_id.as_ref().map(IssuedRunId::transport)
+    }
+
+    pub fn lease_id(&self) -> Option<&LeaseId> {
+        self.lease_id.as_ref().map(IssuedLeaseId::transport)
+    }
+
+    pub fn frame_id(&self) -> Option<&FrameId> {
+        self.frame_id.as_ref().map(IssuedFrameId::transport)
+    }
+
+    pub fn action_id(&self) -> Option<&ActionId> {
+        self.action_id.as_ref().map(IssuedActionId::transport)
+    }
+
+    pub fn recognition_id(&self) -> Option<&RecognitionId> {
+        self.recognition_id
+            .as_ref()
+            .map(IssuedRecognitionId::transport)
+    }
+
+    pub(crate) fn into_transport(self) -> EventLinks {
+        EventLinks {
+            instance_id: self.instance_id.map(IssuedInstanceId::into_transport),
+            request_id: self.request_id.map(IssuedRequestId::into_transport),
+            correlation_id: self.correlation_id.map(IssuedCorrelationId::into_transport),
+            causation_id: self.causation_id.map(IssuedCausationId::into_transport),
+            task_id: self.task_id.map(IssuedTaskId::into_transport),
+            run_id: self.run_id.map(IssuedRunId::into_transport),
+            lease_id: self.lease_id.map(IssuedLeaseId::into_transport),
+            frame_id: self.frame_id.map(IssuedFrameId::into_transport),
+            action_id: self.action_id.map(IssuedActionId::into_transport),
+            recognition_id: self.recognition_id.map(IssuedRecognitionId::into_transport),
+        }
+    }
+}
+
 pub struct EventDraft {
-    event_id: EventId,
+    event_id: IssuedEventId,
     timestamp_unix_ms: u64,
     severity: EventSeverity,
     origin: EventOrigin,
-    links: EventLinks,
+    links: EventLinksDraft,
     payload: EventPayloadDraft,
-    artifacts: Vec<ArtifactReference>,
+    artifacts: Vec<StoreIssuedArtifact>,
 }
 
 impl EventDraft {
     pub fn new(
-        event_id: EventId,
+        event_id: IssuedEventId,
         timestamp_unix_ms: u64,
         severity: EventSeverity,
         origin: EventOrigin,
-        links: EventLinks,
+        links: EventLinksDraft,
         payload: EventPayloadDraft,
     ) -> Self {
         Self {
@@ -186,7 +264,7 @@ impl EventDraft {
         }
     }
 
-    pub fn with_artifacts(mut self, artifacts: Vec<ArtifactReference>) -> Self {
+    pub fn with_artifacts(mut self, artifacts: Vec<StoreIssuedArtifact>) -> Self {
         self.artifacts = artifacts;
         self
     }
@@ -201,23 +279,33 @@ impl EventDraft {
                 "timestamp_unix_ms",
             ));
         }
-        for artifact in &self.artifacts {
+        let artifacts = self
+            .artifacts
+            .into_iter()
+            .map(StoreIssuedArtifact::into_reference)
+            .collect::<Vec<_>>();
+        for artifact in &artifacts {
             artifact.validate()?;
         }
         let payload = self.payload.sanitize(fingerprinter)?;
         payload.validate()?;
+        let sensitivity = artifacts
+            .iter()
+            .fold(payload.sensitivity(), |current, artifact| {
+                current.max(artifact.sensitivity())
+            });
         Ok(SanitizedEventDraft {
             schema_version: GLOBAL_EVENT_SCHEMA_VERSION.to_string(),
-            event_id: self.event_id,
+            event_id: self.event_id.into_transport(),
             timestamp_unix_ms: self.timestamp_unix_ms,
             event_type: payload.event_type(),
             severity: self.severity,
-            sensitivity: payload.sensitivity(),
+            sensitivity,
             origin: self.origin,
-            links: self.links,
+            links: self.links.into_transport(),
             payload_schema: payload.schema().to_string(),
             payload,
-            artifacts: self.artifacts,
+            artifacts,
         })
     }
 }

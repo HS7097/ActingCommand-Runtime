@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use actingcommand_actinglab_architecture::{
-    contract_dependency_violations, extract_command_inventory, inspect_lab_source,
-    inspect_public_api, lab_removability_violations, validate_line_ratchet,
-    workspace_dependency_violations,
+    contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
+    inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
+    inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
+    ledger_owns_query_matching, validate_line_ratchet, workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -120,6 +121,117 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+}
+
+#[test]
+fn event_v2_append_ingress_and_producer_capabilities_are_exact() {
+    let root = workspace_root();
+    let global_path = root.join("crates/ledger/src/global.rs");
+    let global = fs::read_to_string(&global_path).expect("read global ledger source");
+    let append_violations = inspect_global_append_ingress("crates/ledger/src/global.rs", &global)
+        .expect("inspect global append ingress");
+    assert!(
+        append_violations.is_empty(),
+        "global append ingress violations:\n{}",
+        append_violations.join("\n")
+    );
+
+    let mut capability_violations = Vec::new();
+    for relative in [
+        "crates/actingcommand-contract/src/event/envelope.rs",
+        "crates/actingcommand-contract/src/event/artifact.rs",
+        "crates/actingcommand-contract/src/event/ids.rs",
+    ] {
+        let source = fs::read_to_string(root.join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        capability_violations.extend(
+            inspect_producer_event_capabilities(relative, &source)
+                .expect("inspect producer capabilities"),
+        );
+    }
+    assert!(
+        capability_violations.is_empty(),
+        "producer capability violations:\n{}",
+        capability_violations.join("\n")
+    );
+}
+
+#[test]
+fn event_v2_public_surfaces_have_no_json_value_payloads() {
+    let root = workspace_root();
+    let mut files = vec![
+        root.join("crates/actingcommand-contract/src/event.rs"),
+        root.join("crates/ledger/src/fact.rs"),
+        root.join("crates/ledger/src/global.rs"),
+        root.join("crates/ledger/src/global/projection.rs"),
+    ];
+    collect_rust_files(
+        &root.join("crates/actingcommand-contract/src/event"),
+        &mut files,
+    );
+    let mut violations = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        violations.extend(inspect_public_api(&display, &source).expect("inspect public API"));
+    }
+    assert!(
+        violations.is_empty(),
+        "event v2 public Value violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn persisted_event_is_opaque_and_query_matching_is_ledger_owned() {
+    let root = workspace_root();
+    let fact = fs::read_to_string(root.join("crates/ledger/src/fact.rs"))
+        .expect("read persisted fact source");
+    let ownership = inspect_persisted_event_ownership("crates/ledger/src/fact.rs", &fact)
+        .expect("inspect persisted fact");
+    assert!(
+        ownership.is_empty(),
+        "persisted fact ownership violations:\n{}",
+        ownership.join("\n")
+    );
+
+    let mut contract_files = vec![root.join("crates/actingcommand-contract/src/event.rs")];
+    collect_rust_files(
+        &root.join("crates/actingcommand-contract/src/event"),
+        &mut contract_files,
+    );
+    let mut matching_violations = Vec::new();
+    for path in contract_files {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        matching_violations.extend(
+            inspect_contract_fact_matching(&display, &source)
+                .expect("inspect contract fact matching"),
+        );
+    }
+    assert!(
+        matching_violations.is_empty(),
+        "contract-owned fact matching violations:\n{}",
+        matching_violations.join("\n")
+    );
+
+    let projection = fs::read_to_string(root.join("crates/ledger/src/global/projection.rs"))
+        .expect("read ledger projection source");
+    assert!(
+        ledger_owns_query_matching("crates/ledger/src/global/projection.rs", &projection)
+            .expect("inspect ledger query matching"),
+        "ledger projection must own EventQuery-to-PersistedEvent matching"
+    );
 }
 
 #[test]

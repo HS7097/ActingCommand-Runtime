@@ -30,7 +30,7 @@ pub use types::{
     SERVER_BAAS_GLOBAL_EN, SERVER_BAAS_JP, SERVER_BAAS_KO, SERVER_BAAS_ZH_TW, SERVER_MAA_BILIBILI,
     SERVER_MAA_OFFICIAL, SERVER_MAA_TXWY, SERVER_MAA_YOSTAR_EN, SERVER_MAA_YOSTAR_JP,
     SERVER_MAA_YOSTAR_KR, SEVERITY_DEGRADED, SEVERITY_ERROR, SEVERITY_FATAL, SEVERITY_INFO,
-    SEVERITY_WARNING, SchedulerSummary, Severity, TaskRunId, Timestamp,
+    SEVERITY_WARNING, SchedulerSummary, ServerKey, Severity, TaskRunId, Timestamp,
 };
 
 #[cfg(test)]
@@ -39,6 +39,7 @@ mod tests {
 
     #[test]
     fn server_key_constants_keep_backend_variant_names() {
+        let _: ServerKey = SERVER_ALAS_JP.to_string();
         assert_eq!(SERVER_ALAS_JP, "alas.jp");
         assert_eq!(SERVER_BAAS_GLOBAL_EN, "baas.global_en");
         assert_eq!(SERVER_MAA_YOSTAR_JP, "maa.yostar_jp");

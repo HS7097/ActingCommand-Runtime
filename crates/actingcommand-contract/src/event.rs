@@ -35,22 +35,76 @@
 //! let _: SanitizedEventDraft = serde_json::from_str("{}").unwrap();
 //! ```
 //!
-//! Runtime strings cannot be promoted into static codes or typed IDs:
+//! Transport IDs cannot be promoted into producer-issued identifiers:
 //!
 //! ```compile_fail
-//! use actingcommand_contract::{EventId, StaticCode};
+//! use actingcommand_contract::{
+//!     AuditInput, ClientPayloadDraft, EventAction, EventActor, EventDraft, EventId,
+//!     EventLinksDraft, EventOrigin, EventSeverity, EventSource, OriginModule,
+//! };
 //!
-//! let runtime = String::from("runtime.value");
-//! let _ = StaticCode::new(&runtime);
-//! let _ = EventId::new(runtime);
+//! let transport: EventId = serde_json::from_str(
+//!     "\"evt_11111111111111111111111111111111\"",
+//! ).unwrap();
+//! let _ = EventDraft::new(
+//!     transport,
+//!     1,
+//!     EventSeverity::Info,
+//!     EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User),
+//!     EventLinksDraft::default(),
+//!     ClientPayloadDraft::cli_command(EventAction::RuntimeStatus, AuditInput::new()).into(),
+//! );
+//! ```
+//!
+//! Every producer link slot likewise requires an issuer-owned capability:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::{EventLinksDraft, RequestId};
+//!
+//! let transport: RequestId = serde_json::from_str(
+//!     "\"request_11111111111111111111111111111111\"",
+//! ).unwrap();
+//! let _ = EventLinksDraft::default().with_request_id(transport);
+//! ```
+//!
+//! Runtime strings, including leaked `'static` strings, cannot construct schema codes:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::EventAction;
+//!
+//! let leaked: &'static str = Box::leak(String::from("token-secret").into_boxed_str());
+//! let _ = EventAction::new(leaked);
+//! ```
+//!
+//! Transport IDs intentionally have no `Display` implementation:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::EventId;
+//!
+//! let transport: EventId = serde_json::from_str(
+//!     "\"evt_11111111111111111111111111111111\"",
+//! ).unwrap();
+//! let _ = format!("{transport}");
+//! ```
+//!
+//! A deserialized artifact reference is not a store-issued attachment capability:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::{ArtifactReference, EventDraft};
+//!
+//! fn attach(draft: EventDraft, transport: ArtifactReference) {
+//!     let _ = draft.with_artifacts(vec![transport]);
+//! }
 //! ```
 
 mod artifact;
+mod codes;
 mod envelope;
 mod ids;
 mod payload;
 
 pub use artifact::*;
+pub use codes::*;
 pub use envelope::*;
 pub use ids::*;
 pub use payload::*;

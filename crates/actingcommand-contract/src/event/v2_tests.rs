@@ -1,18 +1,33 @@
 use super::*;
+use std::sync::Mutex;
 
-struct TestFingerprinter;
+struct SpyFingerprinter {
+    seen: Mutex<Vec<(SecretField, String)>>,
+}
 
-impl SecretFingerprinter for TestFingerprinter {
+impl SpyFingerprinter {
+    fn new() -> Self {
+        Self {
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn seen(&self) -> Vec<(SecretField, String)> {
+        self.seen.lock().expect("spy lock").clone()
+    }
+}
+
+impl SecretFingerprinter for SpyFingerprinter {
     fn fingerprint(
         &self,
         field: SecretField,
         original: &str,
     ) -> Result<Sha256Fingerprint, SanitizationError> {
-        let digit = match field {
-            SecretField::AccountIdentity => 'a',
-            SecretField::AuthenticationMaterial => 'b',
-        };
-        Sha256Fingerprint::new(format!("sha256:{}", digit.to_string().repeat(64)), original)
+        self.seen
+            .lock()
+            .expect("spy lock")
+            .push((field, original.to_string()));
+        Sha256Fingerprint::new(format!("sha256:{}", "a".repeat(64)), original)
     }
 }
 
@@ -33,11 +48,49 @@ impl SecretFingerprinter for MaliciousEchoFingerprinter {
     }
 }
 
-fn code(value: &'static str) -> StaticCode {
-    StaticCode::new(value).expect("static code")
+fn identifier_issuer() -> IdentifierIssuer {
+    IdentifierIssuer::new().expect("identifier issuer")
 }
 
-fn audit() -> AuditInput {
+fn origin() -> EventOrigin {
+    EventOrigin::new(EventSource::Cli, OriginModule::Actingctl, EventActor::User)
+}
+
+fn links(issuer: &IdentifierIssuer) -> EventLinksDraft {
+    EventLinksDraft::default()
+        .with_instance_id(issuer.mint_instance_id().expect("instance id"))
+        .with_request_id(issuer.mint_request_id().expect("request id"))
+        .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+        .with_causation_id(issuer.mint_causation_id().expect("causation id"))
+        .with_task_id(issuer.mint_task_id().expect("task id"))
+        .with_run_id(issuer.mint_run_id().expect("run id"))
+        .with_lease_id(issuer.mint_lease_id().expect("lease id"))
+        .with_frame_id(issuer.mint_frame_id().expect("frame id"))
+        .with_action_id(issuer.mint_action_id().expect("action id"))
+        .with_recognition_id(issuer.mint_recognition_id().expect("recognition id"))
+}
+
+fn artifact_links(issuer: &IdentifierIssuer) -> ArtifactLinksDraft {
+    ArtifactLinksDraft::default()
+        .with_run_id(issuer.mint_run_id().expect("run id"))
+        .with_frame_id(issuer.mint_frame_id().expect("frame id"))
+        .with_correlation_id(issuer.mint_correlation_id().expect("correlation id"))
+}
+
+fn artifact(bytes: &[u8]) -> StoreIssuedArtifact {
+    let links_issuer = identifier_issuer();
+    ArtifactStoreIssuer::new()
+        .expect("artifact store issuer")
+        .issue_pending(
+            ArtifactKind::CaptureFrame,
+            artifact_links(&links_issuer),
+            bytes,
+            1_752_147_200_000,
+        )
+        .expect("store-issued artifact")
+}
+
+fn audit_all() -> AuditInput {
     AuditInput::new()
         .with_account("account-secret-c1@example.invalid")
         .with_authentication("authentication-secret-c1")
@@ -45,106 +98,72 @@ fn audit() -> AuditInput {
         .with_device_endpoint("127.0.0.1:16384")
 }
 
-fn origin() -> EventOrigin {
-    EventOrigin::new(EventSource::Cli, code("actingctl"), EventActor::User)
-}
-
-fn links() -> EventLinks {
-    EventLinks::default()
-        .with_instance_id(InstanceId::new([1; 16]))
-        .with_request_id(RequestId::new([2; 16]))
-        .with_correlation_id(CorrelationId::new([3; 16]))
-        .with_causation_id(CausationId::new([4; 16]))
-        .with_task_id(TaskId::new([5; 16]))
-        .with_run_id(RunId::new([6; 16]))
-        .with_lease_id(LeaseId::new([7; 16]))
-        .with_frame_id(FrameId::new([8; 16]))
-        .with_action_id(ActionId::new([9; 16]))
-        .with_recognition_id(RecognitionId::new([10; 16]))
-}
-
-fn artifact(object_key: &str) -> Result<ArtifactReference, SanitizationError> {
-    ArtifactReference::new(
-        ArtifactId::new([11; 16]),
-        code("capture.frame"),
-        Some(RunId::new([6; 16])),
-        Some(FrameId::new([8; 16])),
-        Some(CorrelationId::new([3; 16])),
-        object_key,
-        "image/png",
-        4096,
-        format!("sha256:{}", "c".repeat(64)),
-        1_752_147_200_000,
-        code("capture-store"),
-        RetentionClass::Adaptive,
-        ArtifactRedactionState::Applied,
-    )
-}
-
-fn all_payload_drafts(with_audit: bool) -> Vec<EventPayloadDraft> {
-    let input = || {
-        if with_audit {
-            audit()
-        } else {
-            AuditInput::new()
-        }
-    };
-    let action = || code("runtime.action");
-    let diagnostic = || code("runtime.diagnostic");
+fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayloadDraft> {
+    let action = EventAction::RuntimeAction;
+    let diagnostic = DiagnosticCode::RuntimeDiagnostic;
     let effect = EffectDisposition::Performed;
 
     vec![
-        CommandPayloadDraft::received(action(), input()).into(),
-        CommandPayloadDraft::validated(action(), effect, input()).into(),
-        CommandPayloadDraft::rejected(action(), diagnostic(), effect, input()).into(),
-        SchedulerPayloadDraft::admitted(action(), input()).into(),
-        SchedulerPayloadDraft::queued(action(), input()).into(),
-        SchedulerPayloadDraft::denied(action(), diagnostic(), input()).into(),
-        SchedulerPayloadDraft::preempted(action(), diagnostic(), input()).into(),
-        LeasePayloadDraft::requested(action(), input()).into(),
-        LeasePayloadDraft::granted(action(), effect, input()).into(),
-        LeasePayloadDraft::transferred(action(), effect, input()).into(),
-        LeasePayloadDraft::released(action(), effect, input()).into(),
-        LeasePayloadDraft::expired(action(), effect, input()).into(),
-        LeasePayloadDraft::transition_intent(action(), input()).into(),
-        LeasePayloadDraft::transition_failed(action(), diagnostic(), effect, input()).into(),
-        TaskPayloadDraft::requested(action(), input()).into(),
-        TaskPayloadDraft::started(action(), input()).into(),
-        TaskPayloadDraft::step_started(action(), input()).into(),
-        TaskPayloadDraft::step_finished(action(), input()).into(),
-        TaskPayloadDraft::completed(action(), effect, input()).into(),
-        TaskPayloadDraft::failed(action(), diagnostic(), effect, input()).into(),
-        TaskPayloadDraft::cancelled(action(), effect, input()).into(),
-        TaskPayloadDraft::terminal_intent(action(), input()).into(),
-        TaskPayloadDraft::terminal_commit_failed(action(), diagnostic(), effect, input()).into(),
-        InputPayloadDraft::intent(action(), input()).into(),
-        InputPayloadDraft::committed(action(), effect, input()).into(),
-        InputPayloadDraft::completed(action(), input()).into(),
-        InputPayloadDraft::failed(action(), diagnostic(), effect, input()).into(),
-        ClientPayloadDraft::ui_action(action(), input()).into(),
-        ClientPayloadDraft::cli_command(action(), input()).into(),
-        ClientPayloadDraft::lab_request(action(), input()).into(),
-        LedgerPayloadDraft::recovered(code("stale_owner"), Some(1), 64, input()).into(),
+        CommandPayloadDraft::received(action, input()).into(),
+        CommandPayloadDraft::validated(action, effect, input()).into(),
+        CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
+        SchedulerPayloadDraft::admitted(action, input()).into(),
+        SchedulerPayloadDraft::queued(action, input()).into(),
+        SchedulerPayloadDraft::denied(action, diagnostic, input()).into(),
+        SchedulerPayloadDraft::preempted(action, diagnostic, input()).into(),
+        LeasePayloadDraft::requested(action, input()).into(),
+        LeasePayloadDraft::granted(action, effect, input()).into(),
+        LeasePayloadDraft::transferred(action, effect, input()).into(),
+        LeasePayloadDraft::released(action, effect, input()).into(),
+        LeasePayloadDraft::expired(action, effect, input()).into(),
+        LeasePayloadDraft::transition_intent(action, input()).into(),
+        LeasePayloadDraft::transition_failed(action, diagnostic, effect, input()).into(),
+        TaskPayloadDraft::requested(action, input()).into(),
+        TaskPayloadDraft::started(action, input()).into(),
+        TaskPayloadDraft::step_started(action, input()).into(),
+        TaskPayloadDraft::step_finished(action, input()).into(),
+        TaskPayloadDraft::completed(action, effect, input()).into(),
+        TaskPayloadDraft::failed(action, diagnostic, effect, input()).into(),
+        TaskPayloadDraft::cancelled(action, effect, input()).into(),
+        TaskPayloadDraft::terminal_intent(action, input()).into(),
+        TaskPayloadDraft::terminal_commit_failed(action, diagnostic, effect, input()).into(),
+        InputPayloadDraft::intent(action, input()).into(),
+        InputPayloadDraft::committed(action, effect, input()).into(),
+        InputPayloadDraft::completed(action, input()).into(),
+        InputPayloadDraft::failed(action, diagnostic, effect, input()).into(),
+        ClientPayloadDraft::ui_action(action, input()).into(),
+        ClientPayloadDraft::cli_command(action, input()).into(),
+        ClientPayloadDraft::lab_request(action, input()).into(),
+        LedgerPayloadDraft::recovered(RecoveryReason::StaleOwner, Some(1), 64, input()).into(),
     ]
 }
 
-fn sanitize(payload: EventPayloadDraft, index: u8) -> SanitizedEventDraft {
+fn sanitize_with(
+    payload: EventPayloadDraft,
+    index: u64,
+    fingerprinter: &dyn SecretFingerprinter,
+) -> SanitizedEventDraft {
+    let issuer = identifier_issuer();
     EventDraft::new(
-        EventId::new([index; 16]),
-        1_752_147_200_000 + u64::from(index),
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_000 + index,
         EventSeverity::Info,
         origin(),
-        links(),
+        links(&issuer),
         payload,
     )
-    .sanitize(&TestFingerprinter)
+    .sanitize(fingerprinter)
     .expect("sanitize event")
+}
+
+fn sanitize(payload: EventPayloadDraft, index: u64) -> SanitizedEventDraft {
+    sanitize_with(payload, index, &SpyFingerprinter::new())
 }
 
 #[test]
 fn producer_cannot_select_redaction_policy() {
     let sanitized = sanitize(
-        CommandPayloadDraft::received(code("runtime.start"), audit()).into(),
+        CommandPayloadDraft::received(EventAction::RuntimeStart, audit_all()).into(),
         1,
     );
     let json = serde_json::to_string(&sanitized).expect("serialize sanitized event");
@@ -154,36 +173,56 @@ fn producer_cannot_select_redaction_policy() {
 }
 
 #[test]
-fn all_runtime_secret_classes_follow_schema_owned_policy() {
-    for (index, payload) in all_payload_drafts(true).into_iter().enumerate() {
-        let sanitized = sanitize(payload, u8::try_from(index + 1).expect("test index"));
-        let json = serde_json::to_string(&sanitized).expect("serialize sanitized event");
+fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
+    let cases: [(&str, fn(&str) -> AuditInput); 4] = [
+        ("account-secret-c1@example.invalid", |value| {
+            AuditInput::new().with_account(value)
+        }),
+        ("authentication-secret-c1", |value| {
+            AuditInput::new().with_authentication(value)
+        }),
+        (r"C:\Users\Alice\private\runtime.json", |value| {
+            AuditInput::new().with_machine_path(value)
+        }),
+        ("127.0.0.1:16384", |value| {
+            AuditInput::new().with_device_endpoint(value)
+        }),
+    ];
 
-        for original in [
-            "account-secret-c1@example.invalid",
-            "authentication-secret-c1",
-            r"C:\Users\Alice\private\runtime.json",
-            "127.0.0.1:16384",
-        ] {
-            assert!(!json.contains(original), "secret leaked: {original}");
+    for (secret, input) in cases {
+        for (index, payload) in all_payload_drafts(|| input(secret)).into_iter().enumerate() {
+            let spy = SpyFingerprinter::new();
+            let sanitized = sanitize_with(payload, index as u64 + 1, &spy);
+            let json = serde_json::to_string(&sanitized).expect("serialize sanitized event");
+            let debug = format!("{sanitized:?}");
+
+            assert!(!json.contains(secret), "secret leaked: {secret}");
+            assert!(!debug.contains(secret), "debug leaked: {secret}");
+            if secret == "account-secret-c1@example.invalid" {
+                assert_eq!(
+                    spy.seen(),
+                    vec![(SecretField::AccountIdentity, secret.to_string())]
+                );
+                assert!(json.contains(&format!("sha256:{}", "a".repeat(64))));
+            } else {
+                assert!(spy.seen().is_empty());
+            }
         }
-        assert!(json.contains(&format!("sha256:{}", "a".repeat(64))));
-        assert!(json.contains("[redacted]"));
-        assert!(json.contains("authentication_redacted"));
     }
 }
 
 #[test]
 fn hash_shaped_original_cannot_survive_as_fingerprint() {
     for original in ["a".repeat(64), format!("sha256:{}", "a".repeat(64))] {
+        let issuer = identifier_issuer();
         let draft = EventDraft::new(
-            EventId::new([1; 16]),
+            issuer.mint_event_id().expect("event id"),
             1_752_147_200_000,
             EventSeverity::Info,
             origin(),
-            EventLinks::default(),
+            EventLinksDraft::default(),
             CommandPayloadDraft::received(
-                code("runtime.start"),
+                EventAction::RuntimeStart,
                 AuditInput::new().with_account(original.clone()),
             )
             .into(),
@@ -198,89 +237,229 @@ fn hash_shaped_original_cannot_survive_as_fingerprint() {
 }
 
 #[test]
-fn runtime_values_cannot_enter_static_code_or_typed_ids() {
-    assert!(StaticCode::new("runtime.valid").is_ok());
-    assert!(StaticCode::new(".").is_err());
-    assert!(StaticCode::new("-runtime").is_err());
-    assert!(serde_json::from_str::<StaticCode>(r#""C:\\private\\module""#).is_err());
-    assert!(serde_json::from_str::<StaticCode>(r#""127.0.0.1:16384""#).is_err());
-    assert!(serde_json::from_str::<RequestId>(r#""request_runtime-value""#).is_err());
-
-    let encoded = serde_json::to_string(&EventId::new([0xab; 16])).expect("serialize event id");
-    assert_eq!(encoded, format!("\"evt_{}\"", "ab".repeat(16)));
-}
-
-#[test]
-fn sanitized_event_is_typed_and_not_deserializable() {
-    let sanitized = sanitize(
-        CommandPayloadDraft::received(code("runtime.start"), AuditInput::new()).into(),
-        1,
-    );
-
-    assert!(matches!(
-        sanitized.payload(),
-        EventPayload::Command(CommandPayload::Received(_))
-    ));
-    assert_eq!(sanitized.event_type(), EventType::CommandReceived);
-}
-
-#[test]
-fn artifact_reference_requires_complete_v3_metadata() {
-    let artifact = artifact("runs/run-1/frame-1.png").expect("complete artifact");
-
-    assert_eq!(artifact.artifact_id(), &ArtifactId::new([11; 16]));
-    assert_eq!(artifact.kind(), &code("capture.frame"));
-    assert_eq!(artifact.run_id(), Some(&RunId::new([6; 16])));
-    assert_eq!(artifact.frame_id(), Some(&FrameId::new([8; 16])));
-    assert_eq!(
-        artifact.correlation_id(),
-        Some(&CorrelationId::new([3; 16]))
-    );
-    assert_eq!(artifact.object_key(), "runs/run-1/frame-1.png");
-    assert_eq!(artifact.media_type(), "image/png");
-    assert_eq!(artifact.byte_count(), 4096);
-    assert_eq!(artifact.created_at_unix_ms(), 1_752_147_200_000);
-    assert_eq!(artifact.producer(), &code("capture-store"));
-    assert_eq!(artifact.retention_class(), RetentionClass::Adaptive);
-    assert_eq!(artifact.redaction_state(), ArtifactRedactionState::Applied);
-
-    let mut value = serde_json::to_value(&artifact).expect("artifact value");
-    value
-        .as_object_mut()
-        .expect("artifact object")
-        .remove("media_type");
-    assert!(serde_json::from_value::<ArtifactReference>(value).is_err());
-
-    let mut value = serde_json::to_value(&artifact).expect("artifact value");
-    value["media_type"] = serde_json::json!("image/png/extra");
-    assert!(serde_json::from_value::<ArtifactReference>(value).is_err());
-}
-
-#[test]
-fn artifact_object_key_rejects_absolute_or_parent_paths() {
-    for invalid in [
-        "/absolute/frame.png",
-        r"C:\absolute\frame.png",
-        "../frame.png",
-        "runs/../frame.png",
-        r"runs\frame.png",
-        "runs/private frame.png",
-        "runs/private\0frame.png",
-        "runs/私密/frame.png",
+fn runtime_values_cannot_enter_origin_action_or_diagnostic_codes() {
+    for runtime in [
+        "token-secret-7d141b7b",
+        "account-secret-valid-code",
+        Box::leak(String::from("leaked-runtime-token").into_boxed_str()),
     ] {
-        let error = artifact(invalid).expect_err("unsafe object key must fail");
-        assert_eq!(error.code(), "invalid_artifact_object_key");
-        assert!(!error.to_string().contains(invalid));
+        let json = serde_json::to_string(runtime).expect("runtime string");
+        assert!(serde_json::from_str::<OriginModule>(&json).is_err());
+        assert!(serde_json::from_str::<EventAction>(&json).is_err());
+        assert!(serde_json::from_str::<DiagnosticCode>(&json).is_err());
+        assert!(serde_json::from_str::<RecoveryReason>(&json).is_err());
+    }
+
+    assert_eq!(EventAction::RuntimeStart.to_string(), "runtime.start");
+    assert_eq!(format!("{:?}", EventAction::RuntimeStart), "RuntimeStart");
+    assert_eq!(OriginModule::Actingctl.to_string(), "actingctl");
+    assert_eq!(
+        DiagnosticCode::RuntimeDiagnostic.to_string(),
+        "runtime.diagnostic"
+    );
+}
+
+#[test]
+fn canonical_transport_ids_cannot_be_promoted_to_producer_capabilities() {
+    let canonical = format!("evt_{}", "ab".repeat(16));
+    let transport: EventId =
+        serde_json::from_str(&format!("\"{canonical}\"")).expect("transport event id");
+    assert!(!format!("{transport:?}").contains(&canonical));
+
+    let issuer = identifier_issuer();
+    let issued = issuer.mint_event_id().expect("issued event id");
+    let serialized = serde_json::to_string(issued.transport()).expect("serialize issued id");
+    assert_ne!(serialized, format!("\"{canonical}\""));
+    assert!(!format!("{issued:?}").contains(&canonical));
+}
+
+#[test]
+fn every_action_and_diagnostic_slot_rejects_runtime_code_mutations() {
+    for (index, payload) in all_payload_drafts(AuditInput::new).into_iter().enumerate() {
+        let sanitized = sanitize(payload, index as u64 + 1);
+        let value = serde_json::to_value(sanitized.payload()).expect("payload value");
+        if value["payload"]["data"].get("action").is_some() {
+            let mut action_mutation = value.clone();
+            action_mutation["payload"]["data"]["action"] =
+                serde_json::json!("token-secret-valid-code");
+            assert!(serde_json::from_value::<EventPayload>(action_mutation).is_err());
+        }
+        if value["payload"]["data"].get("diagnostic_code").is_some() {
+            let mut diagnostic_mutation = value;
+            diagnostic_mutation["payload"]["data"]["diagnostic_code"] =
+                serde_json::json!("account-secret-valid-code");
+            assert!(serde_json::from_value::<EventPayload>(diagnostic_mutation).is_err());
+        }
     }
 }
 
 #[test]
+fn artifact_store_owns_complete_v3_metadata_and_event_sensitivity() {
+    let issued = artifact(b"capture bytes");
+    let reference = issued.reference();
+
+    assert_eq!(reference.kind(), ArtifactKind::CaptureFrame);
+    assert!(reference.run_id().is_some());
+    assert!(reference.frame_id().is_some());
+    assert!(reference.correlation_id().is_some());
+    assert!(reference.object_key().starts_with("artifacts/"));
+    assert_eq!(reference.media_type(), ArtifactMediaType::ImagePng);
+    assert_eq!(reference.byte_count(), 13);
+    assert_eq!(reference.created_at_unix_ms(), 1_752_147_200_000);
+    assert_eq!(reference.producer(), ArtifactProducer::CaptureStore);
+    assert_eq!(reference.retention_class(), RetentionClass::Adaptive);
+    assert_eq!(reference.redaction_state(), ArtifactRedactionState::Pending);
+    assert_eq!(reference.sensitivity(), Sensitivity::Secret);
+
+    let payload = CommandPayloadDraft::received(EventAction::RuntimeStart, AuditInput::new());
+    let issuer = identifier_issuer();
+    let sanitized = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Info,
+        origin(),
+        EventLinksDraft::default(),
+        payload.into(),
+    )
+    .with_artifacts(vec![issued])
+    .sanitize(&SpyFingerprinter::new())
+    .expect("sanitize artifact event");
+
+    assert_eq!(sanitized.sensitivity(), Sensitivity::Secret);
+}
+
+#[test]
+fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
+    for secret in [
+        "token-secret-artifact",
+        "account-secret-artifact@example.invalid",
+        r"C:\Users\Alice\private\artifact.png",
+        "127.0.0.1:16384",
+        &format!("sha256:{}", "d".repeat(64)),
+    ] {
+        let issued = artifact(secret.as_bytes());
+        let json = serde_json::to_string(issued.reference()).expect("artifact JSON");
+        let debug = format!("{:?}", issued.reference());
+        assert!(!json.contains(secret), "artifact metadata leaked {secret}");
+        assert!(!debug.contains(secret), "artifact debug leaked {secret}");
+    }
+}
+
+#[test]
+fn artifact_transport_rejects_every_mutated_field_and_false_store_state() {
+    let issued = artifact(b"trusted stored bytes");
+    let original = serde_json::to_value(issued.reference()).expect("artifact value");
+    let canonical = "11".repeat(16);
+    let cases = [
+        (
+            "artifact_id",
+            serde_json::json!(format!("artifact_{canonical}")),
+        ),
+        ("kind", serde_json::json!("token-secret-kind")),
+        ("run_id", serde_json::json!(format!("run_{canonical}"))),
+        ("frame_id", serde_json::json!(format!("frame_{canonical}"))),
+        (
+            "correlation_id",
+            serde_json::json!(format!("correlation_{canonical}")),
+        ),
+        ("object_key", serde_json::json!("account-secret/object.png")),
+        ("media_type", serde_json::json!("application/token-secret")),
+        ("byte_count", serde_json::json!(999)),
+        (
+            "sha256",
+            serde_json::json!(format!("sha256:{}", "d".repeat(64))),
+        ),
+        ("created_at_unix_ms", serde_json::json!(99)),
+        ("producer", serde_json::json!("token-secret-producer")),
+        ("retention_class", serde_json::json!("debug_full")),
+        ("redaction_state", serde_json::json!("applied")),
+        (
+            "store_authorization",
+            serde_json::json!(format!("sha256:{}", "e".repeat(64))),
+        ),
+    ];
+
+    for (field, replacement) in cases {
+        let mut mutated = original.clone();
+        mutated[field] = replacement;
+        let rendered = mutated.to_string();
+        let error = serde_json::from_value::<ArtifactReference>(mutated)
+            .expect_err("mutated artifact must fail");
+        assert!(!error.to_string().contains("account-secret"));
+        assert!(!error.to_string().contains("token-secret"));
+        assert!(!format!("{error:?}").contains(&rendered));
+    }
+
+    let mut unknown = original;
+    unknown["smuggled"] = serde_json::json!("token-secret-unknown");
+    assert!(serde_json::from_value::<ArtifactReference>(unknown).is_err());
+}
+
+#[test]
+fn tagged_payload_and_projection_layers_reject_unknown_fields() {
+    let sanitized = sanitize(
+        ClientPayloadDraft::cli_command(EventAction::RuntimeStatus, AuditInput::new()).into(),
+        1,
+    );
+    let payload = serde_json::to_value(sanitized.payload()).expect("payload value");
+
+    let mut event_layer = payload.clone();
+    event_layer["smuggled"] = serde_json::json!("token-secret-event");
+    let error = serde_json::from_value::<EventPayload>(event_layer)
+        .expect_err("unknown event payload field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let mut family_layer = payload.clone();
+    family_layer["payload"]["smuggled"] = serde_json::json!("token-secret-family");
+    let error = serde_json::from_value::<EventPayload>(family_layer)
+        .expect_err("unknown family payload field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let mut detail_layer = payload.clone();
+    detail_layer["payload"]["data"]["smuggled"] = serde_json::json!("token-secret-detail");
+    let error = serde_json::from_value::<EventPayload>(detail_layer)
+        .expect_err("unknown payload detail field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let mut audit_layer = payload.clone();
+    audit_layer["payload"]["data"]["audit"]["smuggled"] = serde_json::json!("token-secret-audit");
+    let error =
+        serde_json::from_value::<EventPayload>(audit_layer).expect_err("unknown audit field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let mut projection_layer = serde_json::json!({
+        "detail": "full",
+        "payload": payload,
+    });
+    projection_layer["smuggled"] = serde_json::json!("token-secret-projection");
+    let error = serde_json::from_value::<ProjectionPayload>(projection_layer)
+        .expect_err("unknown projection payload field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let public_projection = ProjectionPayload::Public(sanitized.payload().public_projection());
+    let mut public_family_layer =
+        serde_json::to_value(&public_projection).expect("public projection value");
+    public_family_layer["payload"]["smuggled"] = serde_json::json!("token-secret-public-family");
+    let error = serde_json::from_value::<ProjectionPayload>(public_family_layer)
+        .expect_err("unknown public family field");
+    assert!(!error.to_string().contains("token-secret"));
+
+    let mut public_detail_layer =
+        serde_json::to_value(&public_projection).expect("public projection value");
+    public_detail_layer["payload"]["payload"]["smuggled"] =
+        serde_json::json!("token-secret-public-detail");
+    let error = serde_json::from_value::<ProjectionPayload>(public_detail_layer)
+        .expect_err("unknown public payload detail field");
+    assert!(!error.to_string().contains("token-secret"));
+}
+
+#[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
-    let payloads = all_payload_drafts(false);
+    let payloads = all_payload_drafts(AuditInput::new);
     assert_eq!(payloads.len(), 31);
 
     for (index, payload) in payloads.into_iter().enumerate() {
-        let sanitized = sanitize(payload, u8::try_from(index + 1).expect("test index"));
+        let sanitized = sanitize(payload, index as u64 + 1);
         assert_eq!(sanitized.schema_version(), GLOBAL_EVENT_SCHEMA_VERSION);
         assert_eq!(sanitized.event_type(), sanitized.payload().event_type());
 
@@ -289,4 +468,13 @@ fn event_v2_round_trips_every_c1_payload_variant() {
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
     }
+}
+
+#[test]
+fn artifact_sha256_matches_known_vector() {
+    let issued = artifact(b"abc");
+    assert_eq!(
+        issued.reference().sha256(),
+        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
 }

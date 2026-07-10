@@ -70,6 +70,430 @@ pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, Strin
     Ok(violations)
 }
 
+/// Enforces the sole public global-ledger append ingress.
+pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut append_methods = Vec::new();
+    let mut alternate_ingress_methods = Vec::new();
+    for item in &file.items {
+        let Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if impl_self_ident(item_impl).is_none_or(|ident| ident != "GlobalLedger") {
+            continue;
+        }
+        for item in &item_impl.items {
+            let syn::ImplItem::Fn(method) = item else {
+                continue;
+            };
+            if method.sig.ident == "append" && is_public(&method.vis) {
+                append_methods.push(method);
+                continue;
+            }
+            if is_public(&method.vis)
+                && (method.sig.ident.to_string().starts_with("append")
+                    || method_accepts_event_ingress(method))
+            {
+                alternate_ingress_methods.push(method.sig.ident.to_string());
+            }
+        }
+    }
+
+    let mut violations = Vec::new();
+    if append_methods.len() != 1 {
+        violations.push(format!(
+            "{path}: expected exactly one public GlobalLedger::append, found {}",
+            append_methods.len()
+        ));
+    } else {
+        let method = append_methods[0];
+        let typed = method
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                FnArg::Receiver(_) => None,
+                FnArg::Typed(argument) => Some(argument),
+            })
+            .collect::<Vec<_>>();
+        let exact = typed.len() == 1
+            && pattern_ident(&typed[0].pat).is_some_and(|ident| ident == "draft")
+            && type_last_ident(&typed[0].ty).is_some_and(|ident| ident == "SanitizedEventDraft");
+        if !exact {
+            violations.push(format!(
+                "{path}: GlobalLedger::append must accept exactly draft: SanitizedEventDraft"
+            ));
+        }
+    }
+    for method in alternate_ingress_methods {
+        violations.push(format!(
+            "{path}: GlobalLedger exposes alternate public event ingress {method}"
+        ));
+    }
+    Ok(violations)
+}
+
+/// Rejects public construction or deserialization of the ledger-owned persisted fact.
+pub fn inspect_persisted_event_ownership(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut violations = Vec::new();
+    let mut found = false;
+    for item in &file.items {
+        match item {
+            Item::Struct(item_struct) if item_struct.ident == "PersistedEvent" => {
+                found = true;
+                if derives_ident(&item_struct.attrs, "Deserialize") {
+                    violations.push(format!("{path}: PersistedEvent derives Deserialize"));
+                }
+                for field in &item_struct.fields {
+                    if is_public(&field.vis) {
+                        violations.push(format!("{path}: PersistedEvent has a public field"));
+                    }
+                }
+            }
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl).is_some_and(|ident| ident == "PersistedEvent") =>
+            {
+                if item_impl
+                    .trait_
+                    .as_ref()
+                    .and_then(|(_, path, _)| path.segments.last())
+                    .is_some_and(|segment| segment.ident == "Deserialize")
+                {
+                    violations.push(format!("{path}: PersistedEvent implements Deserialize"));
+                }
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = impl_item else {
+                        continue;
+                    };
+                    let has_receiver = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|input| matches!(input, FnArg::Receiver(_)));
+                    if is_public(&method.vis)
+                        && !has_receiver
+                        && signature_returns_ident(&method.sig, &["Self", "PersistedEvent"])
+                    {
+                        violations.push(format!(
+                            "{path}: PersistedEvent has public constructor {}",
+                            method.sig.ident
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !found {
+        violations.push(format!("{path}: missing public PersistedEvent definition"));
+    }
+    Ok(violations)
+}
+
+/// Rejects any contract reference to the ledger-owned fact or a contract-owned matches method.
+pub fn inspect_contract_fact_matching(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let needles = ["PersistedEvent"];
+    let mut visitor = IdentTypeVisitor::new(&needles);
+    visitor.visit_file(&file);
+    let mut violations = Vec::new();
+    if visitor.found {
+        violations.push(format!(
+            "{path}: contract source references ledger-owned PersistedEvent"
+        ));
+    }
+    for item in &file.items {
+        let Item::Impl(item_impl) = item else {
+            continue;
+        };
+        if impl_self_ident(item_impl).is_none_or(|ident| ident != "EventQuery") {
+            continue;
+        }
+        if item_impl
+            .items
+            .iter()
+            .any(|item| matches!(item, syn::ImplItem::Fn(method) if method.sig.ident == "matches"))
+        {
+            violations.push(format!("{path}: EventQuery owns fact matching"));
+        }
+    }
+    Ok(violations)
+}
+
+/// Confirms a ledger module contains matching over both EventQuery and PersistedEvent.
+pub fn ledger_owns_query_matching(path: &str, source: &str) -> Result<bool, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    Ok(file.items.iter().any(|item| match item {
+        Item::Fn(function) => signature_uses_idents(
+            &function.sig,
+            &["EventQuery", "PersistedEvent"],
+        ),
+        Item::Impl(item_impl) => item_impl.items.iter().any(|item| {
+            matches!(item, syn::ImplItem::Fn(method) if signature_uses_idents(&method.sig, &["EventQuery", "PersistedEvent"]))
+        }),
+        _ => false,
+    }))
+}
+
+/// Enforces issuer-only producer IDs and store-issued artifact attachments.
+pub fn inspect_producer_event_capabilities(
+    path: &str,
+    source: &str,
+) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut violations = Vec::new();
+    for item in &file.items {
+        match item {
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl).is_some_and(|ident| ident == "EventDraft") =>
+            {
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = impl_item else {
+                        continue;
+                    };
+                    if !is_public(&method.vis) {
+                        continue;
+                    }
+                    if method.sig.ident == "new"
+                        && (method_argument_type(method, "event_id")
+                            .and_then(type_last_ident)
+                            .is_none_or(|ident| ident != "IssuedEventId")
+                            || method_argument_type(method, "links")
+                                .and_then(type_last_ident)
+                                .is_none_or(|ident| ident != "EventLinksDraft"))
+                    {
+                        violations.push(format!(
+                            "{path}: EventDraft::new must require IssuedEventId and EventLinksDraft"
+                        ));
+                    }
+                    if method.sig.ident == "with_artifacts"
+                        && !method_argument_type(method, "artifacts")
+                            .is_some_and(|ty| type_contains_ident(ty, "StoreIssuedArtifact"))
+                    {
+                        violations.push(format!(
+                            "{path}: EventDraft::with_artifacts must require StoreIssuedArtifact"
+                        ));
+                    }
+                }
+            }
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl).is_some_and(|ident| ident == "EventLinksDraft") =>
+            {
+                let expected = [
+                    ("with_instance_id", "IssuedInstanceId"),
+                    ("with_request_id", "IssuedRequestId"),
+                    ("with_correlation_id", "IssuedCorrelationId"),
+                    ("with_causation_id", "IssuedCausationId"),
+                    ("with_task_id", "IssuedTaskId"),
+                    ("with_run_id", "IssuedRunId"),
+                    ("with_lease_id", "IssuedLeaseId"),
+                    ("with_frame_id", "IssuedFrameId"),
+                    ("with_action_id", "IssuedActionId"),
+                    ("with_recognition_id", "IssuedRecognitionId"),
+                ];
+                for (name, expected_type) in expected {
+                    let method = item_impl.items.iter().find_map(|item| match item {
+                        syn::ImplItem::Fn(method) if method.sig.ident == name => Some(method),
+                        _ => None,
+                    });
+                    let valid = method.is_some_and(|method| {
+                        is_public(&method.vis)
+                            && method_argument_type(method, "value")
+                                .and_then(type_last_ident)
+                                .is_some_and(|ident| ident == expected_type)
+                    });
+                    if !valid {
+                        violations.push(format!(
+                            "{path}: EventLinksDraft::{name} must require {expected_type}"
+                        ));
+                    }
+                }
+            }
+            Item::Struct(item_struct) if item_struct.ident == "StoreIssuedArtifact" => {
+                if derives_ident(&item_struct.attrs, "Serialize")
+                    || derives_ident(&item_struct.attrs, "Deserialize")
+                {
+                    violations.push(format!(
+                        "{path}: StoreIssuedArtifact must not be serializable or deserializable"
+                    ));
+                }
+                if item_struct.fields.iter().any(|field| is_public(&field.vis)) {
+                    violations.push(format!(
+                        "{path}: StoreIssuedArtifact must not expose public fields"
+                    ));
+                }
+            }
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl).is_some_and(|ident| ident == "ArtifactReference") =>
+            {
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = impl_item else {
+                        continue;
+                    };
+                    let has_receiver = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|input| matches!(input, FnArg::Receiver(_)));
+                    if is_public(&method.vis)
+                        && !has_receiver
+                        && signature_returns_ident(&method.sig, &["Self", "ArtifactReference"])
+                    {
+                        violations.push(format!(
+                            "{path}: ArtifactReference has public constructor {}",
+                            method.sig.ident
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if source.contains("macro_rules! typed_id") {
+        if source.contains("pub const fn new(bytes") || source.contains("pub fn new(bytes") {
+            violations.push(format!(
+                "{path}: transport identifier macro exposes caller-selected bytes"
+            ));
+        }
+        if source.contains("impl fmt::Display for $name") {
+            violations.push(format!(
+                "{path}: transport identifier macro exposes Display"
+            ));
+        }
+    }
+    if source.contains("StaticCode") {
+        violations.push(format!("{path}: producer event surface retains StaticCode"));
+    }
+    Ok(violations)
+}
+
+fn impl_self_ident(item_impl: &syn::ItemImpl) -> Option<&syn::Ident> {
+    let Type::Path(path) = item_impl.self_ty.as_ref() else {
+        return None;
+    };
+    path.path.segments.last().map(|segment| &segment.ident)
+}
+
+fn pattern_ident(pattern: &Pat) -> Option<&syn::Ident> {
+    let Pat::Ident(ident) = pattern else {
+        return None;
+    };
+    Some(&ident.ident)
+}
+
+fn type_last_ident(value_type: &Type) -> Option<&syn::Ident> {
+    let Type::Path(path) = value_type else {
+        return None;
+    };
+    path.path.segments.last().map(|segment| &segment.ident)
+}
+
+fn method_argument_type<'a>(method: &'a syn::ImplItemFn, name: &str) -> Option<&'a Type> {
+    method.sig.inputs.iter().find_map(|input| {
+        let FnArg::Typed(argument) = input else {
+            return None;
+        };
+        pattern_ident(&argument.pat)
+            .is_some_and(|ident| ident == name)
+            .then_some(argument.ty.as_ref())
+    })
+}
+
+fn method_accepts_event_ingress(method: &syn::ImplItemFn) -> bool {
+    method.sig.inputs.iter().any(|input| {
+        let FnArg::Typed(argument) = input else {
+            return false;
+        };
+        [
+            "EventDraft",
+            "SanitizedEventDraft",
+            "EventPayloadDraft",
+            "ArtifactReference",
+            "PersistedEvent",
+        ]
+        .into_iter()
+        .any(|needle| type_contains_ident(&argument.ty, needle))
+    })
+}
+
+fn derives_ident(attributes: &[syn::Attribute], needle: &str) -> bool {
+    attributes.iter().any(|attribute| {
+        if !attribute.path().is_ident("derive") {
+            return false;
+        }
+        attribute
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|paths| {
+                paths.iter().any(|path| {
+                    path.segments
+                        .last()
+                        .is_some_and(|segment| segment.ident == needle)
+                })
+            })
+    })
+}
+
+fn signature_returns_ident(signature: &syn::Signature, needles: &[&str]) -> bool {
+    let ReturnType::Type(_, output) = &signature.output else {
+        return false;
+    };
+    needles
+        .iter()
+        .any(|needle| type_contains_ident(output, needle))
+}
+
+fn signature_uses_idents(signature: &syn::Signature, needles: &[&str]) -> bool {
+    needles.iter().all(|needle| {
+        let in_inputs = signature.inputs.iter().any(|input| match input {
+            FnArg::Receiver(_) => false,
+            FnArg::Typed(argument) => type_contains_ident(&argument.ty, needle),
+        });
+        let in_output = match &signature.output {
+            ReturnType::Default => false,
+            ReturnType::Type(_, output) => type_contains_ident(output, needle),
+        };
+        in_inputs || in_output
+    })
+}
+
+fn type_contains_ident(value_type: &Type, needle: &str) -> bool {
+    let needles = [needle];
+    let mut visitor = IdentTypeVisitor::new(&needles);
+    visitor.visit_type(value_type);
+    visitor.found
+}
+
+struct IdentTypeVisitor<'a> {
+    needles: &'a [&'a str],
+    found: bool,
+}
+
+impl<'a> IdentTypeVisitor<'a> {
+    fn new(needles: &'a [&'a str]) -> Self {
+        Self {
+            needles,
+            found: false,
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for IdentTypeVisitor<'_> {
+    fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+        if node
+            .path
+            .segments
+            .iter()
+            .any(|segment| self.needles.iter().any(|needle| segment.ident == *needle))
+        {
+            self.found = true;
+        }
+        syn::visit::visit_type_path(self, node);
+    }
+}
+
 /// Validates the contract crate's declared package dependencies against its fixed budget.
 pub fn contract_dependency_violations(manifest: &str) -> Result<Vec<String>, String> {
     let document = toml::from_str::<toml::Value>(manifest)
@@ -639,9 +1063,7 @@ fn inspect_public_items(
             }
             Item::Struct(item_struct) if is_public(&item_struct.vis) => {
                 for (index, field) in item_struct.fields.iter().enumerate() {
-                    if !is_public(&field.vis)
-                        || !type_uses_ledger_storage(&field.ty, &ledger_aliases)
-                    {
+                    if !is_public(&field.vis) {
                         continue;
                     }
                     let field_name = field
@@ -649,10 +1071,36 @@ fn inspect_public_items(
                         .as_ref()
                         .map_or_else(|| index.to_string(), ToString::to_string);
                     let name = format!("{}::{field_name}", item_struct.ident);
-                    violations.push(format!(
-                        "{path}: public field {} uses actingcommand_ledger storage types",
-                        qualified(module, &name)
-                    ));
+                    if type_uses_json_value(&field.ty, &aliases) {
+                        violations.push(format!(
+                            "{path}: public field {} uses serde_json::Value",
+                            qualified(module, &name)
+                        ));
+                    }
+                    if type_uses_ledger_storage(&field.ty, &ledger_aliases) {
+                        violations.push(format!(
+                            "{path}: public field {} uses actingcommand_ledger storage types",
+                            qualified(module, &name)
+                        ));
+                    }
+                }
+            }
+            Item::Enum(item_enum) if is_public(&item_enum.vis) => {
+                for variant in &item_enum.variants {
+                    for (index, field) in variant.fields.iter().enumerate() {
+                        if !type_uses_json_value(&field.ty, &aliases) {
+                            continue;
+                        }
+                        let field_name = field
+                            .ident
+                            .as_ref()
+                            .map_or_else(|| index.to_string(), ToString::to_string);
+                        let name = format!("{}::{}::{field_name}", item_enum.ident, variant.ident);
+                        violations.push(format!(
+                            "{path}: public enum payload {} uses serde_json::Value",
+                            qualified(module, &name)
+                        ));
+                    }
                 }
             }
             Item::Mod(item_mod) => {
@@ -888,6 +1336,148 @@ fn qualified(module: Option<&str>, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn global_append_guard_rejects_any_ingress_other_than_sanitized_event_draft() {
+        let forbidden = r#"
+            pub struct GlobalLedger;
+            pub struct EventDraft;
+            pub struct SanitizedEventDraft;
+            impl GlobalLedger {
+                pub fn append(&self, draft: SanitizedEventDraft) { let _ = draft; }
+                pub fn append_raw(&self, draft: EventDraft) { let _ = draft; }
+            }
+        "#;
+        let allowed = r#"
+            pub struct GlobalLedger;
+            pub struct SanitizedEventDraft;
+            impl GlobalLedger {
+                pub fn append(&self, draft: SanitizedEventDraft) { let _ = draft; }
+            }
+        "#;
+
+        let violations = super::inspect_global_append_ingress("fixture.rs", forbidden).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("alternate public event ingress append_raw"))
+        );
+        assert!(
+            super::inspect_global_append_ingress("fixture.rs", allowed)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn persisted_fact_guard_rejects_deserialize_public_fields_and_public_constructors() {
+        let forbidden = r#"
+            use serde::Deserialize;
+            #[derive(Deserialize)]
+            pub struct PersistedEvent { pub sequence: u64 }
+            impl PersistedEvent {
+                pub fn new(sequence: u64) -> Self { Self { sequence } }
+            }
+        "#;
+        let allowed = r#"
+            #[derive(Clone)]
+            pub struct PersistedEvent { sequence: u64 }
+            impl PersistedEvent {
+                pub(crate) fn from_sanitized(sequence: u64) -> Self { Self { sequence } }
+                pub fn sequence(&self) -> u64 { self.sequence }
+            }
+        "#;
+
+        let violations = super::inspect_persisted_event_ownership("fixture.rs", forbidden).unwrap();
+        assert!(violations.iter().any(|item| item.contains("Deserialize")));
+        assert!(violations.iter().any(|item| item.contains("public field")));
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("public constructor"))
+        );
+        assert!(
+            super::inspect_persisted_event_ownership("fixture.rs", allowed)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ledger_matching_guard_rejects_contract_owned_fact_matching() {
+        let forbidden = r#"
+            pub struct EventQuery;
+            pub struct PersistedEvent;
+            impl EventQuery {
+                pub fn matches(&self, event: &PersistedEvent) -> bool { let _ = event; true }
+            }
+        "#;
+        let allowed_contract = "pub struct EventQuery;";
+        let allowed_ledger = r#"
+            fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
+                let _ = (query, event);
+                true
+            }
+        "#;
+
+        assert!(
+            !super::inspect_contract_fact_matching("fixture.rs", forbidden)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::inspect_contract_fact_matching("fixture.rs", allowed_contract)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(super::ledger_owns_query_matching("fixture.rs", allowed_ledger).unwrap());
+    }
+
+    #[test]
+    fn producer_capability_guard_rejects_transport_ids_and_raw_artifacts() {
+        let forbidden = r#"
+            pub struct EventDraft;
+            impl EventDraft {
+                pub fn new(event_id: EventId, links: EventLinks) -> Self { let _ = (event_id, links); Self }
+                pub fn with_artifacts(self, artifacts: Vec<ArtifactReference>) -> Self { let _ = artifacts; self }
+            }
+            pub struct EventLinksDraft;
+            impl EventLinksDraft {
+                pub fn with_request_id(self, value: RequestId) -> Self { let _ = value; self }
+            }
+        "#;
+        let allowed = r#"
+            pub struct EventDraft;
+            impl EventDraft {
+                pub fn new(event_id: IssuedEventId, links: EventLinksDraft) -> Self { let _ = (event_id, links); Self }
+                pub fn with_artifacts(self, artifacts: Vec<StoreIssuedArtifact>) -> Self { let _ = artifacts; self }
+            }
+            pub struct EventLinksDraft;
+            impl EventLinksDraft {
+                pub fn with_instance_id(self, value: IssuedInstanceId) -> Self { let _ = value; self }
+                pub fn with_request_id(self, value: IssuedRequestId) -> Self { let _ = value; self }
+                pub fn with_correlation_id(self, value: IssuedCorrelationId) -> Self { let _ = value; self }
+                pub fn with_causation_id(self, value: IssuedCausationId) -> Self { let _ = value; self }
+                pub fn with_task_id(self, value: IssuedTaskId) -> Self { let _ = value; self }
+                pub fn with_run_id(self, value: IssuedRunId) -> Self { let _ = value; self }
+                pub fn with_lease_id(self, value: IssuedLeaseId) -> Self { let _ = value; self }
+                pub fn with_frame_id(self, value: IssuedFrameId) -> Self { let _ = value; self }
+                pub fn with_action_id(self, value: IssuedActionId) -> Self { let _ = value; self }
+                pub fn with_recognition_id(self, value: IssuedRecognitionId) -> Self { let _ = value; self }
+            }
+        "#;
+
+        assert!(
+            !super::inspect_producer_event_capabilities("fixture.rs", forbidden)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::inspect_producer_event_capabilities("fixture.rs", allowed)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn contract_dependency_budget_resolves_renamed_packages() {
         let manifest = r#"
             [package]
@@ -1049,6 +1639,8 @@ mod tests {
             pub fn module_alias() -> json::Value { unreachable!() }
             pub trait Port { fn carry(&self) -> JsonValue; }
             pub type Payload = JsonValue;
+            pub struct Event { pub payload: JsonValue, private: JsonValue }
+            pub enum Projection { Full(JsonValue), Omitted }
             fn private_helper() -> JsonValue { unreachable!() }
         "#;
 
@@ -1059,6 +1651,16 @@ mod tests {
         assert!(violations.iter().any(|item| item.contains("module_alias")));
         assert!(violations.iter().any(|item| item.contains("Port::carry")));
         assert!(violations.iter().any(|item| item.contains("Payload")));
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("Event::payload"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("Projection::Full::0"))
+        );
         assert!(
             !violations
                 .iter()

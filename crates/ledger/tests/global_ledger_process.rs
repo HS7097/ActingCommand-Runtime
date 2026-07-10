@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use actingcommand_contract::{
-    ActionId, AuditInput, ClientPayloadDraft, CorrelationId, EffectDisposition, EventActor,
-    EventDraft, EventId, EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource,
-    EventType, InputPayloadDraft, ProjectionProfile, SanitizationError, SchedulerPayloadDraft,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, StaticCode,
+    AuditInput, ClientPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor,
+    EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
+    IdentifierIssuer, InputPayloadDraft, IssuedActionId, IssuedCorrelationId, IssuedEventId,
+    OriginModule, ProjectionProfile, SanitizationError, SchedulerPayloadDraft, SecretField,
+    SecretFingerprinter, Sha256Fingerprint,
 };
 use actingcommand_ledger::critical::{CriticalEventPlan, CriticalExecutionError, execute_critical};
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_ROOT";
@@ -37,28 +39,35 @@ enum InputKind {
     Failed,
 }
 
-fn opaque_id(label: &str) -> [u8; 16] {
-    let digest = Sha256::digest(label.as_bytes());
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes
+fn identifiers() -> IdentifierIssuer {
+    IdentifierIssuer::new().expect("identifier issuer")
 }
 
-fn code(value: &'static str) -> StaticCode {
-    StaticCode::new(value).expect("static code")
+fn event_id(_value: &str) -> IssuedEventId {
+    identifiers().mint_event_id().expect("event id")
 }
 
-fn event_id(value: &str) -> EventId {
-    EventId::new(opaque_id(value))
+macro_rules! cached_identifier {
+    ($function:ident, $type:ty, $mint:ident, $label:literal) => {
+        fn $function(value: &str) -> $type {
+            static IDS: OnceLock<Mutex<HashMap<String, $type>>> = OnceLock::new();
+            let mut ids = IDS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .expect(concat!($label, " registry"));
+            *ids.entry(value.to_string())
+                .or_insert_with(|| identifiers().$mint().expect($label))
+        }
+    };
 }
 
-fn correlation_id(value: &str) -> CorrelationId {
-    CorrelationId::new(opaque_id(value))
-}
-
-fn action_id(value: &str) -> ActionId {
-    ActionId::new(opaque_id(value))
-}
+cached_identifier!(
+    correlation_id,
+    IssuedCorrelationId,
+    mint_correlation_id,
+    "correlation id"
+);
+cached_identifier!(action_id, IssuedActionId, mint_action_id, "action id");
 
 fn config(root: &Path, owner_id: &str) -> GlobalLedgerConfig {
     GlobalLedgerConfig::new(root, owner_id)
@@ -92,15 +101,17 @@ fn client_draft(
     audit: AuditInput,
 ) -> EventDraft {
     let payload = match kind {
-        ClientKind::UiAction => ClientPayloadDraft::ui_action(code("process.acceptance"), audit),
+        ClientKind::UiAction => {
+            ClientPayloadDraft::ui_action(EventAction::ProcessAcceptance, audit)
+        }
         ClientKind::CliCommand => {
-            ClientPayloadDraft::cli_command(code("process.acceptance"), audit)
+            ClientPayloadDraft::cli_command(EventAction::ProcessAcceptance, audit)
         }
         ClientKind::LabRequest => {
-            ClientPayloadDraft::lab_request(code("process.acceptance"), audit)
+            ClientPayloadDraft::lab_request(EventAction::ProcessAcceptance, audit)
         }
     };
-    let mut links = EventLinks::default();
+    let mut links = EventLinksDraft::default();
     if let Some(value) = correlation_id {
         links = links.with_correlation_id(self::correlation_id(value));
     }
@@ -108,7 +119,7 @@ fn client_draft(
         self::event_id(event_id),
         1_752_147_200_000,
         EventSeverity::Info,
-        EventOrigin::new(source, code("process-test"), actor),
+        EventOrigin::new(source, OriginModule::ProcessTest, actor),
         links,
         payload.into(),
     )
@@ -136,11 +147,11 @@ fn scheduler_event(
         EventSeverity::Info,
         EventOrigin::new(
             EventSource::Scheduler,
-            code("scheduler"),
+            OriginModule::Scheduler,
             EventActor::Scheduler,
         ),
-        EventLinks::default().with_correlation_id(self::correlation_id(correlation_id)),
-        SchedulerPayloadDraft::admitted(code("schedule.admit"), AuditInput::new()).into(),
+        EventLinksDraft::default().with_correlation_id(self::correlation_id(correlation_id)),
+        SchedulerPayloadDraft::admitted(EventAction::ScheduleAdmit, AuditInput::new()).into(),
     )
     .sanitize(&fingerprinter())
     .expect("sanitize scheduler event")
@@ -153,15 +164,15 @@ fn input_event(
     action_id: &str,
 ) -> actingcommand_contract::SanitizedEventDraft {
     let payload = match transition {
-        InputKind::Intent => InputPayloadDraft::intent(code("input.tap"), AuditInput::new()),
+        InputKind::Intent => InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new()),
         InputKind::Committed => InputPayloadDraft::committed(
-            code("input.tap"),
+            EventAction::InputTap,
             EffectDisposition::Performed,
             AuditInput::new(),
         ),
         InputKind::Failed => InputPayloadDraft::failed(
-            code("input.tap"),
-            code("input.failed"),
+            EventAction::InputTap,
+            DiagnosticCode::InputFailed,
             EffectDisposition::Indeterminate,
             AuditInput::new(),
         ),
@@ -172,10 +183,10 @@ fn input_event(
         EventSeverity::Info,
         EventOrigin::new(
             EventSource::Device,
-            code("device-proxy"),
+            OriginModule::DeviceProxy,
             EventActor::Runtime,
         ),
-        EventLinks::default()
+        EventLinksDraft::default()
             .with_correlation_id(self::correlation_id(correlation_id))
             .with_action_id(self::action_id(action_id)),
         payload.into(),
@@ -239,7 +250,7 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
         vec![1, 2],
         "recovery preserves contiguous sequence numbers"
     );
-    assert_eq!(events[0].event_id(), &event_id("child-cli-command"));
+    assert_eq!(events[0].event_type(), EventType::CliCommand);
     assert_eq!(events[1].event_type(), EventType::LedgerRecovered);
     ledger.close().expect("close recovered ledger");
 }
@@ -309,22 +320,22 @@ fn five_sources_share_one_correlated_ledger() {
 
     let events = ledger
         .query(EventQuery {
-            correlation_id: Some(self::correlation_id(correlation_id)),
+            correlation_id: Some(*self::correlation_id(correlation_id).transport()),
             ..EventQuery::default()
         })
         .expect("query correlated events");
     assert_eq!(
         events
             .iter()
-            .map(|event| *event.event_id())
+            .map(|event| event.event_type())
             .collect::<Vec<_>>(),
         vec![
-            event_id("cli-command"),
-            event_id("scheduler-decision"),
-            event_id("device-input-intent"),
-            event_id("device-input-outcome"),
-            event_id("ui-action"),
-            event_id("lab-request"),
+            EventType::CliCommand,
+            EventType::SchedulerAdmitted,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+            EventType::UiAction,
+            EventType::LabRequest,
         ]
     );
     assert_eq!(
@@ -378,6 +389,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
         Some(CORRELATION_ID),
         secret_fields(),
     );
+    let expected_event_id = *event.event_id();
     ledger.append(event.clone()).expect("append redacted event");
     ledger.close().expect("close before recovered index query");
 
@@ -385,12 +397,12 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
         .expect("reopen redaction ledger");
     let query = ledger
         .query(EventQuery {
-            correlation_id: Some(correlation_id(CORRELATION_ID)),
+            correlation_id: Some(*correlation_id(CORRELATION_ID).transport()),
             ..EventQuery::default()
         })
         .expect("query recovered correlation index");
     assert_eq!(query.len(), 1, "indexed query must retain the event");
-    assert_eq!(query[0].event_id(), &event_id("secret-bearing-command"));
+    assert_eq!(query[0].event_id(), &expected_event_id);
 
     let duplicate = ledger
         .append(event)
@@ -401,7 +413,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(correlation_id(CORRELATION_ID)),
+                        correlation_id: Some(*correlation_id(CORRELATION_ID).transport()),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Cli,
@@ -413,7 +425,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(correlation_id(CORRELATION_ID)),
+                        correlation_id: Some(*correlation_id(CORRELATION_ID).transport()),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Ui,
@@ -425,7 +437,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(correlation_id(CORRELATION_ID)),
+                        correlation_id: Some(*correlation_id(CORRELATION_ID).transport()),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Lab,
@@ -435,7 +447,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
     ];
     for (label, projection) in &projections {
         assert_eq!(projection.len(), 1, "{label} must retain the event");
-        assert_eq!(projection[0].event_id, event_id("secret-bearing-command"));
+        assert_eq!(projection[0].event_id, expected_event_id);
         let projection_text = serde_json::to_string(projection).expect("serialize projection");
         assert_sentinels_absent(label, &projection_text, &sentinels);
     }

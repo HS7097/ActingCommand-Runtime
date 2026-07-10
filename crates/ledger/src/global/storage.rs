@@ -7,13 +7,13 @@ use super::{
 use crate::PersistedEvent;
 use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
-    AuditInput, EventActor, EventDraft, EventId, EventLinks, EventOrigin, EventSeverity,
-    EventSource, GLOBAL_EVENT_SCHEMA_VERSION, LedgerPayloadDraft, SanitizedEventDraft, StaticCode,
+    AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+    GLOBAL_EVENT_SCHEMA_VERSION, IdentifierIssuer, LedgerPayloadDraft, OriginModule,
+    RecoveryReason, SanitizedEventDraft,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Number, Value};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -86,11 +86,11 @@ impl SegmentStore {
             events: recovery.events,
         };
         if let Some(owner_id) = stale_owner {
-            store.append_recovery("stale_owner", Some(owner_id), None)?;
+            store.append_recovery(RecoveryReason::StaleOwner, Some(owner_id), None)?;
         }
         if let Some(tail) = recovery.truncated_tail {
             store.append_recovery(
-                "truncated_final_tail",
+                RecoveryReason::TruncatedFinalTail,
                 None,
                 Some((tail.segment_index, tail.bytes)),
             )?;
@@ -175,7 +175,7 @@ impl SegmentStore {
 
     fn append_recovery(
         &mut self,
-        reason: &'static str,
+        reason: RecoveryReason,
         previous_owner: Option<String>,
         tail: Option<(u64, u64)>,
     ) -> GlobalLedgerResult<()> {
@@ -186,26 +186,22 @@ impl SegmentStore {
         let (segment_index, affected_bytes) =
             tail.map_or((None, 0), |(segment, bytes)| (Some(segment), bytes));
         let now = unix_ms_now()?;
-        let payload = LedgerPayloadDraft::recovered(
-            StaticCode::new(reason).map_err(|_| {
-                GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-            })?,
-            segment_index,
-            affected_bytes,
-            audit,
-        );
+        let payload = LedgerPayloadDraft::recovered(reason, segment_index, affected_bytes, audit);
+        let identifiers = IdentifierIssuer::new().map_err(|_| {
+            GlobalLedgerError::fatal("recovery_event_failed", "create_identifier_issuer")
+        })?;
         let draft = EventDraft::new(
-            recovery_event_id(now, self.next_sequence),
+            identifiers.mint_event_id().map_err(|_| {
+                GlobalLedgerError::fatal("recovery_event_failed", "issue_recovery_event_id")
+            })?,
             now,
             EventSeverity::Warning,
             EventOrigin::new(
                 EventSource::System,
-                StaticCode::new("global-ledger").map_err(|_| {
-                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-                })?,
+                OriginModule::GlobalLedger,
                 EventActor::System,
             ),
-            EventLinks::default(),
+            EventLinksDraft::default(),
             payload.into(),
         )
         .sanitize(
@@ -634,17 +630,6 @@ fn unix_ms_now() -> GlobalLedgerResult<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .map_err(|_| GlobalLedgerError::fatal("clock_before_epoch", "read_clock"))
-}
-
-fn recovery_event_id(timestamp_unix_ms: u64, sequence: u64) -> EventId {
-    let mut digest = Sha256::new();
-    digest.update(b"actingcommand.ledger.recovery.v2");
-    digest.update(timestamp_unix_ms.to_le_bytes());
-    digest.update(sequence.to_le_bytes());
-    let digest = digest.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    EventId::new(bytes)
 }
 
 fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {

@@ -359,14 +359,16 @@ mod tests {
     };
     use crate::{GlobalLedgerError, GlobalLedgerResult, PersistedEvent};
     use actingcommand_contract::{
-        ActionId, AuditInput, CommandPayloadDraft, CorrelationId, EffectDisposition, EventActor,
-        EventDraft, EventId, EventLinks, EventOrigin, EventSeverity, EventSource, EventType,
-        InputPayloadDraft, InstanceId, LeaseId, RequestId, RunId, SanitizedEventDraft, StaticCode,
-        TaskId,
+        AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction,
+        EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+        EventType, IdentifierIssuer, InputPayloadDraft, IssuedActionId, IssuedCorrelationId,
+        IssuedEventId, IssuedInstanceId, IssuedLeaseId, IssuedRequestId, IssuedRunId, IssuedTaskId,
+        OriginModule, SanitizedEventDraft,
     };
-    use sha2::{Digest, Sha256};
     use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::process::{Command, Output, Stdio};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     const PANIC_CHILD_ENV: &str = "ACTINGCOMMAND_CRITICAL_PANIC_CHILD";
@@ -381,35 +383,55 @@ mod tests {
         Failed,
     }
 
-    fn opaque_id(label: &str) -> [u8; 16] {
-        let digest = Sha256::digest(label.as_bytes());
-        let mut bytes = [0_u8; 16];
-        bytes.copy_from_slice(&digest[..16]);
-        bytes
+    fn identifiers() -> IdentifierIssuer {
+        IdentifierIssuer::new().expect("identifier issuer")
     }
 
-    fn code(value: &'static str) -> StaticCode {
-        StaticCode::new(value).expect("static code")
+    fn event_id(_value: &str) -> IssuedEventId {
+        identifiers().mint_event_id().expect("event id")
     }
 
-    fn event_id(value: &str) -> EventId {
-        EventId::new(opaque_id(value))
+    fn event_label(event_type: EventType) -> String {
+        match event_type {
+            EventType::InputIntent | EventType::CommandReceived => "intent",
+            EventType::InputCompleted | EventType::CommandValidated => "success",
+            EventType::InputFailed | EventType::CommandRejected => "failure",
+            _ => "event",
+        }
+        .to_string()
     }
 
-    fn event_label(value: &EventId) -> String {
-        ["intent", "success", "failure"]
-            .into_iter()
-            .find(|label| event_id(label) == *value)
-            .map_or_else(|| value.to_string(), str::to_string)
+    macro_rules! cached_identifier {
+        ($function:ident, $type:ty, $mint:ident, $label:literal) => {
+            fn $function(value: &str) -> $type {
+                static IDS: OnceLock<Mutex<HashMap<String, $type>>> = OnceLock::new();
+                let mut ids = IDS
+                    .get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock()
+                    .expect(concat!($label, " registry"));
+                *ids.entry(value.to_string())
+                    .or_insert_with(|| identifiers().$mint().expect($label))
+            }
+        };
     }
 
-    fn correlation_id(value: &str) -> CorrelationId {
-        CorrelationId::new(opaque_id(value))
-    }
-
-    fn action_id(value: &str) -> ActionId {
-        ActionId::new(opaque_id(value))
-    }
+    cached_identifier!(
+        correlation_id,
+        IssuedCorrelationId,
+        mint_correlation_id,
+        "correlation id"
+    );
+    cached_identifier!(action_id, IssuedActionId, mint_action_id, "action id");
+    cached_identifier!(
+        instance_id,
+        IssuedInstanceId,
+        mint_instance_id,
+        "instance id"
+    );
+    cached_identifier!(request_id, IssuedRequestId, mint_request_id, "request id");
+    cached_identifier!(task_id, IssuedTaskId, mint_task_id, "task id");
+    cached_identifier!(run_id, IssuedRunId, mint_run_id, "run id");
+    cached_identifier!(lease_id, IssuedLeaseId, mint_lease_id, "lease id");
 
     #[derive(Default)]
     struct InMemoryAppender {
@@ -437,7 +459,7 @@ mod tests {
         fn append_durable(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
             let call = self.append_count.get() + 1;
             self.append_count.set(call);
-            let event_id = event_label(draft.event_id());
+            let event_id = event_label(draft.event_type());
             self.calls.borrow_mut().push(event_id.clone());
             self.order.borrow_mut().push(event_id);
             let failure = {
@@ -460,7 +482,7 @@ mod tests {
         correlation_id: Option<&str>,
         action_id: Option<&str>,
     ) -> SanitizedEventDraft {
-        let mut links = EventLinks::default();
+        let mut links = EventLinksDraft::default();
         if let Some(value) = correlation_id {
             links = links.with_correlation_id(self::correlation_id(value));
         }
@@ -473,30 +495,44 @@ mod tests {
     fn input_draft_with_links(
         event_id: &str,
         transition: InputKind,
-        links: EventLinks,
+        links: EventLinksDraft,
+    ) -> SanitizedEventDraft {
+        input_draft_with_id_and_links(self::event_id(event_id), transition, links)
+    }
+
+    fn input_draft_with_id_and_links(
+        event_id: IssuedEventId,
+        transition: InputKind,
+        links: EventLinksDraft,
     ) -> SanitizedEventDraft {
         let payload = match transition {
-            InputKind::Intent => InputPayloadDraft::intent(code("input.tap"), AuditInput::new()),
+            InputKind::Intent => {
+                InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new())
+            }
             InputKind::Committed => InputPayloadDraft::committed(
-                code("input.tap"),
+                EventAction::InputTap,
                 EffectDisposition::Performed,
                 AuditInput::new(),
             ),
             InputKind::Completed => {
-                InputPayloadDraft::completed(code("input.tap"), AuditInput::new())
+                InputPayloadDraft::completed(EventAction::InputTap, AuditInput::new())
             }
             InputKind::Failed => InputPayloadDraft::failed(
-                code("input.tap"),
-                code("input.failed"),
+                EventAction::InputTap,
+                DiagnosticCode::InputFailed,
                 EffectDisposition::Indeterminate,
                 AuditInput::new(),
             ),
         };
         EventDraft::new(
-            self::event_id(event_id),
+            event_id,
             1_752_147_200_000,
             EventSeverity::Info,
-            EventOrigin::new(EventSource::Runtime, code("runtime"), EventActor::Runtime),
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
             links,
             payload.into(),
         )
@@ -511,11 +547,15 @@ mod tests {
             self::event_id(event_id),
             1_752_147_200_000,
             EventSeverity::Info,
-            EventOrigin::new(EventSource::Runtime, code("runtime"), EventActor::Runtime),
-            EventLinks::default()
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default()
                 .with_correlation_id(self::correlation_id(correlation_id))
                 .with_action_id(self::action_id(action_id)),
-            CommandPayloadDraft::received(code("critical.test"), AuditInput::new()).into(),
+            CommandPayloadDraft::received(EventAction::CriticalTest, AuditInput::new()).into(),
         )
         .sanitize(
             &crate::Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"),
@@ -547,21 +587,21 @@ mod tests {
         .expect("valid input critical plan")
     }
 
-    fn input_links() -> EventLinks {
-        EventLinks::default()
+    fn input_links() -> EventLinksDraft {
+        EventLinksDraft::default()
             .with_correlation_id(correlation_id("correlation-1"))
             .with_action_id(action_id("action-1"))
-            .with_instance_id(InstanceId::new(opaque_id("instance-1")))
-            .with_request_id(RequestId::new(opaque_id("request-1")))
-            .with_task_id(TaskId::new(opaque_id("task-1")))
-            .with_run_id(RunId::new(opaque_id("run-1")))
-            .with_lease_id(LeaseId::new(opaque_id("lease-1")))
+            .with_instance_id(instance_id("instance-1"))
+            .with_request_id(request_id("request-1"))
+            .with_task_id(task_id("task-1"))
+            .with_run_id(run_id("run-1"))
+            .with_lease_id(lease_id("lease-1"))
     }
 
     fn input_plan_with_links(
-        intent_links: EventLinks,
-        success_links: EventLinks,
-        failure_links: EventLinks,
+        intent_links: EventLinksDraft,
+        success_links: EventLinksDraft,
+        failure_links: EventLinksDraft,
     ) -> Result<CriticalEventPlan, CriticalPlanError> {
         CriticalEventPlan::new(
             input_draft_with_links("intent", InputKind::Intent, intent_links),
@@ -606,7 +646,7 @@ mod tests {
         .expect("durable success receipt");
 
         assert_eq!(receipt.value(), &"done");
-        assert_eq!(receipt.outcome().event_id(), &event_id("success"));
+        assert_eq!(receipt.outcome().event_type(), EventType::InputCompleted);
         assert_eq!(action_calls.get(), 1);
         assert_eq!(appender.order(), vec!["intent", "action", "success"]);
     }
@@ -627,7 +667,7 @@ mod tests {
             panic!("expected durable action failure");
         };
         assert_eq!(error, "action failed");
-        assert_eq!(outcome.event_id(), &event_id("failure"));
+        assert_eq!(outcome.event_type(), EventType::InputFailed);
         assert_eq!(action_calls.get(), 1);
         assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
     }
@@ -766,15 +806,18 @@ mod tests {
             .expect_err("duplicate event type"),
             CriticalPlanError::DuplicateEventType
         );
+        let duplicate_id = event_id("duplicate");
+        let duplicate_links = EventLinksDraft::default()
+            .with_correlation_id(correlation_id("correlation-1"))
+            .with_action_id(action_id("action-1"));
         assert_eq!(
             CriticalEventPlan::new(
-                intent(),
-                input_draft(
-                    "intent",
-                    InputKind::Completed,
-                    Some("correlation-1"),
-                    Some("action-1"),
+                input_draft_with_id_and_links(
+                    duplicate_id,
+                    InputKind::Intent,
+                    duplicate_links.clone(),
                 ),
+                input_draft_with_id_and_links(duplicate_id, InputKind::Completed, duplicate_links,),
                 failure(),
             )
             .expect_err("duplicate event id"),
@@ -823,7 +866,7 @@ mod tests {
         let CriticalExecutionError::Panicked { outcome } = error else {
             panic!("expected typed panic result");
         };
-        assert_eq!(outcome.event_id(), &event_id("failure"));
+        assert_eq!(outcome.event_type(), EventType::InputFailed);
         assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
     }
 
@@ -926,12 +969,16 @@ mod tests {
                 event_id("success"),
                 1_752_147_200_000,
                 EventSeverity::Info,
-                EventOrigin::new(EventSource::Runtime, code("runtime"), EventActor::Runtime),
-                EventLinks::default()
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default()
                     .with_correlation_id(correlation_id("correlation-1"))
                     .with_action_id(action_id("action-1")),
                 CommandPayloadDraft::validated(
-                    code("critical.test"),
+                    EventAction::CriticalTest,
                     EffectDisposition::NotPerformed,
                     AuditInput::new(),
                 )
@@ -946,13 +993,17 @@ mod tests {
                 event_id("failure"),
                 1_752_147_200_000,
                 EventSeverity::Info,
-                EventOrigin::new(EventSource::Runtime, code("runtime"), EventActor::Runtime),
-                EventLinks::default()
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default()
                     .with_correlation_id(correlation_id("correlation-1"))
                     .with_action_id(action_id("action-1")),
                 CommandPayloadDraft::rejected(
-                    code("critical.test"),
-                    code("command.rejected"),
+                    EventAction::CriticalTest,
+                    DiagnosticCode::CommandRejected,
                     EffectDisposition::NotPerformed,
                     AuditInput::new(),
                 )
@@ -974,41 +1025,41 @@ mod tests {
         let intent = input_links();
         let failure = input_links();
 
-        let success = input_links().with_instance_id(InstanceId::new(opaque_id("instance-2")));
+        let success = input_links().with_instance_id(instance_id("instance-2"));
         assert_eq!(
             input_plan_with_links(intent.clone(), success, failure.clone())
                 .expect_err("instance mismatch"),
             CriticalPlanError::StableIdentityLinkMismatch
         );
 
-        let success = input_links().with_request_id(RequestId::new(opaque_id("request-2")));
+        let success = input_links().with_request_id(request_id("request-2"));
         assert_eq!(
             input_plan_with_links(intent.clone(), success, failure.clone())
                 .expect_err("request mismatch"),
             CriticalPlanError::StableIdentityLinkMismatch
         );
 
-        let success = EventLinks::default()
+        let success = EventLinksDraft::default()
             .with_correlation_id(correlation_id("correlation-1"))
             .with_action_id(action_id("action-1"))
-            .with_instance_id(InstanceId::new(opaque_id("instance-1")))
-            .with_request_id(RequestId::new(opaque_id("request-1")))
-            .with_run_id(RunId::new(opaque_id("run-1")))
-            .with_lease_id(LeaseId::new(opaque_id("lease-1")));
+            .with_instance_id(instance_id("instance-1"))
+            .with_request_id(request_id("request-1"))
+            .with_run_id(run_id("run-1"))
+            .with_lease_id(lease_id("lease-1"));
         assert_eq!(
             input_plan_with_links(intent.clone(), success, failure.clone())
                 .expect_err("task mismatch"),
             CriticalPlanError::StableIdentityLinkMismatch
         );
 
-        let success = input_links().with_run_id(RunId::new(opaque_id("run-2")));
+        let success = input_links().with_run_id(run_id("run-2"));
         assert_eq!(
             input_plan_with_links(intent.clone(), success, failure.clone())
                 .expect_err("run mismatch"),
             CriticalPlanError::StableIdentityLinkMismatch
         );
 
-        let success = input_links().with_lease_id(LeaseId::new(opaque_id("lease-2")));
+        let success = input_links().with_lease_id(lease_id("lease-2"));
         assert_eq!(
             input_plan_with_links(intent, success, failure).expect_err("lease mismatch"),
             CriticalPlanError::StableIdentityLinkMismatch
@@ -1042,7 +1093,7 @@ mod tests {
                 else {
                     panic!("expected typed panic result");
                 };
-                assert_eq!(outcome.event_id(), &event_id("failure"));
+                assert_eq!(outcome.event_type(), EventType::InputFailed);
             }
             Ok("noncritical") => {
                 let appender = InMemoryAppender::default();

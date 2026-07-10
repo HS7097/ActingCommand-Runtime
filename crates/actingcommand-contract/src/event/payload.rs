@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{EventFamily, EventType, SanitizationError, Sensitivity, StaticCode};
+use super::{
+    DiagnosticCode, EventAction, EventFamily, EventType, RecoveryReason, SanitizationError,
+    Sensitivity,
+};
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -214,22 +217,22 @@ pub enum EffectDisposition {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationPayload {
-    action: StaticCode,
+    action: EventAction,
     audit: SanitizedAudit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticPayload {
-    action: StaticCode,
-    diagnostic_code: StaticCode,
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
     audit: SanitizedAudit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutcomePayload {
-    action: StaticCode,
+    action: EventAction,
     effect_disposition: EffectDisposition,
     audit: SanitizedAudit,
 }
@@ -237,8 +240,8 @@ pub struct OutcomePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticOutcomePayload {
-    action: StaticCode,
-    diagnostic_code: StaticCode,
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
     audit: SanitizedAudit,
 }
@@ -246,7 +249,7 @@ pub struct DiagnosticOutcomePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryPayload {
-    reason: StaticCode,
+    reason: RecoveryReason,
     #[serde(skip_serializing_if = "Option::is_none")]
     segment_index: Option<u64>,
     affected_bytes: u64,
@@ -254,8 +257,8 @@ pub struct RecoveryPayload {
 }
 
 trait PayloadDetail {
-    fn action(&self) -> &StaticCode;
-    fn diagnostic_code(&self) -> Option<&StaticCode>;
+    fn action(&self) -> EventAction;
+    fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
     fn audit(&self) -> &SanitizedAudit;
 }
@@ -263,8 +266,8 @@ trait PayloadDetail {
 macro_rules! common_detail_accessors {
     ($type:ty) => {
         impl $type {
-            pub fn action(&self) -> &StaticCode {
-                &self.action
+            pub const fn action(&self) -> EventAction {
+                self.action
             }
 
             pub fn audit(&self) -> &SanitizedAudit {
@@ -280,8 +283,8 @@ common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 
 impl DiagnosticPayload {
-    pub fn diagnostic_code(&self) -> &StaticCode {
-        &self.diagnostic_code
+    pub const fn diagnostic_code(&self) -> DiagnosticCode {
+        self.diagnostic_code
     }
 }
 
@@ -292,8 +295,8 @@ impl OutcomePayload {
 }
 
 impl DiagnosticOutcomePayload {
-    pub fn diagnostic_code(&self) -> &StaticCode {
-        &self.diagnostic_code
+    pub const fn diagnostic_code(&self) -> DiagnosticCode {
+        self.diagnostic_code
     }
 
     pub const fn effect_disposition(&self) -> EffectDisposition {
@@ -302,11 +305,11 @@ impl DiagnosticOutcomePayload {
 }
 
 impl PayloadDetail for ObservationPayload {
-    fn action(&self) -> &StaticCode {
-        &self.action
+    fn action(&self) -> EventAction {
+        self.action
     }
 
-    fn diagnostic_code(&self) -> Option<&StaticCode> {
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
         None
     }
 
@@ -320,12 +323,12 @@ impl PayloadDetail for ObservationPayload {
 }
 
 impl PayloadDetail for DiagnosticPayload {
-    fn action(&self) -> &StaticCode {
-        &self.action
+    fn action(&self) -> EventAction {
+        self.action
     }
 
-    fn diagnostic_code(&self) -> Option<&StaticCode> {
-        Some(&self.diagnostic_code)
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        Some(self.diagnostic_code)
     }
 
     fn effect_disposition(&self) -> Option<EffectDisposition> {
@@ -338,11 +341,11 @@ impl PayloadDetail for DiagnosticPayload {
 }
 
 impl PayloadDetail for OutcomePayload {
-    fn action(&self) -> &StaticCode {
-        &self.action
+    fn action(&self) -> EventAction {
+        self.action
     }
 
-    fn diagnostic_code(&self) -> Option<&StaticCode> {
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
         None
     }
 
@@ -356,12 +359,12 @@ impl PayloadDetail for OutcomePayload {
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
-    fn action(&self) -> &StaticCode {
-        &self.action
+    fn action(&self) -> EventAction {
+        self.action
     }
 
-    fn diagnostic_code(&self) -> Option<&StaticCode> {
-        Some(&self.diagnostic_code)
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        Some(self.diagnostic_code)
     }
 
     fn effect_disposition(&self) -> Option<EffectDisposition> {
@@ -374,8 +377,8 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 }
 
 impl RecoveryPayload {
-    pub fn reason(&self) -> &StaticCode {
-        &self.reason
+    pub const fn reason(&self) -> RecoveryReason {
+        self.reason
     }
 
     pub const fn segment_index(&self) -> Option<u64> {
@@ -392,11 +395,11 @@ impl RecoveryPayload {
 }
 
 impl PayloadDetail for RecoveryPayload {
-    fn action(&self) -> &StaticCode {
-        &self.reason
+    fn action(&self) -> EventAction {
+        EventAction::LedgerRecovery
     }
 
-    fn diagnostic_code(&self) -> Option<&StaticCode> {
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
         None
     }
 
@@ -410,38 +413,38 @@ impl PayloadDetail for RecoveryPayload {
 }
 
 struct ObservationDraft {
-    action: StaticCode,
+    action: EventAction,
     audit: AuditInput,
 }
 
 struct DiagnosticDraft {
-    action: StaticCode,
-    diagnostic_code: StaticCode,
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
     audit: AuditInput,
 }
 
 struct OutcomeDraft {
-    action: StaticCode,
+    action: EventAction,
     effect_disposition: EffectDisposition,
     audit: AuditInput,
 }
 
 struct DiagnosticOutcomeDraft {
-    action: StaticCode,
-    diagnostic_code: StaticCode,
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
     audit: AuditInput,
 }
 
 struct RecoveryDraft {
-    reason: StaticCode,
+    reason: RecoveryReason,
     segment_index: Option<u64>,
     affected_bytes: u64,
     audit: AuditInput,
 }
 
 impl ObservationDraft {
-    fn new(action: StaticCode, audit: AuditInput) -> Self {
+    fn new(action: EventAction, audit: AuditInput) -> Self {
         Self { action, audit }
     }
 
@@ -457,7 +460,7 @@ impl ObservationDraft {
 }
 
 impl DiagnosticDraft {
-    fn new(action: StaticCode, diagnostic_code: StaticCode, audit: AuditInput) -> Self {
+    fn new(action: EventAction, diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
         Self {
             action,
             diagnostic_code,
@@ -478,7 +481,7 @@ impl DiagnosticDraft {
 }
 
 impl OutcomeDraft {
-    fn new(action: StaticCode, effect_disposition: EffectDisposition, audit: AuditInput) -> Self {
+    fn new(action: EventAction, effect_disposition: EffectDisposition, audit: AuditInput) -> Self {
         Self {
             action,
             effect_disposition,
@@ -500,8 +503,8 @@ impl OutcomeDraft {
 
 impl DiagnosticOutcomeDraft {
     fn new(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect_disposition: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -549,21 +552,21 @@ enum CommandDraftKind {
 pub struct CommandPayloadDraft(CommandDraftKind);
 
 impl CommandPayloadDraft {
-    pub fn received(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn received(action: EventAction, audit: AuditInput) -> Self {
         Self(CommandDraftKind::Received(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn validated(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn validated(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(CommandDraftKind::Validated(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
     pub fn rejected(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -586,19 +589,19 @@ enum SchedulerDraftKind {
 pub struct SchedulerPayloadDraft(SchedulerDraftKind);
 
 impl SchedulerPayloadDraft {
-    pub fn admitted(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn admitted(action: EventAction, audit: AuditInput) -> Self {
         Self(SchedulerDraftKind::Admitted(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn queued(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn queued(action: EventAction, audit: AuditInput) -> Self {
         Self(SchedulerDraftKind::Queued(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn denied(action: StaticCode, diagnostic_code: StaticCode, audit: AuditInput) -> Self {
+    pub fn denied(action: EventAction, diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
         Self(SchedulerDraftKind::Denied(DiagnosticDraft::new(
             action,
             diagnostic_code,
@@ -606,7 +609,11 @@ impl SchedulerPayloadDraft {
         )))
     }
 
-    pub fn preempted(action: StaticCode, diagnostic_code: StaticCode, audit: AuditInput) -> Self {
+    pub fn preempted(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        audit: AuditInput,
+    ) -> Self {
         Self(SchedulerDraftKind::Preempted(DiagnosticDraft::new(
             action,
             diagnostic_code,
@@ -628,45 +635,45 @@ enum LeaseDraftKind {
 pub struct LeasePayloadDraft(LeaseDraftKind);
 
 impl LeasePayloadDraft {
-    pub fn requested(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn requested(action: EventAction, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Requested(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn granted(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn granted(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Granted(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn transferred(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn transferred(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Transferred(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn released(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn released(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Released(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn expired(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn expired(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::Expired(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn transition_intent(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn transition_intent(action: EventAction, audit: AuditInput) -> Self {
         Self(LeaseDraftKind::TransitionIntent(ObservationDraft::new(
             action, audit,
         )))
     }
 
     pub fn transition_failed(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -691,37 +698,37 @@ enum TaskDraftKind {
 pub struct TaskPayloadDraft(TaskDraftKind);
 
 impl TaskPayloadDraft {
-    pub fn requested(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn requested(action: EventAction, audit: AuditInput) -> Self {
         Self(TaskDraftKind::Requested(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn started(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn started(action: EventAction, audit: AuditInput) -> Self {
         Self(TaskDraftKind::Started(ObservationDraft::new(action, audit)))
     }
 
-    pub fn step_started(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn step_started(action: EventAction, audit: AuditInput) -> Self {
         Self(TaskDraftKind::StepStarted(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn step_finished(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn step_finished(action: EventAction, audit: AuditInput) -> Self {
         Self(TaskDraftKind::StepFinished(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn completed(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn completed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(TaskDraftKind::Completed(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
     pub fn failed(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -733,21 +740,21 @@ impl TaskPayloadDraft {
         )))
     }
 
-    pub fn cancelled(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn cancelled(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(TaskDraftKind::Cancelled(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn terminal_intent(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn terminal_intent(action: EventAction, audit: AuditInput) -> Self {
         Self(TaskDraftKind::TerminalIntent(ObservationDraft::new(
             action, audit,
         )))
     }
 
     pub fn terminal_commit_failed(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -767,25 +774,25 @@ enum InputDraftKind {
 pub struct InputPayloadDraft(InputDraftKind);
 
 impl InputPayloadDraft {
-    pub fn intent(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn intent(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Intent(ObservationDraft::new(action, audit)))
     }
 
-    pub fn committed(action: StaticCode, effect: EffectDisposition, audit: AuditInput) -> Self {
+    pub fn committed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
         Self(InputDraftKind::Committed(OutcomeDraft::new(
             action, effect, audit,
         )))
     }
 
-    pub fn completed(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn completed(action: EventAction, audit: AuditInput) -> Self {
         Self(InputDraftKind::Completed(ObservationDraft::new(
             action, audit,
         )))
     }
 
     pub fn failed(
-        action: StaticCode,
-        diagnostic_code: StaticCode,
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
         effect: EffectDisposition,
         audit: AuditInput,
     ) -> Self {
@@ -807,19 +814,19 @@ enum ClientDraftKind {
 pub struct ClientPayloadDraft(ClientDraftKind);
 
 impl ClientPayloadDraft {
-    pub fn ui_action(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn ui_action(action: EventAction, audit: AuditInput) -> Self {
         Self(ClientDraftKind::UiAction(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn cli_command(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn cli_command(action: EventAction, audit: AuditInput) -> Self {
         Self(ClientDraftKind::CliCommand(ObservationDraft::new(
             action, audit,
         )))
     }
 
-    pub fn lab_request(action: StaticCode, audit: AuditInput) -> Self {
+    pub fn lab_request(action: EventAction, audit: AuditInput) -> Self {
         Self(ClientDraftKind::LabRequest(ObservationDraft::new(
             action, audit,
         )))
@@ -834,7 +841,7 @@ pub struct LedgerPayloadDraft(LedgerDraftKind);
 
 impl LedgerPayloadDraft {
     pub fn recovered(
-        reason: StaticCode,
+        reason: RecoveryReason,
         segment_index: Option<u64>,
         affected_bytes: u64,
         audit: AuditInput,
@@ -877,7 +884,12 @@ payload_draft_from!(ClientPayloadDraft, Client);
 payload_draft_from!(LedgerPayloadDraft, Ledger);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum CommandPayload {
     Received(ObservationPayload),
     Validated(OutcomePayload),
@@ -885,7 +897,12 @@ pub enum CommandPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SchedulerPayload {
     Admitted(ObservationPayload),
     Queued(ObservationPayload),
@@ -894,7 +911,12 @@ pub enum SchedulerPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum LeasePayload {
     Requested(ObservationPayload),
     Granted(OutcomePayload),
@@ -906,7 +928,12 @@ pub enum LeasePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum TaskPayload {
     Requested(ObservationPayload),
     Started(ObservationPayload),
@@ -920,7 +947,12 @@ pub enum TaskPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum InputPayload {
     Intent(ObservationPayload),
     Committed(OutcomePayload),
@@ -929,7 +961,12 @@ pub enum InputPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ClientPayload {
     UiAction(ObservationPayload),
     CliCommand(ObservationPayload),
@@ -937,7 +974,12 @@ pub enum ClientPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum LedgerPayload {
     Recovered(RecoveryPayload),
 }
@@ -1012,7 +1054,12 @@ family_payload!(LedgerPayload, {
 });
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "family", content = "payload", rename_all = "snake_case")]
+#[serde(
+    tag = "family",
+    content = "payload",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum EventPayload {
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
@@ -1189,7 +1236,7 @@ impl EventPayload {
         let detail = self.family_payload().detail();
         let payload = PublicPayload {
             event_type,
-            action: detail.action().clone(),
+            action: detail.action(),
             effect_disposition: detail.effect_disposition(),
             segment_index: match self {
                 Self::Ledger(LedgerPayload::Recovered(value)) => value.segment_index,
@@ -1228,7 +1275,7 @@ impl EventPayload {
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
     event_type: EventType,
-    action: StaticCode,
+    action: EventAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1242,8 +1289,8 @@ impl PublicPayload {
         self.event_type
     }
 
-    pub fn action(&self) -> &StaticCode {
-        &self.action
+    pub const fn action(&self) -> EventAction {
+        self.action
     }
 
     pub const fn effect_disposition(&self) -> Option<EffectDisposition> {
@@ -1260,7 +1307,12 @@ impl PublicPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "family", content = "payload", rename_all = "snake_case")]
+#[serde(
+    tag = "family",
+    content = "payload",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PublicEventPayload {
     Command(PublicPayload),
     Scheduler(PublicPayload),
@@ -1272,7 +1324,12 @@ pub enum PublicEventPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "detail", content = "payload", rename_all = "snake_case")]
+#[serde(
+    tag = "detail",
+    content = "payload",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ProjectionPayload {
     Omitted,
     Public(PublicEventPayload),
