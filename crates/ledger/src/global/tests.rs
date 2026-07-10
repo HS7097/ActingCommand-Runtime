@@ -331,6 +331,31 @@ fn complete_blank_line_is_fatal() {
 }
 
 #[test]
+fn duplicate_json_key_is_fatal_without_disclosing_the_hidden_value() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    ledger.append(event("evt-one")).expect("append");
+    ledger.close().expect("close");
+    let segment = segment_paths(temp.path()).pop().expect("segment");
+    let secret = r"C:\hidden\duplicate-subject";
+    let text = fs::read_to_string(&segment).expect("segment text");
+    let encoded_secret = serde_json::to_string(secret).expect("encode secret");
+    let forged = text.replacen(
+        r#""subject":"runtime.start""#,
+        &format!(r#""subject":{encoded_secret},"subject":"runtime.start""#),
+        1,
+    );
+    assert_ne!(forged, text);
+    fs::write(segment, forged).expect("write duplicate-key line");
+
+    let error =
+        GlobalLedger::open(config(&temp, "writer-two")).expect_err("duplicate key must fail");
+
+    assert_eq!(error.code(), "corrupt_segment");
+    assert!(!error.to_string().contains(secret));
+}
+
+#[test]
 fn non_final_segment_corruption_is_fatal() {
     let temp = TempDir::new().expect("temp");
     let small = GlobalLedgerConfig::new(temp.path(), "writer-one")

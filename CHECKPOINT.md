@@ -21,6 +21,8 @@
 - Writer metadata now requires exactly `active + no close time` or `inactive + close time at/after start`.
 - `GlobalLedgerConfig` Debug hides the machine root.
 - Sequence increments use checked arithmetic and fail with `sequence_exhausted` before reuse or wrap.
+- Re-review found one remaining Important bypass: duplicate JSON object keys could preserve a hidden first value in raw JSONL while `serde_json::Value` retained only the last value.
+- Segment recovery now uses a recursive duplicate-key rejecting JSON visitor before typed `StoredLine` decoding; duplicate keys at any nesting depth are fatal and the error omits key/value content.
 
 ### Files changed
 
@@ -44,6 +46,7 @@
 - `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
 - `cargo tree -p actingcommand-ledger --depth 1`
 - review RED tests for full-queue shutdown, blank records, payload kind/unknown fields, contradictory owner metadata, config Debug, and sequence exhaustion
+- re-review RED with a valid complete JSONL record containing duplicate nested `subject` keys and a hidden machine path
 - `git diff --check`
 
 ### Test results
@@ -52,7 +55,7 @@
 - Persisted-event RED failed because recovery validation did not yet exist.
 - Global-ledger focused suite: 10 tests passed.
 - Contract suite after review fixes: 22 tests passed, including 4 recovery-validation tests.
-- Full ledger crate after review fixes: 34 tests passed; legacy tests remain green.
+- Full ledger crate after review fixes: 35 tests passed; legacy tests remain green.
 - Two contract compile-fail tests and all doc tests passed.
 - Contract/ledger Clippy with warnings denied passed.
 - Diff check passed.
