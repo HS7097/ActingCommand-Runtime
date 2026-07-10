@@ -138,7 +138,14 @@ impl<P: LabPorts> Lab<P> {
             });
         }
 
-        let scene = load_env_scene(self, &request)?;
+        let scene = load_scene(
+            self,
+            request.scene_path.as_deref(),
+            request.capture_config.as_ref(),
+            request.require_fresh,
+            request.fresh_delay,
+            "command requires --scene <png> or --capture",
+        )?;
         let now_ms = self.ports().clock().now_unix_ms()?;
         let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
         let result = evaluate_detector(detector, &context, &scene, &resource_hash, now_ms)?;
@@ -302,22 +309,25 @@ impl<P: LabPorts> Lab<P> {
     }
 }
 
-fn load_env_scene<P: LabPorts>(
+pub(crate) fn load_scene<P: LabPorts>(
     lab: &mut Lab<P>,
-    request: &crate::EnvDetectRequest,
+    scene_path: Option<&Path>,
+    capture_config: Option<&CaptureBackendConfig>,
+    require_fresh: bool,
+    fresh_delay: Duration,
+    missing_message: &str,
 ) -> EnvResult<Scene> {
-    if let Some(path) = &request.scene_path {
+    if let Some(path) = scene_path {
         let png = fs::read(path).map_err(|error| {
             LabError::device(format!("failed to read {}: {error}", path.display()))
         })?;
         return Scene::from_png(&png).map_err(|error| LabError::device(error.to_string()));
     }
-    let config = request
-        .capture_config
-        .clone()
-        .ok_or_else(|| LabError::usage("command requires --scene <png> or --capture"))?;
-    let frame = if request.require_fresh {
-        capture_fresh_frame(lab, config, request.fresh_delay)?
+    let config = capture_config
+        .cloned()
+        .ok_or_else(|| LabError::usage(missing_message))?;
+    let frame = if require_fresh {
+        capture_fresh_frame(lab, config, fresh_delay)?
     } else {
         let mut backend = lab
             .ports()

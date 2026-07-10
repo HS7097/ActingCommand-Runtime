@@ -55,6 +55,7 @@ mod lab_run;
 mod maa_task_graph;
 mod package_build;
 pub mod project_interface;
+mod readonly_cli;
 pub mod recovery_exec;
 mod resource_convert;
 
@@ -6170,185 +6171,19 @@ fn run_stream_input_relay(
 }
 
 fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "recognize", args);
-    }
-    let target = flags.required("--target")?;
-    let config = read_user_config()?;
-    let resources = recognition_resources(global, &config, &flags, false)?;
-    let loaded =
-        load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
-    let evaluator = loaded.evaluator;
-    if is_click_only_target(&evaluator, &target)? {
-        let click = evaluator
-            .get_click_target(&target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
-        let mut payload = json!({
-            "target": target,
-            "kind": "click_only",
-            "evaluated": false,
-            "click": rect_json(click),
-            "match_metric": match_metric_name(evaluator.default_match_metric())
-        });
-        attach_env_resolved(&mut payload, &loaded.env_resolved);
-        return Ok(payload);
-    }
-    let scene = load_scene_from_flags(global, &flags)?;
-    let evaluation = evaluator
-        .evaluate_target(&scene, &target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    let evaluation_json = target_eval_json(&evaluation);
-    let mut payload = json!({
-        "target": target,
-        "passed": evaluation.passed,
-        "message": evaluation.message,
-        "matched_rect": evaluation_json.get("matched_rect").cloned(),
-        "template": evaluation_json.get("template").cloned(),
-        "color": evaluation_json.get("color").cloned(),
-        "evaluation": evaluation_json,
-        "match_metric": match_metric_name(evaluator.default_match_metric())
-    });
-    attach_env_resolved(&mut payload, &loaded.env_resolved);
-    if !evaluation.passed {
-        attach_env_needs_detection(
-            &mut payload,
-            "recognize",
-            "target_below_threshold",
-            &target,
-            &loaded.env_resolved,
-        );
-    }
-    Ok(payload)
+    readonly_cli::run_recognize(global, args)
 }
 
 fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "detect_page", args);
-    }
-    let mut ledger = semantic_ledger_context("detect-page", global, args);
-    let result = (|| -> CliOutcome<Value> {
-        let config = read_user_config()?;
-        let resources = recognition_resources(global, &config, &flags, true)?;
-        let pages_path = resources.pages_path.as_ref().ok_or_else(|| {
-            CliError::usage("detect-page requires --pages or --resource-root --game")
-        })?;
-        let (evaluator, detector, env_resolved) = load_evaluator_and_detector_with_env(
-            global,
-            &flags,
-            &resources.pack_path,
-            &resources.pack_root,
-            pages_path,
-        )?;
-        record_env_resolved(&mut ledger, "detect-page", &env_resolved)?;
-        detector
-            .validate(&evaluator)
-            .map_err(|err| CliError::usage(err.to_string()))?;
-        if flags.bool("--check-pages") {
-            return Ok(json!({"check_pages": "passed"}));
-        }
-        let scene = load_scene_from_flags(global, &flags)?;
-        let outcome = detect_current_page(&evaluator, &detector, &scene)?;
-        let reco_id = ledger.issue(IdKind::Reco);
-        let mut payload = page_detection_json(&outcome);
-        payload["req_id"] = json!(ledger.req_id.clone());
-        payload["reco_id"] = json!(reco_id.clone());
-        attach_env_resolved(&mut payload, &env_resolved);
-        if outcome.standby {
-            attach_env_needs_detection(
-                &mut payload,
-                "detect-page",
-                "current_page_unknown",
-                &outcome.page,
-                &env_resolved,
-            );
-            record_env_needs_detection(
-                &mut ledger,
-                "detect-page",
-                "current_page_unknown",
-                &outcome.page,
-                &env_resolved,
-            )?;
-        }
-        ledger.record_drive(json!({
-            "stage": "recognition",
-            "command": "detect-page",
-            "reco_id": reco_id,
-            "page": outcome.page,
-            "matched": outcome.matched,
-            "standby": outcome.standby
-        }))?;
-        Ok(payload)
-    })();
-    finish_semantic_result_with_ledger(global, ledger, result)
+    readonly_cli::run_detect_page(global, args)
 }
 
 fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "current_page", args);
-    }
-    let config = read_user_config()?;
-    let (evaluator, detector, env_resolved) =
-        load_semantic_detector_with_env(global, &config, &flags)?;
-    let scene = load_scene_from_flags(global, &flags)?;
-    let outcome = detect_current_page(&evaluator, &detector, &scene)?;
-    let mut payload = page_detection_json(&outcome);
-    attach_env_resolved(&mut payload, &env_resolved);
-    if outcome.standby {
-        attach_env_needs_detection(
-            &mut payload,
-            "current-page",
-            "current_page_unknown",
-            &outcome.page,
-            &env_resolved,
-        );
-    }
-    Ok(payload)
+    readonly_cli::run_current_page(global, args)
 }
 
 fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "is_visible", args);
-    }
-    let target = target_argument(&flags, "is-visible")?;
-    let config = read_user_config()?;
-    let resources = recognition_resources(global, &config, &flags, false)?;
-    let loaded =
-        load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
-    let evaluator = loaded.evaluator;
-    if evaluator
-        .target_kind(&target)
-        .map_err(|err| CliError::usage(err.to_string()))?
-        == TargetKind::ClickOnly
-    {
-        return Err(CliError::usage(format!(
-            "target '{target}' is click-only and cannot be evaluated for visibility"
-        )));
-    }
-    let scene = load_scene_from_flags(global, &flags)?;
-    let evaluation = evaluator
-        .evaluate_target(&scene, &target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    let mut payload = json!({
-        "target": target,
-        "visible": evaluation.passed,
-        "evaluation": target_eval_json(&evaluation),
-        "match_metric": match_metric_name(evaluator.default_match_metric())
-    });
-    attach_env_resolved(&mut payload, &loaded.env_resolved);
-    if !evaluation.passed {
-        attach_env_needs_detection(
-            &mut payload,
-            "is-visible",
-            "target_below_threshold",
-            &target,
-            &loaded.env_resolved,
-        );
-    }
-    Ok(payload)
+    readonly_cli::run_is_visible(global, args)
 }
 
 fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -26562,16 +26397,6 @@ fn load_evaluator_and_detector_with_env(
         load_page_set_from_json_str(&pages_json).map_err(|err| CliError::usage(err.to_string()))?;
     let detector = PageDetector::new(pages).map_err(|err| CliError::usage(err.to_string()))?;
     Ok((loaded.evaluator, detector, loaded.env_resolved))
-}
-
-fn is_click_only_target(evaluator: &RecognitionEvaluator, target: &str) -> CliOutcome<bool> {
-    let kind = evaluator
-        .target_kind(target)
-        .map_err(|err| CliError::usage(err.to_string()))?;
-    Ok(matches!(
-        kind,
-        actingcommand_recognition_pack::TargetKind::ClickOnly
-    ))
 }
 
 fn page_eval_json(evaluation: &actingcommand_page_detector::PageEvaluation) -> Value {

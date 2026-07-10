@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A3 environment detection migration is implemented and verified; A4 read-only recognition/page migration is next.
+Current node: A4 read-only recognition/page migration is implemented and verified; A5 touch-control migration is next.
 
 A1 delivers:
 
@@ -78,6 +78,16 @@ A3 environment-detection migration:
 - leaves a thin app adapter for flags, production port construction, semantic-ledger projection, serialization, and process behavior;
 - preserves all A1 protocol goldens and existing Runtime behavior while keeping all three dispatch arms below the S3 limit;
 - keeps implementation and test files below the 2600-line module limit.
+
+A4 read-only recognition/page migration:
+
+- moves `recognize`, `detect-page`, `current-page`, and `is-visible` use cases into typed `crates/lab` APIs;
+- shares the A3 scene-loading and env-marker resolution path instead of retaining a second implementation in the CLI;
+- emits `NeedsDetection` and `EnvResolved` through the A3/contract DTOs, including the distinct `detect-page` and `current-page` command identities;
+- preserves detect-page semantic-ledger records, request/reco ids, daemon routing, capture selection, output fields, exit codes, and all A1 goldens;
+- leaves four one-line command functions in `main.rs` and a production-only app adapter for flag/config parsing, port construction, ledger projection, and response serialization;
+- adds sealed Lab family tests for evaluatable recognition, click-only recognition, page detection/current page, and negative visibility;
+- lowers the `main.rs` ratchet from `59967` to `59792` lines without changing Runtime behavior.
 
 ## Current environment detection memory and env pointer node
 

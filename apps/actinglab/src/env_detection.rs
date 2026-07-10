@@ -98,11 +98,11 @@ pub(super) fn resolve_env_markers_in_value(
         server: flags.optional("--server").or_else(|| global.server.clone()),
         env_task: flags.optional("--env-task"),
     };
-    let mut lab = build_marker_lab()?;
+    let mut lab = build_readonly_lab()?;
     lab.resolve_env_markers(request, value)
 }
 
-fn build_marker_lab() -> CliOutcome<Lab<AppLabPorts>> {
+pub(super) fn build_readonly_lab() -> CliOutcome<Lab<AppLabPorts>> {
     Lab::new(
         AppLabPorts {
             input: AppInputFactory {
@@ -271,7 +271,7 @@ fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
         .map_err(|error| CliError::device(format!("failed to serialize Lab response: {error}")))
 }
 
-struct AppLabPorts {
+pub(super) struct AppLabPorts {
     input: AppInputFactory,
     capture: AppCaptureFactory,
     ledger: CliOwnedLedger,
@@ -322,7 +322,7 @@ impl InputFactoryMetadata {
     }
 }
 
-struct AppInputFactory {
+pub(super) struct AppInputFactory {
     input_metadata: Option<InputFactoryMetadata>,
 }
 
@@ -461,7 +461,7 @@ fn input_report(
     }
 }
 
-struct AppCaptureFactory;
+pub(super) struct AppCaptureFactory;
 
 impl CaptureBackendFactory for AppCaptureFactory {
     fn open(&self, request: CaptureBackendRequest) -> Result<Box<dyn CaptureBackend>, LabError> {
@@ -471,7 +471,7 @@ impl CaptureBackendFactory for AppCaptureFactory {
     }
 }
 
-struct CliOwnedLedger;
+pub(super) struct CliOwnedLedger;
 
 impl LedgerSink for CliOwnedLedger {
     fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> Result<(), LabError> {
@@ -487,7 +487,7 @@ impl LedgerSink for CliOwnedLedger {
     }
 }
 
-struct SystemClock;
+pub(super) struct SystemClock;
 
 impl Clock for SystemClock {
     fn now_unix_ms(&self) -> Result<u64, LabError> {
@@ -499,7 +499,7 @@ impl Clock for SystemClock {
     }
 }
 
-struct AppConfigSource {
+pub(super) struct AppConfigSource {
     config: UserConfig,
     state_root: Option<PathBuf>,
 }

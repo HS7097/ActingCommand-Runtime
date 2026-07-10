@@ -13,6 +13,8 @@ mod env_api;
 mod env_detection;
 mod ports;
 mod projection;
+mod readonly;
+mod readonly_api;
 mod state;
 
 pub use context::*;
@@ -20,6 +22,7 @@ pub use env_api::*;
 pub use env_detection::*;
 pub use ports::*;
 pub use projection::*;
+pub use readonly_api::*;
 pub use state::*;
 
 pub use actingcommand_contract::{LabError, LabResult};

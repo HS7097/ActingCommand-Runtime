@@ -95,6 +95,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-ledger",
+ "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "serde",

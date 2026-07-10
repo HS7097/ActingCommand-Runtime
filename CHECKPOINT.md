@@ -1,5 +1,66 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A4 read-only recognition/page migration complete
+
+### Current status
+
+- Moved `recognize`, `detect-page`, `current-page`, and `is-visible` use-case logic into `crates/lab` behind typed request/response models.
+- Reused A3's injected scene/capture path and generic env-marker resolver; no second capture or environment-resolution implementation was introduced.
+- Reused contract `EnvResolved` and `NeedsDetection` DTOs for all env-backed outputs. `detect-page` and `current-page` retain their distinct command identities in detection hints.
+- Preserved click-only recognition without requiring a scene, normal recognition/page evaluation shapes, standby recovery hints, detect-page semantic ledger projection, request/reco ids, Session-daemon routing, exit codes, and protocol fields.
+- Added a thin `readonly_cli` production adapter for flags/configuration, existing port construction, semantic-ledger records, serialization, and process-facing behavior.
+- Reduced all four `main.rs` command functions to one-line delegation and lowered the line ratchet from `59967` to `59792`.
+- Added four sealed Lab family tests covering recognition, click-only behavior, detect/current-page parity, and failed visibility without fake success.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/readonly_cli.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/env_detection.rs`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/readonly.rs`
+- `crates/lab/src/readonly/tests.rs`
+- `crates/lab/src/readonly_api.rs`
+- `ratchet/main_rs_lines.txt`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-lab`.
+- `cargo check -p actingcommand-actinglab`.
+- `cargo test -p actingcommand-lab readonly -- --nocapture`.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`.
+- `cargo clippy -p actingcommand-lab -p actingcommand-actinglab -- -D warnings`.
+- `cargo check --workspace`.
+- `cargo fmt --all -- --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace --quiet`.
+- `git diff --check`.
+
+### Test results
+
+- All four new Lab read-only family tests passed.
+- All 30 static A1 protocol golden cases passed unchanged.
+- All five architecture guards passed, including public API, dependency direction, command inventory, and exact line-ratchet checks.
+- Focused and workspace Clippy passed with warnings denied after boxing the two intentionally asymmetric typed response enum variants.
+- Full workspace formatting and compile checks passed.
+- The complete workspace suite passed: 670 ActingLab unit tests, 29 Lab tests, protocol goldens, integration suites, architecture guards, and compile-time UI tests.
+- Final diff whitespace validation passed.
+
+### Current blocker
+
+- No implementation blocker remains.
+
+### Next step
+
+1. Commit, tag, push, and report A4 in GitHub issue #34.
+2. Continue directly to A5 touch-control migration.
+
 ## 2026-07-10 issue 33 A3 environment detection migration complete
 
 ### Current status
