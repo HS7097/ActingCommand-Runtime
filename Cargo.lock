@@ -208,6 +208,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-scheduler"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+]
+
+[[package]]
 name = "actingcommand-task-loop"
 version = "0.1.0"
 dependencies = [

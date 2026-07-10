@@ -17,6 +17,7 @@ members = [
     "crates/recognition",
     "crates/recognition-pack",
     "crates/runtime-core",
+    "crates/scheduler",
     "crates/task-loop",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
@@ -42,6 +43,7 @@ actingcommand-pack-containment = { path = "crates/pack-containment" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }
+actingcommand-scheduler = { path = "crates/scheduler" }
 actingcommand-task-loop = { path = "crates/task-loop" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }

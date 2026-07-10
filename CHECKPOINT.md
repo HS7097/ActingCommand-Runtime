@@ -1,5 +1,56 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 2 per-instance scheduler seed
+
+### Current status
+
+- Added `actingcommand-scheduler` as the production C3a owner of per-instance write admission and lease state.
+- Implemented one active write lease per typed `InstanceId`, fixed monotonic TTL, busy rejection, connection ownership, idempotent acquire/renew/release behavior, expiry, disconnect cleanup, rollback, and affected-instance takeover cooldown.
+- Every write validation checks `owner_epoch`, `lease_id`, `instance_id`, `holder_id`, connection ownership, expiry, and cooldown before admission.
+- Release idempotency retains the originating connection guard, so a second IPC connection cannot replay another connection's completed release as success.
+- Frozen defaults are heartbeat `5_000 ms`, takeover cooldown `6_000 ms`, and lease TTL `120_000 ms`; invalid cooldown/heartbeat relationships fail fatally.
+- The scheduler contains no queue, priority, preemption, task lifecycle, device, IPC, ledger, capture, UI, or game behavior.
+- Added true zero-stagger concurrency tests for same-instance contention and independent-instance grants.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/scheduler/Cargo.toml`
+- `crates/scheduler/src/lib.rs`
+- `crates/scheduler/src/tests.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-scheduler -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-scheduler -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Scheduler tests passed: 12.
+- Architecture library and workspace guards passed: 14 + 16.
+- Full workspace tests passed, including unchanged A1 protocol goldens and C1 process/compile-fail suites.
+- Scheduler and full-workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+
+### Current blocker
+
+- None for C3a Task 2.
+
+### Next step
+
+1. Commit and push Task 2 with its planning/checkpoint evidence and record the commit in Issue #36.
+2. Implement Task 3 resident Runtime host, owner guard, typed local IPC, DeviceProxy, backend lifecycle, and critical ledger ordering.
+
 ## 2026-07-11 Issue 35 C3a Task 1 typed Runtime contract
 
 ### Current status

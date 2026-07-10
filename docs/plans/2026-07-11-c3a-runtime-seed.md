@@ -58,7 +58,7 @@ Status: complete.
 
 ## Task 2: Per-instance scheduler seed
 
-Status: next.
+Status: complete.
 
 - Create `crates/scheduler` without queue/preempt/task behavior.
 - Partition state by typed `InstanceId`.
@@ -69,6 +69,8 @@ Status: next.
 - Add zero-stagger same-instance and independent-instance concurrency tests.
 
 ## Task 3: Runtime host, owner guard, IPC, and DeviceProxy
+
+Status: next.
 
 - Create `crates/runtime-host`.
 - Acquire one OS-held owner file and append durable owner metadata. Persist active instance
