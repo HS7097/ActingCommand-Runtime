@@ -1,5 +1,42 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 approved resource-authoring amendment reconciliation
+
+### Current status
+
+- Re-read the latest Issue #35 body and every comment after C1 Task 2 approval.
+- Found one new approved narrow amendment: `AMENDMENT-Issue35-Lab-resource-authoring-ownership.md`.
+- Verified its SHA-256 as `de039ad910b0b8208d52b8582b260868d4bcd2b04ec2b272977890661a136b54`, matching Issue #35.
+- The amendment assigns the resource-authoring workflow to Lab, future deterministic authoring algorithms to developer-only `resource-tooling`, and immutable package consumption to production Runtime through shared `pack-containment`.
+- Production crates must not directly or transitively depend on `resource-tooling`; explicit publish must be transactional, ledger-recorded, rollback-safe, and must not automatically commit or push Git changes.
+- Issue #26 G2/G3 stay on the Runtime/client/containment consumption boundary.
+- The amendment explicitly leaves C1, C3a, C4, C2, C3b, and their ordering unchanged, so the next implementation step remains C1 Task 3.
+
+### Files changed
+
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json number,title,state,labels,body,comments,url,updatedAt`
+- `Get-FileHash C:\合作工作区\ActingCommand\AMENDMENT-Issue35-Lab-resource-authoring-ownership.md -Algorithm SHA256`
+- Read the complete approved amendment.
+
+### Test results
+
+- Authority reconciliation passed: issue filename, local file, base-spec hash, and amendment hash agree.
+- No source code changed in this reconciliation.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the reconciled planning/checkpoint state.
+2. Continue C1 Task 3 with query, subscription, and CLI/UI/Lab projection RED tests.
+
 ## 2026-07-10 Issue 35 C1 Task 2 single-writer storage
 
 ### Current status

@@ -13,6 +13,8 @@ The active approved architecture target is GitHub Issue #35:
 - `[架构纠偏][P0] 全局事件账本核心与可移除 Lab 调试管道`
 - Technical source of truth: `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`
 - Specification SHA-256: `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`
+- Approved resource-authoring amendment: `AMENDMENT-Issue35-Lab-resource-authoring-ownership.md`
+- Amendment SHA-256: `de039ad910b0b8208d52b8582b260868d4bcd2b04ec2b272977890661a136b54`
 - Accepted implementation baseline: `981f61f650c51a62f3c6c22fda781d2b98b3ceb8`
 - Historical paused RED evidence: `ead23d2acb3752507b5c6110c1cbf049e878cbbd`
 - Implementation branch: `issue-35-runtime-ledger-v3`
@@ -29,6 +31,18 @@ Current phase: C1 global event contract and ledger skeleton. Alice approved the 
 
 Issue #36 is the only execution-tracking Issue for this chain. Stage progress, implementation details, verification evidence, commits, and rollback anchors are recorded there; no additional subtask Issues are created.
 
+The approved resource-authoring amendment changes only the internal C5/C6 ownership split:
+
+- production Runtime consumes immutable packages through `pack-containment` and does not record, author, convert, build, or publish resources;
+- Lab is the formal user-facing resource-authoring workflow;
+- future `actingcommand-resource-tooling` is a Lab-owned developer-only deep module for deterministic draft, convert, package, validation, and transactional publish operations;
+- production crates must not directly or transitively depend on `actingcommand-resource-tooling`;
+- `pack-containment` remains shared by authoring validation and production `LoadedBundle` consumption;
+- explicit resource publication is transactional, ledger-recorded, rollback-safe, and never performs automatic Git commit or push;
+- Issue #26 G2/G3 remain consumption-side Runtime/containment responsibilities.
+
+This amendment does not change C1, C3a, C4, C2, C3b, the task order, or their acceptance semantics.
+
 C0 decisions include:
 
 - branch from the accepted A7 baseline without cherry-picking the paused A8a RED commit;
@@ -39,7 +53,7 @@ C0 decisions include:
 - rewrite A8a requirements as global-ledger writer and daemon ownership/fencing tests instead of implementing per-command state-file locking;
 - treat the approved frozen C0 payload as the binding C1-C7 architecture.
 
-Current implementation: C1 typed event contract, pre-persistence redaction, single-writer global ledger, append/query/subscribe/project foundations, crash recovery, and critical intent/outcome ordering.
+Current implementation: C1 Tasks 1-2 are complete and approved: typed event/query/projection contracts, pre-persistence redaction, and recoverable single-writer append storage. Task 3 query/subscription/projection behavior and Task 4 critical intent/action/outcome ordering are not implemented yet.
 
 ## Historical CLI-to-Lab extraction chain (superseded)
 
