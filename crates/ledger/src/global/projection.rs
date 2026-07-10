@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{EventQuery, PersistedEvent, ProjectedEvent, ProjectionProfile};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
@@ -89,24 +90,36 @@ impl EventIndexes {
 pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> ProjectedEvent {
     let payload = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => None,
-        ProjectionProfile::Ui
-        | ProjectionProfile::Normal
-        | ProjectionProfile::Lab
-        | ProjectionProfile::Verbose
-        | ProjectionProfile::Forensic => Some(event.payload.clone()),
+        ProjectionProfile::Ui | ProjectionProfile::Normal => ui_payload(event),
+        ProjectionProfile::Lab | ProjectionProfile::Verbose | ProjectionProfile::Forensic => {
+            Some(event.payload.clone())
+        }
     };
     ProjectedEvent {
+        schema_version: event.schema_version.clone(),
         sequence: event.sequence,
         event_id: event.event_id.clone(),
         timestamp_unix_ms: event.timestamp_unix_ms,
         event_type: event.event_type,
         severity: event.severity,
+        sensitivity: event.sensitivity,
         origin: event.origin.clone(),
         links: event.links.clone(),
         payload_schema: event.payload_schema.clone(),
         payload,
         artifacts: event.artifacts.clone(),
     }
+}
+
+fn ui_payload(event: &PersistedEvent) -> Option<Value> {
+    let mut payload = event.payload.clone();
+    let fields = payload.get_mut("fields")?.as_array_mut()?;
+    fields.retain(|field| field.get("sensitivity").and_then(Value::as_str) == Some("public"));
+    payload.as_object_mut()?.insert(
+        "sensitivity".to_string(),
+        Value::String("public".to_string()),
+    );
+    Some(payload)
 }
 
 fn insert_link(

@@ -1123,11 +1123,13 @@ pub enum ProjectionProfile {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectedEvent {
+    pub schema_version: String,
     pub sequence: u64,
     pub event_id: String,
     pub timestamp_unix_ms: u64,
     pub event_type: EventType,
     pub severity: EventSeverity,
+    pub sensitivity: Sensitivity,
     pub origin: EventOrigin,
     pub links: EventLinks,
     pub payload_schema: String,

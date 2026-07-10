@@ -11,10 +11,11 @@ use actingcommand_contract::{
     SubscriptionCursor,
 };
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use storage::SegmentStore;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SEGMENT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_INGRESS_CAPACITY: usize = 256;
+const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 64;
 
 pub type GlobalLedgerResult<T> = Result<T, GlobalLedgerError>;
 
@@ -48,7 +50,7 @@ impl GlobalLedgerError {
     }
 
     pub fn is_fatal(&self) -> bool {
-        true
+        self.terminal
     }
 
     fn fatal(code: &'static str, operation: &'static str) -> Self {
@@ -96,7 +98,7 @@ impl fmt::Display for GlobalLedgerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "global ledger fatal error {} during {}",
+            "global ledger error {} during {}",
             self.code, self.operation
         )
     }
@@ -117,6 +119,7 @@ pub struct GlobalLedgerConfig {
     owner_id: String,
     segment_max_bytes: u64,
     ingress_capacity: usize,
+    subscription_capacity: usize,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -127,6 +130,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("owner_id", &self.owner_id)
             .field("segment_max_bytes", &self.segment_max_bytes)
             .field("ingress_capacity", &self.ingress_capacity)
+            .field("subscription_capacity", &self.subscription_capacity)
             .finish()
     }
 }
@@ -138,6 +142,7 @@ impl GlobalLedgerConfig {
             owner_id: owner_id.into(),
             segment_max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
             ingress_capacity: DEFAULT_INGRESS_CAPACITY,
+            subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
         }
     }
 
@@ -148,6 +153,11 @@ impl GlobalLedgerConfig {
 
     pub fn with_ingress_capacity(mut self, capacity: usize) -> Self {
         self.ingress_capacity = capacity;
+        self
+    }
+
+    pub fn with_subscription_capacity(mut self, capacity: usize) -> Self {
+        self.subscription_capacity = capacity;
         self
     }
 
@@ -174,6 +184,12 @@ impl GlobalLedgerConfig {
             return Err(GlobalLedgerError::fatal(
                 "invalid_ledger_config",
                 "validate_ingress_capacity",
+            ));
+        }
+        if self.subscription_capacity == 0 {
+            return Err(GlobalLedgerError::fatal(
+                "invalid_ledger_config",
+                "validate_subscription_capacity",
             ));
         }
         Ok(())
@@ -245,6 +261,10 @@ enum WriterCommand {
     Shutdown {
         response: SyncSender<GlobalLedgerResult<()>>,
     },
+    #[cfg(test)]
+    TestTerminalFailure { error: GlobalLedgerError },
+    #[cfg(test)]
+    TestSubscriberCount { response: SyncSender<usize> },
 }
 
 pub struct GlobalLedger {
@@ -253,16 +273,45 @@ pub struct GlobalLedger {
 }
 
 pub struct LedgerSubscription {
-    receiver: Receiver<PersistedEvent>,
+    replay: VecDeque<PersistedEvent>,
+    live: Receiver<PersistedEvent>,
+    terminal: Receiver<GlobalLedgerError>,
 }
 
 impl LedgerSubscription {
-    pub fn recv_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<PersistedEvent, mpsc::RecvTimeoutError> {
-        self.receiver.recv_timeout(timeout)
+    pub fn recv_timeout(&mut self, timeout: Duration) -> GlobalLedgerResult<PersistedEvent> {
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
+        if let Some(event) = self.replay.pop_front() {
+            return Ok(event);
+        }
+        let result = match self.live.recv_timeout(timeout) {
+            Ok(event) => Ok(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
+                "subscription_timeout",
+                "receive_subscription",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(GlobalLedgerError::request(
+                "subscription_closed",
+                "receive_subscription",
+            )),
+        };
+        if let Some(error) = self.terminal_error() {
+            return Err(error);
+        }
+        result
     }
+
+    fn terminal_error(&self) -> Option<GlobalLedgerError> {
+        self.terminal.try_recv().ok()
+    }
+}
+
+struct ActiveSubscription {
+    after_sequence: u64,
+    live: SyncSender<PersistedEvent>,
+    terminal: SyncSender<GlobalLedgerError>,
 }
 
 impl fmt::Debug for GlobalLedger {
@@ -289,6 +338,7 @@ impl GlobalLedger {
     {
         config.validate()?;
         let capacity = config.ingress_capacity;
+        let subscription_capacity = config.subscription_capacity;
         let (sender, receiver) = mpsc::sync_channel(capacity);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let writer = thread::Builder::new()
@@ -304,7 +354,7 @@ impl GlobalLedger {
                         return Err(error);
                     }
                 };
-                writer_loop(store, receiver)
+                writer_loop(store, receiver, subscription_capacity)
             })
             .map_err(|error| {
                 GlobalLedgerError::io("writer_spawn_failed", "spawn_writer", &error)
@@ -450,6 +500,7 @@ impl Drop for GlobalLedger {
 fn writer_loop(
     mut store: SegmentStore,
     receiver: Receiver<WriterCommand>,
+    subscription_capacity: usize,
 ) -> GlobalLedgerResult<()> {
     let mut subscribers = Vec::new();
     while let Ok(command) = receiver.recv() {
@@ -457,27 +508,39 @@ fn writer_loop(
             WriterCommand::Append { draft, response } => {
                 let result = store.append(*draft);
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
-                let _ = response.send(result.clone());
                 if let Ok(event) = &result {
-                    subscribers.retain(|subscriber: &Sender<PersistedEvent>| {
-                        subscriber.send(event.clone()).is_ok()
-                    });
+                    let _ = response.send(Ok(event.clone()));
+                    deliver_live_event(&mut subscribers, event);
                 }
                 if terminal {
-                    return Err(result.expect_err("terminal append result must be an error"));
+                    let error = result.expect_err("terminal append result must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                if let Err(error) = result {
+                    let _ = response.send(Err(error));
                 }
             }
             WriterCommand::Query { query, response } => {
                 let _ = response.send(Ok(store.query(&query)));
             }
             WriterCommand::Subscribe { cursor, response } => {
-                let replay = store.events_after(cursor.after_sequence);
-                let (subscriber, receiver) = mpsc::channel();
-                for event in replay {
-                    let _ = subscriber.send(event);
+                let replay = VecDeque::from(store.events_after(cursor.after_sequence));
+                let (live, live_receiver) = mpsc::sync_channel(subscription_capacity);
+                let (terminal, terminal_receiver) = mpsc::sync_channel(1);
+                let subscription = LedgerSubscription {
+                    replay,
+                    live: live_receiver,
+                    terminal: terminal_receiver,
+                };
+                if response.send(Ok(subscription)).is_ok() {
+                    subscribers.push(ActiveSubscription {
+                        after_sequence: cursor.after_sequence,
+                        live,
+                        terminal,
+                    });
                 }
-                subscribers.push(subscriber);
-                let _ = response.send(Ok(LedgerSubscription { receiver }));
             }
             WriterCommand::Project {
                 query,
@@ -493,12 +556,57 @@ fn writer_loop(
             }
             WriterCommand::Shutdown { response } => {
                 let result = store.close();
-                let _ = response.send(result.clone());
-                return result;
+                match result {
+                    Ok(()) => {
+                        let _ = response.send(Ok(()));
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        notify_terminal_failure(&mut subscribers, error.clone());
+                        let _ = response.send(Err(error.clone()));
+                        return Err(error);
+                    }
+                }
+            }
+            #[cfg(test)]
+            WriterCommand::TestTerminalFailure { error } => {
+                notify_terminal_failure(&mut subscribers, error.clone());
+                return Err(error);
+            }
+            #[cfg(test)]
+            WriterCommand::TestSubscriberCount { response } => {
+                let _ = response.send(subscribers.len());
             }
         }
     }
-    store.close()
+    let result = store.close();
+    if let Err(error) = &result {
+        notify_terminal_failure(&mut subscribers, error.clone());
+    }
+    result
+}
+
+fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &PersistedEvent) {
+    subscribers.retain(|subscriber| {
+        if event.sequence <= subscriber.after_sequence {
+            return true;
+        }
+        match subscriber.live.try_send(event.clone()) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                let _ = subscriber.terminal.try_send(GlobalLedgerError::fatal(
+                    "subscription_lagged",
+                    "deliver_subscription",
+                ));
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    });
+}
+
+fn notify_terminal_failure(subscribers: &mut Vec<ActiveSubscription>, error: GlobalLedgerError) {
+    subscribers.retain(|subscriber| subscriber.terminal.try_send(error.clone()).is_ok());
 }
 
 fn send_command(

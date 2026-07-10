@@ -190,7 +190,7 @@ fn subscription_replays_after_cursor_then_receives_live_events() {
     let first = ledger.append(event("evt-one")).expect("append one");
     let replay = ledger.append(event("evt-two")).expect("append two");
 
-    let subscription = ledger
+    let mut subscription = ledger
         .subscribe(SubscriptionCursor {
             after_sequence: first.sequence,
         })
@@ -208,6 +208,183 @@ fn subscription_replays_after_cursor_then_receives_live_events() {
             .recv_timeout(Duration::from_secs(1))
             .expect("live event"),
         live
+    );
+}
+
+#[test]
+fn subscription_reports_timeout_and_clean_close_separately() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let mut subscription = ledger
+        .subscribe(SubscriptionCursor::default())
+        .expect("subscribe");
+
+    let timeout = subscription
+        .recv_timeout(Duration::from_millis(50))
+        .expect_err("empty subscription must time out");
+    assert_eq!(timeout.code(), "subscription_timeout");
+    assert!(!timeout.is_fatal());
+
+    ledger.close().expect("close ledger");
+    let closed = subscription
+        .recv_timeout(Duration::from_millis(50))
+        .expect_err("closed subscription must report closure");
+    assert_eq!(closed.code(), "subscription_closed");
+    assert!(!closed.is_fatal());
+}
+
+#[test]
+fn dropped_subscription_does_not_block_remaining_live_subscribers() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one").with_subscription_capacity(1))
+        .expect("ledger");
+    drop(
+        ledger
+            .subscribe(SubscriptionCursor::default())
+            .expect("dropped subscription"),
+    );
+    let mut active = ledger
+        .subscribe(SubscriptionCursor::default())
+        .expect("active subscription");
+
+    let event = ledger.append(event("evt-active")).expect("append event");
+    assert_eq!(
+        active
+            .recv_timeout(Duration::from_secs(1))
+            .expect("active subscriber event"),
+        event
+    );
+}
+
+#[test]
+fn dropped_subscription_response_does_not_register_a_live_sender() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let (response, dropped_receiver) = mpsc::sync_channel(1);
+    drop(dropped_receiver);
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::Subscribe {
+            cursor: SubscriptionCursor::default(),
+            response,
+        })
+        .expect("enqueue dropped subscription response");
+    let (count_response, count_receiver) = mpsc::sync_channel(1);
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestSubscriberCount {
+            response: count_response,
+        })
+        .expect("enqueue subscriber count");
+
+    assert_eq!(
+        count_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("subscriber count"),
+        0
+    );
+}
+
+#[test]
+fn subscription_reports_terminal_writer_failure() {
+    let temp = TempDir::new().expect("temp");
+    let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let mut subscription = ledger
+        .subscribe(SubscriptionCursor::default())
+        .expect("subscribe");
+    let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+
+    let (count_response, count_receiver) = mpsc::sync_channel(1);
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestSubscriberCount {
+            response: count_response,
+        })
+        .expect("request subscriber count");
+    assert_eq!(
+        count_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("subscriber count"),
+        1
+    );
+
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestTerminalFailure {
+            error: terminal.clone(),
+        })
+        .expect("inject terminal failure");
+
+    let received = subscription
+        .recv_timeout(Duration::from_secs(1))
+        .expect_err("terminal writer error must reach subscription");
+    assert_eq!(received, terminal);
+    assert!(received.is_fatal());
+
+    ledger.sender.take();
+    let writer = ledger.writer.take().expect("writer handle");
+    assert_eq!(
+        writer
+            .join()
+            .expect("writer must not panic")
+            .expect_err("writer must return terminal error"),
+        terminal
+    );
+}
+
+#[test]
+fn slow_subscription_receives_bounded_lag_failure() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one").with_subscription_capacity(1))
+        .expect("ledger");
+    let mut subscription = ledger
+        .subscribe(SubscriptionCursor::default())
+        .expect("subscribe");
+
+    ledger.append(event("evt-lag-one")).expect("first event");
+    ledger.append(event("evt-lag-two")).expect("second event");
+
+    let error = subscription
+        .recv_timeout(Duration::from_secs(1))
+        .expect_err("lagged subscriber must receive fatal status");
+    assert_eq!(error.code(), "subscription_lagged");
+    assert!(error.is_fatal());
+}
+
+#[test]
+fn subscription_suppresses_events_before_a_future_cursor() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let mut subscription = ledger
+        .subscribe(SubscriptionCursor { after_sequence: 3 })
+        .expect("subscribe");
+
+    for event_id in ["evt-one", "evt-two", "evt-three"] {
+        ledger
+            .append(event(event_id))
+            .expect("append suppressed event");
+    }
+    let timeout = subscription
+        .recv_timeout(Duration::from_millis(50))
+        .expect_err("future cursor must suppress earlier live events");
+    assert_eq!(timeout.code(), "subscription_timeout");
+
+    let visible = ledger
+        .append(event("evt-four"))
+        .expect("append visible event");
+    assert_eq!(
+        subscription
+            .recv_timeout(Duration::from_secs(1))
+            .expect("future cursor event"),
+        visible
     );
 }
 
@@ -271,6 +448,46 @@ fn ui_projection_exposes_sanitized_state_without_secret_fields() {
 }
 
 #[test]
+fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let persisted = ledger
+        .append(event_with_links(
+            "evt-projection-separation",
+            EventLinks::default(),
+            vec![
+                ClassifiedField::public("state", "visible").expect("public field"),
+                ClassifiedField::internal("operator_note", "internal-value")
+                    .expect("internal field"),
+                ClassifiedField::secret_fingerprint("token", "secret-value").expect("secret field"),
+            ],
+        ))
+        .expect("append");
+
+    let ui = ledger
+        .project(EventQuery::default(), ProjectionProfile::Ui)
+        .expect("UI project");
+    let ui_payload = ui[0].payload.as_ref().expect("UI payload").to_string();
+    assert!(ui_payload.contains("visible"));
+    assert!(!ui_payload.contains("internal-value"));
+    assert!(!ui_payload.contains("sha256:"));
+
+    let normal = ledger
+        .project(EventQuery::default(), ProjectionProfile::Normal)
+        .expect("Normal project");
+    assert_eq!(normal[0].payload, ui[0].payload);
+
+    let lab = ledger
+        .project(EventQuery::default(), ProjectionProfile::Lab)
+        .expect("Lab project");
+    let lab_payload = lab[0].payload.as_ref().expect("Lab payload").to_string();
+    assert!(lab_payload.contains("internal-value"));
+    assert!(lab_payload.contains("sha256:"));
+    assert_eq!(lab[0].schema_version, persisted.schema_version);
+    assert_eq!(lab[0].sensitivity, persisted.sensitivity);
+}
+
+#[test]
 fn lab_projection_exposes_full_sanitized_fact() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
@@ -291,6 +508,8 @@ fn lab_projection_exposes_full_sanitized_fact() {
 
     assert_eq!(projected.len(), 1);
     assert_eq!(projected[0].sequence, persisted.sequence);
+    assert_eq!(projected[0].schema_version, persisted.schema_version);
+    assert_eq!(projected[0].sensitivity, persisted.sensitivity);
     assert_eq!(projected[0].links, persisted.links);
     assert_eq!(projected[0].payload.as_ref(), Some(&persisted.payload));
     assert_eq!(projected[0].artifacts, persisted.artifacts);
@@ -301,6 +520,7 @@ fn indexes_rebuild_after_reopen() {
     let temp = TempDir::new().expect("temp");
     let links = EventLinks {
         request_id: Some("request-reopen".to_string()),
+        correlation_id: Some("correlation-reopen".to_string()),
         ..EventLinks::default()
     };
     let first = GlobalLedger::open(config(&temp, "writer-one")).expect("first ledger");
@@ -314,10 +534,70 @@ fn indexes_rebuild_after_reopen() {
         reopened
             .query(EventQuery {
                 request_id: links.request_id,
+                correlation_id: links.correlation_id,
                 ..EventQuery::default()
             })
             .expect("query rebuilt index"),
         vec![appended]
+    );
+}
+
+#[test]
+fn query_intersects_multiple_links_in_sequence_order() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+    let first = ledger
+        .append(event_with_links(
+            "evt-intersection-first",
+            EventLinks {
+                instance_id: Some("instance-intersection".to_string()),
+                request_id: Some("request-intersection".to_string()),
+                ..EventLinks::default()
+            },
+            vec![],
+        ))
+        .expect("first matching event");
+    ledger
+        .append(event_with_links(
+            "evt-intersection-other",
+            EventLinks {
+                instance_id: Some("instance-intersection".to_string()),
+                request_id: Some("request-other".to_string()),
+                ..EventLinks::default()
+            },
+            vec![],
+        ))
+        .expect("nonmatching event");
+    let second = ledger
+        .append(event_with_links(
+            "evt-intersection-second",
+            EventLinks {
+                instance_id: Some("instance-intersection".to_string()),
+                request_id: Some("request-intersection".to_string()),
+                ..EventLinks::default()
+            },
+            vec![],
+        ))
+        .expect("second matching event");
+
+    let matching = ledger
+        .query(EventQuery {
+            instance_id: Some("instance-intersection".to_string()),
+            request_id: Some("request-intersection".to_string()),
+            ..EventQuery::default()
+        })
+        .expect("intersection query");
+    assert_eq!(matching, vec![first.clone(), second.clone()]);
+    assert_eq!(
+        ledger
+            .query(EventQuery {
+                instance_id: Some("instance-intersection".to_string()),
+                request_id: Some("request-intersection".to_string()),
+                from_sequence: Some(second.sequence),
+                ..EventQuery::default()
+            })
+            .expect("bounded intersection query"),
+        vec![second]
     );
 }
 
