@@ -1,11 +1,11 @@
 use super::*;
 use actingcommand_contract::{
-    ArtifactKind, ArtifactLinksDraft, ArtifactRedactionState, ArtifactStoreIssuer, AuditInput,
-    ClientPayloadDraft, CorrelationId, EventAction, EventActor, EventDraft, EventId,
-    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, IdentifierIssuer,
-    OriginModule, ProjectedEvent, ProjectionPayload, Sensitivity,
+    ArtifactRedactionState, AuditInput, ClientPayloadDraft, CorrelationId, EventAction, EventActor,
+    EventDraft, EventId, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource,
+    IdentifierIssuer, OriginModule, ProjectedEvent, ProjectionPayload, Sensitivity,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs;
 use tempfile::TempDir;
 
@@ -33,7 +33,7 @@ fn config(temp: &TempDir, owner: &str) -> GlobalLedgerConfig {
         .with_ingress_capacity(8)
 }
 
-fn event(index: u64, with_artifact: bool) -> EventFixture {
+fn event(index: u64) -> EventFixture {
     let identifiers = identifier_issuer();
     let event_id = identifiers.mint_event_id().expect("event id");
     let expected_event_id = *event_id.transport();
@@ -55,23 +55,6 @@ fn event(index: u64, with_artifact: bool) -> EventFixture {
         EventLinksDraft::default().with_correlation_id(correlation_id),
         payload.into(),
     );
-    let draft = if with_artifact {
-        let bytes = ARTIFACT_SECRETS.join("|");
-        let artifact = ArtifactStoreIssuer::new()
-            .expect("artifact issuer")
-            .issue_pending(
-                ArtifactKind::CaptureFrame,
-                ArtifactLinksDraft::default()
-                    .with_run_id(identifiers.mint_run_id().expect("run id"))
-                    .with_correlation_id(correlation_id),
-                bytes.as_bytes(),
-                1_752_147_200_000,
-            )
-            .expect("artifact");
-        draft.with_artifacts(vec![artifact])
-    } else {
-        draft
-    };
     EventFixture {
         draft: draft
             .sanitize(
@@ -83,11 +66,75 @@ fn event(index: u64, with_artifact: bool) -> EventFixture {
     }
 }
 
+fn canonical_id<T: serde::Serialize>(value: T) -> String {
+    serde_json::to_value(value)
+        .expect("serialize id")
+        .as_str()
+        .expect("canonical id")
+        .to_string()
+}
+
+fn canonical_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{digest:x}")
+}
+
+fn inject_artifact_record(temp: &TempDir, correlation_id: CorrelationId, bytes: &[u8]) {
+    let identifiers = identifier_issuer();
+    let artifact_id = canonical_id(
+        *identifiers
+            .mint_artifact_id()
+            .expect("artifact id")
+            .transport(),
+    );
+    let run_id = canonical_id(*identifiers.mint_run_id().expect("run id").transport());
+    let frame_id = canonical_id(*identifiers.mint_frame_id().expect("frame id").transport());
+    let sha256 = canonical_sha256(bytes);
+    let object_key = format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id);
+    let segment_path = temp.path().join("segments/segment-000001.jsonl");
+    let source = fs::read_to_string(&segment_path).expect("segment");
+    let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
+    line["event"]["sensitivity"] = Value::String("secret".to_string());
+    line["event"]["artifacts"] = serde_json::json!([{
+        "artifact_id": artifact_id,
+        "kind": "capture.frame",
+        "run_id": run_id,
+        "frame_id": frame_id,
+        "correlation_id": correlation_id,
+        "object_key": object_key,
+        "media_type": "image/png",
+        "byte_count": u64::try_from(bytes.len()).expect("byte count"),
+        "sha256": sha256,
+        "created_at_unix_ms": 1_752_147_200_000u64,
+        "producer": "capture_store",
+        "retention_class": "adaptive",
+        "redaction_state": "pending"
+    }]);
+    fs::write(
+        &segment_path,
+        format!("{}\n", serde_json::to_string(&line).expect("artifact line")),
+    )
+    .expect("write artifact line");
+}
+
+fn seed_recovered_artifact_event(temp: &TempDir, owner: &str, index: u64) -> EventFixture {
+    let fixture = event(index);
+    let ledger = GlobalLedger::open(config(temp, owner)).expect("ledger");
+    ledger.append(fixture.draft.clone()).expect("append");
+    ledger.close().expect("close");
+    inject_artifact_record(
+        temp,
+        fixture.correlation_id,
+        ARTIFACT_SECRETS.join("|").as_bytes(),
+    );
+    fixture
+}
+
 #[test]
 fn persisted_event_cannot_be_constructed_or_deserialized_by_consumers() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-fact")).expect("ledger");
-    let fixture = event(1, false);
+    let fixture = event(1);
     let expected_id = fixture.event_id;
     let persisted = ledger.append(fixture.draft).expect("append");
     let serialized = serde_json::to_value(&persisted).expect("serialize persisted fact");
@@ -102,8 +149,8 @@ fn storage_assigns_the_only_sequence() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-sequence")).expect("ledger");
 
-    let first = ledger.append(event(1, false).draft).expect("first append");
-    let second = ledger.append(event(2, false).draft).expect("second append");
+    let first = ledger.append(event(1).draft).expect("first append");
+    let second = ledger.append(event(2).draft).expect("second append");
 
     assert_eq!(first.sequence(), 1);
     assert_eq!(second.sequence(), 2);
@@ -129,21 +176,24 @@ fn v1_generic_segment_fails_loudly() {
 #[test]
 fn typed_record_recovery_rebuilds_same_fact() {
     let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-first")).expect("ledger");
-    let expected = ledger.append(event(1, true).draft).expect("append");
-    ledger.close().expect("close");
-
+    let fixture = seed_recovered_artifact_event(&temp, "writer-first", 1);
     let reopened = GlobalLedger::open(config(&temp, "writer-second")).expect("reopen");
     let recovered = reopened.query(EventQuery::default()).expect("query");
 
-    assert_eq!(recovered, vec![expected]);
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].event_id(), &fixture.event_id);
+    assert_eq!(
+        recovered[0].links().correlation_id(),
+        Some(&fixture.correlation_id)
+    );
+    assert_eq!(recovered[0].artifacts().len(), 1);
 }
 
 #[test]
 fn concise_projection_omits_payload() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-concise")).expect("ledger");
-    ledger.append(event(1, false).draft).expect("append");
+    ledger.append(event(1).draft).expect("append");
 
     let projected = ledger
         .project(EventQuery::default(), ProjectionProfile::Concise)
@@ -156,7 +206,7 @@ fn concise_projection_omits_payload() {
 fn ui_projection_contains_only_public_typed_payload() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-ui")).expect("ledger");
-    ledger.append(event(1, false).draft).expect("append");
+    ledger.append(event(1).draft).expect("append");
 
     let projected = ledger
         .project(EventQuery::default(), ProjectionProfile::Ui)
@@ -184,7 +234,7 @@ fn ui_projection_contains_only_public_typed_payload() {
 fn lab_projection_contains_full_sanitized_typed_payload() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-lab")).expect("ledger");
-    let persisted = ledger.append(event(1, false).draft).expect("append");
+    let persisted = ledger.append(event(1).draft).expect("append");
 
     let projected = ledger
         .project(EventQuery::default(), ProjectionProfile::Lab)
@@ -199,8 +249,8 @@ fn lab_projection_contains_full_sanitized_typed_payload() {
 #[test]
 fn ui_projection_omits_artifact_object_key() {
     let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-artifact-ui")).expect("ledger");
-    ledger.append(event(1, true).draft).expect("append");
+    seed_recovered_artifact_event(&temp, "writer-artifact-ui", 1);
+    let ledger = GlobalLedger::open(config(&temp, "writer-artifact-ui-reopen")).expect("ledger");
 
     let ui = ledger
         .project(EventQuery::default(), ProjectionProfile::Ui)
@@ -221,10 +271,13 @@ fn ui_projection_omits_artifact_object_key() {
 #[test]
 fn artifact_bytes_and_metadata_are_safe_across_persistence_query_and_every_projection() {
     let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-artifact")).expect("ledger");
-    let fixture = event(1, true);
+    let fixture = seed_recovered_artifact_event(&temp, "writer-artifact", 1);
     let correlation_id = fixture.correlation_id;
-    let persisted = ledger.append(fixture.draft).expect("append");
+    let ledger = GlobalLedger::open(config(&temp, "writer-artifact-reopen")).expect("ledger");
+    let persisted = ledger
+        .query(EventQuery::default())
+        .expect("query")
+        .remove(0);
 
     assert_eq!(persisted.sensitivity(), Sensitivity::Secret);
     assert_eq!(
@@ -302,9 +355,7 @@ fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
 
     for (label, mutate) in mutations {
         let temp = TempDir::new().expect("temp");
-        let ledger = GlobalLedger::open(config(&temp, "writer-mutate")).expect("ledger");
-        ledger.append(event(1, true).draft).expect("append");
-        ledger.close().expect("close");
+        seed_recovered_artifact_event(&temp, "writer-mutate", 1);
         let segment_path = temp.path().join("segments/segment-000001.jsonl");
         let source = fs::read_to_string(&segment_path).expect("segment");
         let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
@@ -327,10 +378,53 @@ fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
 }
 
 #[test]
+fn coherent_artifact_metadata_mutation_recovers_without_store_authorization_claims() {
+    let temp = TempDir::new().expect("temp");
+    seed_recovered_artifact_event(&temp, "writer-coherent-artifact", 1);
+    let segment_path = temp.path().join("segments/segment-000001.jsonl");
+    let source = fs::read_to_string(&segment_path).expect("segment");
+    let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
+    let artifact = line["event"]["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact object");
+    assert!(
+        !artifact.contains_key("store_authorization"),
+        "artifact recovery shape must not claim provenance with store_authorization"
+    );
+
+    let sha256 = format!("sha256:{}", "c".repeat(64));
+    let artifact_id = artifact
+        .get("artifact_id")
+        .and_then(Value::as_str)
+        .expect("artifact id")
+        .to_string();
+    artifact.insert("byte_count".to_string(), Value::from(999_u64));
+    artifact.insert("sha256".to_string(), Value::String(sha256.clone()));
+    artifact.insert(
+        "object_key".to_string(),
+        Value::String(format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id)),
+    );
+    fs::write(
+        &segment_path,
+        format!("{}\n", serde_json::to_string(&line).expect("mutated line")),
+    )
+    .expect("write mutation");
+
+    let reopened = GlobalLedger::open(config(&temp, "writer-coherent-recover"))
+        .expect("coherent artifact recovery");
+    let recovered = reopened.query(EventQuery::default()).expect("query");
+
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].artifacts()[0].byte_count(), 999);
+    assert_eq!(recovered[0].artifacts()[0].sha256(), sha256);
+}
+
+#[test]
 fn projected_event_rejects_unknown_projection_nesting_without_disclosure() {
     let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-projection-strict")).expect("ledger");
-    ledger.append(event(1, true).draft).expect("append");
+    seed_recovered_artifact_event(&temp, "writer-projection-strict", 1);
+    let ledger =
+        GlobalLedger::open(config(&temp, "writer-projection-strict-reopen")).expect("ledger");
     let projected = ledger
         .project(EventQuery::default(), ProjectionProfile::Lab)
         .expect("projection")

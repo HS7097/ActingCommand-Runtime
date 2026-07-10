@@ -242,7 +242,9 @@ pub fn inspect_producer_event_capabilities(
     source: &str,
 ) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let aliases = local_type_aliases(&file.items);
     let mut violations = Vec::new();
+    let mut found_store_issued_artifact = false;
     for item in &file.items {
         match item {
             Item::Impl(item_impl)
@@ -257,10 +259,10 @@ pub fn inspect_producer_event_capabilities(
                     }
                     if method.sig.ident == "new"
                         && (method_argument_type(method, "event_id")
-                            .and_then(type_last_ident)
+                            .and_then(|ty| resolved_type_ident(ty, &aliases))
                             .is_none_or(|ident| ident != "IssuedEventId")
                             || method_argument_type(method, "links")
-                                .and_then(type_last_ident)
+                                .and_then(|ty| resolved_type_ident(ty, &aliases))
                                 .is_none_or(|ident| ident != "EventLinksDraft"))
                     {
                         violations.push(format!(
@@ -268,8 +270,10 @@ pub fn inspect_producer_event_capabilities(
                         ));
                     }
                     if method.sig.ident == "with_artifacts"
-                        && !method_argument_type(method, "artifacts")
-                            .is_some_and(|ty| type_contains_ident(ty, "StoreIssuedArtifact"))
+                        && !method_argument_type(method, "artifacts").is_some_and(|ty| {
+                            vec_inner_resolved_ident(ty, &aliases)
+                                .is_some_and(|ident| ident == "StoreIssuedArtifact")
+                        })
                     {
                         violations.push(format!(
                             "{path}: EventDraft::with_artifacts must require StoreIssuedArtifact"
@@ -300,7 +304,7 @@ pub fn inspect_producer_event_capabilities(
                     let valid = method.is_some_and(|method| {
                         is_public(&method.vis)
                             && method_argument_type(method, "value")
-                                .and_then(type_last_ident)
+                                .and_then(|ty| resolved_type_ident(ty, &aliases))
                                 .is_some_and(|ident| ident == expected_type)
                     });
                     if !valid {
@@ -311,6 +315,7 @@ pub fn inspect_producer_event_capabilities(
                 }
             }
             Item::Struct(item_struct) if item_struct.ident == "StoreIssuedArtifact" => {
+                found_store_issued_artifact = true;
                 if derives_ident(&item_struct.attrs, "Serialize")
                     || derives_ident(&item_struct.attrs, "Deserialize")
                 {
@@ -322,6 +327,44 @@ pub fn inspect_producer_event_capabilities(
                     violations.push(format!(
                         "{path}: StoreIssuedArtifact must not expose public fields"
                     ));
+                }
+            }
+            Item::Struct(item_struct)
+                if is_public(&item_struct.vis) && item_struct.ident == "ArtifactStoreIssuer" =>
+            {
+                violations.push(format!(
+                    "{path}: public ArtifactStoreIssuer is forbidden until the real store boundary exists"
+                ));
+            }
+            Item::Type(item_type) if is_public(&item_type.vis) => {
+                if item_type.ident == "ArtifactStoreIssuer" {
+                    violations.push(format!(
+                        "{path}: public ArtifactStoreIssuer alias is forbidden until the real store boundary exists"
+                    ));
+                }
+                if resolved_type_ident(&item_type.ty, &aliases)
+                    .is_some_and(|ident| ident == "StoreIssuedArtifact")
+                {
+                    violations.push(format!(
+                        "{path}: public type alias {} exposes StoreIssuedArtifact",
+                        item_type.ident
+                    ));
+                }
+            }
+            Item::Use(item_use) if is_public(&item_use.vis) => {
+                for (local, target) in public_use_aliases(&item_use.tree) {
+                    if local == "ArtifactStoreIssuer" || target == "ArtifactStoreIssuer" {
+                        violations.push(format!("{path}: public use exposes ArtifactStoreIssuer"));
+                    }
+                    if local == "StoreIssuedArtifact" || target == "StoreIssuedArtifact" {
+                        violations.push(format!(
+                            "{path}: public use exposes StoreIssuedArtifact under {local}"
+                        ));
+                    }
+                    if local == "StaticCode" || target == "StaticCode" {
+                        violations
+                            .push(format!("{path}: producer event surface retains StaticCode"));
+                    }
                 }
             }
             Item::Impl(item_impl)
@@ -347,22 +390,128 @@ pub fn inspect_producer_event_capabilities(
                     }
                 }
             }
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl)
+                    .is_some_and(|ident| ident == "StoreIssuedArtifact") =>
+            {
+                if let Some((_, trait_path, _)) = &item_impl.trait_
+                    && trait_path.segments.last().is_some_and(|segment| {
+                        matches!(
+                            segment.ident.to_string().as_str(),
+                            "Serialize"
+                                | "Deserialize"
+                                | "From"
+                                | "TryFrom"
+                                | "FromStr"
+                                | "Default"
+                        )
+                    })
+                {
+                    violations.push(format!(
+                        "{path}: StoreIssuedArtifact implements producer-visible constructor or serde trait"
+                    ));
+                }
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = impl_item else {
+                        continue;
+                    };
+                    let has_receiver = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|input| matches!(input, FnArg::Receiver(_)));
+                    if is_public(&method.vis)
+                        && !has_receiver
+                        && signature_returns_resolved_ident(
+                            &method.sig,
+                            "StoreIssuedArtifact",
+                            &aliases,
+                        )
+                    {
+                        violations.push(format!(
+                            "{path}: StoreIssuedArtifact has public constructor {}",
+                            method.sig.ident
+                        ));
+                    }
+                }
+            }
+            Item::Impl(item_impl) if impl_self_ident(item_impl).is_some_and(is_transport_id) => {
+                if item_impl
+                    .trait_
+                    .as_ref()
+                    .and_then(|(_, path, _)| path.segments.last())
+                    .is_some_and(|segment| segment.ident == "Display")
+                {
+                    violations.push(format!(
+                        "{path}: transport identifier {} exposes Display",
+                        impl_self_ident(item_impl).expect("transport impl")
+                    ));
+                }
+                for impl_item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = impl_item else {
+                        continue;
+                    };
+                    let has_receiver = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|input| matches!(input, FnArg::Receiver(_)));
+                    if is_public(&method.vis)
+                        && !has_receiver
+                        && signature_returns_any_resolved_ident(
+                            &method.sig,
+                            &[
+                                "Self".to_string(),
+                                impl_self_ident(item_impl)
+                                    .expect("transport impl")
+                                    .to_string(),
+                            ],
+                            &aliases,
+                        )
+                    {
+                        violations.push(format!(
+                            "{path}: transport identifier {} exposes public constructor {}",
+                            impl_self_ident(item_impl).expect("transport impl"),
+                            method.sig.ident
+                        ));
+                    }
+                }
+            }
+            Item::Fn(function) if is_public(&function.vis) => {
+                if signature_returns_resolved_ident(&function.sig, "StoreIssuedArtifact", &aliases)
+                {
+                    violations.push(format!(
+                        "{path}: public function {} returns StoreIssuedArtifact",
+                        function.sig.ident
+                    ));
+                }
+            }
+            Item::Trait(item_trait) if is_public(&item_trait.vis) => {
+                for trait_item in &item_trait.items {
+                    let syn::TraitItem::Fn(method) = trait_item else {
+                        continue;
+                    };
+                    if signature_returns_resolved_ident(
+                        &method.sig,
+                        "StoreIssuedArtifact",
+                        &aliases,
+                    ) {
+                        violations.push(format!(
+                            "{path}: public trait method {}::{} returns StoreIssuedArtifact",
+                            item_trait.ident, method.sig.ident
+                        ));
+                    }
+                }
+            }
             _ => {}
         }
     }
-    if source.contains("macro_rules! typed_id") {
-        if source.contains("pub const fn new(bytes") || source.contains("pub fn new(bytes") {
-            violations.push(format!(
-                "{path}: transport identifier macro exposes caller-selected bytes"
-            ));
-        }
-        if source.contains("impl fmt::Display for $name") {
-            violations.push(format!(
-                "{path}: transport identifier macro exposes Display"
-            ));
-        }
+    if !found_store_issued_artifact {
+        violations.push(format!(
+            "{path}: missing concrete StoreIssuedArtifact capability definition"
+        ));
     }
-    if source.contains("StaticCode") {
+    if defined_or_aliased_static_code(&file.items, &aliases) {
         violations.push(format!("{path}: producer event surface retains StaticCode"));
     }
     Ok(violations)
@@ -387,6 +536,224 @@ fn type_last_ident(value_type: &Type) -> Option<&syn::Ident> {
         return None;
     };
     path.path.segments.last().map(|segment| &segment.ident)
+}
+
+#[derive(Default)]
+struct LocalTypeAliases {
+    names: HashMap<String, String>,
+}
+
+fn local_type_aliases(items: &[Item]) -> LocalTypeAliases {
+    let mut aliases = LocalTypeAliases::default();
+    for item in items {
+        match item {
+            Item::Use(item_use) => {
+                collect_type_alias(&mut Vec::new(), &item_use.tree, &mut aliases)
+            }
+            Item::Type(item_type) => {
+                if let Some(target) = type_last_ident(&item_type.ty) {
+                    aliases
+                        .names
+                        .insert(item_type.ident.to_string(), target.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    aliases
+}
+
+fn collect_type_alias(prefix: &mut Vec<String>, tree: &UseTree, aliases: &mut LocalTypeAliases) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_type_alias(prefix, &path.tree, aliases);
+            prefix.pop();
+        }
+        UseTree::Name(name) => {
+            aliases
+                .names
+                .insert(name.ident.to_string(), name.ident.to_string());
+        }
+        UseTree::Rename(rename) => {
+            let target = if rename.ident == "self" {
+                prefix
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| rename.ident.to_string())
+            } else {
+                rename.ident.to_string()
+            };
+            aliases.names.insert(rename.rename.to_string(), target);
+        }
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_type_alias(prefix, item, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_alias(name: &str, aliases: &LocalTypeAliases) -> String {
+    let mut current = name.to_string();
+    let mut visited = HashSet::new();
+    while visited.insert(current.clone()) {
+        let Some(next) = aliases.names.get(&current) else {
+            break;
+        };
+        if next == &current {
+            break;
+        }
+        current = next.clone();
+    }
+    current
+}
+
+fn resolved_type_ident(value_type: &Type, aliases: &LocalTypeAliases) -> Option<String> {
+    type_last_ident(value_type).map(|ident| resolve_alias(&ident.to_string(), aliases))
+}
+
+fn vec_inner_resolved_ident(value_type: &Type, aliases: &LocalTypeAliases) -> Option<String> {
+    let Type::Path(path) = value_type else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Vec" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    arguments.args.iter().find_map(|argument| match argument {
+        syn::GenericArgument::Type(inner) => resolved_type_ident(inner, aliases),
+        _ => None,
+    })
+}
+
+fn signature_returns_resolved_ident(
+    signature: &syn::Signature,
+    needle: &str,
+    aliases: &LocalTypeAliases,
+) -> bool {
+    let ReturnType::Type(_, output) = &signature.output else {
+        return false;
+    };
+    type_uses_resolved_ident(output, needle, aliases)
+}
+
+fn signature_returns_any_resolved_ident(
+    signature: &syn::Signature,
+    needles: &[String],
+    aliases: &LocalTypeAliases,
+) -> bool {
+    let ReturnType::Type(_, output) = &signature.output else {
+        return false;
+    };
+    needles
+        .iter()
+        .any(|needle| type_uses_resolved_ident(output, needle, aliases))
+}
+
+fn type_uses_resolved_ident(value_type: &Type, needle: &str, aliases: &LocalTypeAliases) -> bool {
+    let mut visitor = ResolvedIdentVisitor {
+        aliases,
+        needle,
+        found: false,
+    };
+    visitor.visit_type(value_type);
+    visitor.found
+}
+
+struct ResolvedIdentVisitor<'a> {
+    aliases: &'a LocalTypeAliases,
+    needle: &'a str,
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for ResolvedIdentVisitor<'_> {
+    fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+        if let Some(segment) = node.path.segments.last()
+            && resolve_alias(&segment.ident.to_string(), self.aliases) == self.needle
+        {
+            self.found = true;
+        }
+        syn::visit::visit_type_path(self, node);
+    }
+}
+
+fn public_use_aliases(tree: &UseTree) -> Vec<(String, String)> {
+    let mut aliases = Vec::new();
+    collect_public_use_alias(&mut Vec::new(), tree, &mut aliases);
+    aliases
+}
+
+fn collect_public_use_alias(
+    prefix: &mut Vec<String>,
+    tree: &UseTree,
+    aliases: &mut Vec<(String, String)>,
+) {
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_public_use_alias(prefix, &path.tree, aliases);
+            prefix.pop();
+        }
+        UseTree::Name(name) => {
+            aliases.push((name.ident.to_string(), name.ident.to_string()));
+        }
+        UseTree::Rename(rename) => {
+            let target = if rename.ident == "self" {
+                prefix
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| rename.ident.to_string())
+            } else {
+                rename.ident.to_string()
+            };
+            aliases.push((rename.rename.to_string(), target));
+        }
+        UseTree::Group(group) => {
+            for item in &group.items {
+                collect_public_use_alias(prefix, item, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_transport_id(candidate: &syn::Ident) -> bool {
+    matches!(
+        candidate.to_string().as_str(),
+        "EventId"
+            | "InstanceId"
+            | "RequestId"
+            | "CorrelationId"
+            | "CausationId"
+            | "TaskId"
+            | "RunId"
+            | "LeaseId"
+            | "FrameId"
+            | "ActionId"
+            | "RecognitionId"
+            | "ArtifactId"
+    )
+}
+
+fn defined_or_aliased_static_code(items: &[Item], aliases: &LocalTypeAliases) -> bool {
+    items.iter().any(|item| match item {
+        Item::Struct(item_struct) => item_struct.ident == "StaticCode",
+        Item::Enum(item_enum) => item_enum.ident == "StaticCode",
+        Item::Type(item_type) => {
+            item_type.ident == "StaticCode"
+                || resolved_type_ident(&item_type.ty, aliases)
+                    .is_some_and(|ident| ident == "StaticCode")
+        }
+        Item::Use(item_use) => public_use_aliases(&item_use.tree)
+            .into_iter()
+            .any(|(local, target)| local == "StaticCode" || target == "StaticCode"),
+        _ => false,
+    })
 }
 
 fn method_argument_type<'a>(method: &'a syn::ImplItemFn, name: &str) -> Option<&'a Type> {
@@ -1445,6 +1812,7 @@ mod tests {
             }
         "#;
         let allowed = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
             pub struct EventDraft;
             impl EventDraft {
                 pub fn new(event_id: IssuedEventId, links: EventLinksDraft) -> Self { let _ = (event_id, links); Self }
@@ -1474,6 +1842,74 @@ mod tests {
             super::inspect_producer_event_capabilities("fixture.rs", allowed)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn producer_capability_guard_rejects_public_artifact_authority_and_undefined_capabilities() {
+        let public_issuer = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub struct ArtifactStoreIssuer;
+            impl ArtifactStoreIssuer {
+                pub fn new() -> Self { Self }
+                pub fn issue_pending(&self) -> StoreIssuedArtifact { StoreIssuedArtifact { reference: 1 } }
+            }
+        "#;
+        let undefined_capability = r#"
+            pub struct EventDraft;
+            impl EventDraft {
+                pub fn new(event_id: IssuedEventId, links: EventLinksDraft) -> Self { let _ = (event_id, links); Self }
+                pub fn with_artifacts(self, artifacts: Vec<StoreIssuedArtifact>) -> Self { let _ = artifacts; self }
+            }
+            pub struct EventLinksDraft;
+            impl EventLinksDraft {
+                pub fn with_instance_id(self, value: IssuedInstanceId) -> Self { let _ = value; self }
+                pub fn with_request_id(self, value: IssuedRequestId) -> Self { let _ = value; self }
+                pub fn with_correlation_id(self, value: IssuedCorrelationId) -> Self { let _ = value; self }
+                pub fn with_causation_id(self, value: IssuedCausationId) -> Self { let _ = value; self }
+                pub fn with_task_id(self, value: IssuedTaskId) -> Self { let _ = value; self }
+                pub fn with_run_id(self, value: IssuedRunId) -> Self { let _ = value; self }
+                pub fn with_lease_id(self, value: IssuedLeaseId) -> Self { let _ = value; self }
+                pub fn with_frame_id(self, value: IssuedFrameId) -> Self { let _ = value; self }
+                pub fn with_action_id(self, value: IssuedActionId) -> Self { let _ = value; self }
+                pub fn with_recognition_id(self, value: IssuedRecognitionId) -> Self { let _ = value; self }
+            }
+        "#;
+        let public_free_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub fn issue_pending() -> StoreIssuedArtifact { StoreIssuedArtifact { reference: 1 } }
+        "#;
+        let public_trait_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub trait ArtifactIngress {
+                fn issue_pending(&self) -> StoreIssuedArtifact;
+            }
+        "#;
+
+        let issuer_violations =
+            super::inspect_producer_event_capabilities("fixture.rs", public_issuer).unwrap();
+        assert!(
+            !issuer_violations.is_empty(),
+            "public artifact issuance authority must be rejected"
+        );
+
+        let undefined_violations =
+            super::inspect_producer_event_capabilities("fixture.rs", undefined_capability).unwrap();
+        assert!(
+            !undefined_violations.is_empty(),
+            "undefined StoreIssuedArtifact capability must be rejected"
+        );
+        assert!(
+            !super::inspect_producer_event_capabilities("fixture.rs", public_free_ingress)
+                .unwrap()
+                .is_empty(),
+            "public free ingress to StoreIssuedArtifact must be rejected"
+        );
+        assert!(
+            !super::inspect_producer_event_capabilities("fixture.rs", public_trait_ingress)
+                .unwrap()
+                .is_empty(),
+            "public trait ingress to StoreIssuedArtifact must be rejected"
         );
     }
 

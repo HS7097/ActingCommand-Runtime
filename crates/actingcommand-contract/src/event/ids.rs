@@ -98,6 +98,7 @@ macro_rules! typed_id {
                 &self.0
             }
 
+            #[cfg_attr(not(test), allow(dead_code))]
             pub(super) const fn into_transport(self) -> $name {
                 self.0
             }

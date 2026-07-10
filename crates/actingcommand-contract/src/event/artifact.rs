@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    ArtifactId, CorrelationId, FrameId, IdentifierIssuanceError, IdentifierIssuer,
-    IssuedCorrelationId, IssuedFrameId, IssuedRunId, RunId, SanitizationError, Sensitivity,
+    ArtifactId, CorrelationId, FrameId, IssuedCorrelationId, IssuedFrameId, IssuedRunId, RunId,
+    SanitizationError, Sensitivity,
 };
+#[cfg(test)]
+use super::{IdentifierIssuanceError, IdentifierIssuer};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -15,12 +17,6 @@ pub enum ArtifactKind {
 }
 
 impl ArtifactKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::CaptureFrame => "capture.frame",
-        }
-    }
-
     const fn media_type(self) -> ArtifactMediaType {
         match self {
             Self::CaptureFrame => ArtifactMediaType::ImagePng,
@@ -46,26 +42,10 @@ pub enum ArtifactMediaType {
     ImagePng,
 }
 
-impl ArtifactMediaType {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::ImagePng => "image/png",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactProducer {
     CaptureStore,
-}
-
-impl ArtifactProducer {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::CaptureStore => "capture_store",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -76,32 +56,12 @@ pub enum RetentionClass {
     Light,
 }
 
-impl RetentionClass {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::DebugFull => "debug_full",
-            Self::Adaptive => "adaptive",
-            Self::Light => "light",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactRedactionState {
     NotRequired,
     Applied,
     Pending,
-}
-
-impl ArtifactRedactionState {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::NotRequired => "not_required",
-            Self::Applied => "applied",
-            Self::Pending => "pending",
-        }
-    }
 }
 
 macro_rules! non_disclosing_enum_deserialize {
@@ -182,20 +142,22 @@ impl ArtifactLinksDraft {
     }
 }
 
-/// Capability held by the artifact-store owner. Callers supply bytes and closed semantic fields;
-/// the issuer owns every persisted metadata field.
-pub struct ArtifactStoreIssuer {
+/// Owner-only store boundary. It is intentionally private until C2 supplies the real durable
+/// artifact-store and verification boundary.
+#[cfg(test)]
+struct ArtifactStoreBoundary {
     identifiers: IdentifierIssuer,
 }
 
-impl ArtifactStoreIssuer {
-    pub fn new() -> Result<Self, IdentifierIssuanceError> {
+#[cfg(test)]
+impl ArtifactStoreBoundary {
+    fn new() -> Result<Self, IdentifierIssuanceError> {
         Ok(Self {
             identifiers: IdentifierIssuer::new()?,
         })
     }
 
-    pub fn issue_pending(
+    fn issue_pending(
         &self,
         kind: ArtifactKind,
         links: ArtifactLinksDraft,
@@ -223,7 +185,7 @@ impl ArtifactStoreIssuer {
             .into_transport();
         let sha256 = canonical_sha256(bytes);
         let object_key = object_key_for(&artifact_id, kind, &sha256);
-        let mut reference = ArtifactReference {
+        let reference = ArtifactReference {
             artifact_id,
             kind,
             run_id: links.run_id.map(IssuedRunId::into_transport),
@@ -239,18 +201,29 @@ impl ArtifactStoreIssuer {
             producer: ArtifactProducer::CaptureStore,
             retention_class: kind.retention_class(),
             redaction_state: ArtifactRedactionState::Pending,
-            store_authorization: String::new(),
         };
-        reference.store_authorization = reference.expected_store_authorization();
         reference.validate()?;
         Ok(StoreIssuedArtifact { reference })
     }
 }
 
-impl fmt::Debug for ArtifactStoreIssuer {
+#[cfg(test)]
+impl fmt::Debug for ArtifactStoreBoundary {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ArtifactStoreIssuer(<opaque>)")
+        formatter.write_str("ArtifactStoreBoundary(<opaque>)")
     }
+}
+
+#[cfg(test)]
+pub(super) fn issue_pending_for_tests(
+    kind: ArtifactKind,
+    links: ArtifactLinksDraft,
+    bytes: &[u8],
+    created_at_unix_ms: u64,
+) -> Result<StoreIssuedArtifact, SanitizationError> {
+    ArtifactStoreBoundary::new()
+        .map_err(|_| SanitizationError::new("artifact_id_issuance_failed", "artifact_id"))?
+        .issue_pending(kind, links, bytes, created_at_unix_ms)
 }
 
 /// An attachment capability returned by the artifact-store issuer. It is neither serializable nor
@@ -294,7 +267,6 @@ pub struct ArtifactReference {
     producer: ArtifactProducer,
     retention_class: RetentionClass,
     redaction_state: ArtifactRedactionState,
-    store_authorization: String,
 }
 
 impl ArtifactReference {
@@ -366,8 +338,7 @@ impl ArtifactReference {
             && self.producer == ArtifactProducer::CaptureStore
             && self.retention_class == self.kind.retention_class()
             && self.redaction_state == ArtifactRedactionState::Pending
-            && self.object_key == object_key_for(&self.artifact_id, self.kind, &self.sha256)
-            && self.store_authorization == self.expected_store_authorization();
+            && self.object_key == object_key_for(&self.artifact_id, self.kind, &self.sha256);
         if valid {
             Ok(())
         } else {
@@ -394,30 +365,6 @@ impl ArtifactReference {
             retention_class: self.retention_class,
             redaction_state: self.redaction_state,
         }
-    }
-
-    fn expected_store_authorization(&self) -> String {
-        let mut material = Vec::new();
-        push_authorized_field(&mut material, self.artifact_id.canonical().as_bytes());
-        push_authorized_field(&mut material, self.kind.as_str().as_bytes());
-        push_optional_id(&mut material, self.run_id.as_ref().map(RunId::canonical));
-        push_optional_id(
-            &mut material,
-            self.frame_id.as_ref().map(FrameId::canonical),
-        );
-        push_optional_id(
-            &mut material,
-            self.correlation_id.as_ref().map(CorrelationId::canonical),
-        );
-        push_authorized_field(&mut material, self.object_key.as_bytes());
-        push_authorized_field(&mut material, self.media_type.as_str().as_bytes());
-        push_authorized_field(&mut material, &self.byte_count.to_be_bytes());
-        push_authorized_field(&mut material, self.sha256.as_bytes());
-        push_authorized_field(&mut material, &self.created_at_unix_ms.to_be_bytes());
-        push_authorized_field(&mut material, self.producer.as_str().as_bytes());
-        push_authorized_field(&mut material, self.retention_class.as_str().as_bytes());
-        push_authorized_field(&mut material, self.redaction_state.as_str().as_bytes());
-        canonical_sha256(&material)
     }
 }
 
@@ -453,7 +400,6 @@ struct ArtifactReferenceRecord {
     producer: ArtifactProducer,
     retention_class: RetentionClass,
     redaction_state: ArtifactRedactionState,
-    store_authorization: String,
 }
 
 impl<'de> Deserialize<'de> for ArtifactReference {
@@ -476,7 +422,6 @@ impl<'de> Deserialize<'de> for ArtifactReference {
             producer: record.producer,
             retention_class: record.retention_class,
             redaction_state: record.redaction_state,
-            store_authorization: record.store_authorization,
         };
         reference.validate().map_err(serde::de::Error::custom)?;
         Ok(reference)
@@ -514,18 +459,6 @@ fn object_key_for(artifact_id: &ArtifactId, kind: ArtifactKind, sha256: &str) ->
     )
 }
 
-fn push_optional_id(material: &mut Vec<u8>, value: Option<String>) {
-    match value {
-        Some(value) => push_authorized_field(material, value.as_bytes()),
-        None => push_authorized_field(material, &[]),
-    }
-}
-
-fn push_authorized_field(material: &mut Vec<u8>, value: &[u8]) {
-    material.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    material.extend_from_slice(value);
-}
-
 fn is_sha256(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
@@ -535,6 +468,7 @@ fn is_sha256(value: &str) -> bool {
     })
 }
 
+#[cfg(test)]
 fn canonical_sha256(bytes: &[u8]) -> String {
     let digest = sha256(bytes);
     let mut value = String::with_capacity(71);
@@ -547,6 +481,7 @@ fn canonical_sha256(bytes: &[u8]) -> String {
 }
 
 // FIPS 180-4 SHA-256 compression. This keeps the contract dependency budget unchanged.
+#[cfg(test)]
 fn sha256(input: &[u8]) -> [u8; 32] {
     const INITIAL: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,

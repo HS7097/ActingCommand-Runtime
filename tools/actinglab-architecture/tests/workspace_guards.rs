@@ -136,19 +136,23 @@ fn event_v2_append_ingress_and_producer_capabilities_are_exact() {
         append_violations.join("\n")
     );
 
-    let mut capability_violations = Vec::new();
-    for relative in [
+    let capability_source = [
         "crates/actingcommand-contract/src/event/envelope.rs",
         "crates/actingcommand-contract/src/event/artifact.rs",
         "crates/actingcommand-contract/src/event/ids.rs",
-    ] {
-        let source = fs::read_to_string(root.join(relative))
-            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
-        capability_violations.extend(
-            inspect_producer_event_capabilities(relative, &source)
-                .expect("inspect producer capabilities"),
-        );
-    }
+    ]
+    .into_iter()
+    .map(|relative| {
+        fs::read_to_string(root.join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"))
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+    let capability_violations = inspect_producer_event_capabilities(
+        "crates/actingcommand-contract/src/event/{envelope,artifact,ids}.rs",
+        &capability_source,
+    )
+    .expect("inspect producer capabilities");
     assert!(
         capability_violations.is_empty(),
         "producer capability violations:\n{}",

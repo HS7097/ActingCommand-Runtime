@@ -96,6 +96,15 @@
 //!     let _ = draft.with_artifacts(vec![transport]);
 //! }
 //! ```
+//!
+//! Ordinary producers cannot construct artifact-store authority:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::{ArtifactKind, ArtifactLinksDraft, ArtifactStoreIssuer};
+//!
+//! let issuer = ArtifactStoreIssuer::new().unwrap();
+//! let _ = issuer.issue_pending(ArtifactKind::CaptureFrame, ArtifactLinksDraft::default(), b"bytes", 1);
+//! ```
 
 mod artifact;
 mod codes;

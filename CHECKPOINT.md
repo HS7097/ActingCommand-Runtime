@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 Tasks 1-2 rereview closeout
+
+### Current status
+
+- Closed the rereview's remaining artifact-authority gap without broadening into Task 3 semantics.
+- Removed public producer access to store-issued artifact minting; ordinary contract consumers can no longer construct a store authority or attach self-issued artifact metadata through `EventDraft::with_artifacts`.
+- Removed the undocumented `store_authorization` field from the persisted/public artifact shape; recovery now validates only typed consistency unless it can consult real store-owned state.
+- Strengthened the producer-capability architecture guard to resolve concrete/aliased types from AST instead of relying on identifier names or source substring matches.
+- Added RED-first regressions for public issuer construction, coherent artifact metadata mutation, and architecture fixtures that try undefined/aliased capabilities plus public free/trait ingress.
+- Preserved the pre-existing controller edits in `PLANS.md` and `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/artifact.rs`
+- `crates/actingcommand-contract/src/event/ids.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `crates/ledger/src/global/v2_tests.rs`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- RED:
+  - `cargo test -p actingcommand-contract event:: -- --nocapture`
+  - `cargo test -p actingcommand-ledger global::v2_tests -- --nocapture`
+  - `cargo test -p actingcommand-actinglab-architecture producer_capability_guard -- --nocapture`
+- Verification:
+  - `cargo test -p actingcommand-contract event:: -- --nocapture`
+  - `cargo test -p actingcommand-ledger global::v2_tests -- --nocapture`
+  - `cargo test -p actingcommand-actinglab-architecture producer_capability_guard -- --nocapture`
+  - `cargo test --workspace`
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+### Test results
+
+- Initial RED runs reproduced the rereview findings:
+  - contract event focused suite failed on the missing `store_authorization` removal and coherent mutation regression,
+  - ledger `global::v2_tests` failed on coherent artifact recovery without checksum signaling,
+  - architecture guard focused tests failed on public artifact authority / undefined capability fixtures.
+- Final focused verification passed:
+  - `14` contract event tests,
+  - `12` ledger `global::v2_tests`,
+  - `2` architecture guard tests.
+- Full workspace verification passed, including the new external compile-fail artifact-authority doc test.
+- Full workspace Clippy with warnings denied, formatting check, and diff check passed.
+
+### Current blocker
+
+- None within the approved Tasks 1-2 rereview scope.
+
+### Next step
+
+1. Record the separate rereview source/test fix commit in the final report and stop without pushing.
+
 ## 2026-07-11 Issue 35 C1 hardening design and implementation plan
 
 ### Current status

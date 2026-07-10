@@ -79,15 +79,13 @@ fn artifact_links(issuer: &IdentifierIssuer) -> ArtifactLinksDraft {
 
 fn artifact(bytes: &[u8]) -> StoreIssuedArtifact {
     let links_issuer = identifier_issuer();
-    ArtifactStoreIssuer::new()
-        .expect("artifact store issuer")
-        .issue_pending(
-            ArtifactKind::CaptureFrame,
-            artifact_links(&links_issuer),
-            bytes,
-            1_752_147_200_000,
-        )
-        .expect("store-issued artifact")
+    super::artifact::issue_pending_for_tests(
+        ArtifactKind::CaptureFrame,
+        artifact_links(&links_issuer),
+        bytes,
+        1_752_147_200_000,
+    )
+    .expect("store-issued artifact")
 }
 
 fn audit_all() -> AuditInput {
@@ -356,27 +354,15 @@ fn artifact_transport_rejects_every_mutated_field_and_false_store_state() {
             serde_json::json!(format!("artifact_{canonical}")),
         ),
         ("kind", serde_json::json!("token-secret-kind")),
-        ("run_id", serde_json::json!(format!("run_{canonical}"))),
-        ("frame_id", serde_json::json!(format!("frame_{canonical}"))),
-        (
-            "correlation_id",
-            serde_json::json!(format!("correlation_{canonical}")),
-        ),
         ("object_key", serde_json::json!("account-secret/object.png")),
         ("media_type", serde_json::json!("application/token-secret")),
-        ("byte_count", serde_json::json!(999)),
         (
             "sha256",
             serde_json::json!(format!("sha256:{}", "d".repeat(64))),
         ),
-        ("created_at_unix_ms", serde_json::json!(99)),
         ("producer", serde_json::json!("token-secret-producer")),
         ("retention_class", serde_json::json!("debug_full")),
         ("redaction_state", serde_json::json!("applied")),
-        (
-            "store_authorization",
-            serde_json::json!(format!("sha256:{}", "e".repeat(64))),
-        ),
     ];
 
     for (field, replacement) in cases {
@@ -393,6 +379,47 @@ fn artifact_transport_rejects_every_mutated_field_and_false_store_state() {
     let mut unknown = original;
     unknown["smuggled"] = serde_json::json!("token-secret-unknown");
     assert!(serde_json::from_value::<ArtifactReference>(unknown).is_err());
+
+    let mut undocumented = serde_json::to_value(issued.reference()).expect("artifact value");
+    undocumented["store_authorization"] = serde_json::json!(format!("sha256:{}", "e".repeat(64)));
+    assert!(serde_json::from_value::<ArtifactReference>(undocumented).is_err());
+}
+
+#[test]
+fn artifact_wire_shape_has_no_store_authorization() {
+    let issued = artifact(b"capture bytes");
+    let value = serde_json::to_value(issued.reference()).expect("artifact value");
+
+    assert!(
+        value.get("store_authorization").is_none(),
+        "artifact wire shape must not claim provenance with store_authorization"
+    );
+}
+
+#[test]
+fn coherent_public_artifact_metadata_mutation_round_trips_without_provenance_claim() {
+    let issued = artifact(b"trusted stored bytes");
+    let mut value = serde_json::to_value(issued.reference()).expect("artifact value");
+    assert!(
+        value.get("store_authorization").is_none(),
+        "artifact wire shape must not claim provenance with store_authorization"
+    );
+
+    let sha256 = format!("sha256:{}", "c".repeat(64));
+    let artifact_id = value["artifact_id"]
+        .as_str()
+        .expect("artifact id")
+        .to_string();
+    value["byte_count"] = serde_json::json!(999_u64);
+    value["sha256"] = serde_json::json!(sha256.clone());
+    value["object_key"] =
+        serde_json::json!(format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id));
+
+    let round_trip: ArtifactReference =
+        serde_json::from_value(value).expect("coherent public metadata must stay typed");
+    assert_eq!(round_trip.byte_count(), 999);
+    assert_eq!(round_trip.sha256(), sha256);
+    assert!(round_trip.object_key().ends_with(".png"));
 }
 
 #[test]
