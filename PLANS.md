@@ -27,7 +27,7 @@ The approved chain is:
 - C2 may proceed independently after C0;
 - expansion path: `C3b -> C5 -> C6 -> C7`.
 
-Current phase: C1 global event contract and ledger skeleton. Alice approved the complete Issue #35 chain and clarified that C0-C7 nodes do not require separate approval. The approved C0 architecture is `docs/architecture/runtime-ledger-v3-c0-freeze.md`, payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
+Current phase: C1 global event contract and ledger skeleton. Tasks 1-3 are complete and approved; Task 4 critical intent/action/outcome ordering is next. Alice approved the complete Issue #35 chain and clarified that C0-C7 nodes do not require separate approval. The approved C0 architecture is `docs/architecture/runtime-ledger-v3-c0-freeze.md`, payload SHA-256 `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`.
 
 Issue #36 is the only execution-tracking Issue for this chain. Stage progress, implementation details, verification evidence, commits, and rollback anchors are recorded there; no additional subtask Issues are created.
 
@@ -53,7 +53,7 @@ C0 decisions include:
 - rewrite A8a requirements as global-ledger writer and daemon ownership/fencing tests instead of implementing per-command state-file locking;
 - treat the approved frozen C0 payload as the binding C1-C7 architecture.
 
-Current implementation: C1 Tasks 1-2 are complete and approved: typed event/query/projection contracts, pre-persistence redaction, and recoverable single-writer append storage. Task 3 query/subscription/projection behavior and Task 4 critical intent/action/outcome ordering are not implemented yet.
+Current implementation: C1 Tasks 1-3 are complete and approved: typed event/query/projection contracts, pre-persistence redaction, recoverable single-writer append storage, correlated ordered queries, recovered indexes, race-free replay-plus-live subscriptions with bounded nonblocking delivery, and separate CLI/UI/Lab projections. Task 4 critical intent/action/outcome ordering is not implemented yet.
 
 ## Historical CLI-to-Lab extraction chain (superseded)
 

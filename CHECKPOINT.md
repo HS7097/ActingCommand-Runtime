@@ -1,5 +1,71 @@
 # CHECKPOINT.md
 
+## 2026-07-10 Issue 35 C1 Task 3 correlated query, subscription, and projections
+
+### Current status
+
+- Added ordered in-memory event retention and rebuilt indexes for event ID plus every typed correlation link after startup recovery.
+- Added sequence-ordered query intersection across instance, request, correlation, causation, task, run, lease, frame, action, and recognition identifiers.
+- Added race-free history-plus-live subscriptions registered inside the sole writer loop after replay selection and successful response publication.
+- Subscription replay is subscription-owned instead of enqueued into the live channel; live delivery uses a bounded nonblocking channel.
+- Slow subscribers fail explicitly with fatal `subscription_lagged`; terminal writer/store errors retain their original fatal error; timeout and clean closure use distinct nonfatal codes.
+- Future cursors suppress live events until crossed, and dropped future-cursor subscriptions are pruned through an independent liveness token before cursor filtering.
+- CLI/Concise projections omit payload detail; UI/Normal projections retain public user-facing fields only; Lab/Verbose/Forensic retain the full sanitized persisted payload and artifact references.
+- `ProjectedEvent` now carries persisted schema version and sensitivity so Lab/forensic projections can represent the complete sanitized fact.
+- Task review initially found terminal-error collapse, unbounded live delivery, unreachable subscriber registration, future-cursor leakage, and missing UI/Lab separation; all findings were fixed test-first.
+- Final review of `47ca609..17c168c` approved Task 3 with no Critical, Important, or Minor findings.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/storage.rs`
+- `crates/ledger/src/global/projection.rs`
+- `crates/ledger/src/global/tests.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commits
+
+- `7034b8a` `feat(ledger): add correlated query and projections`
+- `c481ffe` `fix(ledger): harden subscriptions and projections`
+- `17c168c` `fix(ledger): prune dropped future subscriptions`
+
+### Commands run
+
+- RED: `cargo test -p actingcommand-ledger global::tests::query -- --nocapture`
+- Review RED: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
+- Focused lifecycle RED: `cargo test -p actingcommand-ledger global::tests::dropped_subscription_response_does_not_register_a_live_sender -- --nocapture`
+- Focused future-cursor RED: `cargo test -p actingcommand-ledger global::tests::dropped_future_cursor_subscription_is_pruned_before_cursor_is_crossed -- --nocapture`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-contract -p actingcommand-ledger`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Initial RED failed because query, subscribe, and project methods did not exist.
+- Review RED tests reproduced terminal-error collapse, unbounded subscriber lag, response-drop registration, future-cursor behavior, and missing projection fields.
+- Final contract suite: 22 tests passed.
+- Final ledger suite: 55 tests passed.
+- Two contract compile-fail doc tests passed.
+- Full workspace test suite passed after the final Task 3 commits.
+- Contract/ledger Clippy with warnings denied, formatting check, and diff check passed.
+- Final task-scoped review: APPROVED with no Critical, Important, or Minor findings.
+
+### Current blocker
+
+- None for C1 Task 3.
+
+### Next step
+
+1. Run final workspace verification for the committed Task 3 code and planning updates.
+2. Push Task 3 commits and publish evidence to Issue #36.
+3. Start C1 Task 4 critical intent/action/outcome ordering with RED tests.
+
 ## 2026-07-10 Issue 35 approved resource-authoring amendment reconciliation
 
 ### Current status

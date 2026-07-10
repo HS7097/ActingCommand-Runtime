@@ -254,6 +254,7 @@ Commit message: `feat(ledger): add recoverable single writer storage`
 
 **Files:**
 - Modify: `crates/ledger/src/global.rs`
+- Modify: `crates/ledger/src/global/storage.rs`
 - Create: `crates/ledger/src/global/projection.rs`
 - Modify: `crates/ledger/src/global/tests.rs`
 
@@ -261,7 +262,7 @@ Commit message: `feat(ledger): add recoverable single writer storage`
 - Consumes: Task 2 recovered in-memory event list and indexes.
 - Produces: correlation filters, race-free history-plus-live subscription, and named CLI/UI/Lab projections.
 
-- [ ] **Step 1: Add RED tests for every required query key and stream ordering**
+- [x] **Step 1: Add RED tests for every required query key and stream ordering**
 
 Add tests named:
 
@@ -274,19 +275,19 @@ lab_projection_exposes_full_sanitized_fact
 indexes_rebuild_after_reopen
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global::tests::query -- --nocapture`
 
 Expected: tests fail because query/subscription/projection behavior is absent.
 
-- [ ] **Step 3: Implement query indexes and projections**
+- [x] **Step 3: Implement query indexes and projections**
 
-Build in-memory indexes for `event_id`, `instance_id`, `request_id`, `correlation_id`, `causation_id`, `task_id`, `run_id`, `lease_id`, `frame_id`, `action_id`, and `reco_id`. Query results remain sequence ordered.
+Retain the validated recovered event sequence from storage, then build in-memory indexes for `event_id`, `instance_id`, `request_id`, `correlation_id`, `causation_id`, `task_id`, `run_id`, `lease_id`, `frame_id`, `action_id`, and `reco_id`. Query results remain sequence ordered and indexes rebuild after reopen.
 
 Register subscriptions inside the writer command loop after replay events are selected so no live event can race between replay and registration. CLI projection omits detailed payload fields; UI retains sanitized payload and user-facing state; Lab/forensic retains the full sanitized persisted fact. No projection reads raw drafts.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -297,7 +298,7 @@ cargo test -p actingcommand-ledger
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat(ledger): add correlated query and projections`
 
