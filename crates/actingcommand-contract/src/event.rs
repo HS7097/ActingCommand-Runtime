@@ -240,11 +240,11 @@ pub enum EventActor {
     System,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventOrigin {
-    pub source: EventSource,
-    pub module: String,
-    pub actor: EventActor,
+    source: EventSource,
+    module: String,
+    actor: EventActor,
 }
 
 impl EventOrigin {
@@ -260,6 +260,33 @@ impl EventOrigin {
             module,
             actor,
         })
+    }
+
+    pub fn source(&self) -> EventSource {
+        self.source
+    }
+
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+
+    pub fn actor(&self) -> EventActor {
+        self.actor
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_identifier("module", &self.module)
+    }
+}
+
+impl fmt::Debug for EventOrigin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EventOrigin")
+            .field("source", &self.source)
+            .field("module", &"<validated-module>")
+            .field("actor", &self.actor)
+            .finish()
     }
 }
 
@@ -347,12 +374,24 @@ pub trait FieldRedactor {
     fn fingerprint(&self, field_name: &str, value: &str) -> Result<String, SanitizationError>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClassifiedField {
     name: String,
     value: String,
     sensitivity: Sensitivity,
     policy: RedactionPolicy,
+}
+
+impl fmt::Debug for ClassifiedField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClassifiedField")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .field("sensitivity", &self.sensitivity)
+            .field("policy", &self.policy)
+            .finish()
+    }
 }
 
 impl ClassifiedField {
@@ -420,8 +459,10 @@ impl ClassifiedField {
             RedactionPolicy::Keep => (Some(self.value), None),
             RedactionPolicy::Mask => (Some("[redacted]".to_string()), None),
             RedactionPolicy::Fingerprint => {
-                let fingerprint = redactor.fingerprint(&self.name, &self.value)?;
-                if fingerprint.is_empty() || fingerprint == self.value {
+                let fingerprint = redactor
+                    .fingerprint(&self.name, &self.value)
+                    .map_err(|_| SanitizationError::new("redactor_failed", &self.name))?;
+                if !is_sha256(&fingerprint) || fingerprint.contains(&self.value) {
                     return Err(SanitizationError::new("invalid_fingerprint", &self.name));
                 }
                 (None, Some(fingerprint))
@@ -478,11 +519,22 @@ pub trait SanitizedPayload:
     fn sensitivity(&self) -> Sensitivity;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StructuredPayloadDraft<K> {
     kind: K,
     subject: String,
     fields: Vec<ClassifiedField>,
+}
+
+impl<K: fmt::Debug> fmt::Debug for StructuredPayloadDraft<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StructuredPayloadDraft")
+            .field("kind", &self.kind)
+            .field("subject", &self.subject)
+            .field("fields", &self.fields)
+            .finish()
+    }
 }
 
 impl<K: PayloadKind> StructuredPayloadDraft<K> {
@@ -630,7 +682,7 @@ pub type ClientPayload = StructuredPayload<ClientActionKind>;
 pub type LedgerPayloadDraft = StructuredPayloadDraft<LedgerTransition>;
 pub type LedgerPayload = StructuredPayload<LedgerTransition>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EventDraft<P> {
     event_id: String,
     timestamp_unix_ms: u64,
@@ -640,6 +692,22 @@ pub struct EventDraft<P> {
     links: EventLinks,
     artifacts: Vec<ArtifactReference>,
     payload: P,
+}
+
+impl<P> fmt::Debug for EventDraft<P> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EventDraft")
+            .field("event_id", &self.event_id)
+            .field("timestamp_unix_ms", &self.timestamp_unix_ms)
+            .field("event_type", &self.event_type)
+            .field("severity", &self.severity)
+            .field("origin", &self.origin)
+            .field("links", &self.links)
+            .field("artifacts", &self.artifacts)
+            .field("payload", &"<redacted-payload>")
+            .finish()
+    }
 }
 
 impl<P> EventDraft<P> {
@@ -682,6 +750,7 @@ impl<P: RedactablePayload> EventDraft<P> {
                 "timestamp_unix_ms",
             ));
         }
+        self.origin.validate()?;
         self.links.validate()?;
         for artifact in &self.artifacts {
             artifact.validate()?;
@@ -771,7 +840,14 @@ impl<P: SanitizedPayload> SanitizedEventDraft<P> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Type-erased sanitized ingress produced only by `SanitizedEventDraft::erase`.
+///
+/// ```compile_fail
+/// use actingcommand_contract::ErasedSanitizedEventDraft;
+///
+/// let _: ErasedSanitizedEventDraft = serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq)]
 pub struct ErasedSanitizedEventDraft {
     schema_version: String,
     event_id: String,
@@ -915,13 +991,8 @@ impl SanitizationError {
         self.code
     }
 
-    pub fn redactor_failure(field_name: &str) -> Self {
-        let field = if is_identifier(field_name) {
-            field_name
-        } else {
-            "redactor"
-        };
-        Self::new("redactor_failed", field)
+    pub fn redactor_failure() -> Self {
+        Self::new("redactor_failed", "redactor")
     }
 }
 
@@ -1006,9 +1077,12 @@ fn is_safe_relative_ref(value: &str) -> bool {
 }
 
 fn is_sha256(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 #[cfg(test)]
@@ -1019,7 +1093,25 @@ mod tests {
 
     impl FieldRedactor for TestRedactor {
         fn fingerprint(&self, field_name: &str, value: &str) -> Result<String, SanitizationError> {
-            Ok(format!("fp:{field_name}:{}", value.len()))
+            let byte = if field_name == "account" { 'a' } else { 'b' };
+            let _ = value;
+            Ok(format!("sha256:{}", byte.to_string().repeat(64)))
+        }
+    }
+
+    struct EchoRedactor;
+
+    impl FieldRedactor for EchoRedactor {
+        fn fingerprint(&self, _field_name: &str, value: &str) -> Result<String, SanitizationError> {
+            Ok(format!("sha256:{value}"))
+        }
+    }
+
+    struct LeakingErrorRedactor;
+
+    impl FieldRedactor for LeakingErrorRedactor {
+        fn fingerprint(&self, _field_name: &str, value: &str) -> Result<String, SanitizationError> {
+            Err(SanitizationError::new("redactor_failed", value))
         }
     }
 
@@ -1077,7 +1169,7 @@ mod tests {
                 "secret original leaked: {original}"
             );
         }
-        assert!(json.contains("fp:account:"));
+        assert!(json.contains("sha256:"));
         assert!(json.contains("[redacted]"));
     }
 
@@ -1097,10 +1189,85 @@ mod tests {
     fn redactor_failure_does_not_disclose_a_secret_value() {
         let secret = "redactor-secret-c8e1";
 
-        let error = SanitizationError::redactor_failure("token");
+        let error = SanitizationError::redactor_failure();
 
         assert_eq!(error.code(), "redactor_failed");
         assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn origin_is_revalidated_during_sanitization() {
+        let injected = r"C:\Users\Alice\private";
+        let origin: EventOrigin = serde_json::from_value(serde_json::json!({
+            "source": "cli",
+            "module": injected,
+            "actor": "user"
+        }))
+        .expect("deserialize forged origin");
+        let payload = CommandPayloadDraft::new(CommandStage::Received, "runtime.start", vec![])
+            .expect("payload");
+        let draft = EventDraft::new(
+            "evt-origin-1",
+            1_752_147_200_000,
+            EventType::CommandReceived,
+            EventSeverity::Info,
+            origin,
+            EventLinks::default(),
+            payload,
+        );
+
+        let error = draft
+            .sanitize(&TestRedactor)
+            .expect_err("forged origin must fail");
+
+        assert_eq!(error.code(), "invalid_identifier");
+        assert!(!error.to_string().contains(injected));
+    }
+
+    #[test]
+    fn fingerprint_must_be_fixed_sha256_and_must_not_embed_original() {
+        let secret = "a".repeat(64);
+        let draft = command_draft(vec![
+            ClassifiedField::secret_fingerprint("token", &secret).expect("secret field"),
+        ]);
+
+        let error = draft
+            .sanitize(&EchoRedactor)
+            .expect_err("echo fingerprint must fail");
+
+        assert_eq!(error.code(), "invalid_fingerprint");
+        assert!(!error.to_string().contains(&secret));
+    }
+
+    #[test]
+    fn redactor_error_is_mapped_to_the_declared_field_without_original() {
+        let secret = "leaking-error-secret-7f3c";
+        let draft = command_draft(vec![
+            ClassifiedField::secret_fingerprint("token", secret).expect("secret field"),
+        ]);
+
+        let error = draft
+            .sanitize(&LeakingErrorRedactor)
+            .expect_err("redactor failure must fail");
+
+        assert_eq!(error.code(), "redactor_failed");
+        assert!(!error.to_string().contains(secret));
+    }
+
+    #[test]
+    fn raw_debug_does_not_disclose_classified_values() {
+        let secret = "debug-secret-9b2a";
+        let path = r"C:\private\debug.json";
+        let draft = command_draft(vec![
+            ClassifiedField::secret_drop("token", secret).expect("secret field"),
+            ClassifiedField::sensitive_mask("machine_path", path).expect("path field"),
+        ]);
+
+        let debug = format!("{draft:?}");
+
+        assert!(!debug.contains(secret));
+        assert!(!debug.contains(path));
+        assert!(debug.contains("<redacted-payload>"));
     }
 
     #[test]

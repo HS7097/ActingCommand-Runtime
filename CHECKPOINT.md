@@ -12,6 +12,11 @@
 - Secret/account/path/endpoint negative tests prove originals are absent after sanitization and from sanitization errors.
 - Sanitized payload implementations are sealed and sanitized draft fields are private, preventing callers from forging the type-state transition.
 - Used `EventSeverity` rather than replacing the existing public legacy `Severity = String` alias.
+- Task review found one Critical origin-forging path, two Important erased/redactor bypasses, and one Minor raw-Debug leak; all four were reproduced with negative tests and corrected before Task 2.
+- `EventOrigin` fields are private and are revalidated during sanitization even after deserialization.
+- `ErasedSanitizedEventDraft` is neither constructible nor deserializable outside the contract transition.
+- Fingerprints must use lowercase `sha256:<64 hex>`, cannot embed the original, and redactor errors are remapped to the already validated field name.
+- Raw classified fields, origins, payload drafts, and event drafts use non-disclosing Debug output.
 
 ### Files changed
 
@@ -24,6 +29,7 @@
 
 - RED: `cargo test -p actingcommand-contract event::tests -- --nocapture`
 - focused RED for external redactor failure construction
+- review RED tests for forged origin, erased deserialization, malicious fingerprint/error, and raw Debug
 - GREEN: `cargo test -p actingcommand-contract event::tests -- --nocapture`
 - `cargo test -p actingcommand-contract --doc`
 - `cargo fmt --all`
@@ -35,8 +41,8 @@
 
 - Initial RED failed with 42 missing event-contract symbols as intended.
 - Second RED failed because the safe public redactor-error factory did not yet exist.
-- Event contract: 11 unit tests passed, including 6 new event tests.
-- Compile-fail type-state test passed: external code cannot rewrite sanitized draft fields.
+- Event contract after review fixes: 15 unit tests passed, including 10 event security/contract tests.
+- Two compile-fail type-state tests passed: external code cannot rewrite sanitized draft fields or deserialize erased ingress.
 - Contract doc tests passed.
 - Contract Clippy with warnings denied passed.
 - Diff check passed.
