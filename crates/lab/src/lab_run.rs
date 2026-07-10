@@ -5,7 +5,7 @@ use crate::{
     InputBackendFactory, InputBackendRequest, Lab, LabError as CliError, LabPorts,
     LabResult as CliOutcome, LabRunLedgerResponse, LabRunRequest, LabRunResolution, LabRunResponse,
     LabUnsupportedTargetResponse, LabValidateControlResponse, LabValidateRequest,
-    LabValidateResourcesResponse, LabValidateResponse,
+    LabValidateResourcesResponse, LabValidateResponse, LedgerSink,
     frame_store::{
         FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
         FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
@@ -13,12 +13,13 @@ use crate::{
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
-    InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
+    InputBackend, PixelFormat, combine_operation_and_close,
 };
+#[cfg(test)]
+use actingcommand_ledger::LabLedger;
 use actingcommand_ledger::{
-    CommitProof, EvidenceStore, IdIssuer, IdKind, LabLedger, LabLogError, LastResortError,
-    LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader, commit_then_record,
-    project_light_events, write_last_resort_error,
+    CommitProof, EvidenceStore, IdIssuer, IdKind, LabLogError, LastResortError, LedgerRecord,
+    LedgerRecordKind, LightEvent, SessionHeader, commit_then_record, project_light_events,
 };
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,

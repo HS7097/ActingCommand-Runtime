@@ -6,8 +6,11 @@ use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
     CaptureBackendName, InputBackend, TouchBackendConfig,
 };
+use actingcommand_ledger::{
+    LabLogError, LabLogResult, LastResortError, LedgerRead, LedgerRecord, LightEvent, SessionHeader,
+};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -134,10 +137,58 @@ pub trait CaptureBackendFactory {
     fn open(&self, request: CaptureBackendRequest) -> LabResult<Box<dyn CaptureBackend>>;
 }
 
+pub struct RunLedgerSessionRequest {
+    pub run_root: PathBuf,
+    pub run_id: String,
+    pub instance: String,
+    pub header: SessionHeader,
+}
+
 pub trait LedgerSink {
+    type RunSession;
+
     fn append_drive<T: Serialize>(&mut self, record: &DriveRecord<T>) -> LabResult<()>;
 
     fn finish<T: Serialize>(&mut self, response: &T) -> LabResult<LedgerProjection>;
+
+    fn run_session(&mut self) -> Self::RunSession;
+
+    fn start_run_session(
+        _session: &mut Self::RunSession,
+        _request: RunLedgerSessionRequest,
+    ) -> LabLogResult<PathBuf> {
+        Err(run_ledger_unavailable())
+    }
+
+    fn append_run_record(
+        _session: &mut Self::RunSession,
+        _record: LedgerRecord,
+    ) -> LabLogResult<()> {
+        Err(run_ledger_unavailable())
+    }
+
+    fn append_run_event(_session: &mut Self::RunSession, _event: LightEvent) -> LabLogResult<()> {
+        Err(run_ledger_unavailable())
+    }
+
+    fn sync_run_session(_session: &Self::RunSession) -> LabLogResult<()> {
+        Err(run_ledger_unavailable())
+    }
+
+    fn read_run_session(_session: &Self::RunSession) -> LabLogResult<LedgerRead> {
+        Err(run_ledger_unavailable())
+    }
+
+    fn write_run_last_resort(
+        _run_root: Option<&Path>,
+        _error: &LastResortError,
+    ) -> LabLogResult<PathBuf> {
+        Err(run_ledger_unavailable())
+    }
+}
+
+fn run_ledger_unavailable() -> LabLogError {
+    LabLogError::InvalidInput("run ledger capability is unavailable".to_string())
 }
 
 pub trait Clock {

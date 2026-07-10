@@ -40,6 +40,8 @@ impl CaptureBackendFactory for DisabledCaptureFactory {
 struct DisabledLedger;
 
 impl LedgerSink for DisabledLedger {
+    type RunSession = ();
+
     fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> LabResult<()> {
         Err(LabError::device(
             "ledger must not be opened in readonly tests",
@@ -51,6 +53,8 @@ impl LedgerSink for DisabledLedger {
             "ledger must not be opened in readonly tests",
         ))
     }
+
+    fn run_session(&mut self) -> Self::RunSession {}
 }
 
 struct FixedClock;

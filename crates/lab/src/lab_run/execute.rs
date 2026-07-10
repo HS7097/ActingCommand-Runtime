@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-fn capture_until_matched_page(
-    ctx: &mut LabRunContext<'_>,
+fn capture_until_matched_page<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     resources: &LabResources,
     label: &str,
@@ -128,8 +128,8 @@ enum PreExecutionGuardOutcome {
     },
 }
 
-fn pre_execution_guard(
-    ctx: &mut LabRunContext<'_>,
+fn pre_execution_guard<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     resources: &LabResources,
     operation: &Operation,
@@ -221,8 +221,8 @@ struct RoiStabilityRequest<'a> {
     candidate_pages: Option<&'a [String]>,
 }
 
-fn wait_for_roi_stability(
-    ctx: &mut LabRunContext<'_>,
+fn wait_for_roi_stability<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     request: RoiStabilityRequest<'_>,
 ) -> CliOutcome<RoiStabilityOutcome> {
@@ -318,8 +318,8 @@ struct ResourceDriftRequest<'a> {
     candidate_pages: Option<&'a [String]>,
 }
 
-fn confirm_resource_drift(
-    ctx: &mut LabRunContext<'_>,
+fn confirm_resource_drift<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     request: ResourceDriftRequest<'_>,
 ) -> CliOutcome<ResourceDriftOutcome> {
@@ -807,7 +807,7 @@ fn target_is_error_signal(game: &str, target_id: &str, error_pages: &[String]) -
 #[derive(Clone, Copy)]
 struct DeviceInputRequest<'a> {
     factory: &'a dyn InputBackendFactory,
-    config: &'a TouchBackendConfig,
+    selected: &'a crate::LabRunSelectedDevice,
 }
 
 struct OperationExecutionRequest<'a> {
@@ -884,10 +884,11 @@ fn pre_execution_guard_failure_decision(
     OperationFailureDecision::Fail
 }
 
-fn execute_operation_with_retries(
-    ctx: &mut LabRunContext<'_>,
+fn execute_operation_with_retries<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     input: &mut Option<Box<dyn InputBackend>>,
+    resolver: &mut dyn crate::LabRunDeviceResolver,
     request: OperationExecutionRequest<'_>,
 ) -> CliOutcome<OperationRunOutcome> {
     let OperationExecutionRequest {
@@ -1115,7 +1116,12 @@ fn execute_operation_with_retries(
         let action =
             operation.input_action(&control.resolution, ctx.run_seed, action_target.as_ref())?;
         let action_id = ctx.id_issuer.issue(IdKind::Action).value;
-        let backend = ensure_touch_backend(input, device.factory, device.config)?;
+        let backend = ensure_touch_backend(
+            input,
+            device.factory,
+            resolver,
+            device.selected,
+        )?;
         match &action {
             LabInputAction::Tap(point) => {
                 let action_started = Instant::now();
@@ -1300,10 +1306,11 @@ fn execute_operation_with_retries(
     unreachable!("operation attempt loop has at least one iteration")
 }
 
-fn run_recovery_bundle(
-    ctx: &mut LabRunContext<'_>,
+fn run_recovery_bundle<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     input: &mut Option<Box<dyn InputBackend>>,
+    resolver: &mut dyn crate::LabRunDeviceResolver,
     request: RecoveryRunRequest<'_>,
 ) -> CliOutcome<Option<String>> {
     let RecoveryRunRequest {
@@ -1352,6 +1359,7 @@ fn run_recovery_bundle(
             ctx,
             capture,
             input,
+            &mut *resolver,
             OperationExecutionRequest {
                 device,
                 resources,
@@ -1400,11 +1408,13 @@ fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {
 fn ensure_touch_backend<'a>(
     backend: &'a mut Option<Box<dyn InputBackend>>,
     factory: &dyn InputBackendFactory,
-    config: &TouchBackendConfig,
+    resolver: &mut dyn crate::LabRunDeviceResolver,
+    selected: &crate::LabRunSelectedDevice,
 ) -> CliOutcome<&'a mut Box<dyn InputBackend>> {
     if backend.is_none() {
+        let config = resolver.touch_config(selected)?;
         let created = factory.open(InputBackendRequest {
-            config: config.clone(),
+            config,
             observation: None,
         })?;
         *backend = Some(created);
@@ -1429,8 +1439,8 @@ struct AfterOperationRequest<'a> {
     game: &'a str,
 }
 
-fn poll_after_operation(
-    ctx: &mut LabRunContext<'_>,
+fn poll_after_operation<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
     capture: &mut dyn CaptureBackend,
     request: AfterOperationRequest<'_>,
 ) -> CliOutcome<AfterOperationCapture> {

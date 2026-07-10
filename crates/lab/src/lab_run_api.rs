@@ -5,6 +5,7 @@ use actingcommand_device::{CaptureBackendChoice, CaptureBackendConfig, TouchBack
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct LabValidateRequest {
     pub zip_path: PathBuf,
@@ -62,7 +63,7 @@ pub struct LabRunRequest {
     pub game: Option<String>,
     pub server: Option<String>,
     pub instance: Option<String>,
-    pub device_candidates: Vec<LabRunDeviceCandidate>,
+    pub device_resolver: Box<dyn LabRunDeviceResolver>,
     pub capture_interval_override: Option<u64>,
     pub capture_backend_override: Option<CaptureBackendChoice>,
     pub frame_store_override: FrameStoreControl,
@@ -70,48 +71,39 @@ pub struct LabRunRequest {
     pub process: LabRunProcessContext,
 }
 
-pub struct LabRunDeviceCandidate {
-    id: String,
-    resolution: Result<LabRunDeviceConfig, LabError>,
+pub trait LabRunDeviceResolver {
+    fn resolve_serial(&mut self, instance_id: &str) -> Result<LabRunSelectedDevice, LabError>;
+
+    fn global_adb_provenance(&mut self) -> Result<String, LabError>;
+
+    fn capture_config(
+        &mut self,
+        device: &LabRunSelectedDevice,
+    ) -> Result<CaptureBackendConfig, LabError>;
+
+    fn touch_config(
+        &mut self,
+        device: &LabRunSelectedDevice,
+    ) -> Result<TouchBackendConfig, LabError>;
 }
 
-impl LabRunDeviceCandidate {
-    pub fn resolved(id: impl Into<String>, device: LabRunDeviceConfig) -> Self {
-        Self {
-            id: id.into(),
-            resolution: Ok(device),
-        }
-    }
-
-    pub fn failed(id: impl Into<String>, error: LabError) -> Self {
-        Self {
-            id: id.into(),
-            resolution: Err(error),
-        }
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub(crate) fn resolve(&self) -> Result<&LabRunDeviceConfig, LabError> {
-        self.resolution.as_ref().map_err(Clone::clone)
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabRunSelectedDevice {
+    pub id: String,
+    pub serial: String,
 }
 
-pub struct LabRunDeviceConfig {
-    pub instance: String,
-    pub adb_path: String,
-    pub capture_config: CaptureBackendConfig,
-    pub touch_config: TouchBackendConfig,
+pub trait RuntimeCommitSource: Send + Sync {
+    fn sample(&self) -> Option<String>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LabRunProcessContext {
     pub current_dir: Option<PathBuf>,
     pub lease_root: PathBuf,
     pub os: String,
-    pub runtime_commit: Option<String>,
+    pub app_version: String,
+    pub runtime_commit_source: Arc<dyn RuntimeCommitSource>,
     pub memory_source: MemorySampleSource,
 }
 

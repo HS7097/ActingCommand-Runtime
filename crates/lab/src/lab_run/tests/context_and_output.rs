@@ -26,6 +26,50 @@
     }
 
     #[test]
+    fn provenance_uses_app_version_and_independent_live_commit_samples() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        ctx.process.app_version = "actinglab-app-version".to_string();
+        ctx.process.runtime_commit_source = Arc::new(SequencedRuntimeCommitSource::new([
+            Some("commit-a"),
+            None,
+            Some("commit-b"),
+            Some("commit-c"),
+        ]));
+
+        let first_diagnostics = ctx.diagnostics_json(None, None);
+        let first_environment = ctx.environment_json(None).expect("first environment");
+        let second_diagnostics = ctx.diagnostics_json(None, None);
+        let second_environment = ctx.environment_json(None).expect("second environment");
+
+        assert_eq!(
+            first_diagnostics
+                .get("actinglab_cli_version")
+                .and_then(Value::as_str),
+            Some("actinglab-app-version")
+        );
+        assert_eq!(
+            first_diagnostics
+                .get("runtime_commit")
+                .and_then(Value::as_str),
+            Some("commit-a")
+        );
+        assert!(first_environment.get("runtime_repository_commit").unwrap().is_null());
+        assert_eq!(
+            second_diagnostics
+                .get("runtime_commit")
+                .and_then(Value::as_str),
+            Some("commit-b")
+        );
+        assert_eq!(
+            second_environment
+                .get("runtime_repository_commit")
+                .and_then(Value::as_str),
+            Some("commit-c")
+        );
+    }
+
+    #[test]
     fn failure_zip_materializes_frame_store_screenshots() {
         let temp = TempDir::new().expect("temp");
         let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");

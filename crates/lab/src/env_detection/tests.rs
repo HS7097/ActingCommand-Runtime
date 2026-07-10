@@ -32,6 +32,8 @@ impl CaptureBackendFactory for DisabledCaptureFactory {
 struct DisabledLedger;
 
 impl LedgerSink for DisabledLedger {
+    type RunSession = ();
+
     fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> EnvResult<()> {
         Err(LabError::device("ledger must not be opened in this test"))
     }
@@ -39,6 +41,8 @@ impl LedgerSink for DisabledLedger {
     fn finish<T: Serialize>(&mut self, _response: &T) -> EnvResult<LedgerProjection> {
         Err(LabError::device("ledger must not be opened in this test"))
     }
+
+    fn run_session(&mut self) -> Self::RunSession {}
 }
 
 struct FixedClock;

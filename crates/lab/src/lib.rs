@@ -59,6 +59,10 @@ impl<P: LabPorts> Lab<P> {
         &self.ports
     }
 
+    pub(crate) fn ports_mut(&mut self) -> &mut P {
+        &mut self.ports
+    }
+
     pub fn state(&self) -> &LabState {
         &self.state
     }

@@ -5,14 +5,62 @@ use actingcommand_device::{
     MaaTouchConfig, TouchBackendConfig,
 };
 use actingcommand_lab::{
-    CaptureBackendObservation, CaptureBackendReport, FrameStoreControl, LabRunDeviceCandidate,
-    LabRunDeviceConfig, LabRunProcessContext, LabRunRequest, LabRunResponse, LabValidateRequest,
-    LabValidateResponse, MemorySample, MemorySampleSource,
+    CaptureBackendObservation, CaptureBackendReport, FrameStoreControl, LabRunDeviceResolver,
+    LabRunProcessContext, LabRunRequest, LabRunResponse, LabRunSelectedDevice, LabValidateRequest,
+    LabValidateResponse, MemorySample, MemorySampleSource, RuntimeCommitSource,
 };
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 fn assert_serializable<T: Serialize>() {}
+
+struct CompileDeviceResolver;
+
+struct CompileCommitSource;
+
+impl RuntimeCommitSource for CompileCommitSource {
+    fn sample(&self) -> Option<String> {
+        Some("deadbeef".to_string())
+    }
+}
+
+impl LabRunDeviceResolver for CompileDeviceResolver {
+    fn resolve_serial(
+        &mut self,
+        instance_id: &str,
+    ) -> actingcommand_lab::LabResult<LabRunSelectedDevice> {
+        Ok(LabRunSelectedDevice {
+            id: instance_id.to_string(),
+            serial: "fixture".to_string(),
+        })
+    }
+
+    fn global_adb_provenance(&mut self) -> actingcommand_lab::LabResult<String> {
+        Ok("adb".to_string())
+    }
+
+    fn capture_config(
+        &mut self,
+        _device: &LabRunSelectedDevice,
+    ) -> actingcommand_lab::LabResult<CaptureBackendConfig> {
+        Ok(CaptureBackendConfig::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+        ))
+    }
+
+    fn touch_config(
+        &mut self,
+        _device: &LabRunSelectedDevice,
+    ) -> actingcommand_lab::LabResult<TouchBackendConfig> {
+        Ok(TouchBackendConfig::new(
+            AdbConfig::default(),
+            DeviceTarget::default(),
+            MaaTouchConfig::default(),
+        ))
+    }
+}
 
 #[allow(dead_code)]
 fn assert_methods_are_public<P: actingcommand_lab::LabPorts>(
@@ -26,22 +74,12 @@ fn assert_methods_are_public<P: actingcommand_lab::LabPorts>(
 
 #[test]
 fn lab_run_family_exposes_typed_requests_and_responses() {
-    let adb = AdbConfig::default();
-    let target = DeviceTarget::default();
-    let candidate = LabRunDeviceCandidate::resolved(
-        "fixture",
-        LabRunDeviceConfig {
-            instance: target.resolved_serial(),
-            adb_path: adb.adb_path.clone(),
-            capture_config: CaptureBackendConfig::new(adb.clone(), target.clone()),
-            touch_config: TouchBackendConfig::new(adb, target, MaaTouchConfig::default()),
-        },
-    );
     let process = LabRunProcessContext {
         current_dir: Some(PathBuf::from("workspace")),
         lease_root: PathBuf::from("locks"),
         os: "test".to_string(),
-        runtime_commit: Some("deadbeef".to_string()),
+        app_version: "actinglab-test".to_string(),
+        runtime_commit_source: Arc::new(CompileCommitSource),
         memory_source: MemorySampleSource::fixed(MemorySample {
             total_bytes: 8 * 1024 * 1024 * 1024,
             available_bytes: 4 * 1024 * 1024 * 1024,
@@ -54,7 +92,7 @@ fn lab_run_family_exposes_typed_requests_and_responses() {
         game: None,
         server: None,
         instance: None,
-        device_candidates: vec![candidate],
+        device_resolver: Box::new(CompileDeviceResolver),
         capture_interval_override: None,
         capture_backend_override: Some(CaptureBackendChoice::Adb),
         frame_store_override: FrameStoreControl::default(),

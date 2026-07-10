@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, device_config_for_instance, effective_adb_path,
-    effective_run_root, read_user_config,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, effective_adb_path,
+    effective_adb_path_for_instance, effective_capture_backend_choice, effective_run_root,
+    effective_touch_backend_choice, enforce_path_adb_target_boundary, read_user_config,
 };
-use actingcommand_device::CaptureBackendChoice;
+use actingcommand_device::{
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+    TouchBackendConfig,
+};
 use actingcommand_lab::{
-    FrameStoreControl, LabRunDeviceCandidate, LabRunDeviceConfig, LabRunProcessContext,
-    LabRunRequest, LabValidateRequest, MemorySampleSource,
+    FrameStoreControl, LabRunDeviceResolver, LabRunProcessContext, LabRunRequest,
+    LabRunSelectedDevice, LabValidateRequest, MemorySampleSource,
 };
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
 use serde::Serialize;
@@ -16,6 +20,7 @@ use std::env;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,7 +55,7 @@ fn lab_run_request(
             game: global.game.clone(),
             server: global.server.clone(),
             instance: global.instance.clone(),
-            device_candidates: device_candidates(global, &config),
+            device_resolver: Box::new(AppLabRunDeviceResolver::new(global, &config)),
             capture_interval_override: parse_optional_u64(flags, "--capture-interval-ms")?,
             capture_backend_override: global
                 .capture_backend
@@ -73,36 +78,94 @@ pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
     serialize_response(lab.lab_validate(request)?)
 }
 
-fn device_candidates(
-    global: &GlobalOptions,
-    config: &actingcommand_lab::UserConfig,
-) -> Vec<LabRunDeviceCandidate> {
-    let ids = match &global.instance {
-        Some(instance) => vec![instance.clone()],
-        None => config.instances.keys().cloned().collect(),
-    };
-    ids.into_iter()
-        .map(
-            |id| match resolved_lab_run_device_config(global, config, &id) {
-                Ok(device) => LabRunDeviceCandidate::resolved(id, device),
-                Err(error) => LabRunDeviceCandidate::failed(id, error),
-            },
-        )
-        .collect()
+struct AppLabRunDeviceResolver {
+    global: GlobalOptions,
+    config: actingcommand_lab::UserConfig,
+    capture_device: Option<(String, AdbConfig, DeviceTarget)>,
 }
 
-fn resolved_lab_run_device_config(
-    global: &GlobalOptions,
-    config: &actingcommand_lab::UserConfig,
-    id: &str,
-) -> CliOutcome<LabRunDeviceConfig> {
-    let device = device_config_for_instance(global, config, Some(id))?;
-    Ok(LabRunDeviceConfig {
-        instance: device.target.resolved_serial(),
-        adb_path: effective_adb_path(config)?.path,
-        capture_config: device.capture_backend_config(),
-        touch_config: device.touch_backend_config(),
-    })
+struct AppRuntimeCommitSource;
+
+impl actingcommand_lab::RuntimeCommitSource for AppRuntimeCommitSource {
+    fn sample(&self) -> Option<String> {
+        git_commit()
+    }
+}
+
+impl AppLabRunDeviceResolver {
+    fn new(global: &GlobalOptions, config: &actingcommand_lab::UserConfig) -> Self {
+        Self {
+            global: global.clone(),
+            config: config.clone(),
+            capture_device: None,
+        }
+    }
+
+    fn target(&self, id: &str) -> DeviceTarget {
+        let instance = self.config.instances.get(id);
+        let mut target = DeviceTarget::default();
+        if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
+            target.serial = Some(serial);
+        } else if self.global.instance.as_deref() == Some(id) && instance.is_none() {
+            target.serial = Some(id.to_string());
+        }
+        target
+    }
+}
+
+impl LabRunDeviceResolver for AppLabRunDeviceResolver {
+    fn resolve_serial(&mut self, instance_id: &str) -> CliOutcome<LabRunSelectedDevice> {
+        Ok(LabRunSelectedDevice {
+            id: instance_id.to_string(),
+            serial: self.target(instance_id).resolved_serial(),
+        })
+    }
+
+    fn global_adb_provenance(&mut self) -> CliOutcome<String> {
+        Ok(effective_adb_path(&self.config)?.path)
+    }
+
+    fn capture_config(
+        &mut self,
+        device: &LabRunSelectedDevice,
+    ) -> CliOutcome<CaptureBackendConfig> {
+        let instance = self.config.instances.get(&device.id);
+        let target = self.target(&device.id);
+        if target.resolved_serial() != device.serial {
+            return Err(CliError::device(
+                "selected device serial changed before capture configuration",
+            ));
+        }
+        let capture_backend = effective_capture_backend_choice(&self.global, &device.id, instance)?;
+        let resolved_adb = effective_adb_path_for_instance(&self.config, instance)?;
+        enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
+        let adb = AdbConfig {
+            adb_path: resolved_adb.path,
+            ..Default::default()
+        };
+        self.capture_device = Some((device.id.clone(), adb.clone(), target.clone()));
+        Ok(CaptureBackendConfig::new(adb, target).with_requested(capture_backend))
+    }
+
+    fn touch_config(&mut self, device: &LabRunSelectedDevice) -> CliOutcome<TouchBackendConfig> {
+        let (id, adb, target) = self.capture_device.as_ref().ok_or_else(|| {
+            CliError::device("touch configuration requested before capture configuration")
+        })?;
+        if id != &device.id || target.resolved_serial() != device.serial {
+            return Err(CliError::device(
+                "selected device changed before touch configuration",
+            ));
+        }
+        let touch_backend = effective_touch_backend_choice(
+            &self.global,
+            &device.id,
+            self.config.instances.get(&device.id),
+        )?;
+        Ok(
+            TouchBackendConfig::new(adb.clone(), target.clone(), MaaTouchConfig::default())
+                .with_requested(touch_backend),
+        )
+    }
 }
 
 fn process_context() -> CliOutcome<LabRunProcessContext> {
@@ -116,7 +179,8 @@ fn process_context() -> CliOutcome<LabRunProcessContext> {
         current_dir: env::current_dir().ok(),
         lease_root,
         os: env::consts::OS.to_string(),
-        runtime_commit: git_commit(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        runtime_commit_source: Arc::new(AppRuntimeCommitSource),
         memory_source: MemorySampleSource::live(super::frame_store::sample_system_memory),
     })
 }
@@ -249,9 +313,12 @@ mod tests {
     }
 
     #[test]
-    fn device_candidates_defer_unselected_configuration_errors() {
+    fn device_resolver_never_opens_unselected_candidate() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let adb = temp.path().join("adb");
+        std::fs::write(&adb, b"fixture").expect("adb");
         let mut config = actingcommand_lab::UserConfig {
-            adb_path: Some("adb".to_string()),
+            adb_path: Some(adb.display().to_string()),
             ..Default::default()
         };
         config.instances.insert(
@@ -269,16 +336,21 @@ mod tests {
                 serial: Some("fixture:5555".to_string()),
                 game: Some("arknights".to_string()),
                 server: Some("cn".to_string()),
+                adb_path: Some(adb.display().to_string()),
                 capture_backend: Some("adb".to_string()),
                 ..Default::default()
             },
         );
 
-        let candidates = device_candidates(&GlobalOptions::default(), &config);
+        let mut resolver = AppLabRunDeviceResolver::new(&GlobalOptions::default(), &config);
+        let selected = resolver.resolve_serial("b-valid").expect("selected serial");
+        let capture = resolver
+            .capture_config(&selected)
+            .expect("selected capture");
 
-        assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].id(), "a-invalid");
-        assert_eq!(candidates[1].id(), "b-valid");
+        assert_eq!(selected.id, "b-valid");
+        assert_eq!(selected.serial, "fixture:5555");
+        assert_eq!(capture.adb_config.adb_path, adb.display().to_string());
     }
 
     #[test]
@@ -303,12 +375,16 @@ mod tests {
             },
         );
 
-        let device =
-            resolved_lab_run_device_config(&global, &config, "selected").expect("device config");
+        let mut resolver = AppLabRunDeviceResolver::new(&global, &config);
+        let selected = resolver
+            .resolve_serial("selected")
+            .expect("selected serial");
+        let provenance = resolver.global_adb_provenance().expect("provenance");
+        let capture = resolver.capture_config(&selected).expect("capture config");
 
-        assert_eq!(device.adb_path, global_adb.display().to_string());
+        assert_eq!(provenance, global_adb.display().to_string());
         assert_eq!(
-            device.capture_config.adb_config.adb_path,
+            capture.adb_config.adb_path,
             instance_adb.display().to_string()
         );
     }

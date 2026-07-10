@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-struct LabRunContext<'a> {
+struct LabRunContext<'a, L: LedgerSink> {
     clock: &'a dyn Clock,
     process: crate::LabRunProcessContext,
     id_issuer: IdIssuer,
@@ -13,7 +13,8 @@ struct LabRunContext<'a> {
     output_dir: PathBuf,
     logs_dir: PathBuf,
     screenshots_dir: PathBuf,
-    ledger: Option<LabLedger>,
+    ledger_session: L::RunSession,
+    ledger_started: bool,
     ledger_path: Option<PathBuf>,
     ledger_dispatch_written: bool,
     input_zip_sha256: Option<String>,
@@ -48,12 +49,13 @@ struct LabRunContext<'a> {
     expected_page: Option<String>,
 }
 
-impl<'a> LabRunContext<'a> {
+impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     fn create_with_context(
         run_root: &Path,
         input_zip: &Path,
         process: crate::LabRunProcessContext,
         clock: &'a dyn Clock,
+        ledger_session: L::RunSession,
     ) -> CliOutcome<Self> {
         let now = now_system_time(clock)?;
         let issuer = IdIssuer::new();
@@ -88,7 +90,8 @@ impl<'a> LabRunContext<'a> {
             output_dir,
             logs_dir,
             screenshots_dir,
-            ledger: None,
+            ledger_session,
+            ledger_started: false,
             ledger_path: None,
             ledger_dispatch_written: false,
             input_zip_sha256: None,
@@ -192,7 +195,7 @@ impl<'a> LabRunContext<'a> {
     }
 
     fn ensure_ledger(&mut self) -> CliOutcome<()> {
-        if self.ledger.is_some() {
+        if self.ledger_started {
             return Ok(());
         }
         let instance = self.instance.as_deref().unwrap_or("unknown").to_string();
@@ -207,18 +210,24 @@ impl<'a> LabRunContext<'a> {
                 .unwrap_or("unknown"),
             &instance,
         );
-        let mut ledger =
-            LabLedger::create_runtime_shard(&self.run_root, &self.run_id, &instance, header)
-                .map_err(|err| self.ledger_failure(err, "ledger_create"))?;
-        let path = ledger.ledger_path().to_path_buf();
+        let path = L::start_run_session(
+            &mut self.ledger_session,
+            crate::RunLedgerSessionRequest {
+                run_root: self.run_root.clone(),
+                run_id: self.run_id.clone(),
+                instance,
+                header,
+            },
+        )
+        .map_err(|err| self.ledger_failure(err, "ledger_create"))?;
         let backlog = self.events.clone();
         for event in backlog {
-            ledger
-                .append_event(self.light_event_from_legacy_event(&event)?)
+            let light_event = self.light_event_from_legacy_event(&event)?;
+            L::append_run_event(&mut self.ledger_session, light_event)
                 .map_err(|err| self.ledger_failure(err, "ledger_backfill_event"))?;
         }
         self.ledger_path = Some(path);
-        self.ledger = Some(ledger);
+        self.ledger_started = true;
         self.write_dispatch_record()
     }
 
@@ -242,11 +251,10 @@ impl<'a> LabRunContext<'a> {
 
     fn append_ledger_event(&mut self, event: &Value) -> CliOutcome<()> {
         let light_event = self.light_event_from_legacy_event(event)?;
-        let Some(ledger) = self.ledger.as_mut() else {
+        if !self.ledger_started {
             return Ok(());
-        };
-        ledger
-            .append_event(light_event)
+        }
+        L::append_run_event(&mut self.ledger_session, light_event)
             .map_err(|err| self.ledger_failure(err, "ledger_event"))
     }
 
@@ -255,14 +263,13 @@ impl<'a> LabRunContext<'a> {
         record: LedgerRecord,
         failure_phase: &str,
     ) -> CliOutcome<()> {
-        let Some(ledger) = self.ledger.as_mut() else {
+        if !self.ledger_started {
             return Err(self.ledger_failure(
                 LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string()),
                 failure_phase,
             ));
-        };
-        ledger
-            .append(record)
+        }
+        L::append_run_record(&mut self.ledger_session, record)
             .map_err(|err| self.ledger_failure(err, failure_phase))
     }
 
@@ -322,7 +329,7 @@ impl<'a> LabRunContext<'a> {
             self.input_summary(),
             attempted_ledger_path,
         );
-        let last_resort_result = write_last_resort_error(Some(&self.run_root), &last_resort);
+        let last_resort_result = L::write_run_last_resort(Some(&self.run_root), &last_resort);
         let suffix = match last_resort_result {
             Ok(path) => format!("; last-resort error file written to {}", path.display()),
             Err(last_resort_err) => {
@@ -885,7 +892,7 @@ impl<'a> LabRunContext<'a> {
                 .as_ref()
                 .map(|path| path.display().to_string()),
         );
-        let last_resort_result = write_last_resort_error(Some(&self.run_root), &last_resort);
+        let last_resort_result = L::write_run_last_resort(Some(&self.run_root), &last_resort);
         self.append_terminal_receipt(false, Some(&failure_reason), None, None)?;
         let suffix = match last_resort_result {
             Ok(path) => format!("; last-resort error file written to {}", path.display()),
@@ -949,12 +956,9 @@ impl<'a> LabRunContext<'a> {
                 "runtime ledger path is unavailable for Lab result projection",
             )
         })?;
-        if let Some(ledger) = &self.ledger {
-            ledger
-                .sync()
-                .map_err(|err| self.ledger_failure(err, "ledger_projection_sync"))?;
-        }
-        let read = LabLedger::read(ledger_path)
+        L::sync_run_session(&self.ledger_session)
+            .map_err(|err| self.ledger_failure(err, "ledger_projection_sync"))?;
+        let read = L::read_run_session(&self.ledger_session)
             .map_err(|err| self.ledger_failure(err, "ledger_projection_read"))?;
         let events = project_light_events(&read);
         if events.is_empty() {
@@ -1030,12 +1034,9 @@ impl<'a> LabRunContext<'a> {
                 "runtime ledger path is unavailable for completed Lab run projection",
             )
         })?;
-        if let Some(ledger) = &self.ledger {
-            ledger
-                .sync()
-                .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_sync"))?;
-        }
-        let read = LabLedger::read(ledger_path)
+        L::sync_run_session(&self.ledger_session)
+            .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_sync"))?;
+        let read = L::read_run_session(&self.ledger_session)
             .map_err(|err| self.ledger_failure(err, "ledger_completed_projection_read"))?;
         let mut saw_finalizing = false;
         let mut terminal_receipt = None;
@@ -1226,9 +1227,9 @@ impl<'a> LabRunContext<'a> {
     fn diagnostics_json(&self, failure_reason: Option<&str>, state: Option<&RunState>) -> Value {
         let frame_store = self.frame_store.diagnostics_json();
         json!({
-            "actinglab_cli_version": env!("CARGO_PKG_VERSION"),
+            "actinglab_cli_version": self.process.app_version,
             "runtime_version": "runtime-embedded-lab1y",
-            "runtime_commit": self.process.runtime_commit,
+            "runtime_commit": self.process.runtime_commit_source.sample(),
             "os": self.process.os,
             "timezone": "UTC",
             "adb_path": self.adb_path,
@@ -1301,7 +1302,7 @@ impl<'a> LabRunContext<'a> {
             "run_dir": self.run_dir,
             "adb_path": self.adb_path,
             "instance_serial": self.instance,
-            "runtime_repository_commit": self.process.runtime_commit,
+            "runtime_repository_commit": self.process.runtime_commit_source.sample(),
             "control_output": self.control.as_ref().and_then(|control| control.output.clone()),
             "control_stop_on_error": self.control.as_ref().and_then(|control| control.stop_on_error),
             "resource_manifest": state.map(|state| state.resources.manifest.clone())

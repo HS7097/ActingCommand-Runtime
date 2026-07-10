@@ -1,34 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
     #[test]
-    fn successful_recognize_only_run_uses_capture_factory() {
+    fn successful_recognize_only_run_uses_injected_ledger_and_lazy_device_ports() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
         write_minimal_lab_package(&zip);
         let out = temp.path().join("out.zip");
-        let adb = actingcommand_device::AdbConfig::default();
-        let target = actingcommand_device::DeviceTarget {
-            serial: Some("fixture".to_string()),
-            ..Default::default()
-        };
         let mut request = test_run_request(zip, out.clone(), temp.path());
         request.instance = Some("fixture".to_string());
-        request.device_candidates = vec![LabRunDeviceCandidate::resolved(
+        let resolver = Arc::new(DeviceResolverCounters::default());
+        request.device_resolver = test_device_resolver(
             "fixture",
-            crate::LabRunDeviceConfig {
-                instance: target.resolved_serial(),
-                adb_path: adb.adb_path.clone(),
-                capture_config: actingcommand_device::CaptureBackendConfig::new(
-                    adb.clone(),
-                    target.clone(),
-                ),
-                touch_config: actingcommand_device::TouchBackendConfig::new(
-                    adb,
-                    target,
-                    actingcommand_device::MaaTouchConfig::default(),
-                ),
-            },
-        )];
+            "fixture",
+            resolver.clone(),
+            temp.path().join("locks"),
+            true,
+        );
         let mut lab = test_lab(temp.path());
 
         let response = lab.lab_run(request).expect("successful Lab run");
@@ -36,27 +23,94 @@
         assert!(response.ok);
         assert!(out.is_file());
         assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(lab.ports().ledger.run_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *resolver.resolved_ids.lock().expect("resolved ids"),
+            vec!["fixture".to_string()]
+        );
+        assert_eq!(resolver.provenance.load(Ordering::SeqCst), 1);
+        assert_eq!(resolver.capture.load(Ordering::SeqCst), 1);
+        assert_eq!(resolver.touch.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn global_provenance_failure_keeps_selected_serial_in_failure_outputs() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let out = temp.path().join("out.zip");
+        let mut request = test_run_request(zip, out.clone(), temp.path());
+        request.instance = Some("fixture".to_string());
+        let counters = Arc::new(DeviceResolverCounters::default());
+        request.device_resolver = Box::new(TestDeviceResolver {
+            selected: crate::LabRunSelectedDevice {
+                id: "fixture".to_string(),
+                serial: "fixture".to_string(),
+            },
+            counters,
+            lease_root: temp.path().join("locks"),
+            require_lease_before_capture: false,
+            fail_provenance: true,
+        });
+        let run_root = request.run_root.clone();
+        let mut lab = test_lab(temp.path());
+
+        let error = lab.lab_run(request).expect_err("provenance failure");
+
+        assert!(error.message.contains("synthetic global provenance failure"));
+        let file = File::open(&out).expect("failure zip");
+        let mut archive = ZipArchive::new(file).expect("failure archive");
+        let summary: Value =
+            serde_json::from_reader(archive.by_name("logs/summary.json").expect("summary"))
+                .expect("summary json");
+        assert_eq!(summary.get("instance").and_then(Value::as_str), Some("fixture"));
+        let shard_runs = run_root
+            .join("runtime-ledger")
+            .join("instances")
+            .join("fixture")
+            .join("runs");
+        let shard = fs::read_dir(shard_runs)
+            .expect("ledger runs")
+            .next()
+            .expect("ledger shard")
+            .expect("ledger shard entry")
+            .path()
+            .join("ledger.jsonl");
+        let ledger = LabLedger::read(shard).expect("ledger readback");
+        assert_eq!(
+            ledger.header.as_ref().map(|header| header.instance.as_str()),
+            Some("fixture")
+        );
     }
 
     #[test]
     fn touch_backend_initialization_uses_input_factory() {
-        let adb = actingcommand_device::AdbConfig::default();
-        let target = actingcommand_device::DeviceTarget::default();
-        let config = actingcommand_device::TouchBackendConfig::new(
-            adb,
-            target,
-            actingcommand_device::MaaTouchConfig::default(),
-        );
         let opens = Arc::new(AtomicUsize::new(0));
         let factory = TestInputFactory {
             opens: opens.clone(),
         };
+        let counters = Arc::new(DeviceResolverCounters::default());
+        let mut resolver = test_device_resolver(
+            "fixture",
+            "fixture",
+            counters.clone(),
+            PathBuf::from("locks"),
+            false,
+        );
+        let selected = crate::LabRunSelectedDevice {
+            id: "fixture".to_string(),
+            serial: "fixture".to_string(),
+        };
         let mut backend = None;
 
-        ensure_touch_backend(&mut backend, &factory, &config).expect("input backend");
+        ensure_touch_backend(&mut backend, &factory, resolver.as_mut(), &selected)
+            .expect("first input backend");
+        ensure_touch_backend(&mut backend, &factory, resolver.as_mut(), &selected)
+            .expect("cached input backend");
 
         assert!(backend.is_some());
         assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.touch.load(Ordering::SeqCst), 1);
     }
 
     #[test]

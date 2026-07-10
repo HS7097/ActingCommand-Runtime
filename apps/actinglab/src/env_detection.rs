@@ -15,7 +15,11 @@ use actingcommand_lab::{
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
     InputBackendRequest, InputHandshakeReport, Lab, LabError, LabPorts, LabState, LedgerSink,
-    UserConfig,
+    RunLedgerSessionRequest, UserConfig,
+};
+use actingcommand_ledger::{
+    LabLedger, LabLogError, LabLogResult, LastResortError, LedgerRead, LedgerRecord, LightEvent,
+    write_last_resort_error,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -121,7 +125,7 @@ fn build_app_lab(
         AppLabPorts {
             input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory,
-            ledger: CliOwnedLedger,
+            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -235,7 +239,7 @@ fn build_lab(
         AppLabPorts {
             input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory,
-            ledger: CliOwnedLedger,
+            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -286,7 +290,7 @@ fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
 pub(super) struct AppLabPorts {
     input: AppInputFactory,
     capture: AppCaptureFactory,
-    ledger: CliOwnedLedger,
+    ledger: AppLedgerSink,
     clock: SystemClock,
     config: AppConfigSource,
 }
@@ -294,7 +298,7 @@ pub(super) struct AppLabPorts {
 impl LabPorts for AppLabPorts {
     type InputFactory = AppInputFactory;
     type CaptureFactory = AppCaptureFactory;
-    type Ledger = CliOwnedLedger;
+    type Ledger = AppLedgerSink;
     type Time = SystemClock;
     type Config = AppConfigSource;
 
@@ -495,9 +499,15 @@ impl CaptureBackendFactory for AppCaptureFactory {
     }
 }
 
-pub(super) struct CliOwnedLedger;
+pub(super) struct AppLedgerSink;
 
-impl LedgerSink for CliOwnedLedger {
+pub(super) struct AppRunLedgerSession {
+    ledger: Option<LabLedger>,
+}
+
+impl LedgerSink for AppLedgerSink {
+    type RunSession = AppRunLedgerSession;
+
     fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> Result<(), LabError> {
         Err(LabError::device(
             "semantic ledger is owned by the CLI adapter during A3 migration",
@@ -509,6 +519,65 @@ impl LedgerSink for CliOwnedLedger {
             "semantic ledger is owned by the CLI adapter during A3 migration",
         ))
     }
+
+    fn run_session(&mut self) -> Self::RunSession {
+        AppRunLedgerSession { ledger: None }
+    }
+
+    fn start_run_session(
+        session: &mut Self::RunSession,
+        request: RunLedgerSessionRequest,
+    ) -> LabLogResult<PathBuf> {
+        if session.ledger.is_some() {
+            return Err(LabLogError::InvalidInput(
+                "runtime ledger session is already started".to_string(),
+            ));
+        }
+        let ledger = LabLedger::create_runtime_shard(
+            request.run_root,
+            &request.run_id,
+            &request.instance,
+            request.header,
+        )?;
+        let path = ledger.ledger_path().to_path_buf();
+        session.ledger = Some(ledger);
+        Ok(path)
+    }
+
+    fn append_run_record(session: &mut Self::RunSession, record: LedgerRecord) -> LabLogResult<()> {
+        app_run_ledger_mut(session)?.append(record)
+    }
+
+    fn append_run_event(session: &mut Self::RunSession, event: LightEvent) -> LabLogResult<()> {
+        app_run_ledger_mut(session)?.append_event(event)
+    }
+
+    fn sync_run_session(session: &Self::RunSession) -> LabLogResult<()> {
+        app_run_ledger(session)?.sync()
+    }
+
+    fn read_run_session(session: &Self::RunSession) -> LabLogResult<LedgerRead> {
+        LabLedger::read(app_run_ledger(session)?.ledger_path())
+    }
+
+    fn write_run_last_resort(
+        run_root: Option<&Path>,
+        error: &LastResortError,
+    ) -> LabLogResult<PathBuf> {
+        write_last_resort_error(run_root, error)
+    }
+}
+
+fn app_run_ledger(session: &AppRunLedgerSession) -> LabLogResult<&LabLedger> {
+    session.ledger.as_ref().ok_or_else(|| {
+        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+    })
+}
+
+fn app_run_ledger_mut(session: &mut AppRunLedgerSession) -> LabLogResult<&mut LabLedger> {
+    session.ledger.as_mut().ok_or_else(|| {
+        LabLogError::InvalidInput("runtime ledger handle is unavailable".to_string())
+    })
 }
 
 pub(super) struct SystemClock;

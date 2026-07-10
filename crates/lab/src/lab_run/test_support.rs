@@ -21,22 +21,11 @@ impl Clock for TestClock {
 static TEST_CLOCK: TestClock = TestClock;
 
 #[cfg(test)]
-impl LabRunContext<'static> {
-    fn create(run_root: &Path, input_zip: &Path) -> CliOutcome<Self> {
-        Self::create_with_context(
-            run_root,
-            input_zip,
-            crate::LabRunProcessContext {
-                current_dir: None,
-                lease_root: run_root.join("locks"),
-                os: "test".to_string(),
-                runtime_commit: None,
-                memory_source: crate::MemorySampleSource::fixed(crate::MemorySample {
-                    total_bytes: 8 * 1024 * 1024 * 1024,
-                    available_bytes: 4 * 1024 * 1024 * 1024,
-                }),
-            },
-            &TEST_CLOCK,
-        )
+struct EmptyRuntimeCommitSource;
+
+#[cfg(test)]
+impl crate::RuntimeCommitSource for EmptyRuntimeCommitSource {
+    fn sample(&self) -> Option<String> {
+        None
     }
 }

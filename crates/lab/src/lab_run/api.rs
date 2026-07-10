@@ -16,14 +16,19 @@ impl<P: LabPorts> Lab<P> {
     }
 }
 
-fn run_lab<P: LabPorts>(lab: &mut Lab<P>, request: LabRunRequest) -> CliOutcome<LabRunResponse> {
+fn run_lab<P: LabPorts>(
+    lab: &mut Lab<P>,
+    mut request: LabRunRequest,
+) -> CliOutcome<LabRunResponse> {
     let zip_path = request.zip_path.clone();
     let out_path = request.out_path.clone();
+    let ledger_session = lab.ports_mut().ledger().run_session();
     let mut ctx = LabRunContext::create_with_context(
         &request.run_root,
         &zip_path,
         request.process.clone(),
         lab.ports().clock(),
+        ledger_session,
     )?;
     let run_dir = ctx.run_dir.clone();
     if path_is_inside_from(
@@ -42,7 +47,7 @@ fn run_lab<P: LabPorts>(lab: &mut Lab<P>, request: LabRunRequest) -> CliOutcome<
         json!({"input_zip": zip_path, "out": out_path}),
     )?;
 
-    let result = execute_lab_run(&mut ctx, lab.ports(), &request);
+    let result = execute_lab_run(&mut ctx, lab.ports(), &mut request);
     match result {
         Ok(run_state) => {
             ctx.finish(&out_path, true, None, Some(&run_state))?;
@@ -148,9 +153,9 @@ fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<LabValidateResponse> 
 }
 
 fn execute_lab_run<P: LabPorts>(
-    ctx: &mut LabRunContext<'_>,
+    ctx: &mut LabRunContext<'_, P::Ledger>,
     ports: &P,
-    request: &LabRunRequest,
+    request: &mut LabRunRequest,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
     let contained = load_lab_package_through_containment(
@@ -221,13 +226,14 @@ fn execute_lab_run<P: LabPorts>(
     )?;
 
     let app_config = ports.config().load()?;
-    let device = select_device_candidate(request, &control, &app_config)?;
-    ctx.instance = Some(device.instance.clone());
-    ctx.adb_path = Some(device.adb_path.clone());
+    let selected_id = select_device_id(request, &control, &app_config)?;
+    let device = request.device_resolver.resolve_serial(&selected_id)?;
+    ctx.instance = Some(device.serial.clone());
+    ctx.adb_path = Some(request.device_resolver.global_adb_provenance()?);
     ctx.ensure_ledger()?;
 
     ctx.set_phase("lab_lease_acquired");
-    let _lease_guard = LabLeaseGuard::acquire(&request.process.lease_root, &device.instance)?;
+    let _lease_guard = LabLeaseGuard::acquire(&request.process.lease_root, &device.serial)?;
     ctx.event(
         "lab_lease_acquired",
         json!({"mode": "trusted_execution", "instance": ctx.instance}),
@@ -239,11 +245,9 @@ fn execute_lab_run<P: LabPorts>(
         .or(control.capture_backend_choice()?)
         .unwrap_or_default();
     let capture_observation = CaptureBackendObservation::default();
+    let capture_config = request.device_resolver.capture_config(&device)?;
     let mut capture = ports.capture_factory().open(CaptureBackendRequest {
-        config: device
-            .capture_config
-            .clone()
-            .with_requested(requested_capture_backend),
+        config: capture_config.with_requested(requested_capture_backend),
         observation: Some(capture_observation.clone()),
     })?;
     let capture_report = capture_observation.snapshot()?;
@@ -350,10 +354,11 @@ fn execute_lab_run<P: LabPorts>(
             ctx,
             capture.as_mut(),
             &mut input,
+            request.device_resolver.as_mut(),
             OperationExecutionRequest {
                 device: DeviceInputRequest {
                     factory: ports.input_factory(),
-                    config: &device.touch_config,
+                    selected: &device,
                 },
                 resources: &state.resources,
                 bundle: &state.resources.operation_bundle,
@@ -441,10 +446,11 @@ fn execute_lab_run<P: LabPorts>(
                     ctx,
                     capture.as_mut(),
                     &mut input,
+                    request.device_resolver.as_mut(),
                     RecoveryRunRequest {
                         device: DeviceInputRequest {
                             factory: ports.input_factory(),
-                            config: &device.touch_config,
+                            selected: &device,
                         },
                         resources: &state.resources,
                         control: &state.control,
@@ -494,32 +500,27 @@ fn execute_lab_run<P: LabPorts>(
     Ok(state)
 }
 
-fn select_device_candidate<'a>(
-    request: &'a LabRunRequest,
+fn select_device_id(
+    request: &LabRunRequest,
     control: &LabControl,
     config: &crate::UserConfig,
-) -> CliOutcome<&'a crate::LabRunDeviceConfig> {
+) -> CliOutcome<String> {
     let selected_id = match &request.instance {
-        Some(instance) => Some(instance.as_str()),
+        Some(instance) => Some(instance.clone()),
         None => {
             let game = request.game.as_ref().unwrap_or(&control.game);
             let server = request.server.as_ref().unwrap_or(&control.server);
             config.instances.iter().find_map(|(id, instance)| {
                 (instance.game.as_ref() == Some(game) && instance.server.as_ref() == Some(server))
-                    .then_some(id.as_str())
+                    .then_some(id.clone())
             })
         }
     };
-    request
-        .device_candidates
-        .iter()
-        .find(|candidate| Some(candidate.id()) == selected_id)
-        .ok_or_else(|| {
-            CliError::instance(
-                "could not resolve instance; pass --instance or configure instance.<id>.game/server",
-            )
-        })?
-        .resolve()
+    selected_id.ok_or_else(|| {
+        CliError::instance(
+            "could not resolve instance; pass --instance or configure instance.<id>.game/server",
+        )
+    })
 }
 
 struct ContainedLabInput {

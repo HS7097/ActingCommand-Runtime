@@ -2000,6 +2000,8 @@ mod tests {
     struct DisabledLedger;
 
     impl LedgerSink for DisabledLedger {
+        type RunSession = ();
+
         fn append_drive<T: Serialize>(&mut self, _record: &DriveRecord<T>) -> CliOutcome<()> {
             Err(CliError::device(
                 "ledger must not be opened in package tests",
@@ -2011,6 +2013,8 @@ mod tests {
                 "ledger must not be opened in package tests",
             ))
         }
+
+        fn run_session(&mut self) -> Self::RunSession {}
     }
 
     struct FixedClock;
