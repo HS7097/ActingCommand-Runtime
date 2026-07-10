@@ -1,8 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{GlobalLedger, GlobalLedgerError, GlobalLedgerResult};
-use actingcommand_contract::{ErasedSanitizedEventDraft, PersistedEvent};
+use actingcommand_contract::{ErasedSanitizedEventDraft, EventType, PersistedEvent};
+use std::cell::Cell;
 use std::fmt;
+use std::sync::Once;
+
+thread_local! {
+    static CRITICAL_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+struct CriticalPanicScope;
+
+impl CriticalPanicScope {
+    fn enter() -> Self {
+        install_critical_panic_hook();
+        CRITICAL_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for CriticalPanicScope {
+    fn drop(&mut self) {
+        CRITICAL_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+fn install_critical_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let suppress = CRITICAL_PANIC_DEPTH
+                .try_with(|depth| depth.get() > 0)
+                .unwrap_or(false);
+            if !suppress {
+                previous(info);
+            }
+        }));
+    });
+}
 
 pub trait EventAppender {
     fn append_durable(
@@ -52,8 +89,11 @@ pub enum CriticalPlanError {
     CorrelationIdMismatch,
     MissingActionId,
     ActionIdMismatch,
+    StableIdentityLinkMismatch,
     DuplicateEventType,
     DuplicateEventId,
+    UnsupportedIntent,
+    OutcomeRoleMismatch,
 }
 
 impl fmt::Display for CriticalPlanError {
@@ -64,8 +104,11 @@ impl fmt::Display for CriticalPlanError {
             Self::CorrelationIdMismatch => "critical event correlation ids must match",
             Self::MissingActionId => "critical events require action ids",
             Self::ActionIdMismatch => "critical event action ids must match",
+            Self::StableIdentityLinkMismatch => "critical stable identity links must match",
             Self::DuplicateEventType => "critical event types must be distinct",
             Self::DuplicateEventId => "critical event ids must be distinct",
+            Self::UnsupportedIntent => "critical intent event type is unsupported",
+            Self::OutcomeRoleMismatch => "critical outcome event roles do not match the intent",
         };
         formatter.write_str(message)
     }
@@ -103,6 +146,7 @@ impl CriticalEventPlan {
         {
             return Err(CriticalPlanError::DuplicateEventType);
         }
+        validate_event_roles(event_types[0], event_types[1], event_types[2])?;
 
         let event_ids = [
             intent.event_id(),
@@ -130,12 +174,43 @@ impl CriticalEventPlan {
             CriticalPlanError::MissingActionId,
             CriticalPlanError::ActionIdMismatch,
         )?;
+        validate_stable_identity_links(
+            intent.links(),
+            success_outcome.links(),
+            failure_outcome.links(),
+        )?;
 
         Ok(Self {
             intent,
             success_outcome,
             failure_outcome,
         })
+    }
+}
+
+fn validate_event_roles(
+    intent: EventType,
+    success: EventType,
+    failure: EventType,
+) -> Result<(), CriticalPlanError> {
+    match intent {
+        EventType::InputIntent
+            if matches!(
+                success,
+                EventType::InputCommitted | EventType::InputCompleted
+            ) && failure == EventType::InputFailed =>
+        {
+            Ok(())
+        }
+        EventType::CommandReceived
+            if success == EventType::CommandValidated && failure == EventType::CommandRejected =>
+        {
+            Ok(())
+        }
+        EventType::InputIntent | EventType::CommandReceived => {
+            Err(CriticalPlanError::OutcomeRoleMismatch)
+        }
+        _ => Err(CriticalPlanError::UnsupportedIntent),
     }
 }
 
@@ -157,6 +232,45 @@ fn validate_matching_link(
         .ok_or(missing_error)?;
     if intent != success || intent != failure {
         return Err(mismatch_error);
+    }
+    Ok(())
+}
+
+fn validate_stable_identity_links(
+    intent: &actingcommand_contract::EventLinks,
+    success: &actingcommand_contract::EventLinks,
+    failure: &actingcommand_contract::EventLinks,
+) -> Result<(), CriticalPlanError> {
+    for (intent, success, failure) in [
+        (
+            intent.instance_id.as_deref(),
+            success.instance_id.as_deref(),
+            failure.instance_id.as_deref(),
+        ),
+        (
+            intent.request_id.as_deref(),
+            success.request_id.as_deref(),
+            failure.request_id.as_deref(),
+        ),
+        (
+            intent.task_id.as_deref(),
+            success.task_id.as_deref(),
+            failure.task_id.as_deref(),
+        ),
+        (
+            intent.run_id.as_deref(),
+            success.run_id.as_deref(),
+            failure.run_id.as_deref(),
+        ),
+        (
+            intent.lease_id.as_deref(),
+            success.lease_id.as_deref(),
+            failure.lease_id.as_deref(),
+        ),
+    ] {
+        if intent != success || intent != failure {
+            return Err(CriticalPlanError::StableIdentityLinkMismatch);
+        }
     }
     Ok(())
 }
@@ -229,8 +343,11 @@ pub fn execute_critical<T, E>(
     let intent = appender
         .append_durable(intent)
         .map_err(CriticalExecutionError::IntentAppend)?;
+    let panic_scope = CriticalPanicScope::enter();
+    let action_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action));
+    drop(panic_scope);
 
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
+    match action_result {
         Ok(Ok(value)) => appender
             .append_durable(success_outcome)
             .map(|outcome| CriticalReceipt {
@@ -277,6 +394,12 @@ mod tests {
         InputTransition, PersistedEvent,
     };
     use std::cell::{Cell, RefCell};
+    use std::process::{Command, Output, Stdio};
+    use std::time::{Duration, Instant};
+
+    const PANIC_CHILD_ENV: &str = "ACTINGCOMMAND_CRITICAL_PANIC_CHILD";
+    const PANIC_SECRET: &str = "critical-panic-secret-4e53e895";
+    const NONCRITICAL_HOOK_MARKER: &str = "noncritical-hook-marker-c29a6953";
 
     #[derive(Default)]
     struct InMemoryAppender {
@@ -330,6 +453,22 @@ mod tests {
         correlation_id: Option<&str>,
         action_id: Option<&str>,
     ) -> ErasedSanitizedEventDraft {
+        input_draft_with_links(
+            event_id,
+            transition,
+            EventLinks {
+                correlation_id: correlation_id.map(str::to_string),
+                action_id: action_id.map(str::to_string),
+                ..EventLinks::default()
+            },
+        )
+    }
+
+    fn input_draft_with_links(
+        event_id: &str,
+        transition: InputTransition,
+        links: EventLinks,
+    ) -> ErasedSanitizedEventDraft {
         let event_type = match transition {
             InputTransition::Intent => EventType::InputIntent,
             InputTransition::Committed => EventType::InputCommitted,
@@ -342,11 +481,7 @@ mod tests {
             event_type,
             EventSeverity::Info,
             EventOrigin::new(EventSource::Runtime, "runtime", EventActor::Runtime).expect("origin"),
-            EventLinks {
-                correlation_id: correlation_id.map(str::to_string),
-                action_id: action_id.map(str::to_string),
-                ..EventLinks::default()
-            },
+            links,
             InputPayloadDraft::new(transition, "input.tap", vec![]).expect("payload"),
         )
         .sanitize(&crate::Sha256FieldRedactor::new(b"test-private-salt").expect("redactor"))
@@ -402,6 +537,31 @@ mod tests {
             ),
         )
         .expect("valid input critical plan")
+    }
+
+    fn input_links() -> EventLinks {
+        EventLinks {
+            correlation_id: Some("correlation-1".to_string()),
+            action_id: Some("action-1".to_string()),
+            instance_id: Some("instance-1".to_string()),
+            request_id: Some("request-1".to_string()),
+            task_id: Some("task-1".to_string()),
+            run_id: Some("run-1".to_string()),
+            lease_id: Some("lease-1".to_string()),
+            ..EventLinks::default()
+        }
+    }
+
+    fn input_plan_with_links(
+        intent_links: EventLinks,
+        success_links: EventLinks,
+        failure_links: EventLinks,
+    ) -> Result<CriticalEventPlan, CriticalPlanError> {
+        CriticalEventPlan::new(
+            input_draft_with_links("intent", InputTransition::Intent, intent_links),
+            input_draft_with_links("success", InputTransition::Completed, success_links),
+            input_draft_with_links("failure", InputTransition::Failed, failure_links),
+        )
     }
 
     fn append_failure() -> GlobalLedgerError {
@@ -689,5 +849,246 @@ mod tests {
             })
         ));
         assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
+    }
+
+    #[test]
+    fn critical_plan_rejects_swapped_and_unsupported_roles_before_execution() {
+        let appender = InMemoryAppender::default();
+        let action_calls = Cell::new(0);
+        CriticalEventPlan::new(
+            input_draft(
+                "intent-committed",
+                InputTransition::Intent,
+                Some("correlation-1"),
+                Some("action-1"),
+            ),
+            input_draft(
+                "success-committed",
+                InputTransition::Committed,
+                Some("correlation-1"),
+                Some("action-1"),
+            ),
+            input_draft(
+                "failure-committed",
+                InputTransition::Failed,
+                Some("correlation-1"),
+                Some("action-1"),
+            ),
+        )
+        .expect("input committed triplet must be supported");
+        assert_eq!(
+            CriticalEventPlan::new(
+                input_draft(
+                    "intent",
+                    InputTransition::Intent,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+                input_draft(
+                    "success",
+                    InputTransition::Failed,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+                input_draft(
+                    "failure",
+                    InputTransition::Completed,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+            )
+            .expect_err("swapped outcomes must fail"),
+            CriticalPlanError::OutcomeRoleMismatch
+        );
+        assert_eq!(
+            CriticalEventPlan::new(
+                input_draft(
+                    "intent",
+                    InputTransition::Committed,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+                input_draft(
+                    "success",
+                    InputTransition::Completed,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+                input_draft(
+                    "failure",
+                    InputTransition::Failed,
+                    Some("correlation-1"),
+                    Some("action-1"),
+                ),
+            )
+            .expect_err("unsupported intent must fail"),
+            CriticalPlanError::UnsupportedIntent
+        );
+        CriticalEventPlan::new(
+            command_draft("intent", "correlation-1", "action-1"),
+            EventDraft::new(
+                "success",
+                1_752_147_200_000,
+                EventType::CommandValidated,
+                EventSeverity::Info,
+                EventOrigin::new(EventSource::Runtime, "runtime", EventActor::Runtime)
+                    .expect("origin"),
+                EventLinks {
+                    correlation_id: Some("correlation-1".to_string()),
+                    action_id: Some("action-1".to_string()),
+                    ..EventLinks::default()
+                },
+                CommandPayloadDraft::new(CommandStage::Validated, "critical.test", vec![])
+                    .expect("payload"),
+            )
+            .sanitize(&crate::Sha256FieldRedactor::new(b"test-private-salt").expect("redactor"))
+            .expect("sanitize")
+            .erase()
+            .expect("erase"),
+            EventDraft::new(
+                "failure",
+                1_752_147_200_000,
+                EventType::CommandRejected,
+                EventSeverity::Info,
+                EventOrigin::new(EventSource::Runtime, "runtime", EventActor::Runtime)
+                    .expect("origin"),
+                EventLinks {
+                    correlation_id: Some("correlation-1".to_string()),
+                    action_id: Some("action-1".to_string()),
+                    ..EventLinks::default()
+                },
+                CommandPayloadDraft::new(CommandStage::Rejected, "critical.test", vec![])
+                    .expect("payload"),
+            )
+            .sanitize(&crate::Sha256FieldRedactor::new(b"test-private-salt").expect("redactor"))
+            .expect("sanitize")
+            .erase()
+            .expect("erase"),
+        )
+        .expect("command role triplet must be supported");
+        assert_eq!(action_calls.get(), 0);
+        assert!(appender.calls().is_empty());
+    }
+
+    #[test]
+    fn critical_plan_rejects_stable_identity_link_mismatches() {
+        let intent = input_links();
+        let failure = input_links();
+
+        let mut success = input_links();
+        success.instance_id = Some("instance-2".to_string());
+        assert_eq!(
+            input_plan_with_links(intent.clone(), success, failure.clone())
+                .expect_err("instance mismatch"),
+            CriticalPlanError::StableIdentityLinkMismatch
+        );
+
+        let mut success = input_links();
+        success.request_id = Some("request-2".to_string());
+        assert_eq!(
+            input_plan_with_links(intent.clone(), success, failure.clone())
+                .expect_err("request mismatch"),
+            CriticalPlanError::StableIdentityLinkMismatch
+        );
+
+        let mut success = input_links();
+        success.task_id = None;
+        assert_eq!(
+            input_plan_with_links(intent.clone(), success, failure.clone())
+                .expect_err("task mismatch"),
+            CriticalPlanError::StableIdentityLinkMismatch
+        );
+
+        let mut success = input_links();
+        success.run_id = Some("run-2".to_string());
+        assert_eq!(
+            input_plan_with_links(intent.clone(), success, failure.clone())
+                .expect_err("run mismatch"),
+            CriticalPlanError::StableIdentityLinkMismatch
+        );
+
+        let mut success = input_links();
+        success.lease_id = Some("lease-2".to_string());
+        assert_eq!(
+            input_plan_with_links(intent, success, failure).expect_err("lease mismatch"),
+            CriticalPlanError::StableIdentityLinkMismatch
+        );
+    }
+
+    #[test]
+    fn critical_panic_payload_is_suppressed_in_subprocess() {
+        let output = run_panic_child("critical");
+        assert!(output.status.success(), "child status: {:?}", output.status);
+        assert!(!child_output(&output).contains(PANIC_SECRET));
+    }
+
+    #[test]
+    fn critical_panic_hook_forwards_noncritical_panics() {
+        let output = run_panic_child("noncritical");
+        assert!(output.status.success(), "child status: {:?}", output.status);
+        assert!(child_output(&output).contains(NONCRITICAL_HOOK_MARKER));
+    }
+
+    #[test]
+    fn panic_hook_subprocess_child() {
+        match std::env::var(PANIC_CHILD_ENV).as_deref() {
+            Ok("critical") => {
+                let appender = InMemoryAppender::default();
+                let result = execute_critical::<(), &'static str>(&appender, valid_plan(), || {
+                    std::panic::panic_any(PANIC_SECRET)
+                });
+                let CriticalExecutionError::Panicked { outcome } =
+                    result.expect_err("panic result")
+                else {
+                    panic!("expected typed panic result");
+                };
+                assert_eq!(outcome.event_id, "failure");
+            }
+            Ok("noncritical") => {
+                let appender = InMemoryAppender::default();
+                execute_critical::<(), &'static str>(&appender, valid_plan(), || Ok(()))
+                    .expect("install critical hook");
+                let _ = std::panic::catch_unwind(|| std::panic::panic_any(NONCRITICAL_HOOK_MARKER));
+            }
+            Ok(mode) => panic!("unknown panic child mode: {mode}"),
+            Err(_) => {}
+        }
+    }
+
+    fn run_panic_child(mode: &str) -> Output {
+        let executable = std::env::current_exe().expect("test executable");
+        let mut child = Command::new(executable)
+            .args([
+                "--exact",
+                "critical::tests::panic_hook_subprocess_child",
+                "--nocapture",
+            ])
+            .env(PANIC_CHILD_ENV, mode)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn panic child");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.try_wait().expect("poll panic child").is_some() {
+                return child
+                    .wait_with_output()
+                    .expect("collect panic child output");
+            }
+            if Instant::now() >= deadline {
+                child.kill().expect("kill timed-out panic child");
+                let _ = child.wait();
+                panic!("panic child timed out");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn child_output(output: &Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 }
