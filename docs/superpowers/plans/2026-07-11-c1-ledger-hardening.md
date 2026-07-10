@@ -1,6 +1,6 @@
 # C1 Global Ledger Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution rule:** Follow repository `AGENTS.md`, verified `HS7097` authority, and this approved plan directly. Do not invoke Superpowers. Steps use checkbox syntax for tracking.
 
 **Goal:** Close every Critical, Important, and Minor finding from the Issue #35 whole-C1 review without adding C3a or later-phase behavior.
 
@@ -42,6 +42,10 @@
 - `crates/ledger/src/global/recovery_tests.rs`: test-only process kill matrix for repair boundaries.
 - `crates/ledger/tests/global_ledger_process.rs`: process acceptance and cross-source proof.
 - `tools/actinglab-architecture/tests/workspace_guards.rs`: public-contract and dependency guards.
+
+Execution atomicity: Tasks 1 and 2 are one implementation/review unit. Removing the public v1 contract necessarily breaks the existing ledger until the opaque v2 fact migration is complete, so there must be no pushed or reviewed intermediate commit with a broken workspace.
+
+Tasks 1-2 completion note: the atomic v2 migration and review fixes are implemented by `0a3b6a6`, `0a610ce`, `6bb3406`, and `5a5fd19`. Artifact attachments require an opaque store-issued capability. Until C2 supplies the durable artifact owner and verifier, recovery of any artifact-bearing stored event fails fatally with `artifact_store_verification_unavailable`; C1 never promotes self-consistent public metadata into a trusted fact.
 
 ---
 
@@ -153,7 +157,7 @@ Critical outcome constructors require `EffectDisposition`; noncritical observati
 
 `ArtifactReference::new` requires artifact ID, kind, optional run/frame/correlation IDs, object key, media type, byte count, SHA-256, creation timestamp, producer static code, retention class, and redaction state. All fields are private and validated.
 
-- [ ] **Step 1: Add RED contract tests**
+- [x] **Step 1: Add RED contract tests**
 
 Add tests named:
 
@@ -170,17 +174,17 @@ event_v2_round_trips_every_c1_payload_variant
 
 Add compile-fail documentation proving `ClassifiedField`, `StructuredPayloadDraft`, public raw-policy construction, sanitized-draft field mutation, and deserialization of `SanitizedEventDraft` are unavailable.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-contract event:: -- --nocapture`
 
 Expected: compile/test failure because the v2 modules and interfaces do not exist.
 
-- [ ] **Step 3: Implement IDs, payload schemas, sanitization, and artifact contract**
+- [x] **Step 3: Implement IDs, payload schemas, sanitization, and artifact contract**
 
 Implement only the interfaces and variants listed above. `Sha256Fingerprint::new` rejects a candidate when either the full candidate or its digest portion equals the original.
 
-- [ ] **Step 4: Verify GREEN and forbidden API surface**
+- [x] **Step 4: Verify GREEN and forbidden API surface**
 
 Run:
 
@@ -195,9 +199,9 @@ git diff --check
 
 Expected: tests pass; scans find no public caller-selected policy type or `Value` payload.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Continue directly into Task 2 without committing**
 
-Commit message: `feat(contract): enforce schema-owned event v2`
+Do not create or push a contract-only commit. Keep the RED/GREEN evidence in the Task 1 report and complete the ledger migration below before committing.
 
 ---
 
@@ -242,7 +246,7 @@ impl GlobalLedger {
 
 `StoredEventRecord` is crate-private and is the only `Deserialize` form. Conversion to `PersistedEvent` validates schema v2, sequence, event type/payload match, identifiers, typed payload invariants, and artifacts. `PersistedEvent::from_sanitized` is `pub(crate)`.
 
-- [ ] **Step 1: Add RED fact and projection tests**
+- [x] **Step 1: Add RED fact and projection tests**
 
 Add tests named:
 
@@ -257,17 +261,17 @@ lab_projection_contains_full_sanitized_typed_payload
 ui_projection_omits_artifact_object_key
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global:: -- --nocapture`
 
 Expected: compile failure until the ledger owns the fact and callers are migrated.
 
-- [ ] **Step 3: Implement the fact, private storage record, matching, and typed projection**
+- [x] **Step 3: Implement the fact, private storage record, matching, and typed projection**
 
 Remove contract-owned `PersistedEvent`, `ErasedSanitizedEventDraft`, and `EventQuery::matches`. Query matching lives in ledger projection/index code and uses typed ID getters.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -281,9 +285,9 @@ git diff --check
 
 Expected: tests pass; no public `Value` payload, persisted deserializer, or public fact constructor exists.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
-Commit message: `feat(ledger): own typed persisted facts`
+Commit message: `feat(ledger): enforce typed event v2 facts`
 
 ---
 

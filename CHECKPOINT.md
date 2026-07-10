@@ -1,12 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening Tasks 1-2 final acceptance
+
+### Current status
+
+- Completed the atomic schema-owned event v2 and opaque ledger-fact migration plus all review fixes.
+- Closed the final artifact recovery defect in source commit `5a5fd19`: `ArtifactReference` is no longer deserializable, the private storage record cannot authenticate artifacts by field consistency, and every artifact-bearing recovery attempt fails fatally with `artifact_store_verification_unavailable` until C2 supplies the durable store owner and verifier.
+- Closed the final architecture-guard defect: the guard recursively inspects every Rust source under the event module, resolves capability aliases, and rejects public free functions, inherent methods, trait paths, conversions, associated values, and exposed wrappers that can yield `StoreIssuedArtifact`.
+- Direct final review found no remaining Critical, Important, or Minor finding in hardening Tasks 1-2. Task 3 semantics were not changed.
+- Recorded the ActingCommand execution rule: do not invoke Superpowers; default to direct execution and keep critical-path work local, with subagents reserved for clearly faster independent work.
+
+### Files changed
+
+- `AGENTS.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/artifact.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `crates/ledger/src/fact.rs`
+- `crates/ledger/src/global/v2_tests.rs`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+
+### Commands run
+
+- `cargo test -p actingcommand-contract -p actingcommand-ledger -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards event_v2_append_ingress_and_producer_capabilities_are_exact -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture producer_capability_guard -- --nocapture`
+- `cargo test -p actingcommand-ledger global::v2_tests -- --nocapture`
+- `cargo test -p actingcommand-contract event:: -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- targeted source scans for public artifact issuers, provenance checksums, artifact deserialization, and fail-closed recovery
+
+### Test results
+
+- Focused contract, ledger, architecture unit, workspace-guard, process, and compile-fail documentation tests passed.
+- Full workspace tests passed.
+- Full workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- Adversarial recovery tests reject complete artifact injection, coherent byte-count/hash/object-key replacement, valid typed run/frame/correlation replacement, timestamp replacement, and unknown artifact fields without diagnostic disclosure.
+- Architecture negative fixtures reject renamed inherent issuers, receiver promotion, conversion implementations, nested/new event-module issuance, direct aliases, and wrapped aliases.
+
+### Current blocker
+
+- None for hardening Tasks 1-2.
+- Artifact-bearing segment recovery intentionally remains unavailable until C2 can verify metadata against store-owned durable state.
+
+### Next step
+
+1. Push the verified Tasks 1-2 commits and planning/checkpoint closeout to `issue-35-runtime-ledger-v3`.
+2. Record the commit and verification evidence in Issue #36.
+3. Begin hardening Task 3: post-action critical outcomes, without invoking Superpowers or broadening into Task 4.
+
 ## 2026-07-11 Issue 35 C1 Tasks 1-2 rereview closeout
 
 ### Current status
 
 - Closed the rereview's remaining artifact-authority gap without broadening into Task 3 semantics.
 - Removed public producer access to store-issued artifact minting; ordinary contract consumers can no longer construct a store authority or attach self-issued artifact metadata through `EventDraft::with_artifacts`.
-- Removed the undocumented `store_authorization` field from the persisted/public artifact shape; recovery now validates only typed consistency unless it can consult real store-owned state.
+- Removed the undocumented `store_authorization` field from the persisted/public artifact shape. This intermediate typed-consistency approach was superseded by `5a5fd19`, which fails closed until real store-owned verification exists.
 - Strengthened the producer-capability architecture guard to resolve concrete/aliased types from AST instead of relying on identifier names or source substring matches.
 - Added RED-first regressions for public issuer construction, coherent artifact metadata mutation, and architecture fixtures that try undefined/aliased capabilities plus public free/trait ingress.
 - Preserved the pre-existing controller edits in `PLANS.md` and `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`.
