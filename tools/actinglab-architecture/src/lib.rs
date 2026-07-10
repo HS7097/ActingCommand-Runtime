@@ -243,9 +243,12 @@ pub fn inspect_producer_event_capabilities(
 ) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
     let aliases = local_type_aliases(&file.items);
+    let mut items = Vec::new();
+    collect_nested_items(&file.items, &mut items);
     let mut violations = Vec::new();
     let mut found_store_issued_artifact = false;
-    for item in &file.items {
+    for item in items.iter().copied() {
+        inspect_public_artifact_capability_routes(path, item, &aliases, &mut violations);
         match item {
             Item::Impl(item_impl)
                 if impl_self_ident(item_impl).is_some_and(|ident| ident == "EventDraft") =>
@@ -342,9 +345,7 @@ pub fn inspect_producer_event_capabilities(
                         "{path}: public ArtifactStoreIssuer alias is forbidden until the real store boundary exists"
                     ));
                 }
-                if resolved_type_ident(&item_type.ty, &aliases)
-                    .is_some_and(|ident| ident == "StoreIssuedArtifact")
-                {
+                if type_uses_resolved_ident(&item_type.ty, "StoreIssuedArtifact", &aliases) {
                     violations.push(format!(
                         "{path}: public type alias {} exposes StoreIssuedArtifact",
                         item_type.ident
@@ -511,10 +512,192 @@ pub fn inspect_producer_event_capabilities(
             "{path}: missing concrete StoreIssuedArtifact capability definition"
         ));
     }
-    if defined_or_aliased_static_code(&file.items, &aliases) {
+    if defined_or_aliased_static_code(&items, &aliases) {
         violations.push(format!("{path}: producer event surface retains StaticCode"));
     }
     Ok(violations)
+}
+
+fn inspect_public_artifact_capability_routes(
+    path: &str,
+    item: &Item,
+    aliases: &LocalTypeAliases,
+    violations: &mut Vec<String>,
+) {
+    match item {
+        Item::Fn(function)
+            if is_public(&function.vis)
+                && signature_returns_resolved_ident(
+                    &function.sig,
+                    "StoreIssuedArtifact",
+                    aliases,
+                ) =>
+        {
+            violations.push(format!(
+                "{path}: public function {} returns StoreIssuedArtifact",
+                function.sig.ident
+            ));
+        }
+        Item::Const(item_const)
+            if is_public(&item_const.vis)
+                && type_uses_resolved_ident(&item_const.ty, "StoreIssuedArtifact", aliases) =>
+        {
+            violations.push(format!(
+                "{path}: public const {} exposes StoreIssuedArtifact",
+                item_const.ident
+            ));
+        }
+        Item::Static(item_static)
+            if is_public(&item_static.vis)
+                && type_uses_resolved_ident(&item_static.ty, "StoreIssuedArtifact", aliases) =>
+        {
+            violations.push(format!(
+                "{path}: public static {} exposes StoreIssuedArtifact",
+                item_static.ident
+            ));
+        }
+        Item::Struct(item_struct)
+            if is_public(&item_struct.vis) && item_struct.ident != "StoreIssuedArtifact" =>
+        {
+            for field in &item_struct.fields {
+                if is_public(&field.vis)
+                    && type_uses_resolved_ident(&field.ty, "StoreIssuedArtifact", aliases)
+                {
+                    violations.push(format!(
+                        "{path}: public struct {} exposes StoreIssuedArtifact",
+                        item_struct.ident
+                    ));
+                }
+            }
+        }
+        Item::Enum(item_enum) if is_public(&item_enum.vis) => {
+            for variant in &item_enum.variants {
+                if variant.fields.iter().any(|field| {
+                    type_uses_resolved_ident(&field.ty, "StoreIssuedArtifact", aliases)
+                }) {
+                    violations.push(format!(
+                        "{path}: public enum {} exposes StoreIssuedArtifact",
+                        item_enum.ident
+                    ));
+                }
+            }
+        }
+        Item::Union(item_union) if is_public(&item_union.vis) => {
+            if item_union.fields.named.iter().any(|field| {
+                is_public(&field.vis)
+                    && type_uses_resolved_ident(&field.ty, "StoreIssuedArtifact", aliases)
+            }) {
+                violations.push(format!(
+                    "{path}: public union {} exposes StoreIssuedArtifact",
+                    item_union.ident
+                ));
+            }
+        }
+        Item::Impl(item_impl) => {
+            let trait_impl = item_impl.trait_.is_some();
+            let self_is_capability =
+                impl_self_ident(item_impl).is_some_and(|ident| ident == "StoreIssuedArtifact");
+            for impl_item in &item_impl.items {
+                match impl_item {
+                    syn::ImplItem::Fn(method) => {
+                        let externally_callable = trait_impl || is_public(&method.vis);
+                        let returns_capability = signature_returns_resolved_ident(
+                            &method.sig,
+                            "StoreIssuedArtifact",
+                            aliases,
+                        ) || (self_is_capability
+                            && signature_returns_ident(&method.sig, &["Self"]));
+                        if externally_callable && returns_capability {
+                            let owner = impl_self_ident(item_impl)
+                                .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
+                            violations.push(format!(
+                                "{path}: externally callable method {owner}::{} returns StoreIssuedArtifact",
+                                method.sig.ident
+                            ));
+                        }
+                    }
+                    syn::ImplItem::Const(item_const)
+                        if (trait_impl || is_public(&item_const.vis))
+                            && type_uses_resolved_ident(
+                                &item_const.ty,
+                                "StoreIssuedArtifact",
+                                aliases,
+                            ) =>
+                    {
+                        violations.push(format!(
+                            "{path}: externally visible associated const exposes StoreIssuedArtifact"
+                        ));
+                    }
+                    syn::ImplItem::Type(item_type)
+                        if trait_impl
+                            && type_uses_resolved_ident(
+                                &item_type.ty,
+                                "StoreIssuedArtifact",
+                                aliases,
+                            ) =>
+                    {
+                        violations.push(format!(
+                            "{path}: trait implementation exposes StoreIssuedArtifact as an associated type"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Item::Trait(item_trait) if is_public(&item_trait.vis) => {
+            for trait_item in &item_trait.items {
+                match trait_item {
+                    syn::TraitItem::Fn(method)
+                        if signature_returns_resolved_ident(
+                            &method.sig,
+                            "StoreIssuedArtifact",
+                            aliases,
+                        ) =>
+                    {
+                        violations.push(format!(
+                            "{path}: public trait method {}::{} returns StoreIssuedArtifact",
+                            item_trait.ident, method.sig.ident
+                        ));
+                    }
+                    syn::TraitItem::Const(item_const)
+                        if type_uses_resolved_ident(
+                            &item_const.ty,
+                            "StoreIssuedArtifact",
+                            aliases,
+                        ) =>
+                    {
+                        violations.push(format!(
+                            "{path}: public trait {} exposes StoreIssuedArtifact in an associated const",
+                            item_trait.ident
+                        ));
+                    }
+                    syn::TraitItem::Type(item_type)
+                        if item_type.default.as_ref().is_some_and(|(_, ty)| {
+                            type_uses_resolved_ident(ty, "StoreIssuedArtifact", aliases)
+                        }) =>
+                    {
+                        violations.push(format!(
+                            "{path}: public trait {} exposes StoreIssuedArtifact as an associated type",
+                            item_trait.ident
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_nested_items<'a>(items: &'a [Item], collected: &mut Vec<&'a Item>) {
+    for item in items {
+        collected.push(item);
+        if let Item::Mod(item_mod) = item
+            && let Some((_, nested)) = &item_mod.content
+        {
+            collect_nested_items(nested, collected);
+        }
+    }
 }
 
 fn impl_self_ident(item_impl: &syn::ItemImpl) -> Option<&syn::Ident> {
@@ -545,11 +728,41 @@ struct LocalTypeAliases {
 
 fn local_type_aliases(items: &[Item]) -> LocalTypeAliases {
     let mut aliases = LocalTypeAliases::default();
+    collect_local_type_aliases(items, &mut aliases);
+    while promote_store_capability_aliases(items, &mut aliases) {}
+    aliases
+}
+
+fn promote_store_capability_aliases(items: &[Item], aliases: &mut LocalTypeAliases) -> bool {
+    let mut changed = false;
     for item in items {
         match item {
-            Item::Use(item_use) => {
-                collect_type_alias(&mut Vec::new(), &item_use.tree, &mut aliases)
+            Item::Type(item_type)
+                if type_uses_resolved_ident(&item_type.ty, "StoreIssuedArtifact", aliases)
+                    && resolve_alias(&item_type.ident.to_string(), aliases)
+                        != "StoreIssuedArtifact" =>
+            {
+                aliases.names.insert(
+                    item_type.ident.to_string(),
+                    "StoreIssuedArtifact".to_string(),
+                );
+                changed = true;
             }
+            Item::Mod(item_mod) => {
+                if let Some((_, nested)) = &item_mod.content {
+                    changed |= promote_store_capability_aliases(nested, aliases);
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+fn collect_local_type_aliases(items: &[Item], aliases: &mut LocalTypeAliases) {
+    for item in items {
+        match item {
+            Item::Use(item_use) => collect_type_alias(&mut Vec::new(), &item_use.tree, aliases),
             Item::Type(item_type) => {
                 if let Some(target) = type_last_ident(&item_type.ty) {
                     aliases
@@ -557,10 +770,14 @@ fn local_type_aliases(items: &[Item]) -> LocalTypeAliases {
                         .insert(item_type.ident.to_string(), target.to_string());
                 }
             }
+            Item::Mod(item_mod) => {
+                if let Some((_, nested)) = &item_mod.content {
+                    collect_local_type_aliases(nested, aliases);
+                }
+            }
             _ => {}
         }
     }
-    aliases
 }
 
 fn collect_type_alias(prefix: &mut Vec<String>, tree: &UseTree, aliases: &mut LocalTypeAliases) {
@@ -740,7 +957,7 @@ fn is_transport_id(candidate: &syn::Ident) -> bool {
     )
 }
 
-fn defined_or_aliased_static_code(items: &[Item], aliases: &LocalTypeAliases) -> bool {
+fn defined_or_aliased_static_code(items: &[&Item], aliases: &LocalTypeAliases) -> bool {
     items.iter().any(|item| match item {
         Item::Struct(item_struct) => item_struct.ident == "StaticCode",
         Item::Enum(item_enum) => item_enum.ident == "StaticCode",
@@ -1885,6 +2102,58 @@ mod tests {
                 fn issue_pending(&self) -> StoreIssuedArtifact;
             }
         "#;
+        let renamed_inherent_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub struct RenamedStoreBoundary;
+            impl RenamedStoreBoundary {
+                pub fn issue_pending(&self) -> StoreIssuedArtifact {
+                    StoreIssuedArtifact { reference: 1 }
+                }
+            }
+        "#;
+        let receiver_promotion = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub struct ArtifactReference;
+            impl ArtifactReference {
+                pub fn promote(self) -> StoreIssuedArtifact {
+                    StoreIssuedArtifact { reference: 1 }
+                }
+            }
+        "#;
+        let conversion_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub struct ArtifactReference;
+            impl From<ArtifactReference> for StoreIssuedArtifact {
+                fn from(_: ArtifactReference) -> Self {
+                    Self { reference: 1 }
+                }
+            }
+        "#;
+        let nested_module_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            mod newly_added_event_module {
+                pub fn issue_pending() -> super::StoreIssuedArtifact {
+                    super::StoreIssuedArtifact { reference: 1 }
+                }
+            }
+        "#;
+        let aliased_method_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            type Attachment = StoreIssuedArtifact;
+            pub struct Boundary;
+            impl Boundary {
+                pub fn issue_pending(&self) -> Attachment {
+                    StoreIssuedArtifact { reference: 1 }
+                }
+            }
+        "#;
+        let wrapped_alias_ingress = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            type Attachment = Result<StoreIssuedArtifact, ()>;
+            pub fn issue_pending() -> Attachment {
+                Ok(StoreIssuedArtifact { reference: 1 })
+            }
+        "#;
 
         let issuer_violations =
             super::inspect_producer_event_capabilities("fixture.rs", public_issuer).unwrap();
@@ -1911,6 +2180,21 @@ mod tests {
                 .is_empty(),
             "public trait ingress to StoreIssuedArtifact must be rejected"
         );
+        for (label, source) in [
+            ("renamed inherent issuer", renamed_inherent_ingress),
+            ("receiver promotion", receiver_promotion),
+            ("conversion implementation", conversion_ingress),
+            ("new nested event module", nested_module_ingress),
+            ("aliased method return", aliased_method_ingress),
+            ("wrapped alias return", wrapped_alias_ingress),
+        ] {
+            assert!(
+                !super::inspect_producer_event_capabilities("fixture.rs", source)
+                    .unwrap()
+                    .is_empty(),
+                "{label} must be rejected"
+            );
+        }
     }
 
     #[test]

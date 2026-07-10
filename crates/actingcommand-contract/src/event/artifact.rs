@@ -384,50 +384,6 @@ impl fmt::Debug for ArtifactReference {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArtifactReferenceRecord {
-    artifact_id: ArtifactId,
-    kind: ArtifactKind,
-    run_id: Option<RunId>,
-    frame_id: Option<FrameId>,
-    correlation_id: Option<CorrelationId>,
-    object_key: String,
-    media_type: ArtifactMediaType,
-    byte_count: u64,
-    sha256: String,
-    created_at_unix_ms: u64,
-    producer: ArtifactProducer,
-    retention_class: RetentionClass,
-    redaction_state: ArtifactRedactionState,
-}
-
-impl<'de> Deserialize<'de> for ArtifactReference {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let record = ArtifactReferenceRecord::deserialize(deserializer)?;
-        let reference = Self {
-            artifact_id: record.artifact_id,
-            kind: record.kind,
-            run_id: record.run_id,
-            frame_id: record.frame_id,
-            correlation_id: record.correlation_id,
-            object_key: record.object_key,
-            media_type: record.media_type,
-            byte_count: record.byte_count,
-            sha256: record.sha256,
-            created_at_unix_ms: record.created_at_unix_ms,
-            producer: record.producer,
-            retention_class: record.retention_class,
-            redaction_state: record.redaction_state,
-        };
-        reference.validate().map_err(serde::de::Error::custom)?;
-        Ok(reference)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectedArtifactReference {

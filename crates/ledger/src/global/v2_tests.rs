@@ -1,8 +1,8 @@
 use super::*;
 use actingcommand_contract::{
-    ArtifactRedactionState, AuditInput, ClientPayloadDraft, CorrelationId, EventAction, EventActor,
-    EventDraft, EventId, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource,
-    IdentifierIssuer, OriginModule, ProjectedEvent, ProjectionPayload, Sensitivity,
+    AuditInput, ClientPayloadDraft, CorrelationId, EventAction, EventActor, EventDraft, EventId,
+    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, IdentifierIssuer,
+    OriginModule, ProjectedEvent, ProjectionPayload,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -117,11 +117,16 @@ fn inject_artifact_record(temp: &TempDir, correlation_id: CorrelationId, bytes: 
     .expect("write artifact line");
 }
 
-fn seed_recovered_artifact_event(temp: &TempDir, owner: &str, index: u64) -> EventFixture {
+fn seed_event(temp: &TempDir, owner: &str, index: u64) -> EventFixture {
     let fixture = event(index);
     let ledger = GlobalLedger::open(config(temp, owner)).expect("ledger");
     ledger.append(fixture.draft.clone()).expect("append");
     ledger.close().expect("close");
+    fixture
+}
+
+fn seed_artifact_bearing_segment(temp: &TempDir, owner: &str, index: u64) -> EventFixture {
+    let fixture = seed_event(temp, owner, index);
     inject_artifact_record(
         temp,
         fixture.correlation_id,
@@ -176,7 +181,7 @@ fn v1_generic_segment_fails_loudly() {
 #[test]
 fn typed_record_recovery_rebuilds_same_fact() {
     let temp = TempDir::new().expect("temp");
-    let fixture = seed_recovered_artifact_event(&temp, "writer-first", 1);
+    let fixture = seed_event(&temp, "writer-first", 1);
     let reopened = GlobalLedger::open(config(&temp, "writer-second")).expect("reopen");
     let recovered = reopened.query(EventQuery::default()).expect("query");
 
@@ -186,7 +191,7 @@ fn typed_record_recovery_rebuilds_same_fact() {
         recovered[0].links().correlation_id(),
         Some(&fixture.correlation_id)
     );
-    assert_eq!(recovered[0].artifacts().len(), 1);
+    assert!(recovered[0].artifacts().is_empty());
 }
 
 #[test]
@@ -247,78 +252,23 @@ fn lab_projection_contains_full_sanitized_typed_payload() {
 }
 
 #[test]
-fn ui_projection_omits_artifact_object_key() {
+fn artifact_bearing_recovery_fails_closed_without_disclosure() {
     let temp = TempDir::new().expect("temp");
-    seed_recovered_artifact_event(&temp, "writer-artifact-ui", 1);
-    let ledger = GlobalLedger::open(config(&temp, "writer-artifact-ui-reopen")).expect("ledger");
+    seed_artifact_bearing_segment(&temp, "writer-artifact", 1);
+    let error = GlobalLedger::open(config(&temp, "writer-artifact-reopen"))
+        .expect_err("C1 must not recover artifact metadata without the C2 store owner");
 
-    let ui = ledger
-        .project(EventQuery::default(), ProjectionProfile::Ui)
-        .expect("UI projection");
-    let lab = ledger
-        .project(EventQuery::default(), ProjectionProfile::Lab)
-        .expect("Lab projection");
-
-    assert_eq!(ui[0].artifacts[0].object_key, None);
-    assert!(
-        lab[0].artifacts[0]
-            .object_key
-            .as_deref()
-            .is_some_and(|key| key.starts_with("artifacts/"))
-    );
-}
-
-#[test]
-fn artifact_bytes_and_metadata_are_safe_across_persistence_query_and_every_projection() {
-    let temp = TempDir::new().expect("temp");
-    let fixture = seed_recovered_artifact_event(&temp, "writer-artifact", 1);
-    let correlation_id = fixture.correlation_id;
-    let ledger = GlobalLedger::open(config(&temp, "writer-artifact-reopen")).expect("ledger");
-    let persisted = ledger
-        .query(EventQuery::default())
-        .expect("query")
-        .remove(0);
-
-    assert_eq!(persisted.sensitivity(), Sensitivity::Secret);
-    assert_eq!(
-        persisted.artifacts()[0].redaction_state(),
-        ArtifactRedactionState::Pending
-    );
-    let query = EventQuery {
-        correlation_id: Some(correlation_id),
-        ..EventQuery::default()
-    };
-    let queried = ledger.query(query.clone()).expect("query artifact event");
-    assert_eq!(queried, vec![persisted.clone()]);
-
-    let segment =
-        fs::read_to_string(temp.path().join("segments/segment-000001.jsonl")).expect("segment");
-    let debug = format!("{persisted:?}");
+    assert_eq!(error.code(), "artifact_store_verification_unavailable");
+    assert!(error.is_fatal());
+    let diagnostic = format!("{error:?} {error}");
     for secret in ARTIFACT_SECRETS {
-        assert!(!segment.contains(secret), "segment leaked {secret}");
-        assert!(!debug.contains(secret), "debug leaked {secret}");
-    }
-
-    for profile in [
-        ProjectionProfile::Cli,
-        ProjectionProfile::Ui,
-        ProjectionProfile::Lab,
-        ProjectionProfile::Concise,
-        ProjectionProfile::Normal,
-        ProjectionProfile::Verbose,
-        ProjectionProfile::Forensic,
-    ] {
-        let projection = ledger.project(query.clone(), profile).expect("projection");
-        let json = serde_json::to_string(&projection).expect("projection JSON");
-        for secret in ARTIFACT_SECRETS {
-            assert!(!json.contains(secret), "{profile:?} leaked {secret}");
-        }
+        assert!(!diagnostic.contains(secret), "diagnostic leaked {secret}");
     }
 }
 
 #[test]
 fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
-    let mutations: [(&str, fn(&mut Value)); 9] = [
+    let mutations: [(&str, fn(&mut Value)); 8] = [
         ("event", |line| {
             line["event"]["smuggled"] = Value::String("token-secret-event".to_string());
         }),
@@ -334,10 +284,6 @@ fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
             line["event"]["payload"]["payload"]["data"]["smuggled"] =
                 Value::String("token-secret-detail".to_string());
         }),
-        ("artifact", |line| {
-            line["event"]["artifacts"][0]["smuggled"] =
-                Value::String("token-secret-artifact".to_string());
-        }),
         ("event_type", |line| {
             line["event"]["event_type"] = Value::String("command.received".to_string());
         }),
@@ -347,15 +293,14 @@ fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
         ("sensitivity", |line| {
             line["event"]["sensitivity"] = Value::String("public".to_string());
         }),
-        ("artifact_hash", |line| {
-            line["event"]["artifacts"][0]["sha256"] =
-                Value::String(format!("sha256:{}", "f".repeat(64)));
+        ("origin", |line| {
+            line["event"]["origin"]["smuggled"] = Value::String("token-secret-origin".to_string());
         }),
     ];
 
     for (label, mutate) in mutations {
         let temp = TempDir::new().expect("temp");
-        seed_recovered_artifact_event(&temp, "writer-mutate", 1);
+        seed_event(&temp, "writer-mutate", 1);
         let segment_path = temp.path().join("segments/segment-000001.jsonl");
         let source = fs::read_to_string(&segment_path).expect("segment");
         let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
@@ -375,56 +320,97 @@ fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
             "{label} disclosed value"
         );
     }
-}
 
-#[test]
-fn coherent_artifact_metadata_mutation_recovers_without_store_authorization_claims() {
     let temp = TempDir::new().expect("temp");
-    seed_recovered_artifact_event(&temp, "writer-coherent-artifact", 1);
+    seed_artifact_bearing_segment(&temp, "writer-artifact-unknown", 1);
     let segment_path = temp.path().join("segments/segment-000001.jsonl");
     let source = fs::read_to_string(&segment_path).expect("segment");
     let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
-    let artifact = line["event"]["artifacts"][0]
-        .as_object_mut()
-        .expect("artifact object");
-    assert!(
-        !artifact.contains_key("store_authorization"),
-        "artifact recovery shape must not claim provenance with store_authorization"
-    );
-
-    let sha256 = format!("sha256:{}", "c".repeat(64));
-    let artifact_id = artifact
-        .get("artifact_id")
-        .and_then(Value::as_str)
-        .expect("artifact id")
-        .to_string();
-    artifact.insert("byte_count".to_string(), Value::from(999_u64));
-    artifact.insert("sha256".to_string(), Value::String(sha256.clone()));
-    artifact.insert(
-        "object_key".to_string(),
-        Value::String(format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id)),
-    );
+    line["event"]["artifacts"][0]["smuggled"] = Value::String("token-secret-artifact".to_string());
     fs::write(
         &segment_path,
         format!("{}\n", serde_json::to_string(&line).expect("mutated line")),
     )
     .expect("write mutation");
+    let error = GlobalLedger::open(config(&temp, "writer-artifact-unknown-recover"))
+        .expect_err("unknown artifact field must fail");
+    assert_eq!(error.code(), "corrupt_segment");
+    assert!(!format!("{error:?} {error}").contains("token-secret"));
+}
 
-    let reopened = GlobalLedger::open(config(&temp, "writer-coherent-recover"))
-        .expect("coherent artifact recovery");
-    let recovered = reopened.query(EventQuery::default()).expect("query");
+#[test]
+fn artifact_recovery_rejects_coherent_forgery_and_public_identity_mutations() {
+    fn assert_fatal(label: &str, mutate: impl FnOnce(&mut Value)) {
+        let temp = TempDir::new().expect("temp");
+        seed_artifact_bearing_segment(&temp, "writer-artifact-forgery", 1);
+        let segment_path = temp.path().join("segments/segment-000001.jsonl");
+        let source = fs::read_to_string(&segment_path).expect("segment");
+        let mut line: Value = serde_json::from_str(source.trim_end()).expect("stored line");
+        mutate(&mut line);
+        fs::write(
+            &segment_path,
+            format!("{}\n", serde_json::to_string(&line).expect("mutated line")),
+        )
+        .expect("write mutation");
 
-    assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].artifacts()[0].byte_count(), 999);
-    assert_eq!(recovered[0].artifacts()[0].sha256(), sha256);
+        let error = GlobalLedger::open(config(&temp, "writer-artifact-forgery-recover"))
+            .expect_err("artifact recovery must require store-owned evidence");
+        assert_eq!(
+            error.code(),
+            "artifact_store_verification_unavailable",
+            "unexpected code for {label}"
+        );
+        assert!(error.is_fatal(), "{label} was not fatal");
+        let diagnostic = format!("{error:?} {error}");
+        assert!(
+            !diagnostic.contains("token-secret"),
+            "{label} disclosed value"
+        );
+    }
+
+    assert_fatal("complete_injection", |_| {});
+    assert_fatal("coherent_size_hash_key", |line| {
+        let artifact = line["event"]["artifacts"][0]
+            .as_object_mut()
+            .expect("artifact object");
+        let sha256 = format!("sha256:{}", "c".repeat(64));
+        let artifact_id = artifact
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .expect("artifact id")
+            .to_string();
+        artifact.insert("byte_count".to_string(), Value::from(999_u64));
+        artifact.insert("sha256".to_string(), Value::String(sha256.clone()));
+        artifact.insert(
+            "object_key".to_string(),
+            Value::String(format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id)),
+        );
+    });
+    assert_fatal("typed_links", |line| {
+        let identifiers = identifier_issuer();
+        line["event"]["artifacts"][0]["run_id"] = serde_json::json!(canonical_id(
+            *identifiers.mint_run_id().expect("run id").transport()
+        ));
+        line["event"]["artifacts"][0]["frame_id"] = serde_json::json!(canonical_id(
+            *identifiers.mint_frame_id().expect("frame id").transport()
+        ));
+        line["event"]["artifacts"][0]["correlation_id"] = serde_json::json!(canonical_id(
+            *identifiers
+                .mint_correlation_id()
+                .expect("correlation id")
+                .transport()
+        ));
+    });
+    assert_fatal("timestamp", |line| {
+        line["event"]["artifacts"][0]["created_at_unix_ms"] = Value::from(1_752_147_299_999_u64);
+    });
 }
 
 #[test]
 fn projected_event_rejects_unknown_projection_nesting_without_disclosure() {
     let temp = TempDir::new().expect("temp");
-    seed_recovered_artifact_event(&temp, "writer-projection-strict", 1);
-    let ledger =
-        GlobalLedger::open(config(&temp, "writer-projection-strict-reopen")).expect("ledger");
+    let ledger = GlobalLedger::open(config(&temp, "writer-projection-strict")).expect("ledger");
+    ledger.append(event(1).draft).expect("append");
     let projected = ledger
         .project(EventQuery::default(), ProjectionProfile::Lab)
         .expect("projection")
@@ -443,9 +429,17 @@ fn projected_event_rejects_unknown_projection_nesting_without_disclosure() {
         .expect_err("unknown projection payload field");
     assert!(!error.to_string().contains("token-secret"));
 
+    let artifact_temp = TempDir::new().expect("artifact temp");
+    seed_artifact_bearing_segment(&artifact_temp, "writer-projection-artifact", 1);
+    let artifact_line =
+        fs::read_to_string(artifact_temp.path().join("segments/segment-000001.jsonl"))
+            .expect("artifact segment");
+    let artifact_value: Value =
+        serde_json::from_str(artifact_line.trim_end()).expect("artifact line");
+    let mut artifact = artifact_value["event"]["artifacts"][0].clone();
+    artifact["smuggled"] = Value::String("token-secret-projection-artifact".to_string());
     let mut artifact_layer = serde_json::to_value(&projected).expect("projection value");
-    artifact_layer["artifacts"][0]["smuggled"] =
-        Value::String("token-secret-projection-artifact".to_string());
+    artifact_layer["artifacts"] = serde_json::json!([artifact]);
     let error = serde_json::from_value::<ProjectedEvent>(artifact_layer)
         .expect_err("unknown projection artifact field");
     assert!(!error.to_string().contains("token-secret"));

@@ -97,6 +97,14 @@
 //! }
 //! ```
 //!
+//! Artifact transport metadata cannot be promoted into a trusted reference by deserialization:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::ArtifactReference;
+//!
+//! let _: ArtifactReference = serde_json::from_str("{}").unwrap();
+//! ```
+//!
 //! Ordinary producers cannot construct artifact-store authority:
 //!
 //! ```compile_fail

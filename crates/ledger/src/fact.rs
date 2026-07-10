@@ -3,8 +3,10 @@
 //! Opaque facts whose sequence and durable identity are owned by the ledger.
 
 use actingcommand_contract::{
-    ArtifactReference, EventId, EventLinks, EventOrigin, EventPayload, EventSeverity, EventType,
-    GLOBAL_EVENT_SCHEMA_VERSION, SanitizedEventDraft, Sensitivity,
+    ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
+    ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
+    EventSeverity, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION, RetentionClass, RunId,
+    SanitizedEventDraft, Sensitivity,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -191,7 +193,45 @@ pub(crate) struct StoredEventRecord {
     links: EventLinks,
     payload_schema: String,
     payload: EventPayload,
-    artifacts: Vec<ArtifactReference>,
+    artifacts: Vec<StoredArtifactRecord>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredArtifactRecord {
+    artifact_id: ArtifactId,
+    kind: ArtifactKind,
+    run_id: Option<RunId>,
+    frame_id: Option<FrameId>,
+    correlation_id: Option<CorrelationId>,
+    object_key: String,
+    media_type: ArtifactMediaType,
+    byte_count: u64,
+    sha256: String,
+    created_at_unix_ms: u64,
+    producer: ArtifactProducer,
+    retention_class: RetentionClass,
+    redaction_state: ArtifactRedactionState,
+}
+
+impl StoredArtifactRecord {
+    fn from_reference(reference: &ArtifactReference) -> Self {
+        Self {
+            artifact_id: *reference.artifact_id(),
+            kind: reference.kind(),
+            run_id: reference.run_id().copied(),
+            frame_id: reference.frame_id().copied(),
+            correlation_id: reference.correlation_id().copied(),
+            object_key: reference.object_key().to_string(),
+            media_type: reference.media_type(),
+            byte_count: reference.byte_count(),
+            sha256: reference.sha256().to_string(),
+            created_at_unix_ms: reference.created_at_unix_ms(),
+            producer: reference.producer(),
+            retention_class: reference.retention_class(),
+            redaction_state: reference.redaction_state(),
+        }
+    }
 }
 
 impl StoredEventRecord {
@@ -208,11 +248,22 @@ impl StoredEventRecord {
             links: event.links.clone(),
             payload_schema: event.payload_schema.clone(),
             payload: event.payload.clone(),
-            artifacts: event.artifacts.clone(),
+            artifacts: event
+                .artifacts
+                .iter()
+                .map(StoredArtifactRecord::from_reference)
+                .collect(),
         }
     }
 
     pub(crate) fn into_event(self) -> Result<PersistedEvent, FactValidationError> {
+        // C1 cannot authenticate public artifact metadata without the C2 store owner. Recovery
+        // therefore fails closed instead of promoting a syntactically coherent record.
+        if !self.artifacts.is_empty() {
+            return Err(FactValidationError {
+                code: "artifact_store_verification_unavailable",
+            });
+        }
         let event = PersistedEvent {
             schema_version: self.schema_version,
             event_id: self.event_id,
@@ -225,7 +276,7 @@ impl StoredEventRecord {
             links: self.links,
             payload_schema: self.payload_schema,
             payload: self.payload,
-            artifacts: self.artifacts,
+            artifacts: Vec::new(),
         };
         event.validate()?;
         Ok(event)

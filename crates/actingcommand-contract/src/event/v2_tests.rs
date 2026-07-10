@@ -344,82 +344,58 @@ fn artifact_secret_classes_cannot_survive_any_metadata_or_diagnostic_surface() {
 }
 
 #[test]
-fn artifact_transport_rejects_every_mutated_field_and_false_store_state() {
-    let issued = artifact(b"trusted stored bytes");
-    let original = serde_json::to_value(issued.reference()).expect("artifact value");
-    let canonical = "11".repeat(16);
-    let cases = [
-        (
-            "artifact_id",
-            serde_json::json!(format!("artifact_{canonical}")),
-        ),
-        ("kind", serde_json::json!("token-secret-kind")),
-        ("object_key", serde_json::json!("account-secret/object.png")),
-        ("media_type", serde_json::json!("application/token-secret")),
-        (
-            "sha256",
-            serde_json::json!(format!("sha256:{}", "d".repeat(64))),
-        ),
-        ("producer", serde_json::json!("token-secret-producer")),
-        ("retention_class", serde_json::json!("debug_full")),
-        ("redaction_state", serde_json::json!("applied")),
-    ];
-
-    for (field, replacement) in cases {
-        let mut mutated = original.clone();
-        mutated[field] = replacement;
-        let rendered = mutated.to_string();
-        let error = serde_json::from_value::<ArtifactReference>(mutated)
-            .expect_err("mutated artifact must fail");
-        assert!(!error.to_string().contains("account-secret"));
-        assert!(!error.to_string().contains("token-secret"));
-        assert!(!format!("{error:?}").contains(&rendered));
-    }
-
-    let mut unknown = original;
-    unknown["smuggled"] = serde_json::json!("token-secret-unknown");
-    assert!(serde_json::from_value::<ArtifactReference>(unknown).is_err());
-
-    let mut undocumented = serde_json::to_value(issued.reference()).expect("artifact value");
-    undocumented["store_authorization"] = serde_json::json!(format!("sha256:{}", "e".repeat(64)));
-    assert!(serde_json::from_value::<ArtifactReference>(undocumented).is_err());
-}
-
-#[test]
 fn artifact_wire_shape_has_no_store_authorization() {
     let issued = artifact(b"capture bytes");
     let value = serde_json::to_value(issued.reference()).expect("artifact value");
+    let mut keys = value
+        .as_object()
+        .expect("artifact object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
 
     assert!(
         value.get("store_authorization").is_none(),
         "artifact wire shape must not claim provenance with store_authorization"
+    );
+    assert_eq!(
+        keys,
+        [
+            "artifact_id",
+            "byte_count",
+            "correlation_id",
+            "created_at_unix_ms",
+            "frame_id",
+            "kind",
+            "media_type",
+            "object_key",
+            "producer",
+            "redaction_state",
+            "retention_class",
+            "run_id",
+            "sha256",
+        ]
     );
 }
 
 #[test]
-fn coherent_public_artifact_metadata_mutation_round_trips_without_provenance_claim() {
+fn artifact_projection_controls_object_key_and_rejects_unknown_fields() {
     let issued = artifact(b"trusted stored bytes");
-    let mut value = serde_json::to_value(issued.reference()).expect("artifact value");
-    assert!(
-        value.get("store_authorization").is_none(),
-        "artifact wire shape must not claim provenance with store_authorization"
+    let hidden = issued.reference().project(false);
+    let visible = issued.reference().project(true);
+
+    assert_eq!(hidden.object_key, None);
+    assert_eq!(
+        visible.object_key.as_deref(),
+        Some(issued.reference().object_key())
     );
 
-    let sha256 = format!("sha256:{}", "c".repeat(64));
-    let artifact_id = value["artifact_id"]
-        .as_str()
-        .expect("artifact id")
-        .to_string();
-    value["byte_count"] = serde_json::json!(999_u64);
-    value["sha256"] = serde_json::json!(sha256.clone());
-    value["object_key"] =
-        serde_json::json!(format!("artifacts/{}/{}.png", &sha256[7..9], artifact_id));
-
-    let round_trip: ArtifactReference =
-        serde_json::from_value(value).expect("coherent public metadata must stay typed");
-    assert_eq!(round_trip.byte_count(), 999);
-    assert_eq!(round_trip.sha256(), sha256);
-    assert!(round_trip.object_key().ends_with(".png"));
+    let mut value = serde_json::to_value(visible).expect("artifact projection value");
+    value["smuggled"] = serde_json::json!("token-secret-projection-artifact");
+    let error = serde_json::from_value::<ProjectedArtifactReference>(value)
+        .expect_err("unknown artifact projection field");
+    assert!(!error.to_string().contains("token-secret"));
 }
 
 #[test]
