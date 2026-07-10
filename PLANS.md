@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A5 touch-control migration is implemented and verified; A6 package/conversion migration is next.
+Current node: A6 package/conversion migration is implemented and verified; A7 Lab run/validate migration is next.
 
 A1 delivers:
 
@@ -99,6 +99,16 @@ A5 touch-control migration:
 - adds sealed Lab tests for dry-run planning, failed recognition, navigation routing, real input-port execution, and coordinate derivation;
 - lowers the `main.rs` ratchet from `59792` to `59466` lines;
 - validates one real safe AK-device tap on `127.0.0.1:16416` after mirroring the Arknights resource repository, with no game-progress or paid-resource action.
+
+A6 package/conversion migration:
+
+- moves `package build-task`, `package validate`, and `resource convert` into typed `crates/lab` use-case APIs while retaining flag parsing, output serialization, process exit mapping, and package ledger-event attachment in the app;
+- keeps adjacent `package build-pack` and `resource compile-maa` orchestration app-owned, with only the shared typed package/converter machinery located in Lab;
+- restores the complete pre-move generated-package validator, including control, manifest, operation, guard, coordinate, asset, recognition-pack, page, and navigation validation;
+- injects temporary-root discovery from the app and extends architecture guards so Lab cannot read behavioral process environment state;
+- moves package/converter/MAA graph tests with their implementation and retains app-level full/split `build-pack` command coverage;
+- records the intentionally unresolved Issue #26 G2/G3 seams in `docs/architecture/actinglab-a6-issue26-handoff.md` without changing those semantics;
+- preserves all 30 protocol goldens, keeps every Lab source file below 2600 lines, and lowers the exact `main.rs` ratchet from `59466` to `59185` lines.
 
 ## Current environment detection memory and env pointer node
 

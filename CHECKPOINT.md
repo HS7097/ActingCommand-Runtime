@@ -1,5 +1,79 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A6 package/conversion migration complete
+
+### Current status
+
+- Moved `package build-task`, `package validate`, and `resource convert` into `crates/lab` behind typed request/response boundaries.
+- Moved shared package assembly, package validation, resource conversion, and MAA task-graph compilation implementation into Lab while keeping `package build-pack` and `resource compile-maa` command orchestration in the app.
+- Preserved app ownership of CLI parsing, process output/exit behavior, package light-event attachment, and command-specific wire-response assembly.
+- Restored the exact pre-A6 generated-package validation depth after review found the first mechanical move had introduced a weaker duplicate validator.
+- Injected the package temporary root from the app and added architecture guards against behavioral `env::temp_dir`, `env::current_dir`, `env::var`, and `env::var_os` reads in Lab.
+- Retained command-level full and split `package build-pack` tests after restoring that orchestration to the app boundary.
+- Recorded the unchanged Issue #26 G2/G3 seams in `docs/architecture/actinglab-a6-issue26-handoff.md`.
+- Lowered the exact `apps/actinglab/src/main.rs` ratchet from `59466` to `59185` lines.
+- A6 implementation commits: `0aed3df2d71ef92c622dd472766ee961f7a3e44e`, `30d03efec6d62af438600a41afed50f34ee48e4f`, and `b27e2c3ef7c4b1f63d2ef1f34fefe4ef050030c0`.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/maa_task_graph.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/package_build.rs`
+- `apps/actinglab/src/package_cli.rs`
+- `apps/actinglab/src/resource_convert.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/maa_task_graph.rs`
+- `crates/lab/src/package_api.rs`
+- `crates/lab/src/package_build.rs`
+- `crates/lab/src/package_validate.rs`
+- `crates/lab/src/resource_convert/mod.rs`
+- `crates/lab/src/resource_convert/tests.rs`
+- `crates/lab/tests/package_api.rs`
+- `docs/architecture/actinglab-a6-issue26-handoff.md`
+- `tools/actinglab-architecture/src/lib.rs`
+- `ratchet/main_rs_lines.txt`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Focused RED/GREEN tests for typed package APIs, invalid generated-package validation, Lab environment guards, command-scope guards, resource conversion, MAA graph compilation, package validation, and app-owned full/split build-pack paths.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`.
+- `cargo fmt --all -- --check`.
+- `git diff --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace`.
+- Lab forbidden-source, public-API, source-size, command-scope, and exact ratchet scans.
+- Two task-scoped code-review rounds plus a final clean re-review of `0569b1b..b27e2c3`.
+
+### Test results
+
+- All focused Lab package, resource-conversion, MAA graph, environment-boundary, and app adapter tests passed.
+- Both restored app-owned `package build-pack` command paths passed, including split staging promotion and cleanup assertions.
+- All 30 A1 protocol golden cases passed unchanged.
+- All architecture/dependency/inventory/ratchet guards passed.
+- Full workspace formatting, diff validation, and Clippy with warnings denied passed.
+- The complete workspace suite passed with 601 ActingLab tests, 108 Lab unit tests, the typed Lab API integration test, and all remaining integration, doc, and compile-time tests.
+- Final task review reported no Critical, Important, or Minor findings: spec PASS and quality APPROVED.
+
+### Current blocker
+
+- No A6 implementation blocker remains.
+- Issue #26 G2/G3 remain intentionally unresolved and are recorded only as future handoff seams.
+- Before A8, the frozen chain needs Alice's ruling on moving ledger same-session conflict detection into A8a and on expanding the chain so A9's 95 percent / 6000-line terminal gates are achievable.
+
+### Next step
+
+1. Commit, tag, push, and report A6 in GitHub issue #34.
+2. Continue to A7 `lab run` / `lab validate` migration.
+3. Apply Alice's A8/A9 scope ruling before starting the conflicting behavior/terminal nodes.
+
 ## 2026-07-10 issue 33 A5 touch-control migration complete
 
 ### Current status
