@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+use crate::{
+    CaptureBackendFactory, CaptureBackendObservation, CaptureBackendRequest, Clock, ConfigSource,
+    InputBackendFactory, InputBackendRequest, Lab, LabError as CliError, LabPorts,
+    LabResult as CliOutcome, LabRunLedgerResponse, LabRunRequest, LabRunResolution, LabRunResponse,
+    LabUnsupportedTargetResponse, LabValidateControlResponse, LabValidateRequest,
+    LabValidateResourcesResponse, LabValidateResponse,
+    frame_store::{
+        FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
+        FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
+    },
+};
+use actingcommand_device::{
+    CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
+    InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
+};
+use actingcommand_ledger::{
+    CommitProof, EvidenceStore, IdIssuer, IdKind, LabLedger, LabLogError, LastResortError,
+    LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader, commit_then_record,
+    project_light_events, write_last_resort_error,
+};
+use actingcommand_pack_containment::{
+    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
+};
+use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetRole};
+use actingcommand_recognition::{Scene, ScenePixelFormat};
+use actingcommand_recognition_pack::{
+    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use zip::ZipWriter;
+use zip::write::FileOptions;
+
+const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
+const SUMMARY_SCHEMA: &str = "Lab-1y.summary.v1";
+const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 300;
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_STEP_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_MAX_STEPS: usize = 50;
+const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
+const DEFAULT_RETRY_INTERVAL_MS: u64 = 1_500;
+const DEFAULT_POST_WAIT_FREEZES_MS: u64 = 480;
+const DEFAULT_RECOVERY_TASK_ID: &str = "return_home";
+const DEFAULT_ROI_STABLE_FRAMES: u32 = 2;
+const DEFAULT_ROI_STABILITY_TIMEOUT_MS: u64 = 1_500;
+const DEFAULT_RESOURCE_DRIFT_FRAMES: u32 = 2;
+const ROI_TEMPLATE_SCORE_EPSILON: f32 = 0.01;
+const ROI_TEMPLATE_POSITION_EPSILON: i32 = 1;
+const ROI_COLOR_DISTANCE_EPSILON: f32 = 2.0;
+const ROI_COLOR_MEAN_EPSILON: u8 = 2;
+
+include!("lab_run/api.rs");
+include!("lab_run/execute.rs");
+include!("lab_run/bundle.rs");
+include!("lab_run/context.rs");
+include!("lab_run/output.rs");
+include!("lab_run/test_support.rs");
+
+#[cfg(test)]
+mod tests;

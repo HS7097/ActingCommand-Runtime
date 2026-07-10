@@ -2575,7 +2575,7 @@ fn wait_for_stable_target(
         let current = evaluator
             .evaluate_target(&next_scene.scene, target)
             .map_err(|err| CliError::usage(err.to_string()))?;
-        if lab_run::target_evaluations_stable_for_wait(&previous, &current) {
+        if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
             return Ok(json!({
                 "req_id": ids.req_id,
                 "wf_id": ids.wf_id,

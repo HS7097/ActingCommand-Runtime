@@ -332,7 +332,10 @@ pub(crate) fn load_scene<P: LabPorts>(
         let mut backend = lab
             .ports()
             .capture_factory()
-            .open(crate::CaptureBackendRequest { config })?;
+            .open(crate::CaptureBackendRequest {
+                config,
+                observation: None,
+            })?;
         backend
             .capture()
             .map_err(|error| LabError::device(error.to_string()))?
@@ -362,6 +365,7 @@ fn capture_fresh_frame<P: LabPorts>(
             .capture_factory()
             .open(crate::CaptureBackendRequest {
                 config: choice_config,
+                observation: None,
             }) {
             Ok(backend) => backend,
             Err(error) => {

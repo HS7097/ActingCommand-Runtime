@@ -340,6 +340,11 @@ pub(super) struct AppInputFactory {
 
 impl InputBackendFactory for AppInputFactory {
     fn open(&self, request: InputBackendRequest) -> Result<Box<dyn InputBackend>, LabError> {
+        if request.observation.is_none() {
+            return create_touch_backend(request.config)
+                .map(|selected| Box::new(selected) as Box<dyn InputBackend>)
+                .map_err(|error| LabError::device(error.to_string()));
+        }
         let metadata = self
             .input_metadata
             .clone()
@@ -477,9 +482,16 @@ pub(super) struct AppCaptureFactory;
 
 impl CaptureBackendFactory for AppCaptureFactory {
     fn open(&self, request: CaptureBackendRequest) -> Result<Box<dyn CaptureBackend>, LabError> {
-        create_capture_backend(request.config)
-            .map(|selected| selected.backend)
-            .map_err(|error| LabError::device(error.to_string()))
+        let selected = create_capture_backend(request.config)
+            .map_err(|error| LabError::device(error.to_string()))?;
+        if let Some(observation) = request.observation {
+            observation.record(actingcommand_lab::CaptureBackendReport {
+                requested: selected.diagnostics.requested,
+                used: selected.diagnostics.used,
+                attempts: selected.diagnostics.attempts.clone(),
+            })?;
+        }
+        Ok(selected.backend)
     }
 }
 

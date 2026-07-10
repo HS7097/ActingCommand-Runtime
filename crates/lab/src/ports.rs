@@ -3,7 +3,8 @@
 use crate::UserConfig;
 use actingcommand_contract::{DriveRecord, LabResult, LedgerProjection};
 use actingcommand_device::{
-    CaptureBackend, CaptureBackendConfig, InputBackend, TouchBackendConfig,
+    CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
+    CaptureBackendName, InputBackend, TouchBackendConfig,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -88,6 +89,45 @@ pub trait InputBackendFactory {
 
 pub struct CaptureBackendRequest {
     pub config: CaptureBackendConfig,
+    pub observation: Option<CaptureBackendObservation>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CaptureBackendObservation {
+    report: Arc<Mutex<Option<CaptureBackendReport>>>,
+}
+
+impl CaptureBackendObservation {
+    pub fn record(&self, report: CaptureBackendReport) -> LabResult<()> {
+        let mut slot = self.report.lock().map_err(|_| {
+            actingcommand_contract::LabError::device("capture backend observation lock poisoned")
+        })?;
+        *slot = Some(report);
+        Ok(())
+    }
+
+    pub fn snapshot(&self) -> LabResult<CaptureBackendReport> {
+        self.report
+            .lock()
+            .map_err(|_| {
+                actingcommand_contract::LabError::device(
+                    "capture backend observation lock poisoned",
+                )
+            })?
+            .clone()
+            .ok_or_else(|| {
+                actingcommand_contract::LabError::device(
+                    "capture backend did not publish selection diagnostics",
+                )
+            })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureBackendReport {
+    pub requested: CaptureBackendChoice,
+    pub used: CaptureBackendName,
+    pub attempts: Vec<CaptureBackendAttempt>,
 }
 
 pub trait CaptureBackendFactory {
