@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening Task 3 post-action critical outcomes
+
+### Current status
+
+- Completed hardening Task 3 in source commit `3848f01`.
+- Critical execution now durably appends the sanitized intent before invoking the action exactly once in the current call, then invokes only the selected success or failure outcome builder with the real action value/error and reported effect.
+- Built outcomes are sanitized and checked for operation role, event family, event identity, correlation/action links, stable identity links, payload action, and effect disposition before durable append.
+- Outcome build, sanitization, validation, or append failure after action returns fatal `OutcomeUndurable` with the known effect, safe stage/code, and no receipt.
+- Command validation, device write, every lease transition, and every task terminal transition have explicit post-action role maps. Device success records `input.committed`.
+- Production critical execution no longer catches unwind or installs process-global panic hooks. Panic propagates after durable intent without a guessed outcome.
+- Reusing an action ID remains non-deduplicating in C1; no cross-call exactly-once guarantee is claimed.
+- Critical receipt, plan, action-report, and execution-error `Debug` output redact action values/errors and raw payload details.
+- Per Alice's execution preference, this task was implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/ledger/src/critical.rs`
+- `crates/ledger/src/critical/tests.rs`
+- `crates/ledger/tests/global_ledger_process.rs`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-ledger --lib critical::tests -- --nocapture`
+- `cargo test -p actingcommand-ledger --test global_ledger_process -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "take_hook|set_hook|catch_unwind|CriticalPanic" crates/ledger/src/critical.rs`
+
+### Test results
+
+- All 16 focused critical-execution tests passed, including post-action builder observation, fatal undurable outcomes, complete operation role maps, repeated action IDs, panic propagation, and non-disclosing diagnostics.
+- All 5 global-ledger process tests passed after migration to post-action builders.
+- Full workspace tests passed.
+- Full workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- Production `critical.rs` contains no panic-hook mutation, unwind catch, or legacy critical-panic scope.
+
+### Current blocker
+
+- None for hardening Task 3.
+
+### Next step
+
+1. Commit and push the Task 3 planning/checkpoint closeout with source commit `3848f01`.
+2. Record Task 3 implementation and verification evidence in Issue #36.
+3. Begin hardening Task 4: bounded replay and absorbing subscription state, without broadening into Task 5.
+
 ## 2026-07-11 Issue 35 C1 hardening Tasks 1-2 final acceptance
 
 ### Current status

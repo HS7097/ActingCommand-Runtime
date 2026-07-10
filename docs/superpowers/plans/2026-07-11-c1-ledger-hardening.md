@@ -343,7 +343,7 @@ where
 
 The executor does not call `catch_unwind` and does not install a panic hook. Panic propagation leaves the durable intent without a guessed outcome. Outcome build, sanitize, role, stable-link, or append failure after the action returns `OutcomeUndurable { effect, stage, code }` with no success receipt.
 
-- [ ] **Step 1: Add RED critical tests**
+- [x] **Step 1: Add RED critical tests**
 
 Add tests named:
 
@@ -361,17 +361,17 @@ panic_propagates_after_durable_intent_without_installing_hook
 critical_debug_does_not_disclose_value_error_payload_path_or_endpoint
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger critical::tests -- --nocapture`
 
 Expected: compile/test failure against the prebuilt-outcome API.
 
-- [ ] **Step 3: Implement post-action builders and non-disclosing errors**
+- [x] **Step 3: Implement post-action builders and non-disclosing errors**
 
 Delete the process-global panic hook and all prebuilt outcome selection. Validate the selected outcome after building and sanitizing it. Custom `Debug` must not require or format `T: Debug` or `E: Debug`.
 
-- [ ] **Step 4: Verify GREEN and no false exactly-once claim**
+- [x] **Step 4: Verify GREEN and no false exactly-once claim**
 
 Run:
 
@@ -386,7 +386,7 @@ git diff --check
 
 Expected: tests pass; source contains no panic-hook mutation, unwind catch, or C1 exactly-once claim.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `fix(ledger): build critical outcomes after action`
 
