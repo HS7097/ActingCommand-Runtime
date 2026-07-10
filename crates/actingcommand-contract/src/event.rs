@@ -940,6 +940,20 @@ pub struct ErasedSanitizedEventDraft {
     artifacts: Vec<ArtifactReference>,
 }
 
+impl ErasedSanitizedEventDraft {
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub fn event_type(&self) -> EventType {
+        self.event_type
+    }
+
+    pub fn links(&self) -> &EventLinks {
+        &self.links
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersistedEvent {
