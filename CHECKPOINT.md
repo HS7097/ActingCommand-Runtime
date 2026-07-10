@@ -29,6 +29,8 @@
 - A pre-existing empty `writer.lock` is fatal instead of being mistaken for first use; only a file created by the current acquisition may begin empty.
 - Owner metadata also uses recursive duplicate-key rejection before typed decoding.
 - Empty segment files now reopen cleanly, while a complete blank JSONL record remains fatal.
+- Final review of `9204e01..d2c013f` found no Critical, Important, or Minor issues and approved C1 Task 2.
+- Task 2 lifecycle-fix commit: `d2c013f` (`fix(ledger): preserve startup and owner recovery`).
 
 ### Files changed
 
@@ -55,6 +57,7 @@
 - review RED tests for full-queue shutdown, blank records, payload kind/unknown fields, contradictory owner metadata, config Debug, and sequence exhaustion
 - re-review RED with a valid complete JSONL record containing duplicate nested `subject` keys and a hidden machine path
 - final-review RED for bounded startup timeout, existing empty owner metadata, interrupted metadata append, append-only clean close, and empty-ledger reopen
+- final concurrency/recovery/security re-review of `9204e01..d2c013f`
 - `git diff --check`
 
 ### Test results
@@ -68,6 +71,7 @@
 - Two contract compile-fail tests and all doc tests passed.
 - Contract/ledger Clippy with warnings denied passed.
 - Diff check passed.
+- Final task-scoped review: APPROVED with no Critical, Important, or Minor findings.
 
 ### Current blocker
 
@@ -75,9 +79,9 @@
 
 ### Next step
 
-1. Commit and push the final Task 2 lifecycle fixes.
-2. Obtain final task-scoped concurrency/recovery/security approval with no Critical or Important findings.
-3. Re-read the latest Issue #35 body and comments before entering Task 3.
+1. Publish the final Task 2 approval evidence to Issue #36.
+2. Re-read the latest Issue #35 body and comments before entering Task 3.
+3. Reconcile any updated authority with the C1 plan before writing Task 3 RED tests.
 
 ## 2026-07-10 Issue 35 C1 Task 1 typed event contract
 
