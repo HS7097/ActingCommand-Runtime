@@ -9,6 +9,8 @@
 #![allow(clippy::result_large_err)]
 
 mod context;
+mod drive;
+mod drive_api;
 mod env_api;
 mod env_detection;
 mod ports;
@@ -18,6 +20,8 @@ mod readonly_api;
 mod state;
 
 pub use context::*;
+pub use drive::*;
+pub use drive_api::*;
 pub use env_api::*;
 pub use env_detection::*;
 pub use ports::*;

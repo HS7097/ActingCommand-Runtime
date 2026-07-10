@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A5 touch-control migration complete
+
+### Current status
+
+- Moved `tap-target` and `navigate` use-case logic into `crates/lab` behind typed request/response models.
+- Moved target recognition, page detection, route parsing/search, destructive-action guards, touch/drag execution, and arrival polling into Lab.
+- Routed device actions through the frozen `InputBackendFactory`; typed device responses preserve selected backend, requested backend, attempts, warnings, serial, state, screen size, handshake, control mode, and resolved action.
+- Preserved Session-daemon routing, real-execution `--capture` requirements, env-resolution/needs-detection behavior, semantic request/reco/action ids, ledger stages, output fields, error codes, and process exit mapping.
+- Moved `derive_absolute_coordinate_rect_from_match` into Lab unchanged and retained its regression coverage; no #30 retry/recovery behavior was modified.
+- Reduced `run_tap_target` and `run_navigate` in `main.rs` to one-line delegation and lowered the exact ratchet from `59792` to `59466`.
+- Added five sealed Lab drive tests. `drive.rs` is 1053 lines and its test module is 423 lines, both below the 2600-line limit.
+
+### Safe AK smoke
+
+- Mirrored `ActingCommand-Resources-Arknights`; local and `origin/main` both resolved to `72e33fcb98bc85123d43be3b0caedf5b3bbc1edd` with a clean worktree.
+- Read-only capture showed the AK B-server client was behind a Bilibili overlay and then reported that the installed client version had expired.
+- Used an ignored synthetic full-frame target for the visible confirmation control at `(640,490)`; no repository resource or binary artifact was added.
+- Dry-run `tap-target` returned `status=planned`, the expected point, recognition score `1.0`, and ledger receipt.
+- Real `tap-target` returned `status=sent`, `executed=true`, and device backend `adb_shell_input`; a follow-up capture confirmed the confirmation overlay closed and returned to the existing Bilibili page.
+- The smoke did not enter gameplay, spend currency, claim rewards, recruit, purchase, or change account resources.
+
+### Files changed
+
+- `apps/actinglab/src/drive_cli.rs`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/readonly_cli.rs`
+- `crates/lab/src/drive.rs`
+- `crates/lab/src/drive/tests.rs`
+- `crates/lab/src/drive_api.rs`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/readonly.rs`
+- `ratchet/main_rs_lines.txt`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags` in `ActingCommand-Resources-Arknights` plus local/remote commit checks.
+- `cargo check -p actingcommand-lab -p actingcommand-actinglab`.
+- `cargo test -p actingcommand-lab drive -- --nocapture`.
+- Focused ActingLab tests for tap-target planning, navigation planning, semantic ledger receipts, and destructive-overlap rejection.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`.
+- `cargo fmt --all -- --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace --quiet`.
+- Safe AK capture, read-only env detection, dry-run tap-target, real tap-target, and post-tap capture commands on `127.0.0.1:16416`.
+- `git diff --check`.
+
+### Test results
+
+- All five new Lab drive tests passed, including real execution through an injected input port.
+- All four focused pre-existing ActingLab control/ledger tests passed.
+- All 30 A1 protocol golden cases passed unchanged.
+- All five architecture guards passed.
+- Full workspace formatting, Clippy with warnings denied, and diff validation passed.
+- The complete workspace suite passed: 670 ActingLab tests, 34 Lab tests, protocol goldens, integration suites, architecture guards, and compile-time UI tests.
+- The safe AK real-device smoke passed with a visible post-click screen change.
+
+### Current blocker
+
+- The installed AK B-server client reports that its version is expired, so gameplay-route smoke is unavailable until the emulator client is updated. This did not block the required safe device-input smoke.
+
+### Next step
+
+1. Commit, tag, push, and report A5 in GitHub issue #34.
+2. Continue directly to A6 package/conversion migration.
+
 ## 2026-07-10 issue 33 A4 read-only recognition/page migration complete
 
 ### Current status

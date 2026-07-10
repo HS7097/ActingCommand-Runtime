@@ -15,7 +15,7 @@ use actingcommand_device::{
 };
 use actingcommand_lab::{
     InstanceConfig, SemanticLedgerContext, SemanticRequestContext, UserConfig,
-    project_semantic_payload,
+    derive_absolute_coordinate_rect_from_match, project_semantic_payload,
 };
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRead, LedgerRecord, LedgerRecordKind,
@@ -48,6 +48,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipWriter;
 use zip::write::FileOptions;
 
+mod drive_cli;
 mod env_detection;
 mod frame_store;
 mod lab2_cli;
@@ -6286,18 +6287,6 @@ fn env_needs_detection_json(
     }))
 }
 
-fn attach_env_needs_detection(
-    payload: &mut Value,
-    command: &str,
-    reason: &str,
-    subject: &str,
-    values: &[env_detection::ResolvedEnvValue],
-) {
-    if let Some(needs_detection) = env_needs_detection_json(command, reason, subject, values) {
-        payload["needs_detection"] = needs_detection;
-    }
-}
-
 fn record_env_needs_detection(
     ledger: &mut SemanticLedgerContext,
     command: &str,
@@ -6529,292 +6518,11 @@ fn semantic_first_string_at_paths(values: &[&Value], paths: &[&str]) -> Option<S
 }
 
 fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_control_via_session_daemon(global, &flags)? {
-        return submit_control_session_request(global, &flags, "tap_target", args);
-    }
-    let target = target_argument(&flags, "tap-target")?;
-    let mut ledger = semantic_ledger_context("tap-target", global, args);
-    let result = (|| -> CliOutcome<Value> {
-        let allow_destructive = flags.bool("--allow-destructive");
-        let dry_run = global.dry_run || flags.bool("--dry-run");
-        if !allow_destructive {
-            reject_dangerous_semantic_id("target", &target)?;
-        }
-        if !dry_run && !flags.bool("--capture") {
-            return Err(CliError::usage(
-                "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
-            ));
-        }
-
-        let config = read_user_config()?;
-        let resources = recognition_resources(global, &config, &flags, false)?;
-        let loaded =
-            load_evaluator_with_env(global, &flags, &resources.pack_path, &resources.pack_root)?;
-        let evaluator = loaded.evaluator;
-        record_env_resolved(&mut ledger, "tap-target", &loaded.env_resolved)?;
-        if evaluator
-            .target_kind(&target)
-            .map_err(|err| CliError::usage(err.to_string()))?
-            == TargetKind::ClickOnly
-        {
-            return Err(CliError::usage(format!(
-                "tap-target requires a visually evaluatable target; '{target}' is click-only"
-            )));
-        }
-        let scene = load_scene_from_flags(global, &flags)?;
-        let evaluation = evaluator
-            .evaluate_target(&scene, &target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
-        let reco_id = ledger.issue(IdKind::Reco);
-        ledger.record_drive(json!({
-            "stage": "recognition",
-            "command": "tap-target",
-            "target": target.clone(),
-            "reco_id": reco_id.clone(),
-            "evaluation": target_eval_json(&evaluation)
-        }))?;
-        if !evaluation.passed {
-            record_env_needs_detection(
-                &mut ledger,
-                "tap-target",
-                "target_below_threshold",
-                &target,
-                &loaded.env_resolved,
-            )?;
-            let mut details = json!({
-                "target": target,
-                "evaluation": target_eval_json(&evaluation)
-            });
-            attach_env_resolved(&mut details, &loaded.env_resolved);
-            attach_env_needs_detection(
-                &mut details,
-                "tap-target",
-                "target_below_threshold",
-                &target,
-                &loaded.env_resolved,
-            );
-            return Err(CliError::safety_blocked(
-                "target_not_visible",
-                format!(
-                    "target '{target}' did not pass recognition: {}",
-                    evaluation.message
-                ),
-                &["visible_target"],
-            )
-            .with_details(details));
-        }
-        let click = evaluator
-            .get_click_target(&target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
-        let point = rect_center(click)?;
-        let action_id = ledger.issue(IdKind::Action);
-        if dry_run {
-            let mut payload = json!({
-                "status": "planned",
-                "executed": false,
-                "target": target.clone(),
-                "req_id": ledger.req_id.clone(),
-                "reco_id": reco_id.clone(),
-                "action_id": action_id.clone(),
-                "click": rect_json(click),
-                "point": point_json(point),
-                "evaluation": target_eval_json(&evaluation),
-                "safety_gate": "navigation_only_default"
-            });
-            attach_env_resolved(&mut payload, &loaded.env_resolved);
-            ledger.record_drive(json!({
-                "stage": "action_plan",
-                "command": "tap-target",
-                "target": target.clone(),
-                "action_id": action_id.clone(),
-                "executed": false,
-                "click": rect_json(click),
-                "point": point_json(point)
-            }))?;
-            return Ok(payload);
-        }
-
-        let action_result = send_semantic_tap(global, &config, point)?;
-        let mut payload = json!({
-            "status": "sent",
-            "executed": true,
-            "target": target.clone(),
-            "req_id": ledger.req_id.clone(),
-            "reco_id": reco_id.clone(),
-            "action_id": action_id.clone(),
-            "click": rect_json(click),
-            "point": point_json(point),
-            "evaluation": target_eval_json(&evaluation),
-            "safety_gate": "navigation_only_default",
-            "device": action_result
-        });
-        attach_env_resolved(&mut payload, &loaded.env_resolved);
-        ledger.record_drive(json!({
-            "stage": "action",
-            "command": "tap-target",
-            "target": target.clone(),
-            "action_id": action_id.clone(),
-            "executed": true,
-            "click": rect_json(click),
-            "point": point_json(point),
-            "device": payload.get("device").cloned().unwrap_or(Value::Null)
-        }))?;
-        Ok(payload)
-    })();
-    finish_semantic_result_with_ledger(global, ledger, result)
+    drive_cli::run_tap_target(global, args)
 }
 
 fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_control_via_session_daemon(global, &flags)? {
-        return submit_control_session_request(global, &flags, "navigate", args);
-    }
-    let to = flags.required("--to")?;
-    let mut ledger = semantic_ledger_context("navigate", global, args);
-    let result = (|| -> CliOutcome<Value> {
-        let allow_destructive = flags.bool("--allow-destructive");
-        let dry_run = global.dry_run || flags.bool("--dry-run");
-        if !dry_run && !flags.bool("--capture") {
-            return Err(CliError::usage(
-                "navigate real execution requires --capture; use --dry-run with --scene for route planning",
-            ));
-        }
-
-        let config = read_user_config()?;
-        let (evaluator, detector, env_resolved) =
-            load_semantic_detector_with_env(global, &config, &flags)?;
-        record_env_resolved(&mut ledger, "navigate", &env_resolved)?;
-        let graph = load_navigation_graph(global, &config, &flags)?;
-        let scene = load_scene_from_flags(global, &flags)?;
-        let start = detect_current_page(&evaluator, &detector, &scene)?;
-        let reco_id = ledger.issue(IdKind::Reco);
-        ledger.record_drive(json!({
-            "stage": "recognition",
-            "command": "navigate",
-            "reco_id": reco_id.clone(),
-            "page": start.page.clone(),
-            "matched": start.matched,
-            "standby": start.standby
-        }))?;
-        if start.standby {
-            record_env_needs_detection(
-                &mut ledger,
-                "navigate",
-                "current_page_unknown",
-                &start.page,
-                &env_resolved,
-            )?;
-            let mut details = page_detection_json(&start);
-            attach_env_resolved(&mut details, &env_resolved);
-            attach_env_needs_detection(
-                &mut details,
-                "navigate",
-                "current_page_unknown",
-                &start.page,
-                &env_resolved,
-            );
-            return Err(CliError::safety_blocked(
-                "current_page_unknown",
-                "navigate requires a matched current page before clicking",
-                &["current_page"],
-            )
-            .with_details(details));
-        }
-        let target_page = canonical_navigation_page(&graph, &to);
-        if start.page == target_page {
-            let mut payload = json!({
-                "status": "already_at_target",
-                "executed": false,
-                "req_id": ledger.req_id.clone(),
-                "reco_id": reco_id,
-                "from": start.page,
-                "to": target_page,
-                "route": []
-            });
-            attach_env_resolved(&mut payload, &env_resolved);
-            return Ok(payload);
-        }
-        let route =
-            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
-                CliError::usage(format!(
-                    "no navigation route from '{}' to '{}'",
-                    start.page, target_page
-                ))
-            })?;
-        for edge in &route {
-            if !allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-            }
-        }
-        let action_ids = route
-            .iter()
-            .map(|_| ledger.issue(IdKind::Action))
-            .collect::<Vec<_>>();
-        let route_json = route
-            .iter()
-            .zip(action_ids.iter())
-            .map(|(edge, action_id)| navigation_edge_json_with_action_id(edge, action_id))
-            .collect::<Vec<_>>();
-        if dry_run {
-            let mut payload = json!({
-                "status": "planned",
-                "executed": false,
-                "req_id": ledger.req_id.clone(),
-                "reco_id": reco_id,
-                "from": start.page,
-                "to": target_page,
-                "route": route_json,
-                "safety_gate": "navigation_only_default"
-            });
-            attach_env_resolved(&mut payload, &env_resolved);
-            ledger.record_drive(json!({
-                "stage": "action_plan",
-                "command": "navigate",
-                "executed": false,
-                "action_ids": action_ids,
-                "route": payload.get("route").cloned().unwrap_or(Value::Null)
-            }))?;
-            return Ok(payload);
-        }
-
-        let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
-        let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
-        let execution = NavigationExecutionContext {
-            global,
-            flags: &flags,
-            config: &config,
-            evaluator: &evaluator,
-            detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
-            step_timeout,
-            poll,
-        };
-        let (mut executed, _) = execute_navigation_route(&execution, start.page, route)?;
-        for (step, action_id) in executed.iter_mut().zip(action_ids.iter()) {
-            step["action_id"] = json!(action_id);
-        }
-        let mut payload = json!({
-            "status": "arrived",
-            "executed": true,
-            "req_id": ledger.req_id.clone(),
-            "reco_id": reco_id,
-            "to": target_page,
-            "steps": executed,
-            "safety_gate": "navigation_only_default"
-        });
-        attach_env_resolved(&mut payload, &env_resolved);
-        ledger.record_drive(json!({
-            "stage": "action",
-            "command": "navigate",
-            "executed": true,
-            "action_ids": action_ids,
-            "steps": payload.get("steps").cloned().unwrap_or(Value::Null)
-        }))?;
-        Ok(payload)
-    })();
-    finish_semantic_result_with_ledger(global, ledger, result)
+    drive_cli::run_navigate(global, args)
 }
 
 fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -7635,12 +7343,6 @@ fn navigation_edge_json(edge: &NavigationEdge) -> Value {
     })
 }
 
-fn navigation_edge_json_with_action_id(edge: &NavigationEdge, action_id: &str) -> Value {
-    let mut value = navigation_edge_json(edge);
-    value["action_id"] = json!(action_id);
-    value
-}
-
 fn control_point_json(point: &ControlPoint) -> Value {
     json!({
         "name": point.name,
@@ -8062,34 +7764,6 @@ fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
     Ok(SemanticPoint {
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2,
-    })
-}
-
-fn derive_absolute_coordinate_rect_from_match(
-    kind: &str,
-    declared: PackRect,
-    expected_rect: PackRect,
-    matched_rect: PackRect,
-) -> CliOutcome<PackRect> {
-    let dx = matched_rect
-        .x
-        .checked_sub(expected_rect.x)
-        .ok_or_else(|| CliError::package_invalid(format!("{kind} x delta overflow")))?;
-    let dy = matched_rect
-        .y
-        .checked_sub(expected_rect.y)
-        .ok_or_else(|| CliError::package_invalid(format!("{kind} y delta overflow")))?;
-    Ok(PackRect {
-        x: declared
-            .x
-            .checked_add(dx)
-            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated x overflow")))?,
-        y: declared
-            .y
-            .checked_add(dy)
-            .ok_or_else(|| CliError::package_invalid(format!("{kind} translated y overflow")))?,
-        width: declared.width,
-        height: declared.height,
     })
 }
 

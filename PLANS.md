@@ -38,7 +38,7 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A4 read-only recognition/page migration is implemented and verified; A5 touch-control migration is next.
+Current node: A5 touch-control migration is implemented and verified; A6 package/conversion migration is next.
 
 A1 delivers:
 
@@ -88,6 +88,17 @@ A4 read-only recognition/page migration:
 - leaves four one-line command functions in `main.rs` and a production-only app adapter for flag/config parsing, port construction, ledger projection, and response serialization;
 - adds sealed Lab family tests for evaluatable recognition, click-only recognition, page detection/current page, and negative visibility;
 - lowers the `main.rs` ratchet from `59967` to `59792` lines without changing Runtime behavior.
+
+A5 touch-control migration:
+
+- moves `tap-target` and `navigate` recognition, safety, route planning, touch execution, and arrival polling into typed `crates/lab` APIs;
+- executes tap/drag operations exclusively through the A2a-frozen `InputBackendFactory` and preserves production backend diagnostics in typed responses;
+- keeps Session-daemon routing, semantic request/reco/action ids, ledger drive records, destructive-action guards, env-resolution hints, real-execution capture requirements, and failure codes unchanged;
+- moves the #29 absolute-coordinate translation helper into Lab without changing its established behavior, while leaving #30 retry/recovery behavior and call surfaces unchanged;
+- leaves two one-line command functions in `main.rs` and a production adapter for flag/config parsing, deferred device/timing resolution, Lab port construction, and serialization;
+- adds sealed Lab tests for dry-run planning, failed recognition, navigation routing, real input-port execution, and coordinate derivation;
+- lowers the `main.rs` ratchet from `59792` to `59466` lines;
+- validates one real safe AK-device tap on `127.0.0.1:16416` after mirroring the Arknights resource repository, with no game-progress or paid-resource action.
 
 ## Current environment detection memory and env pointer node
 

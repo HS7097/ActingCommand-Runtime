@@ -158,7 +158,7 @@ impl<P: LabPorts> Lab<P> {
     }
 }
 
-fn load_evaluator<P: LabPorts>(
+pub(crate) fn load_evaluator<P: LabPorts>(
     lab: &mut Lab<P>,
     input: &mut crate::ReadonlyRecognitionInput,
 ) -> LabResult<(RecognitionEvaluator, Vec<EnvResolved>)> {
@@ -188,7 +188,7 @@ fn load_evaluator<P: LabPorts>(
     Ok((evaluator, env_resolved))
 }
 
-fn load_page_detector(
+pub(crate) fn load_page_detector(
     input: &crate::ReadonlyRecognitionInput,
     missing_message: &str,
 ) -> LabResult<PageDetector> {
@@ -203,7 +203,7 @@ fn load_page_detector(
     PageDetector::new(pages).map_err(|error| LabError::usage(error.to_string()))
 }
 
-fn recognition_scene<P: LabPorts>(
+pub(crate) fn recognition_scene<P: LabPorts>(
     lab: &mut Lab<P>,
     input: &mut crate::ReadonlyRecognitionInput,
 ) -> LabResult<Scene> {
@@ -220,7 +220,7 @@ fn recognition_scene<P: LabPorts>(
     )
 }
 
-fn detect_current_page(
+pub(crate) fn detect_current_page(
     evaluator: &RecognitionEvaluator,
     detector: &PageDetector,
     scene: &Scene,
@@ -254,7 +254,7 @@ fn detect_current_page(
     })
 }
 
-fn needs_detection(
+pub(crate) fn needs_detection(
     command: &str,
     reason: &str,
     subject: &str,
@@ -279,7 +279,9 @@ fn needs_detection(
     })
 }
 
-fn target_evaluation_response(evaluation: &TargetEvaluation) -> crate::TargetEvaluationResponse {
+pub(crate) fn target_evaluation_response(
+    evaluation: &TargetEvaluation,
+) -> crate::TargetEvaluationResponse {
     crate::TargetEvaluationResponse {
         target: evaluation.id.clone(),
         kind: format!("{:?}", evaluation.kind),
@@ -339,7 +341,7 @@ fn page_target_evaluation_response(
     }
 }
 
-fn rect_response(rect: PackRect) -> crate::RectResponse {
+pub(crate) fn rect_response(rect: PackRect) -> crate::RectResponse {
     crate::RectResponse {
         x: rect.x,
         y: rect.y,

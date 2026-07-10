@@ -73,16 +73,25 @@ pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
     serialize_response(lab.is_visible(request)?)
 }
 
-fn recognition_input(
+pub(super) fn recognition_input(
     global: &GlobalOptions,
     flags: &FlagArgs,
     require_pages: bool,
 ) -> CliOutcome<ReadonlyRecognitionInput> {
     let config = read_user_config()?;
-    let resources = recognition_resources(global, &config, flags, require_pages)?;
+    recognition_input_with_config(global, flags, require_pages, &config)
+}
+
+pub(super) fn recognition_input_with_config(
+    global: &GlobalOptions,
+    flags: &FlagArgs,
+    require_pages: bool,
+    config: &super::UserConfig,
+) -> CliOutcome<ReadonlyRecognitionInput> {
+    let resources = recognition_resources(global, config, flags, require_pages)?;
     let capture_config = flags
         .bool("--capture")
-        .then(|| device_config(global, &config))
+        .then(|| device_config(global, config))
         .transpose()?
         .map(|device| device.capture_backend_config());
     let fresh_delay = if capture_config.is_some() {

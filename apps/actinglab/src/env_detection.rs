@@ -103,16 +103,28 @@ pub(super) fn resolve_env_markers_in_value(
 }
 
 pub(super) fn build_readonly_lab() -> CliOutcome<Lab<AppLabPorts>> {
+    build_app_lab(UserConfig::default(), None)
+}
+
+pub(super) fn build_control_lab(
+    config: UserConfig,
+    device: Option<&super::DeviceRuntimeConfig>,
+) -> CliOutcome<Lab<AppLabPorts>> {
+    build_app_lab(config, device.map(InputFactoryMetadata::from_device))
+}
+
+fn build_app_lab(
+    config: UserConfig,
+    input_metadata: Option<InputFactoryMetadata>,
+) -> CliOutcome<Lab<AppLabPorts>> {
     Lab::new(
         AppLabPorts {
-            input: AppInputFactory {
-                input_metadata: None,
-            },
+            input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory,
             ledger: CliOwnedLedger,
             clock: SystemClock,
             config: AppConfigSource {
-                config: UserConfig::default(),
+                config,
                 state_root: None,
             },
         },
