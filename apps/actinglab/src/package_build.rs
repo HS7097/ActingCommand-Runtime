@@ -317,3 +317,267 @@ fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
     serde_json::to_value(response)
         .map_err(|error| CliError::device(format!("failed to serialize Lab response: {error}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeSet;
+    use tempfile::TempDir;
+
+    #[test]
+    fn package_build_pack_full_command_preserves_defaults_and_response_shape() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        let out = temp.path().join("full.zip");
+        write_fixture_repo(&repo);
+
+        let result = super::super::run_cli(
+            [
+                "--json",
+                "package",
+                "build-pack",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--entry-task",
+                "operator_task",
+                "--out",
+                out.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let data = result.envelope.data.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(
+            data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "dry_run",
+                "entry_task_id",
+                "execution_mode",
+                "from_remote",
+                "game",
+                "mode",
+                "out",
+                "package_id",
+                "repo",
+                "resource_layout",
+                "resource_root",
+                "server",
+                "status",
+                "task_count",
+                "validation",
+            ])
+        );
+        assert_eq!(data.get("status"), Some(&json!("written")));
+        assert_eq!(data.get("mode"), Some(&json!("build-pack")));
+        assert_eq!(data.get("game"), Some(&json!("arknights")));
+        assert_eq!(data.get("server"), Some(&json!("cn")));
+        assert_eq!(data.get("entry_task_id"), Some(&json!("operator_task")));
+        assert_eq!(data.get("package_id"), Some(&json!("arknights.cn.full")));
+        assert_eq!(data.get("execution_mode"), Some(&json!("recognize_only")));
+        assert_eq!(data.get("task_count"), Some(&json!(2)));
+        assert_eq!(data.get("dry_run"), Some(&json!(false)));
+        assert_eq!(data.get("out"), Some(&json!(out.display().to_string())));
+        assert_eq!(data.get("from_remote"), Some(&Value::Null));
+        assert_eq!(
+            data["validation"].pointer("/control/package_id"),
+            Some(&json!("arknights.cn.full"))
+        );
+        assert_eq!(
+            data["validation"].pointer("/control/execution_mode"),
+            Some(&json!("recognize_only"))
+        );
+        assert!(out.is_file());
+    }
+
+    #[test]
+    fn package_build_pack_split_command_promotes_and_cleans_staging_directory() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        let split_dir = temp.path().join("split");
+        write_fixture_repo(&repo);
+
+        let result = super::super::run_cli(
+            [
+                "--json",
+                "package",
+                "build-pack",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--split-dir",
+                split_dir.to_str().unwrap(),
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
+        let data = result.envelope.data.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(
+            data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "dry_run",
+                "from_remote",
+                "game",
+                "mode",
+                "package_count",
+                "packages",
+                "repo",
+                "resource_layout",
+                "resource_root",
+                "server",
+                "status",
+            ])
+        );
+        assert_eq!(data.get("status"), Some(&json!("written")));
+        assert_eq!(data.get("mode"), Some(&json!("build-pack-split")));
+        assert_eq!(data.get("game"), Some(&json!("arknights")));
+        assert_eq!(data.get("server"), Some(&json!("cn")));
+        assert_eq!(data.get("package_count"), Some(&json!(2)));
+        assert_eq!(data.get("dry_run"), Some(&json!(false)));
+
+        let mut packages = data["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>();
+        packages.sort_by(|left, right| {
+            left["task_id"]
+                .as_str()
+                .unwrap()
+                .cmp(right["task_id"].as_str().unwrap())
+        });
+        for package in packages {
+            let task_id = package["task_id"].as_str().unwrap();
+            let package_id = format!("arknights.cn.{task_id}");
+            let out = split_dir.join(format!("{package_id}.zip"));
+            assert_eq!(package["out"], json!(out.display().to_string()));
+            assert_eq!(
+                package.pointer("/validation/control/package_id"),
+                Some(&json!(package_id))
+            );
+            assert_eq!(
+                package.pointer("/validation/control/execution_mode"),
+                Some(&json!("navigable_route"))
+            );
+            assert!(out.is_file());
+        }
+        assert_eq!(
+            fs::read_dir(&split_dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().is_file())
+                .count(),
+            2
+        );
+        let staging_prefix = ".split.tmp-";
+        let staging_dirs = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(staging_prefix)
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        assert!(
+            staging_dirs.is_empty(),
+            "split staging directories were not cleaned: {staging_dirs:?}"
+        );
+    }
+
+    fn write_fixture_repo(root: &Path) {
+        fs::create_dir_all(root.join("operations/operator_task/assets")).unwrap();
+        fs::create_dir_all(root.join("operations/return_home/assets")).unwrap();
+        fs::create_dir_all(root.join("navigation")).unwrap();
+        fs::write(
+            root.join("operations/resources.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "1.0",
+                "resources": [],
+                "resource_count": 0
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        write_task_fixture(root, "operator_task", "operator", "OPERATOR.png", 10);
+        write_task_fixture(root, "return_home", "home", "HOME.png", 20);
+        fs::write(
+            root.join("navigation/arknights.cn.navigation.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "0.3",
+                "control_points": [{"name": "home", "point": [1, 1]}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_task_fixture(
+        root: &Path,
+        task_id: &str,
+        page_id: &str,
+        asset_name: &str,
+        coordinate: i32,
+    ) {
+        let task_root = root.join("operations").join(task_id);
+        fs::write(task_root.join("assets").join(asset_name), one_pixel_png()).unwrap();
+        fs::write(
+            task_root.join("task.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": "0.3",
+                "task_id": task_id,
+                "game": "arknights",
+                "server_scope": ["cn"],
+                "goal": "app command fixture",
+                "coordinate_space": {"width": 1280, "height": 720},
+                "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
+                "anchors": [{
+                    "id": page_id,
+                    "template": format!("assets/{asset_name}"),
+                    "region": {
+                        "mode": "rect",
+                        "rect": {"x": coordinate, "y": coordinate, "width": 1, "height": 1}
+                    },
+                    "threshold": 0.8,
+                    "color_check": null
+                }],
+                "entry_page": page_id,
+                "target_page": page_id,
+                "operations": [{
+                    "id": format!("{task_id}_noop"),
+                    "purpose": "fixture",
+                    "from": page_id,
+                    "to": null,
+                    "click": {"kind": "point", "x": coordinate, "y": coordinate},
+                    "verify_template": null,
+                    "guard": {
+                        "page_id": page_id,
+                        "target_id": format!("page/{page_id}"),
+                        "expected_rect": {
+                            "x": coordinate,
+                            "y": coordinate,
+                            "width": 1,
+                            "height": 1
+                        },
+                        "verify_template": format!("assets/{asset_name}")
+                    },
+                    "consumes": [],
+                    "produces": []
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn one_pixel_png() -> &'static [u8] {
+        &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 15, 4,
+            0, 9, 251, 3, 253, 167, 89, 75, 221, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ]
+    }
+}
