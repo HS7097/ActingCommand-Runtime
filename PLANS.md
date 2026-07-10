@@ -15,9 +15,9 @@ The active approved architecture work is GitHub issue #33:
 - Frozen specification SHA-256: `efb9e37f10807ce2a615205e3924021ad91eb073a54e4c65cd178e14b0aeab3b`
 - Runtime baseline: `6941b9a046da182185b1a64745f77651e0aec5f0`
 
-The chain is strictly linear:
+The amended chain is strictly linear:
 
-`A0 -> A1 -> A2a -> A2b -> A3 -> A4 -> A5 -> A6 -> A7 -> A8a -> A8b -> A9`
+`A0 -> A1 -> A2a -> A2b -> A3 -> A4 -> A5 -> A6 -> A7 -> A8a -> A8b -> A8c -> A9`
 
 Current tracking surface: GitHub issue #34 on branch `issue-34-lab-extraction-chain`.
 
@@ -38,7 +38,16 @@ A0 implementation is complete and verified on its task branch:
 
 Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
 
-Current node: A6 package/conversion migration is implemented and verified; A7 Lab run/validate migration is next.
+Current node: A7 Lab run/validate migration is implemented and verified; A8a concurrency/crash-recovery and ledger-conflict repair is next.
+
+Approved amendments:
+
+- A7 interface amendment: `docs/architecture/actinglab-a7-interface-amendment.md`, frozen payload SHA-256 `eb753f19c03cd71bafdc50ac9847800c070713b148b07fccd7f9b335be7264e0`.
+- Chain amendment: `docs/architecture/actinglab-chain-amendment-20260710.md`, frozen payload SHA-256 `09ac0a1e8c891f54eeaccd3e0aae3f59851621df61d9e9c53bbec97907d54fe6`.
+- A8a now owns both Lab2 arbitrator locking/recovery and same-session runtime-ledger writer conflict detection, followed by golden review/re-freeze.
+- A8b remains the pure Lab2 migration.
+- New A8c migrates all remaining use cases needed to reach the original A9 terminal gates.
+- A9 remains unchanged: `main.rs <= 6000`, at least 95 percent of the 44 frozen dispatch arms satisfy S3, and the full invariant/guard/golden/retirement audit must pass.
 
 A1 delivers:
 
@@ -109,6 +118,16 @@ A6 package/conversion migration:
 - moves package/converter/MAA graph tests with their implementation and retains app-level full/split `build-pack` command coverage;
 - records the intentionally unresolved Issue #26 G2/G3 seams in `docs/architecture/actinglab-a6-issue26-handoff.md` without changing those semantics;
 - preserves all 30 protocol goldens, keeps every Lab source file below 2600 lines, and lowers the exact `main.rs` ratchet from `59466` to `59185` lines.
+
+A7 Lab run/validate migration:
+
+- moves `lab run` and `lab validate` into typed `crates/lab` APIs while the app retains flags, process context, concrete device/config adapters, serialization, and exit mapping;
+- keeps containment before control/resource parsing and records the unchanged Issue #26 G2/G3 insertion points in `docs/architecture/actinglab-a7-issue26-splice.md`;
+- moves safe frame-store, run lifecycle, retry/recovery, ledger projection, archive, and cleanup logic into Lab while the Windows memory sampler remains app-owned;
+- keeps exactly one `LedgerSink`, uses Lab-owned opaque ledger DTOs at the public boundary, and keeps concrete `LabLedger` ownership in the app adapter;
+- validates the complete selected device configuration before context assignment, normal ledger creation, and lease acquisition, while capture opening stays post-lease and touch opening stays first-input only;
+- preserves selected-only resolution, archive/ledger ordering, wire fields, exits, all 30 goldens, the `59185` line ratchet, and every source/dependency guard;
+- leaves Issue #26 G2/G3 behavior unchanged and adds no resource, device, scheduler, UI, SQLite, OCR, or game-logic change.
 
 ## Current environment detection memory and env pointer node
 

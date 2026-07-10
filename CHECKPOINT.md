@@ -1,5 +1,88 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 A7 Lab run/validate migration complete
+
+### Current status
+
+- Moved `lab run` and `lab validate` into typed `crates/lab` use cases.
+- Kept CLI parsing, process context, concrete device/config/ledger adapters, serialization, and exit mapping in `apps/actinglab`.
+- Moved safe frame-store, contained package consumption, run execution, retry/recovery, runtime-ledger projection, archive generation, and cleanup behavior into Lab.
+- Preserved Issue #26 G2/G3 behavior and recorded exact future splice anchors in `docs/architecture/actinglab-a7-issue26-splice.md`.
+- Alice approved and froze `docs/architecture/actinglab-a7-interface-amendment.md` at payload SHA-256 `eb753f19c03cd71bafdc50ac9847800c070713b148b07fccd7f9b335be7264e0`.
+- The amended single `LedgerSink` uses Lab-owned opaque DTOs; public Lab signatures expose neither raw `serde_json::Value` nor `actingcommand_ledger` storage types, and concrete `LabLedger` remains app-owned.
+- Complete selected capture, touch, instance ADB, path-boundary, and global ADB provenance validation now precedes context assignment, normal ledger creation, and lease acquisition. Capture opens after the lease; touch opens on first actual input.
+- Selected-only behavior remains intact: unselected invalid instance configurations are not resolved.
+- A7 source commits: `4f6574f44c8a90f304860f9064136f4fef6598c0`, `d4149f7e245bc832c6e2883c62599956237ef9bd`, and `60bafa3`.
+- Alice also approved the chain amendment `docs/architecture/actinglab-chain-amendment-20260710.md`, frozen at payload SHA-256 `09ac0a1e8c891f54eeaccd3e0aae3f59851621df61d9e9c53bbec97907d54fe6`.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/frame_store.rs`
+- `apps/actinglab/src/lab_run.rs`
+- `apps/actinglab/src/main.rs`
+- `crates/lab/src/context.rs`
+- `crates/lab/src/frame_store.rs`
+- `crates/lab/src/lab_run.rs`
+- `crates/lab/src/lab_run/`
+- `crates/lab/src/lab_run_api.rs`
+- `crates/lab/src/ledger_port.rs`
+- `crates/lab/src/lib.rs`
+- `crates/lab/src/ports.rs`
+- `crates/lab/tests/lab_run_api.rs`
+- `docs/architecture/actinglab-a7-interface-amendment.md`
+- `docs/architecture/actinglab-a7-issue26-splice.md`
+- `docs/architecture/actinglab-chain-amendment-20260710.md`
+- `tools/actinglab-architecture/Cargo.toml`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- supporting Lab test-sink implementations in drive, env, package, and readonly tests
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Focused RED/GREEN work for opaque ledger ports, selected-device validation order, failure ordering, and public API guards.
+- `cargo test -p actingcommand-lab --test lab_run_api --no-run`.
+- `cargo test -p actingcommand-lab -- --nocapture`.
+- `cargo test -p actingcommand-actinglab lab_ -- --nocapture`.
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`.
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`.
+- `cargo fmt --all -- --check`.
+- `git diff --check`.
+- `cargo clippy --workspace -- -D warnings`.
+- `cargo test --workspace`.
+- Three isolated reruns of `vendor_stdio::tests::captures_crt_stdout_and_stderr_noise` and one full `actingcommand-device` library run after the first workspace attempt exposed a transient failure.
+- Exact ratchet, source-size, forbidden-source, concrete-ledger-storage, and ledger-trait scans.
+- Focused controller diff review of the approved A7 amendment and its second-review fixes.
+
+### Test results
+
+- Lab: 206 unit tests passed, plus typed Lab run/package API tests and doc tests.
+- ActingLab focused Lab adapter tests: 18 passed.
+- All 30 A1 protocol golden cases passed unchanged.
+- Architecture guard suite: 7 guards passed after adding both frozen-amendment checks.
+- Formatting, diff validation, and workspace Clippy with warnings denied passed.
+- The first workspace run exposed a timing-sensitive pre-existing vendor-stdio capture test failure. The exact test then passed three consecutive isolated runs, all 73 device tests passed together, and a fresh complete workspace rerun passed.
+- `main.rs` and its ratchet both remain `59185` lines.
+- Every `crates/lab` Rust source remains at or below 2600 lines.
+- Forbidden Lab source scan, public `Value`/ledger-storage AST guards, and concrete run-ledger storage scan passed.
+- Exactly one public Lab ledger trait remains.
+- Focused controller review found no Critical, Important, or Minor A7 finding. Subagent re-review attempts did not return a verdict before shutdown; final independent chain acceptance remains pending by Alice's design.
+
+### Current blocker
+
+- No A7 implementation blocker remains.
+- Issue #26 G2 self-hash and G3 semantic routing remain intentionally deferred.
+- The vendor-stdio test can be timing-sensitive under parallel workspace execution; A7 does not touch that code, and the required fresh full rerun passed.
+
+### Next step
+
+1. Commit the A7 planning/checkpoint and approved chain amendment.
+2. Tag and push the A7 checkpoint, then comment the completion and both freeze hashes on issue #34.
+3. Execute A8a: Lab2 arbitrator concurrency/crash recovery plus same-session runtime-ledger writer conflict detection, then review and re-freeze affected goldens.
+
 ## 2026-07-10 issue 33 A6 package/conversion migration complete
 
 ### Current status

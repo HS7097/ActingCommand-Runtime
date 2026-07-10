@@ -20,10 +20,27 @@ fn workspace_root() -> PathBuf {
 
 #[test]
 fn a7_interface_amendment_matches_declared_freeze() {
-    let source = fs::read_to_string(
-        workspace_root().join("docs/architecture/actinglab-a7-interface-amendment.md"),
-    )
-    .expect("read A7 interface amendment");
+    assert_frozen_payload(
+        "docs/architecture/actinglab-a7-interface-amendment.md",
+        "<!-- A7-INTERFACE-FREEZE-BEGIN -->\n",
+        "<!-- A7-INTERFACE-FREEZE-END -->",
+        "A7 interface amendment",
+    );
+}
+
+#[test]
+fn issue33_chain_amendment_matches_declared_freeze() {
+    assert_frozen_payload(
+        "docs/architecture/actinglab-chain-amendment-20260710.md",
+        "<!-- ISSUE33-CHAIN-FREEZE-BEGIN -->\n",
+        "<!-- ISSUE33-CHAIN-FREEZE-END -->",
+        "issue 33 chain amendment",
+    );
+}
+
+fn assert_frozen_payload(path: &str, begin: &str, end: &str, label: &str) {
+    let source = fs::read_to_string(workspace_root().join(path))
+        .unwrap_or_else(|error| panic!("read {label}: {error}"));
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
     let declared = normalized
         .lines()
@@ -31,17 +48,14 @@ fn a7_interface_amendment_matches_declared_freeze() {
             line.strip_prefix("Frozen payload SHA-256: `")
                 .and_then(|value| value.strip_suffix('`'))
         })
-        .expect("A7 amendment declares frozen payload SHA-256");
+        .unwrap_or_else(|| panic!("{label} declares frozen payload SHA-256"));
     let payload = normalized
-        .split_once("<!-- A7-INTERFACE-FREEZE-BEGIN -->\n")
-        .and_then(|(_, tail)| {
-            tail.split_once("<!-- A7-INTERFACE-FREEZE-END -->")
-                .map(|(payload, _)| payload)
-        })
-        .expect("A7 amendment contains freeze markers");
+        .split_once(begin)
+        .and_then(|(_, tail)| tail.split_once(end).map(|(payload, _)| payload))
+        .unwrap_or_else(|| panic!("{label} contains freeze markers"));
     let actual = format!("{:x}", Sha256::digest(payload.as_bytes()));
 
-    assert_eq!(actual, declared, "A7 interface amendment freeze drifted");
+    assert_eq!(actual, declared, "{label} freeze drifted");
 }
 
 #[test]
