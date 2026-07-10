@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult, is_identifier,
-    projection::EventIndexes,
+    GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult, Sha256SecretFingerprinter,
+    is_identifier, projection::EventIndexes,
 };
+use crate::PersistedEvent;
+use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
-    ClassifiedField, ErasedSanitizedEventDraft, EventActor, EventDraft, EventLinks, EventOrigin,
-    EventSeverity, EventSource, EventType, FieldRedactor, LedgerPayloadDraft, LedgerTransition,
-    PersistedEvent, SanitizationError,
+    AuditInput, EventActor, EventDraft, EventId, EventLinks, EventOrigin, EventSeverity,
+    EventSource, GLOBAL_EVENT_SCHEMA_VERSION, LedgerPayloadDraft, SanitizedEventDraft, StaticCode,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Number, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -98,14 +100,13 @@ impl SegmentStore {
 
     pub(super) fn append(
         &mut self,
-        draft: ErasedSanitizedEventDraft,
+        draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
         let following_sequence = increment_sequence(self.next_sequence)?;
-        let event = PersistedEvent::from_draft(self.next_sequence, draft);
-        event
-            .validate()
-            .map_err(|_| GlobalLedgerError::request("invalid_sanitized_event", "validate_event"))?;
-        if self.indexes.contains_event_id(&event.event_id) {
+        let event = PersistedEvent::from_sanitized(self.next_sequence, draft).map_err(|error| {
+            GlobalLedgerError::request(error.code(), "validate_sanitized_event")
+        })?;
+        if self.indexes.contains_event_id(event.event_id()) {
             return Err(GlobalLedgerError::request(
                 "duplicate_event_id",
                 "append_event",
@@ -113,7 +114,7 @@ impl SegmentStore {
         }
         let mut bytes = serde_json::to_vec(&StoredLine {
             line_type: LINE_TYPE.to_string(),
-            event: event.clone(),
+            event: StoredEventRecord::from_event(&event),
         })
         .map_err(|error| {
             GlobalLedgerError::json("event_serialization_failed", "serialize_event", &error)
@@ -144,7 +145,7 @@ impl SegmentStore {
     pub(super) fn events_after(&self, sequence: u64) -> Vec<PersistedEvent> {
         self.events
             .iter()
-            .filter(|event| event.sequence > sequence)
+            .filter(|event| event.sequence() > sequence)
             .cloned()
             .collect()
     }
@@ -174,70 +175,57 @@ impl SegmentStore {
 
     fn append_recovery(
         &mut self,
-        reason: &str,
+        reason: &'static str,
         previous_owner: Option<String>,
         tail: Option<(u64, u64)>,
     ) -> GlobalLedgerResult<()> {
-        let mut fields = vec![ClassifiedField::public("reason", reason).map_err(|_| {
-            GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-        })?];
+        let mut audit = AuditInput::new();
         if let Some(owner_id) = previous_owner {
-            fields.push(
-                ClassifiedField::internal("previous_owner", owner_id).map_err(|_| {
-                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-                })?,
-            );
+            audit = audit.with_account(owner_id);
         }
-        if let Some((segment, bytes)) = tail {
-            fields.push(
-                ClassifiedField::public("segment", segment.to_string()).map_err(|_| {
-                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-                })?,
-            );
-            fields.push(
-                ClassifiedField::public("quarantined_bytes", bytes.to_string()).map_err(|_| {
-                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-                })?,
-            );
-        }
+        let (segment_index, affected_bytes) =
+            tail.map_or((None, 0), |(segment, bytes)| (Some(segment), bytes));
         let now = unix_ms_now()?;
-        let payload =
-            LedgerPayloadDraft::new(LedgerTransition::Recovered, "writer_recovery", fields)
-                .map_err(|_| {
-                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
-                })?;
+        let payload = LedgerPayloadDraft::recovered(
+            StaticCode::new(reason).map_err(|_| {
+                GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
+            })?,
+            segment_index,
+            affected_bytes,
+            audit,
+        );
         let draft = EventDraft::new(
-            format!("ledger-recovery-{now}-{}", self.next_sequence),
+            recovery_event_id(now, self.next_sequence),
             now,
-            EventType::LedgerRecovered,
             EventSeverity::Warning,
-            EventOrigin::new(EventSource::System, "global-ledger", EventActor::System).map_err(
-                |_| GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event"),
-            )?,
+            EventOrigin::new(
+                EventSource::System,
+                StaticCode::new("global-ledger").map_err(|_| {
+                    GlobalLedgerError::fatal("recovery_event_failed", "build_recovery_event")
+                })?,
+                EventActor::System,
+            ),
             EventLinks::default(),
-            payload,
+            payload.into(),
         )
-        .sanitize(&PublicOnlyRedactor)
-        .map_err(|_| GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event"))?
-        .erase()?;
+        .sanitize(
+            &Sha256SecretFingerprinter::new(b"actingcommand-ledger-recovery-v2").map_err(|_| {
+                GlobalLedgerError::fatal("recovery_event_failed", "configure_fingerprinter")
+            })?,
+        )
+        .map_err(|_| {
+            GlobalLedgerError::fatal("recovery_event_failed", "sanitize_recovery_event")
+        })?;
         self.append(draft)?;
         Ok(())
     }
 }
 
-struct PublicOnlyRedactor;
-
-impl FieldRedactor for PublicOnlyRedactor {
-    fn fingerprint(&self, _field_name: &str, _value: &str) -> Result<String, SanitizationError> {
-        Err(SanitizationError::redactor_failure())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredLine {
     line_type: String,
-    event: PersistedEvent,
+    event: StoredEventRecord,
 }
 
 struct RecoveryState {
@@ -313,6 +301,17 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
             let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
                 GlobalLedgerError::json("corrupt_segment", "parse_segment", &error)
             })?;
+            let schema_version = unique
+                .0
+                .get("event")
+                .and_then(|event| event.get("schema_version"))
+                .and_then(Value::as_str);
+            if schema_version.is_some_and(|schema| schema != GLOBAL_EVENT_SCHEMA_VERSION) {
+                return Err(GlobalLedgerError::fatal(
+                    "unsupported_event_schema",
+                    "recover_event_schema",
+                ));
+            }
             let stored = serde_json::from_value::<StoredLine>(unique.0).map_err(|error| {
                 GlobalLedgerError::json("corrupt_segment", "decode_segment", &error)
             })?;
@@ -322,22 +321,22 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
                     "validate_line_type",
                 ));
             }
-            stored.event.validate().map_err(|_| {
-                GlobalLedgerError::fatal("corrupt_segment", "validate_persisted_event")
+            let event = stored.event.into_event().map_err(|error| {
+                GlobalLedgerError::fatal(error.code(), "validate_persisted_event")
             })?;
-            if stored.event.sequence != next_sequence {
+            if event.sequence() != next_sequence {
                 return Err(GlobalLedgerError::fatal(
                     "sequence_discontinuity",
                     "recover_sequence",
                 ));
             }
-            if !event_ids.insert(stored.event.event_id.clone()) {
+            if !event_ids.insert(*event.event_id()) {
                 return Err(GlobalLedgerError::fatal(
                     "duplicate_event_id",
                     "recover_event_ids",
                 ));
             }
-            events.push(stored.event);
+            events.push(event);
             next_sequence = increment_sequence(next_sequence)?;
         }
     }
@@ -635,6 +634,17 @@ fn unix_ms_now() -> GlobalLedgerResult<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .map_err(|_| GlobalLedgerError::fatal("clock_before_epoch", "read_clock"))
+}
+
+fn recovery_event_id(timestamp_unix_ms: u64, sequence: u64) -> EventId {
+    let mut digest = Sha256::new();
+    digest.update(b"actingcommand.ledger.recovery.v2");
+    digest.update(timestamp_unix_ms.to_le_bytes());
+    digest.update(sequence.to_le_bytes());
+    let digest = digest.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    EventId::new(bytes)
 }
 
 fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {

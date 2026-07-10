@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::PersistedEvent;
+use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
-    ClassifiedField, CommandPayloadDraft, CommandStage, EventActor, EventDraft, EventLinks,
-    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, FieldRedactor, PersistedEvent,
-    ProjectionProfile, SubscriptionCursor,
+    ActionId, AuditInput, CausationId, CommandPayloadDraft, CorrelationId, EventActor, EventDraft,
+    EventId, EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource, EventType, FrameId,
+    InstanceId, LeaseId, ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
+    SecretField, SecretFingerprinter, StaticCode, SubscriptionCursor, TaskId,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +23,61 @@ fn config(temp: &TempDir, owner_id: &str) -> GlobalLedgerConfig {
     GlobalLedgerConfig::new(temp.path(), owner_id)
         .with_segment_max_bytes(16 * 1024)
         .with_ingress_capacity(8)
+}
+
+fn opaque_id(label: &str) -> [u8; 16] {
+    let digest = Sha256::digest(label.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes
+}
+
+fn code(value: &'static str) -> StaticCode {
+    StaticCode::new(value).expect("static code")
+}
+
+fn event_id(value: &str) -> EventId {
+    EventId::new(opaque_id(value))
+}
+
+fn instance_id(value: &str) -> InstanceId {
+    InstanceId::new(opaque_id(value))
+}
+
+fn request_id(value: &str) -> RequestId {
+    RequestId::new(opaque_id(value))
+}
+
+fn correlation_id(value: &str) -> CorrelationId {
+    CorrelationId::new(opaque_id(value))
+}
+
+fn causation_id(value: &str) -> CausationId {
+    CausationId::new(opaque_id(value))
+}
+
+fn task_id(value: &str) -> TaskId {
+    TaskId::new(opaque_id(value))
+}
+
+fn run_id(value: &str) -> RunId {
+    RunId::new(opaque_id(value))
+}
+
+fn lease_id(value: &str) -> LeaseId {
+    LeaseId::new(opaque_id(value))
+}
+
+fn frame_id(value: &str) -> FrameId {
+    FrameId::new(opaque_id(value))
+}
+
+fn action_id(value: &str) -> ActionId {
+    ActionId::new(opaque_id(value))
+}
+
+fn recognition_id(value: &str) -> RecognitionId {
+    RecognitionId::new(opaque_id(value))
 }
 
 #[test]
@@ -75,29 +134,25 @@ fn empty_ledger_reopens_without_treating_the_segment_as_a_blank_record() {
         .expect("close second owner");
 }
 
-fn event(
-    event_id: &str,
-) -> actingcommand_contract::SanitizedEventDraft<actingcommand_contract::CommandPayload> {
-    event_with_links(event_id, EventLinks::default(), vec![])
+fn event(event_label: &str) -> actingcommand_contract::SanitizedEventDraft {
+    event_with_links(event_label, EventLinks::default(), AuditInput::new())
 }
 
 fn event_with_links(
-    event_id: &str,
+    event_label: &str,
     links: EventLinks,
-    fields: Vec<ClassifiedField>,
-) -> actingcommand_contract::SanitizedEventDraft<actingcommand_contract::CommandPayload> {
-    let payload =
-        CommandPayloadDraft::new(CommandStage::Received, "runtime.start", fields).expect("payload");
+    audit: AuditInput,
+) -> actingcommand_contract::SanitizedEventDraft {
+    let payload = CommandPayloadDraft::received(code("runtime.start"), audit);
     EventDraft::new(
-        event_id,
+        event_id(event_label),
         1_752_147_200_000,
-        EventType::CommandReceived,
         EventSeverity::Info,
-        EventOrigin::new(EventSource::Cli, "actingctl", EventActor::User).expect("origin"),
+        EventOrigin::new(EventSource::Cli, code("actingctl"), EventActor::User),
         links,
-        payload,
+        payload.into(),
     )
-    .sanitize(&Sha256FieldRedactor::new(b"test-private-salt").expect("redactor"))
+    .sanitize(&Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"))
     .expect("sanitize")
 }
 
@@ -106,62 +161,65 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
     ledger.append(event("evt-before")).expect("append before");
-    let links = EventLinks {
-        instance_id: Some("instance-1".to_string()),
-        request_id: Some("request-1".to_string()),
-        correlation_id: Some("correlation-1".to_string()),
-        causation_id: Some("causation-1".to_string()),
-        task_id: Some("task-1".to_string()),
-        run_id: Some("run-1".to_string()),
-        lease_id: Some("lease-1".to_string()),
-        frame_id: Some("frame-1".to_string()),
-        action_id: Some("action-1".to_string()),
-        reco_id: Some("reco-1".to_string()),
-    };
+    let links = EventLinks::default()
+        .with_instance_id(instance_id("instance-1"))
+        .with_request_id(request_id("request-1"))
+        .with_correlation_id(correlation_id("correlation-1"))
+        .with_causation_id(causation_id("causation-1"))
+        .with_task_id(task_id("task-1"))
+        .with_run_id(run_id("run-1"))
+        .with_lease_id(lease_id("lease-1"))
+        .with_frame_id(frame_id("frame-1"))
+        .with_action_id(action_id("action-1"))
+        .with_recognition_id(recognition_id("reco-1"));
     let correlated = ledger
-        .append(event_with_links("evt-correlated", links.clone(), vec![]))
+        .append(event_with_links(
+            "evt-correlated",
+            links.clone(),
+            AuditInput::new(),
+        ))
         .expect("append correlated");
     ledger.append(event("evt-after")).expect("append after");
 
     let filters = [
         EventQuery {
-            instance_id: links.instance_id.clone(),
+            instance_id: links.instance_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            request_id: links.request_id.clone(),
+            request_id: links.request_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            correlation_id: links.correlation_id.clone(),
+            correlation_id: links.correlation_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            causation_id: links.causation_id.clone(),
+            causation_id: links.causation_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            task_id: links.task_id.clone(),
+            task_id: links.task_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            run_id: links.run_id.clone(),
+            run_id: links.run_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            lease_id: links.lease_id.clone(),
+            lease_id: links.lease_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            frame_id: links.frame_id.clone(),
+            frame_id: links.frame_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            action_id: links.action_id.clone(),
+            action_id: links.action_id().copied(),
             ..EventQuery::default()
         },
         EventQuery {
-            reco_id: links.reco_id.clone(),
+            recognition_id: links.recognition_id().copied(),
             ..EventQuery::default()
         },
     ];
@@ -174,8 +232,8 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
     assert_eq!(
         ledger
             .query(EventQuery {
-                from_sequence: Some(correlated.sequence),
-                to_sequence: Some(correlated.sequence),
+                from_sequence: Some(correlated.sequence()),
+                to_sequence: Some(correlated.sequence()),
                 ..EventQuery::default()
             })
             .expect("sequence query"),
@@ -192,7 +250,7 @@ fn subscription_replays_after_cursor_then_receives_live_events() {
 
     let mut subscription = ledger
         .subscribe(SubscriptionCursor {
-            after_sequence: first.sequence,
+            after_sequence: first.sequence(),
         })
         .expect("subscribe");
     assert_eq!(
@@ -428,18 +486,15 @@ fn cli_projection_is_concise_and_correlated() {
     ledger
         .append(event_with_links(
             "evt-cli",
-            EventLinks {
-                correlation_id: Some("correlation-cli".to_string()),
-                ..EventLinks::default()
-            },
-            vec![ClassifiedField::public("detail", "verbose-value").expect("field")],
+            EventLinks::default().with_correlation_id(correlation_id("correlation-cli")),
+            AuditInput::new(),
         ))
         .expect("append");
 
     let projected = ledger
         .project(
             EventQuery {
-                correlation_id: Some("correlation-cli".to_string()),
+                correlation_id: Some(correlation_id("correlation-cli")),
                 ..EventQuery::default()
             },
             ProjectionProfile::Cli,
@@ -448,10 +503,10 @@ fn cli_projection_is_concise_and_correlated() {
 
     assert_eq!(projected.len(), 1);
     assert_eq!(
-        projected[0].links.correlation_id.as_deref(),
-        Some("correlation-cli")
+        projected[0].links.correlation_id(),
+        Some(&correlation_id("correlation-cli"))
     );
-    assert!(projected[0].payload.is_none());
+    assert!(matches!(projected[0].payload, ProjectionPayload::Omitted));
 }
 
 #[test]
@@ -463,10 +518,7 @@ fn ui_projection_exposes_sanitized_state_without_secret_fields() {
         .append(event_with_links(
             "evt-ui",
             EventLinks::default(),
-            vec![
-                ClassifiedField::public("state", "admitted").expect("state field"),
-                ClassifiedField::secret_fingerprint("token", secret).expect("secret field"),
-            ],
+            AuditInput::new().with_account(secret),
         ))
         .expect("append");
 
@@ -475,9 +527,9 @@ fn ui_projection_exposes_sanitized_state_without_secret_fields() {
         .expect("project");
 
     assert_eq!(projected.len(), 1);
-    let payload = projected[0].payload.as_ref().expect("sanitized payload");
-    assert_eq!(payload["subject"], "runtime.start");
-    assert!(!payload.to_string().contains(secret));
+    let payload = serde_json::to_string(&projected[0].payload).expect("sanitized payload");
+    assert!(matches!(projected[0].payload, ProjectionPayload::Public(_)));
+    assert!(!payload.contains(secret));
 }
 
 #[test]
@@ -488,22 +540,20 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
         .append(event_with_links(
             "evt-projection-separation",
             EventLinks::default(),
-            vec![
-                ClassifiedField::public("state", "visible").expect("public field"),
-                ClassifiedField::internal("operator_note", "internal-value")
-                    .expect("internal field"),
-                ClassifiedField::secret_fingerprint("token", "secret-value").expect("secret field"),
-            ],
+            AuditInput::new()
+                .with_account("secret-value")
+                .with_authentication("authentication-value")
+                .with_machine_path("internal-value"),
         ))
         .expect("append");
 
     let ui = ledger
         .project(EventQuery::default(), ProjectionProfile::Ui)
         .expect("UI project");
-    let ui_payload = ui[0].payload.as_ref().expect("UI payload").to_string();
-    assert!(ui_payload.contains("visible"));
+    let ui_payload = serde_json::to_string(&ui[0].payload).expect("UI payload");
     assert!(!ui_payload.contains("internal-value"));
     assert!(!ui_payload.contains("sha256:"));
+    assert!(!ui_payload.contains("authentication_redacted"));
 
     let normal = ledger
         .project(EventQuery::default(), ProjectionProfile::Normal)
@@ -513,11 +563,13 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
     let lab = ledger
         .project(EventQuery::default(), ProjectionProfile::Lab)
         .expect("Lab project");
-    let lab_payload = lab[0].payload.as_ref().expect("Lab payload").to_string();
-    assert!(lab_payload.contains("internal-value"));
+    let lab_payload = serde_json::to_string(&lab[0].payload).expect("Lab payload");
+    assert!(!lab_payload.contains("internal-value"));
+    assert!(lab_payload.contains("[redacted]"));
     assert!(lab_payload.contains("sha256:"));
-    assert_eq!(lab[0].schema_version, persisted.schema_version);
-    assert_eq!(lab[0].sensitivity, persisted.sensitivity);
+    assert!(lab_payload.contains("authentication_redacted"));
+    assert_eq!(lab[0].schema_version, persisted.schema_version());
+    assert_eq!(lab[0].sensitivity, persisted.sensitivity());
 }
 
 #[test]
@@ -527,11 +579,8 @@ fn lab_projection_exposes_full_sanitized_fact() {
     let persisted = ledger
         .append(event_with_links(
             "evt-lab",
-            EventLinks {
-                run_id: Some("run-lab".to_string()),
-                ..EventLinks::default()
-            },
-            vec![ClassifiedField::public("detail", "forensic-value").expect("field")],
+            EventLinks::default().with_run_id(run_id("run-lab")),
+            AuditInput::new(),
         ))
         .expect("append");
 
@@ -540,25 +589,30 @@ fn lab_projection_exposes_full_sanitized_fact() {
         .expect("project");
 
     assert_eq!(projected.len(), 1);
-    assert_eq!(projected[0].sequence, persisted.sequence);
-    assert_eq!(projected[0].schema_version, persisted.schema_version);
-    assert_eq!(projected[0].sensitivity, persisted.sensitivity);
-    assert_eq!(projected[0].links, persisted.links);
-    assert_eq!(projected[0].payload.as_ref(), Some(&persisted.payload));
-    assert_eq!(projected[0].artifacts, persisted.artifacts);
+    assert_eq!(projected[0].sequence, persisted.sequence());
+    assert_eq!(projected[0].schema_version, persisted.schema_version());
+    assert_eq!(projected[0].sensitivity, persisted.sensitivity());
+    assert_eq!(&projected[0].links, persisted.links());
+    assert_eq!(
+        projected[0].payload,
+        ProjectionPayload::Full(persisted.payload().clone())
+    );
+    assert!(projected[0].artifacts.is_empty());
 }
 
 #[test]
 fn indexes_rebuild_after_reopen() {
     let temp = TempDir::new().expect("temp");
-    let links = EventLinks {
-        request_id: Some("request-reopen".to_string()),
-        correlation_id: Some("correlation-reopen".to_string()),
-        ..EventLinks::default()
-    };
+    let links = EventLinks::default()
+        .with_request_id(request_id("request-reopen"))
+        .with_correlation_id(correlation_id("correlation-reopen"));
     let first = GlobalLedger::open(config(&temp, "writer-one")).expect("first ledger");
     let appended = first
-        .append(event_with_links("evt-reopen", links.clone(), vec![]))
+        .append(event_with_links(
+            "evt-reopen",
+            links.clone(),
+            AuditInput::new(),
+        ))
         .expect("append");
     first.close().expect("close first");
 
@@ -566,8 +620,8 @@ fn indexes_rebuild_after_reopen() {
     assert_eq!(
         reopened
             .query(EventQuery {
-                request_id: links.request_id,
-                correlation_id: links.correlation_id,
+                request_id: links.request_id().copied(),
+                correlation_id: links.correlation_id().copied(),
                 ..EventQuery::default()
             })
             .expect("query rebuilt index"),
@@ -582,41 +636,35 @@ fn query_intersects_multiple_links_in_sequence_order() {
     let first = ledger
         .append(event_with_links(
             "evt-intersection-first",
-            EventLinks {
-                instance_id: Some("instance-intersection".to_string()),
-                request_id: Some("request-intersection".to_string()),
-                ..EventLinks::default()
-            },
-            vec![],
+            EventLinks::default()
+                .with_instance_id(instance_id("instance-intersection"))
+                .with_request_id(request_id("request-intersection")),
+            AuditInput::new(),
         ))
         .expect("first matching event");
     ledger
         .append(event_with_links(
             "evt-intersection-other",
-            EventLinks {
-                instance_id: Some("instance-intersection".to_string()),
-                request_id: Some("request-other".to_string()),
-                ..EventLinks::default()
-            },
-            vec![],
+            EventLinks::default()
+                .with_instance_id(instance_id("instance-intersection"))
+                .with_request_id(request_id("request-other")),
+            AuditInput::new(),
         ))
         .expect("nonmatching event");
     let second = ledger
         .append(event_with_links(
             "evt-intersection-second",
-            EventLinks {
-                instance_id: Some("instance-intersection".to_string()),
-                request_id: Some("request-intersection".to_string()),
-                ..EventLinks::default()
-            },
-            vec![],
+            EventLinks::default()
+                .with_instance_id(instance_id("instance-intersection"))
+                .with_request_id(request_id("request-intersection")),
+            AuditInput::new(),
         ))
         .expect("second matching event");
 
     let matching = ledger
         .query(EventQuery {
-            instance_id: Some("instance-intersection".to_string()),
-            request_id: Some("request-intersection".to_string()),
+            instance_id: Some(instance_id("instance-intersection")),
+            request_id: Some(request_id("request-intersection")),
             ..EventQuery::default()
         })
         .expect("intersection query");
@@ -624,9 +672,9 @@ fn query_intersects_multiple_links_in_sequence_order() {
     assert_eq!(
         ledger
             .query(EventQuery {
-                instance_id: Some("instance-intersection".to_string()),
-                request_id: Some("request-intersection".to_string()),
-                from_sequence: Some(second.sequence),
+                instance_id: Some(instance_id("instance-intersection")),
+                request_id: Some(request_id("request-intersection")),
+                from_sequence: Some(second.sequence()),
                 ..EventQuery::default()
             })
             .expect("bounded intersection query"),
@@ -650,7 +698,9 @@ fn read_events(root: &Path) -> Vec<PersistedEvent> {
         let text = fs::read_to_string(path).expect("segment text");
         for line in text.lines() {
             let value: Value = serde_json::from_str(line).expect("line JSON");
-            events.push(serde_json::from_value(value["event"].clone()).expect("persisted event"));
+            let stored: StoredEventRecord =
+                serde_json::from_value(value["event"].clone()).expect("stored event");
+            events.push(stored.into_event().expect("persisted event"));
         }
     }
     events
@@ -675,28 +725,28 @@ fn write_owner_metadata(root: &Path, active: bool, valid: bool) {
 }
 
 #[test]
-fn sha256_redactor_requires_non_empty_private_salt() {
-    let error = Sha256FieldRedactor::new([]).expect_err("empty salt must fail");
+fn sha256_fingerprinter_requires_non_empty_private_salt() {
+    let error = Sha256SecretFingerprinter::new([]).expect_err("empty fingerprinter salt must fail");
 
     assert_eq!(error.code(), "invalid_redactor_config");
 }
 
 #[test]
-fn sha256_redactor_returns_fixed_lowercase_fingerprint() {
-    let redactor = Sha256FieldRedactor::new(b"private-salt").expect("redactor");
+fn sha256_fingerprinter_returns_fixed_lowercase_fingerprint() {
+    let fingerprinter = Sha256SecretFingerprinter::new(b"private-salt").expect("fingerprinter");
 
-    let fingerprint = redactor
-        .fingerprint("token", "secret-value")
+    let fingerprint = fingerprinter
+        .fingerprint(SecretField::AccountIdentity, "secret-value")
         .expect("fingerprint");
 
-    assert!(fingerprint.starts_with("sha256:"));
-    assert_eq!(fingerprint.len(), 71);
+    assert!(fingerprint.as_str().starts_with("sha256:"));
+    assert_eq!(fingerprint.as_str().len(), 71);
     assert!(
-        fingerprint[7..]
+        fingerprint.as_str()[7..]
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     );
-    assert!(!fingerprint.contains("secret-value"));
+    assert!(!fingerprint.as_str().contains("secret-value"));
 }
 
 #[test]
@@ -822,8 +872,8 @@ fn stale_active_owner_is_recovered_explicitly() {
 
     let events = read_events(temp.path());
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event_type, EventType::LedgerRecovered);
-    assert_eq!(events[0].sequence, 1);
+    assert_eq!(events[0].event_type(), EventType::LedgerRecovered);
+    assert_eq!(events[0].sequence(), 1);
 }
 
 #[test]
@@ -831,7 +881,10 @@ fn append_assigns_contiguous_sequences_across_reopen() {
     let temp = TempDir::new().expect("temp");
     let first = GlobalLedger::open(config(&temp, "writer-one")).expect("first");
     assert_eq!(
-        first.append(event("evt-one")).expect("append one").sequence,
+        first
+            .append(event("evt-one"))
+            .expect("append one")
+            .sequence(),
         1
     );
     first.close().expect("close first");
@@ -841,14 +894,14 @@ fn append_assigns_contiguous_sequences_across_reopen() {
         second
             .append(event("evt-two"))
             .expect("append two")
-            .sequence,
+            .sequence(),
         2
     );
     second.close().expect("close second");
 
     let sequences = read_events(temp.path())
         .into_iter()
-        .map(|event| event.sequence)
+        .map(|event| event.sequence())
         .collect::<Vec<_>>();
     assert_eq!(sequences, vec![1, 2]);
 }
@@ -872,15 +925,15 @@ fn truncated_final_tail_is_quarantined_and_reported() {
         recovered
             .append(event("evt-after-recovery"))
             .expect("append after recovery")
-            .sequence,
+            .sequence(),
         3
     );
     recovered.close().expect("close recovered");
 
     let events = read_events(temp.path());
-    assert_eq!(events[0].event_id, "evt-one");
-    assert_eq!(events[1].event_type, EventType::LedgerRecovered);
-    assert_eq!(events[2].event_id, "evt-after-recovery");
+    assert_eq!(events[0].event_id(), &event_id("evt-one"));
+    assert_eq!(events[1].event_type(), EventType::LedgerRecovered);
+    assert_eq!(events[2].event_id(), &event_id("evt-after-recovery"));
     let quarantine_count = fs::read_dir(temp.path().join("quarantine"))
         .expect("quarantine")
         .count();
@@ -937,8 +990,8 @@ fn duplicate_json_key_is_fatal_without_disclosing_the_hidden_value() {
     let text = fs::read_to_string(&segment).expect("segment text");
     let encoded_secret = serde_json::to_string(secret).expect("encode secret");
     let forged = text.replacen(
-        r#""subject":"runtime.start""#,
-        &format!(r#""subject":{encoded_secret},"subject":"runtime.start""#),
+        r#""action":"runtime.start""#,
+        &format!(r#""action":{encoded_secret},"action":"runtime.start""#),
         1,
     );
     assert_ne!(forged, text);

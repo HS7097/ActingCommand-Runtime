@@ -9,18 +9,56 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use actingcommand_contract::{
-    ClassifiedField, ClientActionKind, ClientPayload, ClientPayloadDraft, EventActor, EventDraft,
-    EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource, EventType, InputPayload,
-    InputPayloadDraft, InputTransition, PayloadKind, ProjectionProfile, SanitizationError,
-    SchedulerDecision, SchedulerPayload, SchedulerPayloadDraft,
+    ActionId, AuditInput, ClientPayloadDraft, CorrelationId, EffectDisposition, EventActor,
+    EventDraft, EventId, EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource,
+    EventType, InputPayloadDraft, ProjectionProfile, SanitizationError, SchedulerPayloadDraft,
+    SecretField, SecretFingerprinter, Sha256Fingerprint, StaticCode,
 };
 use actingcommand_ledger::critical::{CriticalEventPlan, CriticalExecutionError, execute_critical};
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256FieldRedactor};
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_ROOT";
 const CHILD_READY_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_READY";
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy)]
+enum ClientKind {
+    UiAction,
+    CliCommand,
+    LabRequest,
+}
+
+#[derive(Clone, Copy)]
+enum InputKind {
+    Intent,
+    Committed,
+    Failed,
+}
+
+fn opaque_id(label: &str) -> [u8; 16] {
+    let digest = Sha256::digest(label.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes
+}
+
+fn code(value: &'static str) -> StaticCode {
+    StaticCode::new(value).expect("static code")
+}
+
+fn event_id(value: &str) -> EventId {
+    EventId::new(opaque_id(value))
+}
+
+fn correlation_id(value: &str) -> CorrelationId {
+    CorrelationId::new(opaque_id(value))
+}
+
+fn action_id(value: &str) -> ActionId {
+    ActionId::new(opaque_id(value))
+}
 
 fn config(root: &Path, owner_id: &str) -> GlobalLedgerConfig {
     GlobalLedgerConfig::new(root, owner_id)
@@ -28,95 +66,121 @@ fn config(root: &Path, owner_id: &str) -> GlobalLedgerConfig {
         .with_ingress_capacity(8)
 }
 
-fn redactor() -> Sha256FieldRedactor {
-    Sha256FieldRedactor::new(b"global-ledger-process-test-salt").expect("redactor")
+fn fingerprinter() -> Sha256SecretFingerprinter {
+    Sha256SecretFingerprinter::new(b"global-ledger-process-test-salt").expect("fingerprinter")
 }
 
 fn client_event(
     event_id: &str,
-    kind: ClientActionKind,
+    kind: ClientKind,
     source: EventSource,
     actor: EventActor,
     correlation_id: Option<&str>,
-    fields: Vec<ClassifiedField>,
-) -> actingcommand_contract::SanitizedEventDraft<ClientPayload> {
-    client_draft(event_id, kind, source, actor, correlation_id, fields)
-        .sanitize(&redactor())
+    audit: AuditInput,
+) -> actingcommand_contract::SanitizedEventDraft {
+    client_draft(event_id, kind, source, actor, correlation_id, audit)
+        .sanitize(&fingerprinter())
         .expect("sanitize client event")
 }
 
 fn client_draft(
     event_id: &str,
-    kind: ClientActionKind,
+    kind: ClientKind,
     source: EventSource,
     actor: EventActor,
     correlation_id: Option<&str>,
-    fields: Vec<ClassifiedField>,
-) -> EventDraft<ClientPayloadDraft> {
+    audit: AuditInput,
+) -> EventDraft {
+    let payload = match kind {
+        ClientKind::UiAction => ClientPayloadDraft::ui_action(code("process.acceptance"), audit),
+        ClientKind::CliCommand => {
+            ClientPayloadDraft::cli_command(code("process.acceptance"), audit)
+        }
+        ClientKind::LabRequest => {
+            ClientPayloadDraft::lab_request(code("process.acceptance"), audit)
+        }
+    };
+    let mut links = EventLinks::default();
+    if let Some(value) = correlation_id {
+        links = links.with_correlation_id(self::correlation_id(value));
+    }
     EventDraft::new(
-        event_id,
+        self::event_id(event_id),
         1_752_147_200_000,
-        kind.event_type(),
         EventSeverity::Info,
-        EventOrigin::new(source, "process-test", actor).expect("origin"),
-        EventLinks {
-            correlation_id: correlation_id.map(str::to_string),
-            ..EventLinks::default()
-        },
-        ClientPayloadDraft::new(kind, "process.acceptance", fields).expect("client payload"),
+        EventOrigin::new(source, code("process-test"), actor),
+        links,
+        payload.into(),
     )
 }
 
 struct FailingBoundaryRedactor;
 
-impl actingcommand_contract::FieldRedactor for FailingBoundaryRedactor {
-    fn fingerprint(&self, _field_name: &str, _value: &str) -> Result<String, SanitizationError> {
-        Err(SanitizationError::redactor_failure())
+impl SecretFingerprinter for FailingBoundaryRedactor {
+    fn fingerprint(
+        &self,
+        _field: SecretField,
+        _original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
+        Err(SanitizationError::fingerprinter_failure())
     }
 }
 
 fn scheduler_event(
     event_id: &str,
     correlation_id: &str,
-) -> actingcommand_contract::SanitizedEventDraft<SchedulerPayload> {
-    let decision = SchedulerDecision::Admitted;
+) -> actingcommand_contract::SanitizedEventDraft {
     EventDraft::new(
-        event_id,
+        self::event_id(event_id),
         1_752_147_200_000,
-        decision.event_type(),
         EventSeverity::Info,
-        EventOrigin::new(EventSource::Scheduler, "scheduler", EventActor::Scheduler)
-            .expect("origin"),
-        EventLinks {
-            correlation_id: Some(correlation_id.to_string()),
-            ..EventLinks::default()
-        },
-        SchedulerPayloadDraft::new(decision, "schedule.admit", vec![]).expect("scheduler payload"),
+        EventOrigin::new(
+            EventSource::Scheduler,
+            code("scheduler"),
+            EventActor::Scheduler,
+        ),
+        EventLinks::default().with_correlation_id(self::correlation_id(correlation_id)),
+        SchedulerPayloadDraft::admitted(code("schedule.admit"), AuditInput::new()).into(),
     )
-    .sanitize(&redactor())
+    .sanitize(&fingerprinter())
     .expect("sanitize scheduler event")
 }
 
 fn input_event(
     event_id: &str,
-    transition: InputTransition,
+    transition: InputKind,
     correlation_id: &str,
     action_id: &str,
-) -> actingcommand_contract::SanitizedEventDraft<InputPayload> {
+) -> actingcommand_contract::SanitizedEventDraft {
+    let payload = match transition {
+        InputKind::Intent => InputPayloadDraft::intent(code("input.tap"), AuditInput::new()),
+        InputKind::Committed => InputPayloadDraft::committed(
+            code("input.tap"),
+            EffectDisposition::Performed,
+            AuditInput::new(),
+        ),
+        InputKind::Failed => InputPayloadDraft::failed(
+            code("input.tap"),
+            code("input.failed"),
+            EffectDisposition::Indeterminate,
+            AuditInput::new(),
+        ),
+    };
     EventDraft::new(
-        event_id,
+        self::event_id(event_id),
         1_752_147_200_000,
-        transition.event_type(),
         EventSeverity::Info,
-        EventOrigin::new(EventSource::Device, "device-proxy", EventActor::Runtime).expect("origin"),
-        EventLinks {
-            correlation_id: Some(correlation_id.to_string()),
-            action_id: Some(action_id.to_string()),
-            ..EventLinks::default()
-        },
-        InputPayloadDraft::new(transition, "input.tap", vec![]).expect("input payload"),
+        EventOrigin::new(
+            EventSource::Device,
+            code("device-proxy"),
+            EventActor::Runtime,
+        ),
+        EventLinks::default()
+            .with_correlation_id(self::correlation_id(correlation_id))
+            .with_action_id(self::action_id(action_id)),
+        payload.into(),
     )
-    .sanitize(&redactor())
+    .sanitize(&fingerprinter())
     .expect("sanitize input event")
 }
 
@@ -130,11 +194,11 @@ fn ledger_writer_process_child() {
     ledger
         .append(client_event(
             "child-cli-command",
-            ClientActionKind::CliCommand,
+            ClientKind::CliCommand,
             EventSource::Cli,
             EventActor::Cli,
             Some("process-recovery-correlation"),
-            vec![],
+            AuditInput::new(),
         ))
         .expect("child appends durable event");
     fs::write(ready_path, "ready").expect("child writes ready marker");
@@ -170,13 +234,13 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
     assert_eq!(
         events
             .iter()
-            .map(|event| event.sequence)
+            .map(|event| event.sequence())
             .collect::<Vec<_>>(),
         vec![1, 2],
         "recovery preserves contiguous sequence numbers"
     );
-    assert_eq!(events[0].event_id, "child-cli-command");
-    assert_eq!(events[1].event_type, EventType::LedgerRecovered);
+    assert_eq!(events[0].event_id(), &event_id("child-cli-command"));
+    assert_eq!(events[1].event_type(), EventType::LedgerRecovered);
     ledger.close().expect("close recovered ledger");
 }
 
@@ -190,11 +254,11 @@ fn five_sources_share_one_correlated_ledger() {
     ledger
         .append(client_event(
             "cli-command",
-            ClientActionKind::CliCommand,
+            ClientKind::CliCommand,
             EventSource::Cli,
             EventActor::Cli,
             Some(correlation_id),
-            vec![],
+            AuditInput::new(),
         ))
         .expect("append cli command");
     ledger
@@ -203,76 +267,70 @@ fn five_sources_share_one_correlated_ledger() {
     let plan = CriticalEventPlan::new(
         input_event(
             "device-input-intent",
-            InputTransition::Intent,
+            InputKind::Intent,
             correlation_id,
             action_id,
-        )
-        .erase()
-        .expect("erase input intent"),
+        ),
         input_event(
             "device-input-outcome",
-            InputTransition::Committed,
+            InputKind::Committed,
             correlation_id,
             action_id,
-        )
-        .erase()
-        .expect("erase input outcome"),
+        ),
         input_event(
             "device-input-failure",
-            InputTransition::Failed,
+            InputKind::Failed,
             correlation_id,
             action_id,
-        )
-        .erase()
-        .expect("erase input failure"),
+        ),
     )
     .expect("critical input plan");
     execute_critical(&ledger, plan, || Ok::<(), ()>(())).expect("record input outcome");
     ledger
         .append(client_event(
             "ui-action",
-            ClientActionKind::UiAction,
+            ClientKind::UiAction,
             EventSource::Ui,
             EventActor::Ui,
             Some(correlation_id),
-            vec![],
+            AuditInput::new(),
         ))
         .expect("append UI action");
     ledger
         .append(client_event(
             "lab-request",
-            ClientActionKind::LabRequest,
+            ClientKind::LabRequest,
             EventSource::Lab,
             EventActor::Lab,
             Some(correlation_id),
-            vec![],
+            AuditInput::new(),
         ))
         .expect("append Lab request");
 
     let events = ledger
         .query(EventQuery {
-            correlation_id: Some(correlation_id.to_string()),
+            correlation_id: Some(self::correlation_id(correlation_id)),
             ..EventQuery::default()
         })
         .expect("query correlated events");
     assert_eq!(
         events
             .iter()
-            .map(|event| event.event_id.as_str())
+            .map(|event| *event.event_id())
             .collect::<Vec<_>>(),
         vec![
-            "cli-command",
-            "scheduler-decision",
-            "device-input-intent",
-            "device-input-outcome",
-            "ui-action",
-            "lab-request",
+            event_id("cli-command"),
+            event_id("scheduler-decision"),
+            event_id("device-input-intent"),
+            event_id("device-input-outcome"),
+            event_id("ui-action"),
+            event_id("lab-request"),
         ]
     );
     assert_eq!(
         events
             .iter()
-            .map(|event| event.origin.source())
+            .map(|event| event.origin().source())
             .collect::<Vec<_>>(),
         vec![
             EventSource::Cli,
@@ -286,7 +344,7 @@ fn five_sources_share_one_correlated_ledger() {
     assert_eq!(
         events
             .iter()
-            .map(|event| event.sequence)
+            .map(|event| event.sequence())
             .collect::<Vec<_>>(),
         vec![1, 2, 3, 4, 5, 6]
     );
@@ -303,20 +361,18 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
     let sentinels = [TOKEN, ACCOUNT, MACHINE_PATH, ENDPOINT];
 
     let secret_fields = || {
-        vec![
-            ClassifiedField::secret_fingerprint("access-token", TOKEN).expect("token field"),
-            ClassifiedField::secret_fingerprint("account-id", ACCOUNT).expect("account field"),
-            ClassifiedField::secret_fingerprint("machine-path", MACHINE_PATH)
-                .expect("machine path field"),
-            ClassifiedField::secret_fingerprint("endpoint", ENDPOINT).expect("endpoint field"),
-        ]
+        AuditInput::new()
+            .with_authentication(TOKEN)
+            .with_account(ACCOUNT)
+            .with_machine_path(MACHINE_PATH)
+            .with_device_endpoint(ENDPOINT)
     };
 
     let temp = TempDir::new().expect("temp root");
     let ledger = GlobalLedger::open(config(temp.path(), "redaction-writer")).expect("ledger");
     let event = client_event(
         "secret-bearing-command",
-        ClientActionKind::CliCommand,
+        ClientKind::CliCommand,
         EventSource::Cli,
         EventActor::Cli,
         Some(CORRELATION_ID),
@@ -329,12 +385,12 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
         .expect("reopen redaction ledger");
     let query = ledger
         .query(EventQuery {
-            correlation_id: Some(CORRELATION_ID.to_string()),
+            correlation_id: Some(correlation_id(CORRELATION_ID)),
             ..EventQuery::default()
         })
         .expect("query recovered correlation index");
     assert_eq!(query.len(), 1, "indexed query must retain the event");
-    assert_eq!(query[0].event_id, "secret-bearing-command");
+    assert_eq!(query[0].event_id(), &event_id("secret-bearing-command"));
 
     let duplicate = ledger
         .append(event)
@@ -345,7 +401,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        correlation_id: Some(correlation_id(CORRELATION_ID)),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Cli,
@@ -357,7 +413,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        correlation_id: Some(correlation_id(CORRELATION_ID)),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Ui,
@@ -369,7 +425,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
             ledger
                 .project(
                     EventQuery {
-                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        correlation_id: Some(correlation_id(CORRELATION_ID)),
                         ..EventQuery::default()
                     },
                     ProjectionProfile::Lab,
@@ -379,13 +435,13 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
     ];
     for (label, projection) in &projections {
         assert_eq!(projection.len(), 1, "{label} must retain the event");
-        assert_eq!(projection[0].event_id, "secret-bearing-command");
+        assert_eq!(projection[0].event_id, event_id("secret-bearing-command"));
         let projection_text = serde_json::to_string(projection).expect("serialize projection");
         assert_sentinels_absent(label, &projection_text, &sentinels);
     }
     let boundary_error = client_draft(
         "redaction-boundary-error",
-        ClientActionKind::CliCommand,
+        ClientKind::CliCommand,
         EventSource::Cli,
         EventActor::Cli,
         Some(CORRELATION_ID),
@@ -393,7 +449,7 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
     )
     .sanitize(&FailingBoundaryRedactor)
     .expect_err("redaction-boundary failure must surface");
-    assert_eq!(boundary_error.code(), "redactor_failed");
+    assert_eq!(boundary_error.code(), "fingerprinter_failed");
 
     let query_text = serde_json::to_string(&query).expect("serialize query");
     let error_text = format!("{duplicate:?}{duplicate}{boundary_error:?}{boundary_error}");
@@ -414,7 +470,7 @@ fn critical_append_failure_blocks_side_effect() {
     let ledger = GlobalLedger::open(config(temp.path(), "critical-writer")).expect("ledger");
     let intent = input_event(
         "duplicate-critical-intent",
-        InputTransition::Intent,
+        InputKind::Intent,
         "critical-correlation",
         "critical-action",
     );
@@ -422,23 +478,19 @@ fn critical_append_failure_blocks_side_effect() {
         .append(intent.clone())
         .expect("seed duplicate critical intent");
     let plan = CriticalEventPlan::new(
-        intent.erase().expect("erase intent"),
+        intent,
         input_event(
             "critical-success",
-            InputTransition::Committed,
+            InputKind::Committed,
             "critical-correlation",
             "critical-action",
-        )
-        .erase()
-        .expect("erase success"),
+        ),
         input_event(
             "critical-failure",
-            InputTransition::Failed,
+            InputKind::Failed,
             "critical-correlation",
             "critical-action",
-        )
-        .erase()
-        .expect("erase failure"),
+        ),
     )
     .expect("critical plan");
     let action_calls = Cell::new(0);

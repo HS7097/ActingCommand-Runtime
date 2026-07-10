@@ -5,10 +5,10 @@
 mod projection;
 mod storage;
 
+use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventContractError, EventQuery, FieldRedactor, PersistedEvent, ProjectedEvent,
-    ProjectionProfile, SanitizationError, SanitizedEventDraft, SanitizedPayload,
-    SubscriptionCursor,
+    EventQuery, ProjectedEvent, ProjectionProfile, SanitizationError, SanitizedEventDraft,
+    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -109,13 +109,6 @@ impl fmt::Display for GlobalLedgerError {
 
 impl Error for GlobalLedgerError {}
 
-impl From<EventContractError> for GlobalLedgerError {
-    fn from(error: EventContractError) -> Self {
-        let code = error.code();
-        Self::request(code, "erase_sanitized_event")
-    }
-}
-
 #[derive(Clone)]
 pub struct GlobalLedgerConfig {
     root: PathBuf,
@@ -200,20 +193,20 @@ impl GlobalLedgerConfig {
 }
 
 #[derive(Clone)]
-pub struct Sha256FieldRedactor {
+pub struct Sha256SecretFingerprinter {
     private_salt: Vec<u8>,
 }
 
-impl fmt::Debug for Sha256FieldRedactor {
+impl fmt::Debug for Sha256SecretFingerprinter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("Sha256FieldRedactor")
+            .debug_struct("Sha256SecretFingerprinter")
             .field("private_salt", &"<redacted>")
             .finish()
     }
 }
 
-impl Sha256FieldRedactor {
+impl Sha256SecretFingerprinter {
     pub fn new(salt: impl AsRef<[u8]>) -> GlobalLedgerResult<Self> {
         let salt = salt.as_ref();
         if salt.is_empty() {
@@ -228,24 +221,31 @@ impl Sha256FieldRedactor {
     }
 }
 
-impl FieldRedactor for Sha256FieldRedactor {
-    fn fingerprint(&self, field_name: &str, value: &str) -> Result<String, SanitizationError> {
+impl SecretFingerprinter for Sha256SecretFingerprinter {
+    fn fingerprint(
+        &self,
+        field: SecretField,
+        original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
         if self.private_salt.is_empty() {
-            return Err(SanitizationError::redactor_failure());
+            return Err(SanitizationError::fingerprinter_failure());
         }
         let mut digest = Sha256::new();
         digest.update(&self.private_salt);
         digest.update([0]);
-        digest.update(field_name.as_bytes());
+        digest.update(match field {
+            SecretField::AccountIdentity => b"account_identity".as_slice(),
+            SecretField::AuthenticationMaterial => b"authentication_material".as_slice(),
+        });
         digest.update([0]);
-        digest.update(value.as_bytes());
-        Ok(format!("sha256:{:x}", digest.finalize()))
+        digest.update(original.as_bytes());
+        Sha256Fingerprint::new(format!("sha256:{:x}", digest.finalize()), original)
     }
 }
 
 enum WriterCommand {
     Append {
-        draft: Box<actingcommand_contract::ErasedSanitizedEventDraft>,
+        draft: Box<SanitizedEventDraft>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
     Query {
@@ -391,18 +391,7 @@ impl GlobalLedger {
         }
     }
 
-    pub fn append<P: SanitizedPayload>(
-        &self,
-        draft: SanitizedEventDraft<P>,
-    ) -> GlobalLedgerResult<PersistedEvent> {
-        let draft = draft.erase()?;
-        self.append_erased(draft)
-    }
-
-    pub(crate) fn append_erased(
-        &self,
-        draft: actingcommand_contract::ErasedSanitizedEventDraft,
-    ) -> GlobalLedgerResult<PersistedEvent> {
+    pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -606,7 +595,7 @@ fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &Persist
         if subscriber.liveness.upgrade().is_none() {
             return false;
         }
-        if event.sequence <= subscriber.after_sequence {
+        if event.sequence() <= subscriber.after_sequence {
             return true;
         }
         match subscriber.live.try_send(event.clone()) {
@@ -667,3 +656,7 @@ fn is_identifier(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "global/v2_tests.rs"]
+mod v2_tests;

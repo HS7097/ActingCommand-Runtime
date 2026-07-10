@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod critical;
+mod fact;
 pub mod global;
+pub use fact::PersistedEvent;
 pub use global::*;
 
 const ID_SCHEMA_VERSION: &str = "actingcommand.id.v0.1";
