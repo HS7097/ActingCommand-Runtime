@@ -17,7 +17,10 @@ use actingcommand_contract::{
     OriginModule, ProjectionProfile, SanitizationError, SchedulerPayloadDraft, SecretField,
     SecretFingerprinter, Sha256Fingerprint,
 };
-use actingcommand_ledger::critical::{CriticalEventPlan, CriticalExecutionError, execute_critical};
+use actingcommand_ledger::critical::{
+    CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
+    DefiniteEffectDisposition, execute_critical,
+};
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use tempfile::TempDir;
 
@@ -163,6 +166,17 @@ fn input_event(
     correlation_id: &str,
     action_id: &str,
 ) -> actingcommand_contract::SanitizedEventDraft {
+    input_draft(event_id, transition, correlation_id, action_id)
+        .sanitize(&fingerprinter())
+        .expect("sanitize input event")
+}
+
+fn input_draft(
+    event_id: &str,
+    transition: InputKind,
+    correlation_id: &str,
+    action_id: &str,
+) -> EventDraft {
     let payload = match transition {
         InputKind::Intent => InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new()),
         InputKind::Committed => InputPayloadDraft::committed(
@@ -191,8 +205,6 @@ fn input_event(
             .with_action_id(self::action_id(action_id)),
         payload.into(),
     )
-    .sanitize(&fingerprinter())
-    .expect("sanitize input event")
 }
 
 #[test]
@@ -276,27 +288,41 @@ fn five_sources_share_one_correlated_ledger() {
         .append(scheduler_event("scheduler-decision", correlation_id))
         .expect("append scheduler decision");
     let plan = CriticalEventPlan::new(
+        CriticalOperation::DeviceWrite,
         input_event(
             "device-input-intent",
             InputKind::Intent,
             correlation_id,
             action_id,
         ),
-        input_event(
-            "device-input-outcome",
-            InputKind::Committed,
-            correlation_id,
-            action_id,
-        ),
-        input_event(
-            "device-input-failure",
-            InputKind::Failed,
-            correlation_id,
-            action_id,
-        ),
     )
     .expect("critical input plan");
-    execute_critical(&ledger, plan, || Ok::<(), ()>(())).expect("record input outcome");
+    execute_critical::<(), (), _, _>(
+        &ledger,
+        &fingerprinter(),
+        plan,
+        || CriticalActionReport::Succeeded {
+            value: (),
+            effect: DefiniteEffectDisposition::Performed,
+        },
+        |_, _| {
+            Ok(input_draft(
+                "device-input-outcome",
+                InputKind::Committed,
+                correlation_id,
+                action_id,
+            ))
+        },
+        |_, _| {
+            Ok(input_draft(
+                "device-input-failure",
+                InputKind::Failed,
+                correlation_id,
+                action_id,
+            ))
+        },
+    )
+    .expect("record input outcome");
     ledger
         .append(client_event(
             "ui-action",
@@ -489,28 +515,38 @@ fn critical_append_failure_blocks_side_effect() {
     ledger
         .append(intent.clone())
         .expect("seed duplicate critical intent");
-    let plan = CriticalEventPlan::new(
-        intent,
-        input_event(
-            "critical-success",
-            InputKind::Committed,
-            "critical-correlation",
-            "critical-action",
-        ),
-        input_event(
-            "critical-failure",
-            InputKind::Failed,
-            "critical-correlation",
-            "critical-action",
-        ),
-    )
-    .expect("critical plan");
+    let plan =
+        CriticalEventPlan::new(CriticalOperation::DeviceWrite, intent).expect("critical plan");
     let action_calls = Cell::new(0);
 
-    let error = execute_critical(&ledger, plan, || {
-        action_calls.set(action_calls.get() + 1);
-        Ok::<(), ()>(())
-    })
+    let error = execute_critical::<(), (), _, _>(
+        &ledger,
+        &fingerprinter(),
+        plan,
+        || {
+            action_calls.set(action_calls.get() + 1);
+            CriticalActionReport::Succeeded {
+                value: (),
+                effect: DefiniteEffectDisposition::Performed,
+            }
+        },
+        |_, _| {
+            Ok(input_draft(
+                "critical-success",
+                InputKind::Committed,
+                "critical-correlation",
+                "critical-action",
+            ))
+        },
+        |_, _| {
+            Ok(input_draft(
+                "critical-failure",
+                InputKind::Failed,
+                "critical-correlation",
+                "critical-action",
+            ))
+        },
+    )
     .expect_err("intent append failure must block side effect");
 
     assert!(matches!(

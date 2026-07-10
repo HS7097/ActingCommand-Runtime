@@ -1217,6 +1217,14 @@ impl EventPayload {
         sensitivity
     }
 
+    pub fn action(&self) -> EventAction {
+        self.family_payload().detail().action()
+    }
+
+    pub fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.family_payload().detail().effect_disposition()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;

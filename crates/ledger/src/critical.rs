@@ -1,45 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{GlobalLedger, GlobalLedgerError, GlobalLedgerResult, PersistedEvent};
-use actingcommand_contract::{EventType, SanitizedEventDraft};
-use std::cell::Cell;
+use actingcommand_contract::{
+    EffectDisposition, EventDraft, EventLinks, EventType, SanitizationError, SanitizedEventDraft,
+    SecretFingerprinter,
+};
 use std::fmt;
-use std::sync::Once;
-
-thread_local! {
-    static CRITICAL_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-struct CriticalPanicScope;
-
-impl CriticalPanicScope {
-    fn enter() -> Self {
-        install_critical_panic_hook();
-        CRITICAL_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
-        Self
-    }
-}
-
-impl Drop for CriticalPanicScope {
-    fn drop(&mut self) {
-        CRITICAL_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-fn install_critical_panic_hook() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let suppress = CRITICAL_PANIC_DEPTH
-                .try_with(|depth| depth.get() > 0)
-                .unwrap_or(false);
-            if !suppress {
-                previous(info);
-            }
-        }));
-    });
-}
 
 pub trait EventAppender {
     fn append_durable(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent>;
@@ -51,11 +17,126 @@ impl EventAppender for GlobalLedger {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CriticalReceipt<T> {
     value: T,
     intent: PersistedEvent,
     outcome: PersistedEvent,
+}
+
+impl<T> fmt::Debug for CriticalReceipt<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CriticalReceipt")
+            .field("value", &"<redacted-action-value>")
+            .field("intent_sequence", &self.intent.sequence())
+            .field("outcome_sequence", &self.outcome.sequence())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefiniteEffectDisposition {
+    NotPerformed,
+    Performed,
+}
+
+impl From<DefiniteEffectDisposition> for EffectDisposition {
+    fn from(value: DefiniteEffectDisposition) -> Self {
+        match value {
+            DefiniteEffectDisposition::NotPerformed => Self::NotPerformed,
+            DefiniteEffectDisposition::Performed => Self::Performed,
+        }
+    }
+}
+
+pub enum CriticalActionReport<T, E> {
+    Succeeded {
+        value: T,
+        effect: DefiniteEffectDisposition,
+    },
+    Failed {
+        error: E,
+        effect: EffectDisposition,
+    },
+}
+
+impl<T, E> fmt::Debug for CriticalActionReport<T, E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Succeeded { effect, .. } => formatter
+                .debug_struct("Succeeded")
+                .field("value", &"<redacted-action-value>")
+                .field("effect", effect)
+                .finish(),
+            Self::Failed { effect, .. } => formatter
+                .debug_struct("Failed")
+                .field("error", &"<redacted-action-error>")
+                .field("effect", effect)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseTransitionTarget {
+    Granted,
+    Transferred,
+    Released,
+    Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskTerminalTarget {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalOperation {
+    CommandValidation,
+    DeviceWrite,
+    LeaseTransition(LeaseTransitionTarget),
+    TaskTerminal(TaskTerminalTarget),
+}
+
+impl CriticalOperation {
+    fn intent_type(self) -> EventType {
+        match self {
+            Self::CommandValidation => EventType::CommandReceived,
+            Self::DeviceWrite => EventType::InputIntent,
+            Self::LeaseTransition(_) => EventType::LeaseTransitionIntent,
+            Self::TaskTerminal(_) => EventType::TaskTerminalIntent,
+        }
+    }
+
+    fn success_type(self) -> EventType {
+        match self {
+            Self::CommandValidation => EventType::CommandValidated,
+            Self::DeviceWrite => EventType::InputCommitted,
+            Self::LeaseTransition(target) => match target {
+                LeaseTransitionTarget::Granted => EventType::LeaseGranted,
+                LeaseTransitionTarget::Transferred => EventType::LeaseTransferred,
+                LeaseTransitionTarget::Released => EventType::LeaseReleased,
+                LeaseTransitionTarget::Expired => EventType::LeaseExpired,
+            },
+            Self::TaskTerminal(target) => match target {
+                TaskTerminalTarget::Completed => EventType::TaskCompleted,
+                TaskTerminalTarget::Failed => EventType::TaskFailed,
+                TaskTerminalTarget::Cancelled => EventType::TaskCancelled,
+            },
+        }
+    }
+
+    fn failure_type(self) -> EventType {
+        match self {
+            Self::CommandValidation => EventType::CommandRejected,
+            Self::DeviceWrite => EventType::InputFailed,
+            Self::LeaseTransition(_) => EventType::LeaseTransitionFailed,
+            Self::TaskTerminal(_) => EventType::TaskTerminalCommitFailed,
+        }
+    }
 }
 
 impl<T> CriticalReceipt<T> {
@@ -88,6 +169,8 @@ pub enum CriticalPlanError {
     DuplicateEventId,
     UnsupportedIntent,
     OutcomeRoleMismatch,
+    EffectDispositionMismatch,
+    PayloadActionMismatch,
 }
 
 impl fmt::Display for CriticalPlanError {
@@ -103,161 +186,179 @@ impl fmt::Display for CriticalPlanError {
             Self::DuplicateEventId => "critical event ids must be distinct",
             Self::UnsupportedIntent => "critical intent event type is unsupported",
             Self::OutcomeRoleMismatch => "critical outcome event roles do not match the intent",
+            Self::EffectDispositionMismatch => {
+                "critical outcome effect does not match the action report"
+            }
+            Self::PayloadActionMismatch => {
+                "critical outcome action does not match the intent action"
+            }
         };
         formatter.write_str(message)
     }
 }
 
+impl CriticalPlanError {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::EventFamilyMismatch => "critical_event_family_mismatch",
+            Self::MissingCorrelationId => "critical_missing_correlation_id",
+            Self::CorrelationIdMismatch => "critical_correlation_id_mismatch",
+            Self::MissingActionId => "critical_missing_action_id",
+            Self::ActionIdMismatch => "critical_action_id_mismatch",
+            Self::StableIdentityLinkMismatch => "critical_stable_link_mismatch",
+            Self::DuplicateEventType => "critical_duplicate_event_type",
+            Self::DuplicateEventId => "critical_duplicate_event_id",
+            Self::UnsupportedIntent => "critical_unsupported_intent",
+            Self::OutcomeRoleMismatch => "critical_outcome_role_mismatch",
+            Self::EffectDispositionMismatch => "critical_effect_disposition_mismatch",
+            Self::PayloadActionMismatch => "critical_payload_action_mismatch",
+        }
+    }
+}
+
 impl std::error::Error for CriticalPlanError {}
 
-#[derive(Debug)]
 pub struct CriticalEventPlan {
+    operation: CriticalOperation,
     intent: SanitizedEventDraft,
-    success_outcome: SanitizedEventDraft,
-    failure_outcome: SanitizedEventDraft,
 }
 
 impl CriticalEventPlan {
     pub fn new(
+        operation: CriticalOperation,
         intent: SanitizedEventDraft,
-        success_outcome: SanitizedEventDraft,
-        failure_outcome: SanitizedEventDraft,
     ) -> Result<Self, CriticalPlanError> {
-        let event_types = [
-            intent.event_type(),
-            success_outcome.event_type(),
-            failure_outcome.event_type(),
-        ];
-        if event_types
-            .iter()
-            .any(|event_type| event_type.family() != event_types[0].family())
-        {
-            return Err(CriticalPlanError::EventFamilyMismatch);
+        if intent.event_type() != operation.intent_type() {
+            return Err(CriticalPlanError::UnsupportedIntent);
         }
-        if event_types[0] == event_types[1]
-            || event_types[0] == event_types[2]
-            || event_types[1] == event_types[2]
-        {
-            return Err(CriticalPlanError::DuplicateEventType);
+        if intent.links().correlation_id().is_none() {
+            return Err(CriticalPlanError::MissingCorrelationId);
         }
-        validate_event_roles(event_types[0], event_types[1], event_types[2])?;
-
-        let event_ids = [
-            intent.event_id(),
-            success_outcome.event_id(),
-            failure_outcome.event_id(),
-        ];
-        if event_ids[0] == event_ids[1]
-            || event_ids[0] == event_ids[2]
-            || event_ids[1] == event_ids[2]
-        {
-            return Err(CriticalPlanError::DuplicateEventId);
+        if intent.links().action_id().is_none() {
+            return Err(CriticalPlanError::MissingActionId);
         }
+        Ok(Self { operation, intent })
+    }
 
-        validate_matching_link(
-            intent.links().correlation_id(),
-            success_outcome.links().correlation_id(),
-            failure_outcome.links().correlation_id(),
-            CriticalPlanError::MissingCorrelationId,
-            CriticalPlanError::CorrelationIdMismatch,
-        )?;
-        validate_matching_link(
-            intent.links().action_id(),
-            success_outcome.links().action_id(),
-            failure_outcome.links().action_id(),
-            CriticalPlanError::MissingActionId,
-            CriticalPlanError::ActionIdMismatch,
-        )?;
-        validate_stable_identity_links(
-            intent.links(),
-            success_outcome.links(),
-            failure_outcome.links(),
-        )?;
+    pub const fn operation(&self) -> CriticalOperation {
+        self.operation
+    }
 
-        Ok(Self {
-            intent,
-            success_outcome,
-            failure_outcome,
-        })
+    pub const fn intent(&self) -> &SanitizedEventDraft {
+        &self.intent
     }
 }
 
-fn validate_event_roles(
-    intent: EventType,
-    success: EventType,
-    failure: EventType,
-) -> Result<(), CriticalPlanError> {
-    match intent {
-        EventType::InputIntent
-            if matches!(
-                success,
-                EventType::InputCommitted | EventType::InputCompleted
-            ) && failure == EventType::InputFailed =>
-        {
-            Ok(())
-        }
-        EventType::CommandReceived
-            if success == EventType::CommandValidated && failure == EventType::CommandRejected =>
-        {
-            Ok(())
-        }
-        EventType::InputIntent | EventType::CommandReceived => {
-            Err(CriticalPlanError::OutcomeRoleMismatch)
-        }
-        _ => Err(CriticalPlanError::UnsupportedIntent),
+impl fmt::Debug for CriticalEventPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CriticalEventPlan")
+            .field("operation", &self.operation)
+            .field("intent_event_type", &self.intent.event_type())
+            .field("intent", &"<sanitized-intent>")
+            .finish()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OutcomeRole {
+    Success,
+    Failure,
+}
+
+fn validate_outcome(
+    operation: CriticalOperation,
+    intent: &PersistedEvent,
+    outcome: &SanitizedEventDraft,
+    role: OutcomeRole,
+    effect: EffectDisposition,
+) -> Result<(), CriticalPlanError> {
+    if outcome.event_type().family() != intent.event_type().family() {
+        return Err(CriticalPlanError::EventFamilyMismatch);
+    }
+    let expected_type = match role {
+        OutcomeRole::Success => operation.success_type(),
+        OutcomeRole::Failure => operation.failure_type(),
+    };
+    if outcome.event_type() != expected_type {
+        return Err(CriticalPlanError::OutcomeRoleMismatch);
+    }
+    if outcome.event_type() == intent.event_type() {
+        return Err(CriticalPlanError::DuplicateEventType);
+    }
+    if outcome.event_id() == intent.event_id() {
+        return Err(CriticalPlanError::DuplicateEventId);
+    }
+    validate_matching_link(
+        intent.links().correlation_id(),
+        outcome.links().correlation_id(),
+        CriticalPlanError::MissingCorrelationId,
+        CriticalPlanError::CorrelationIdMismatch,
+    )?;
+    validate_matching_link(
+        intent.links().action_id(),
+        outcome.links().action_id(),
+        CriticalPlanError::MissingActionId,
+        CriticalPlanError::ActionIdMismatch,
+    )?;
+    validate_stable_identity_links(intent.links(), outcome.links())?;
+    if outcome.payload().action() != intent.payload().action() {
+        return Err(CriticalPlanError::PayloadActionMismatch);
+    }
+    if outcome.payload().effect_disposition() != Some(effect) {
+        return Err(CriticalPlanError::EffectDispositionMismatch);
+    }
+    Ok(())
 }
 
 fn validate_matching_link<T: PartialEq>(
     intent: Option<&T>,
-    success: Option<&T>,
-    failure: Option<&T>,
+    outcome: Option<&T>,
     missing_error: CriticalPlanError,
     mismatch_error: CriticalPlanError,
 ) -> Result<(), CriticalPlanError> {
     let intent = intent.ok_or(missing_error)?;
-    let success = success.ok_or(missing_error)?;
-    let failure = failure.ok_or(missing_error)?;
-    if intent != success || intent != failure {
+    let outcome = outcome.ok_or(missing_error)?;
+    if intent != outcome {
         return Err(mismatch_error);
     }
     Ok(())
 }
 
 fn validate_stable_identity_links(
-    intent: &actingcommand_contract::EventLinks,
-    success: &actingcommand_contract::EventLinks,
-    failure: &actingcommand_contract::EventLinks,
+    intent: &EventLinks,
+    outcome: &EventLinks,
 ) -> Result<(), CriticalPlanError> {
-    if intent.instance_id() != success.instance_id()
-        || intent.instance_id() != failure.instance_id()
-        || intent.request_id() != success.request_id()
-        || intent.request_id() != failure.request_id()
-        || intent.task_id() != success.task_id()
-        || intent.task_id() != failure.task_id()
-        || intent.run_id() != success.run_id()
-        || intent.run_id() != failure.run_id()
-        || intent.lease_id() != success.lease_id()
-        || intent.lease_id() != failure.lease_id()
+    if intent.instance_id() != outcome.instance_id()
+        || intent.request_id() != outcome.request_id()
+        || intent.task_id() != outcome.task_id()
+        || intent.run_id() != outcome.run_id()
+        || intent.lease_id() != outcome.lease_id()
     {
         return Err(CriticalPlanError::StableIdentityLinkMismatch);
     }
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalOutcomeStage {
+    Build,
+    Sanitize,
+    Validate,
+    Append,
+}
+
 pub enum CriticalExecutionError<E> {
     IntentAppend(GlobalLedgerError),
     Action {
         error: E,
+        effect: EffectDisposition,
         outcome: Box<PersistedEvent>,
     },
-    Panicked {
-        outcome: Box<PersistedEvent>,
-    },
-    Indeterminate {
-        action_performed: bool,
-        source: GlobalLedgerError,
+    OutcomeUndurable {
+        effect: EffectDisposition,
+        stage: CriticalOutcomeStage,
+        code: &'static str,
     },
 }
 
@@ -266,8 +367,37 @@ impl<E> CriticalExecutionError<E> {
         match self {
             Self::IntentAppend(error) => error.is_fatal(),
             Self::Action { .. } => false,
-            Self::Panicked { .. } => true,
-            Self::Indeterminate { .. } => true,
+            Self::OutcomeUndurable { .. } => true,
+        }
+    }
+}
+
+impl<E> fmt::Debug for CriticalExecutionError<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IntentAppend(error) => formatter
+                .debug_struct("IntentAppend")
+                .field("code", &error.code())
+                .field("fatal", &error.is_fatal())
+                .finish(),
+            Self::Action {
+                effect, outcome, ..
+            } => formatter
+                .debug_struct("Action")
+                .field("error", &"<redacted-action-error>")
+                .field("effect", effect)
+                .field("outcome_sequence", &outcome.sequence())
+                .finish(),
+            Self::OutcomeUndurable {
+                effect,
+                stage,
+                code,
+            } => formatter
+                .debug_struct("OutcomeUndurable")
+                .field("effect", effect)
+                .field("stage", stage)
+                .field("code", code)
+                .finish(),
         }
     }
 }
@@ -281,865 +411,104 @@ impl<E> fmt::Display for CriticalExecutionError<E> {
             Self::Action { .. } => {
                 write!(formatter, "critical action failed after durable outcome")
             }
-            Self::Panicked { .. } => {
-                write!(
-                    formatter,
-                    "critical action panicked after durable failure outcome"
-                )
-            }
-            Self::Indeterminate {
-                action_performed,
-                source,
+            Self::OutcomeUndurable {
+                effect,
+                stage,
+                code,
             } => write!(
                 formatter,
-                "critical action outcome persistence is indeterminate after action_performed={action_performed}: {source}"
+                "critical action outcome is undurable at {stage:?} with {effect:?} ({code})"
             ),
         }
     }
 }
 
-impl<E: fmt::Debug> std::error::Error for CriticalExecutionError<E> {}
+impl<E> std::error::Error for CriticalExecutionError<E> {}
 
-pub fn execute_critical<T, E>(
+pub fn execute_critical<T, E, SB, FB>(
     appender: &impl EventAppender,
+    fingerprinter: &dyn SecretFingerprinter,
     plan: CriticalEventPlan,
-    action: impl FnOnce() -> Result<T, E>,
-) -> Result<CriticalReceipt<T>, CriticalExecutionError<E>> {
-    let CriticalEventPlan {
-        intent,
-        success_outcome,
-        failure_outcome,
-    } = plan;
+    action: impl FnOnce() -> CriticalActionReport<T, E>,
+    success_builder: SB,
+    failure_builder: FB,
+) -> Result<CriticalReceipt<T>, CriticalExecutionError<E>>
+where
+    SB: FnOnce(&T, DefiniteEffectDisposition) -> Result<EventDraft, SanitizationError>,
+    FB: FnOnce(&E, EffectDisposition) -> Result<EventDraft, SanitizationError>,
+{
+    let CriticalEventPlan { operation, intent } = plan;
     let intent = appender
         .append_durable(intent)
         .map_err(CriticalExecutionError::IntentAppend)?;
-    let panic_scope = CriticalPanicScope::enter();
-    let action_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action));
-    drop(panic_scope);
 
-    match action_result {
-        Ok(Ok(value)) => appender
-            .append_durable(success_outcome)
-            .map(|outcome| CriticalReceipt {
+    match action() {
+        CriticalActionReport::Succeeded { value, effect } => {
+            let effect_disposition = effect.into();
+            let outcome = persist_outcome(
+                appender,
+                fingerprinter,
+                operation,
+                &intent,
+                OutcomeRole::Success,
+                effect_disposition,
+                success_builder(&value, effect),
+            )
+            .map_err(|(stage, code)| CriticalExecutionError::OutcomeUndurable {
+                effect: effect_disposition,
+                stage,
+                code,
+            })?;
+            Ok(CriticalReceipt {
                 value,
                 intent,
                 outcome,
             })
-            .map_err(|source| CriticalExecutionError::Indeterminate {
-                action_performed: true,
-                source,
-            }),
-        Ok(Err(error)) => match appender.append_durable(failure_outcome) {
-            Ok(outcome) => Err(CriticalExecutionError::Action {
+        }
+        CriticalActionReport::Failed { error, effect } => {
+            let outcome = persist_outcome(
+                appender,
+                fingerprinter,
+                operation,
+                &intent,
+                OutcomeRole::Failure,
+                effect,
+                failure_builder(&error, effect),
+            )
+            .map_err(|(stage, code)| CriticalExecutionError::OutcomeUndurable {
+                effect,
+                stage,
+                code,
+            })?;
+            Err(CriticalExecutionError::Action {
                 error,
+                effect,
                 outcome: Box::new(outcome),
-            }),
-            Err(source) => Err(CriticalExecutionError::Indeterminate {
-                action_performed: true,
-                source,
-            }),
-        },
-        Err(_) => match appender.append_durable(failure_outcome) {
-            Ok(outcome) => Err(CriticalExecutionError::Panicked {
-                outcome: Box::new(outcome),
-            }),
-            Err(source) => Err(CriticalExecutionError::Indeterminate {
-                action_performed: true,
-                source,
-            }),
-        },
+            })
+        }
     }
+}
+
+fn persist_outcome(
+    appender: &impl EventAppender,
+    fingerprinter: &dyn SecretFingerprinter,
+    operation: CriticalOperation,
+    intent: &PersistedEvent,
+    role: OutcomeRole,
+    effect: EffectDisposition,
+    built: Result<EventDraft, SanitizationError>,
+) -> Result<PersistedEvent, (CriticalOutcomeStage, &'static str)> {
+    let draft = built.map_err(|error| (CriticalOutcomeStage::Build, error.code()))?;
+    let draft = draft
+        .sanitize(fingerprinter)
+        .map_err(|error| (CriticalOutcomeStage::Sanitize, error.code()))?;
+    validate_outcome(operation, intent, &draft, role, effect)
+        .map_err(|error| (CriticalOutcomeStage::Validate, error.code()))?;
+    appender
+        .append_durable(draft)
+        .map_err(|error| (CriticalOutcomeStage::Append, error.code()))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        CriticalEventPlan, CriticalExecutionError, CriticalPlanError, EventAppender,
-        execute_critical,
-    };
-    use crate::{GlobalLedgerError, GlobalLedgerResult, PersistedEvent};
-    use actingcommand_contract::{
-        AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction,
-        EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
-        EventType, IdentifierIssuer, InputPayloadDraft, IssuedActionId, IssuedCorrelationId,
-        IssuedEventId, IssuedInstanceId, IssuedLeaseId, IssuedRequestId, IssuedRunId, IssuedTaskId,
-        OriginModule, SanitizedEventDraft,
-    };
-    use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
-    use std::process::{Command, Output, Stdio};
-    use std::sync::{Mutex, OnceLock};
-    use std::time::{Duration, Instant};
-
-    const PANIC_CHILD_ENV: &str = "ACTINGCOMMAND_CRITICAL_PANIC_CHILD";
-    const PANIC_SECRET: &str = "critical-panic-secret-4e53e895";
-    const NONCRITICAL_HOOK_MARKER: &str = "noncritical-hook-marker-c29a6953";
-
-    #[derive(Clone, Copy)]
-    enum InputKind {
-        Intent,
-        Committed,
-        Completed,
-        Failed,
-    }
-
-    fn identifiers() -> IdentifierIssuer {
-        IdentifierIssuer::new().expect("identifier issuer")
-    }
-
-    fn event_id(_value: &str) -> IssuedEventId {
-        identifiers().mint_event_id().expect("event id")
-    }
-
-    fn event_label(event_type: EventType) -> String {
-        match event_type {
-            EventType::InputIntent | EventType::CommandReceived => "intent",
-            EventType::InputCompleted | EventType::CommandValidated => "success",
-            EventType::InputFailed | EventType::CommandRejected => "failure",
-            _ => "event",
-        }
-        .to_string()
-    }
-
-    macro_rules! cached_identifier {
-        ($function:ident, $type:ty, $mint:ident, $label:literal) => {
-            fn $function(value: &str) -> $type {
-                static IDS: OnceLock<Mutex<HashMap<String, $type>>> = OnceLock::new();
-                let mut ids = IDS
-                    .get_or_init(|| Mutex::new(HashMap::new()))
-                    .lock()
-                    .expect(concat!($label, " registry"));
-                *ids.entry(value.to_string())
-                    .or_insert_with(|| identifiers().$mint().expect($label))
-            }
-        };
-    }
-
-    cached_identifier!(
-        correlation_id,
-        IssuedCorrelationId,
-        mint_correlation_id,
-        "correlation id"
-    );
-    cached_identifier!(action_id, IssuedActionId, mint_action_id, "action id");
-    cached_identifier!(
-        instance_id,
-        IssuedInstanceId,
-        mint_instance_id,
-        "instance id"
-    );
-    cached_identifier!(request_id, IssuedRequestId, mint_request_id, "request id");
-    cached_identifier!(task_id, IssuedTaskId, mint_task_id, "task id");
-    cached_identifier!(run_id, IssuedRunId, mint_run_id, "run id");
-    cached_identifier!(lease_id, IssuedLeaseId, mint_lease_id, "lease id");
-
-    #[derive(Default)]
-    struct InMemoryAppender {
-        calls: RefCell<Vec<String>>,
-        order: RefCell<Vec<String>>,
-        append_count: Cell<u64>,
-        failures: RefCell<Vec<(u64, GlobalLedgerError)>>,
-    }
-
-    impl InMemoryAppender {
-        fn fail_on_call(&self, call: u64, error: GlobalLedgerError) {
-            self.failures.borrow_mut().push((call, error));
-        }
-
-        fn calls(&self) -> Vec<String> {
-            self.calls.borrow().clone()
-        }
-
-        fn order(&self) -> Vec<String> {
-            self.order.borrow().clone()
-        }
-    }
-
-    impl EventAppender for InMemoryAppender {
-        fn append_durable(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
-            let call = self.append_count.get() + 1;
-            self.append_count.set(call);
-            let event_id = event_label(draft.event_type());
-            self.calls.borrow_mut().push(event_id.clone());
-            self.order.borrow_mut().push(event_id);
-            let failure = {
-                let mut failures = self.failures.borrow_mut();
-                failures
-                    .iter()
-                    .position(|(failure_call, _)| *failure_call == call)
-                    .map(|index| failures.remove(index))
-            };
-            if let Some((_, error)) = failure {
-                return Err(error);
-            }
-            Ok(PersistedEvent::from_sanitized(call, draft).expect("valid test event"))
-        }
-    }
-
-    fn input_draft(
-        event_id: &str,
-        transition: InputKind,
-        correlation_id: Option<&str>,
-        action_id: Option<&str>,
-    ) -> SanitizedEventDraft {
-        let mut links = EventLinksDraft::default();
-        if let Some(value) = correlation_id {
-            links = links.with_correlation_id(self::correlation_id(value));
-        }
-        if let Some(value) = action_id {
-            links = links.with_action_id(self::action_id(value));
-        }
-        input_draft_with_links(event_id, transition, links)
-    }
-
-    fn input_draft_with_links(
-        event_id: &str,
-        transition: InputKind,
-        links: EventLinksDraft,
-    ) -> SanitizedEventDraft {
-        input_draft_with_id_and_links(self::event_id(event_id), transition, links)
-    }
-
-    fn input_draft_with_id_and_links(
-        event_id: IssuedEventId,
-        transition: InputKind,
-        links: EventLinksDraft,
-    ) -> SanitizedEventDraft {
-        let payload = match transition {
-            InputKind::Intent => {
-                InputPayloadDraft::intent(EventAction::InputTap, AuditInput::new())
-            }
-            InputKind::Committed => InputPayloadDraft::committed(
-                EventAction::InputTap,
-                EffectDisposition::Performed,
-                AuditInput::new(),
-            ),
-            InputKind::Completed => {
-                InputPayloadDraft::completed(EventAction::InputTap, AuditInput::new())
-            }
-            InputKind::Failed => InputPayloadDraft::failed(
-                EventAction::InputTap,
-                DiagnosticCode::InputFailed,
-                EffectDisposition::Indeterminate,
-                AuditInput::new(),
-            ),
-        };
-        EventDraft::new(
-            event_id,
-            1_752_147_200_000,
-            EventSeverity::Info,
-            EventOrigin::new(
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-            ),
-            links,
-            payload.into(),
-        )
-        .sanitize(
-            &crate::Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"),
-        )
-        .expect("sanitize")
-    }
-
-    fn command_draft(event_id: &str, correlation_id: &str, action_id: &str) -> SanitizedEventDraft {
-        EventDraft::new(
-            self::event_id(event_id),
-            1_752_147_200_000,
-            EventSeverity::Info,
-            EventOrigin::new(
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-            ),
-            EventLinksDraft::default()
-                .with_correlation_id(self::correlation_id(correlation_id))
-                .with_action_id(self::action_id(action_id)),
-            CommandPayloadDraft::received(EventAction::CriticalTest, AuditInput::new()).into(),
-        )
-        .sanitize(
-            &crate::Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"),
-        )
-        .expect("sanitize")
-    }
-
-    fn valid_plan() -> CriticalEventPlan {
-        CriticalEventPlan::new(
-            input_draft(
-                "intent",
-                InputKind::Intent,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-            input_draft(
-                "success",
-                InputKind::Completed,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-            input_draft(
-                "failure",
-                InputKind::Failed,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-        )
-        .expect("valid input critical plan")
-    }
-
-    fn input_links() -> EventLinksDraft {
-        EventLinksDraft::default()
-            .with_correlation_id(correlation_id("correlation-1"))
-            .with_action_id(action_id("action-1"))
-            .with_instance_id(instance_id("instance-1"))
-            .with_request_id(request_id("request-1"))
-            .with_task_id(task_id("task-1"))
-            .with_run_id(run_id("run-1"))
-            .with_lease_id(lease_id("lease-1"))
-    }
-
-    fn input_plan_with_links(
-        intent_links: EventLinksDraft,
-        success_links: EventLinksDraft,
-        failure_links: EventLinksDraft,
-    ) -> Result<CriticalEventPlan, CriticalPlanError> {
-        CriticalEventPlan::new(
-            input_draft_with_links("intent", InputKind::Intent, intent_links),
-            input_draft_with_links("success", InputKind::Completed, success_links),
-            input_draft_with_links("failure", InputKind::Failed, failure_links),
-        )
-    }
-
-    fn append_failure() -> GlobalLedgerError {
-        crate::Sha256SecretFingerprinter::new(b"").expect_err("empty fingerprinter salt must fail")
-    }
-
-    #[test]
-    fn intent_append_failure_prevents_action() {
-        let appender = InMemoryAppender::default();
-        appender.fail_on_call(1, append_failure());
-        let action_calls = Cell::new(0);
-
-        let result = execute_critical(&appender, valid_plan(), || {
-            action_calls.set(action_calls.get() + 1);
-            Ok::<_, &'static str>(())
-        });
-
-        assert!(matches!(
-            result,
-            Err(CriticalExecutionError::IntentAppend(_))
-        ));
-        assert_eq!(action_calls.get(), 0);
-        assert_eq!(appender.calls(), vec!["intent"]);
-    }
-
-    #[test]
-    fn successful_action_requires_durable_success_outcome() {
-        let appender = InMemoryAppender::default();
-        let action_calls = Cell::new(0);
-
-        let receipt = execute_critical(&appender, valid_plan(), || {
-            action_calls.set(action_calls.get() + 1);
-            appender.order.borrow_mut().push("action".to_string());
-            Ok::<_, &'static str>("done")
-        })
-        .expect("durable success receipt");
-
-        assert_eq!(receipt.value(), &"done");
-        assert_eq!(receipt.outcome().event_type(), EventType::InputCompleted);
-        assert_eq!(action_calls.get(), 1);
-        assert_eq!(appender.order(), vec!["intent", "action", "success"]);
-    }
-
-    #[test]
-    fn failed_action_requires_durable_failure_outcome() {
-        let appender = InMemoryAppender::default();
-        let action_calls = Cell::new(0);
-
-        let result = execute_critical(&appender, valid_plan(), || {
-            action_calls.set(action_calls.get() + 1);
-            appender.order.borrow_mut().push("action".to_string());
-            Err::<(), _>("action failed")
-        });
-
-        let CriticalExecutionError::Action { error, outcome } = result.expect_err("action failure")
-        else {
-            panic!("expected durable action failure");
-        };
-        assert_eq!(error, "action failed");
-        assert_eq!(outcome.event_type(), EventType::InputFailed);
-        assert_eq!(action_calls.get(), 1);
-        assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
-    }
-
-    #[test]
-    fn outcome_append_failure_returns_indeterminate_fatal_without_success_receipt() {
-        let appender = InMemoryAppender::default();
-        appender.fail_on_call(2, append_failure());
-        let action_calls = Cell::new(0);
-
-        let result = execute_critical(&appender, valid_plan(), || {
-            action_calls.set(action_calls.get() + 1);
-            appender.order.borrow_mut().push("action".to_string());
-            Ok::<_, &'static str>(())
-        });
-
-        let CriticalExecutionError::Indeterminate {
-            action_performed,
-            source,
-        } = result.expect_err("indeterminate result")
-        else {
-            panic!("expected indeterminate failure");
-        };
-        assert!(action_performed);
-        assert!(source.is_fatal());
-        assert!(
-            CriticalExecutionError::<&'static str>::Indeterminate {
-                action_performed,
-                source,
-            }
-            .is_fatal()
-        );
-        assert_eq!(action_calls.get(), 1);
-        assert_eq!(appender.order(), vec!["intent", "action", "success"]);
-    }
-
-    #[test]
-    fn successful_path_orders_intent_action_outcome() {
-        let appender = InMemoryAppender::default();
-
-        let receipt = execute_critical(&appender, valid_plan(), || Ok::<_, &'static str>(()))
-            .expect("success");
-
-        assert_eq!(receipt.intent().event_type(), EventType::InputIntent);
-        assert_eq!(receipt.outcome().event_type(), EventType::InputCompleted);
-        assert_eq!(appender.calls(), vec!["intent", "success"]);
-    }
-
-    #[test]
-    fn critical_plan_rejects_contract_mismatches_before_execution() {
-        let appender = InMemoryAppender::default();
-        let action_calls = Cell::new(0);
-        let intent = || {
-            input_draft(
-                "intent",
-                InputKind::Intent,
-                Some("correlation-1"),
-                Some("action-1"),
-            )
-        };
-        let failure = || {
-            input_draft(
-                "failure",
-                InputKind::Failed,
-                Some("correlation-1"),
-                Some("action-1"),
-            )
-        };
-
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                command_draft("success", "correlation-1", "action-1"),
-                failure(),
-            )
-            .expect_err("family mismatch"),
-            CriticalPlanError::EventFamilyMismatch
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                input_draft("success", InputKind::Completed, None, Some("action-1")),
-                failure(),
-            )
-            .expect_err("missing correlation"),
-            CriticalPlanError::MissingCorrelationId
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                input_draft(
-                    "success",
-                    InputKind::Completed,
-                    Some("correlation-2"),
-                    Some("action-1"),
-                ),
-                failure(),
-            )
-            .expect_err("correlation mismatch"),
-            CriticalPlanError::CorrelationIdMismatch
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                input_draft("success", InputKind::Completed, Some("correlation-1"), None),
-                failure(),
-            )
-            .expect_err("missing action"),
-            CriticalPlanError::MissingActionId
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                input_draft(
-                    "success",
-                    InputKind::Completed,
-                    Some("correlation-1"),
-                    Some("action-2"),
-                ),
-                failure(),
-            )
-            .expect_err("action mismatch"),
-            CriticalPlanError::ActionIdMismatch
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                intent(),
-                input_draft(
-                    "success",
-                    InputKind::Intent,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-                failure(),
-            )
-            .expect_err("duplicate event type"),
-            CriticalPlanError::DuplicateEventType
-        );
-        let duplicate_id = event_id("duplicate");
-        let duplicate_links = EventLinksDraft::default()
-            .with_correlation_id(correlation_id("correlation-1"))
-            .with_action_id(action_id("action-1"));
-        assert_eq!(
-            CriticalEventPlan::new(
-                input_draft_with_id_and_links(
-                    duplicate_id,
-                    InputKind::Intent,
-                    duplicate_links.clone(),
-                ),
-                input_draft_with_id_and_links(duplicate_id, InputKind::Completed, duplicate_links,),
-                failure(),
-            )
-            .expect_err("duplicate event id"),
-            CriticalPlanError::DuplicateEventId
-        );
-
-        assert_eq!(action_calls.get(), 0);
-        assert!(appender.calls().is_empty());
-    }
-
-    #[test]
-    fn failure_outcome_append_failure_returns_indeterminate_fatal() {
-        let appender = InMemoryAppender::default();
-        appender.fail_on_call(2, append_failure());
-
-        let result = execute_critical(&appender, valid_plan(), || {
-            appender.order.borrow_mut().push("action".to_string());
-            Err::<(), _>("action failed")
-        });
-
-        assert!(matches!(
-            result,
-            Err(CriticalExecutionError::Indeterminate {
-                action_performed: true,
-                ..
-            })
-        ));
-        assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
-    }
-
-    #[test]
-    fn panic_records_failure_outcome_and_returns_fatal() {
-        let appender = InMemoryAppender::default();
-
-        let result = execute_critical::<(), &'static str>(&appender, valid_plan(), || {
-            appender.order.borrow_mut().push("action".to_string());
-            std::panic::panic_any(())
-        });
-
-        let error = result.expect_err("panic must fail");
-        assert!(error.is_fatal());
-        assert_eq!(
-            error.to_string(),
-            "critical action panicked after durable failure outcome"
-        );
-        let CriticalExecutionError::Panicked { outcome } = error else {
-            panic!("expected typed panic result");
-        };
-        assert_eq!(outcome.event_type(), EventType::InputFailed);
-        assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
-    }
-
-    #[test]
-    fn panic_failure_outcome_append_failure_returns_indeterminate() {
-        let appender = InMemoryAppender::default();
-        appender.fail_on_call(2, append_failure());
-
-        let result = execute_critical::<(), &'static str>(&appender, valid_plan(), || {
-            appender.order.borrow_mut().push("action".to_string());
-            std::panic::panic_any(())
-        });
-
-        assert!(matches!(
-            result,
-            Err(CriticalExecutionError::Indeterminate {
-                action_performed: true,
-                ..
-            })
-        ));
-        assert_eq!(appender.order(), vec!["intent", "action", "failure"]);
-    }
-
-    #[test]
-    fn critical_plan_rejects_swapped_and_unsupported_roles_before_execution() {
-        let appender = InMemoryAppender::default();
-        let action_calls = Cell::new(0);
-        CriticalEventPlan::new(
-            input_draft(
-                "intent-committed",
-                InputKind::Intent,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-            input_draft(
-                "success-committed",
-                InputKind::Committed,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-            input_draft(
-                "failure-committed",
-                InputKind::Failed,
-                Some("correlation-1"),
-                Some("action-1"),
-            ),
-        )
-        .expect("input committed triplet must be supported");
-        assert_eq!(
-            CriticalEventPlan::new(
-                input_draft(
-                    "intent",
-                    InputKind::Intent,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-                input_draft(
-                    "success",
-                    InputKind::Failed,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-                input_draft(
-                    "failure",
-                    InputKind::Completed,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-            )
-            .expect_err("swapped outcomes must fail"),
-            CriticalPlanError::OutcomeRoleMismatch
-        );
-        assert_eq!(
-            CriticalEventPlan::new(
-                input_draft(
-                    "intent",
-                    InputKind::Committed,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-                input_draft(
-                    "success",
-                    InputKind::Completed,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-                input_draft(
-                    "failure",
-                    InputKind::Failed,
-                    Some("correlation-1"),
-                    Some("action-1"),
-                ),
-            )
-            .expect_err("unsupported intent must fail"),
-            CriticalPlanError::UnsupportedIntent
-        );
-        CriticalEventPlan::new(
-            command_draft("intent", "correlation-1", "action-1"),
-            EventDraft::new(
-                event_id("success"),
-                1_752_147_200_000,
-                EventSeverity::Info,
-                EventOrigin::new(
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                ),
-                EventLinksDraft::default()
-                    .with_correlation_id(correlation_id("correlation-1"))
-                    .with_action_id(action_id("action-1")),
-                CommandPayloadDraft::validated(
-                    EventAction::CriticalTest,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                )
-                .into(),
-            )
-            .sanitize(
-                &crate::Sha256SecretFingerprinter::new(b"test-private-salt")
-                    .expect("fingerprinter"),
-            )
-            .expect("sanitize"),
-            EventDraft::new(
-                event_id("failure"),
-                1_752_147_200_000,
-                EventSeverity::Info,
-                EventOrigin::new(
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                ),
-                EventLinksDraft::default()
-                    .with_correlation_id(correlation_id("correlation-1"))
-                    .with_action_id(action_id("action-1")),
-                CommandPayloadDraft::rejected(
-                    EventAction::CriticalTest,
-                    DiagnosticCode::CommandRejected,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                )
-                .into(),
-            )
-            .sanitize(
-                &crate::Sha256SecretFingerprinter::new(b"test-private-salt")
-                    .expect("fingerprinter"),
-            )
-            .expect("sanitize"),
-        )
-        .expect("command role triplet must be supported");
-        assert_eq!(action_calls.get(), 0);
-        assert!(appender.calls().is_empty());
-    }
-
-    #[test]
-    fn critical_plan_rejects_stable_identity_link_mismatches() {
-        let intent = input_links();
-        let failure = input_links();
-
-        let success = input_links().with_instance_id(instance_id("instance-2"));
-        assert_eq!(
-            input_plan_with_links(intent.clone(), success, failure.clone())
-                .expect_err("instance mismatch"),
-            CriticalPlanError::StableIdentityLinkMismatch
-        );
-
-        let success = input_links().with_request_id(request_id("request-2"));
-        assert_eq!(
-            input_plan_with_links(intent.clone(), success, failure.clone())
-                .expect_err("request mismatch"),
-            CriticalPlanError::StableIdentityLinkMismatch
-        );
-
-        let success = EventLinksDraft::default()
-            .with_correlation_id(correlation_id("correlation-1"))
-            .with_action_id(action_id("action-1"))
-            .with_instance_id(instance_id("instance-1"))
-            .with_request_id(request_id("request-1"))
-            .with_run_id(run_id("run-1"))
-            .with_lease_id(lease_id("lease-1"));
-        assert_eq!(
-            input_plan_with_links(intent.clone(), success, failure.clone())
-                .expect_err("task mismatch"),
-            CriticalPlanError::StableIdentityLinkMismatch
-        );
-
-        let success = input_links().with_run_id(run_id("run-2"));
-        assert_eq!(
-            input_plan_with_links(intent.clone(), success, failure.clone())
-                .expect_err("run mismatch"),
-            CriticalPlanError::StableIdentityLinkMismatch
-        );
-
-        let success = input_links().with_lease_id(lease_id("lease-2"));
-        assert_eq!(
-            input_plan_with_links(intent, success, failure).expect_err("lease mismatch"),
-            CriticalPlanError::StableIdentityLinkMismatch
-        );
-    }
-
-    #[test]
-    fn critical_panic_payload_is_suppressed_in_subprocess() {
-        let output = run_panic_child("critical");
-        assert!(output.status.success(), "child status: {:?}", output.status);
-        assert!(!child_output(&output).contains(PANIC_SECRET));
-    }
-
-    #[test]
-    fn critical_panic_hook_forwards_noncritical_panics() {
-        let output = run_panic_child("noncritical");
-        assert!(output.status.success(), "child status: {:?}", output.status);
-        assert!(child_output(&output).contains(NONCRITICAL_HOOK_MARKER));
-    }
-
-    #[test]
-    fn panic_hook_subprocess_child() {
-        match std::env::var(PANIC_CHILD_ENV).as_deref() {
-            Ok("critical") => {
-                let appender = InMemoryAppender::default();
-                let result = execute_critical::<(), &'static str>(&appender, valid_plan(), || {
-                    std::panic::panic_any(PANIC_SECRET)
-                });
-                let CriticalExecutionError::Panicked { outcome } =
-                    result.expect_err("panic result")
-                else {
-                    panic!("expected typed panic result");
-                };
-                assert_eq!(outcome.event_type(), EventType::InputFailed);
-            }
-            Ok("noncritical") => {
-                let appender = InMemoryAppender::default();
-                execute_critical::<(), &'static str>(&appender, valid_plan(), || Ok(()))
-                    .expect("install critical hook");
-                let _ = std::panic::catch_unwind(|| std::panic::panic_any(NONCRITICAL_HOOK_MARKER));
-            }
-            Ok(mode) => panic!("unknown panic child mode: {mode}"),
-            Err(_) => {}
-        }
-    }
-
-    fn run_panic_child(mode: &str) -> Output {
-        let executable = std::env::current_exe().expect("test executable");
-        let mut child = Command::new(executable)
-            .args([
-                "--exact",
-                "critical::tests::panic_hook_subprocess_child",
-                "--nocapture",
-            ])
-            .env(PANIC_CHILD_ENV, mode)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn panic child");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if child.try_wait().expect("poll panic child").is_some() {
-                return child
-                    .wait_with_output()
-                    .expect("collect panic child output");
-            }
-            if Instant::now() >= deadline {
-                child.kill().expect("kill timed-out panic child");
-                let _ = child.wait();
-                panic!("panic child timed out");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    fn child_output(output: &Output) -> String {
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    }
-}
+#[path = "critical/tests.rs"]
+mod tests;
