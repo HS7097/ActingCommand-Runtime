@@ -6,10 +6,7 @@
 //! semantics needed before ActingCommand can convert those resources into its own
 //! schema. It does not call or copy the upstream MAA engine.
 
-use crate::{
-    JsonDocument, Lab, LabError as CliError, LabPorts, LabResult as CliOutcome,
-    MaaTaskCompileRequest, MaaTaskCompileResponse,
-};
+use crate::{JsonDocument, LabError as CliError, LabResult as CliOutcome};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -48,7 +45,7 @@ const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
 ];
 
 #[derive(Debug, Clone)]
-pub(crate) struct MaaTaskGraph {
+pub struct MaaTaskGraph {
     tasks: BTreeMap<String, Value>,
     stats: MaaTaskGraphStats,
 }
@@ -58,23 +55,40 @@ impl MaaTaskGraph {
         self.tasks.get(task_id)
     }
 
+    pub fn stats(&self) -> MaaTaskGraphStats {
+        self.stats
+    }
+
+    pub fn task_ids(&self) -> Vec<String> {
+        self.tasks.keys().cloned().collect()
+    }
+
+    pub fn task_document(&self, task_id: &str) -> CliOutcome<JsonDocument> {
+        self.task(task_id)
+            .cloned()
+            .map(JsonDocument::new)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!("compiled MAA task '{task_id}' was not found"))
+            })
+    }
+
     pub(crate) fn tasks(&self) -> &BTreeMap<String, Value> {
         &self.tasks
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct MaaTaskGraphStats {
-    pub(crate) source_files: usize,
-    pub(crate) raw_tasks: usize,
-    pub(crate) compiled_tasks: usize,
-    pub(crate) base_task_derivations: usize,
-    pub(crate) explicit_at_tasks: usize,
-    pub(crate) implicit_at_tasks: usize,
-    pub(crate) virtual_references: usize,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MaaTaskGraphStats {
+    pub source_files: usize,
+    pub raw_tasks: usize,
+    pub compiled_tasks: usize,
+    pub base_task_derivations: usize,
+    pub explicit_at_tasks: usize,
+    pub implicit_at_tasks: usize,
+    pub virtual_references: usize,
 }
 
-pub(crate) fn compile_maa_task_graph_family(tasks_root: &Path) -> CliOutcome<MaaTaskGraph> {
+pub fn compile_maa_task_graph(tasks_root: &Path) -> CliOutcome<MaaTaskGraph> {
     let mut files = collect_maa_task_files(tasks_root)?;
     if files.is_empty() {
         return Err(CliError::package_invalid(format!(
@@ -104,46 +118,6 @@ fn compile_maa_task_graph_from_value(root: Value) -> CliOutcome<MaaTaskGraph> {
     let mut registry = MaaRawTaskRegistry::default();
     registry.load_value("<memory>", root)?;
     MaaTaskCompiler::new(registry, 1).compile_all()
-}
-
-impl<P: LabPorts> Lab<P> {
-    pub fn compile_maa_tasks(
-        &mut self,
-        request: MaaTaskCompileRequest,
-    ) -> CliOutcome<MaaTaskCompileResponse> {
-        let graph = compile_maa_task_graph_family(&request.tasks_root)?;
-        let selected_task = request
-            .selected_task
-            .as_deref()
-            .map(|task_id| {
-                graph
-                    .task(task_id)
-                    .cloned()
-                    .map(JsonDocument::new)
-                    .ok_or_else(|| {
-                        CliError::package_invalid(format!(
-                            "compiled MAA task '{task_id}' was not found"
-                        ))
-                    })
-            })
-            .transpose()?;
-        Ok(MaaTaskCompileResponse {
-            schema_version: "actingcommand.maa-task-graph.v1".to_string(),
-            source_files: graph.stats.source_files,
-            raw_tasks: graph.stats.raw_tasks,
-            compiled_tasks: graph.stats.compiled_tasks,
-            base_task_derivations: graph.stats.base_task_derivations,
-            explicit_at_tasks: graph.stats.explicit_at_tasks,
-            implicit_at_tasks: graph.stats.implicit_at_tasks,
-            virtual_references: graph.stats.virtual_references,
-            task_ids: graph.tasks.keys().cloned().collect(),
-            repo: request.repo.display().to_string(),
-            resource_root: request.resource_root.display().to_string(),
-            resource_layout: request.resource_layout,
-            maa_tasks_root: request.tasks_root.display().to_string(),
-            selected_task,
-        })
-    }
 }
 
 #[derive(Debug, Default)]

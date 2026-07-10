@@ -42,6 +42,16 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
         ("process::exit", "process::exit"),
         ("env::var(", "env::var"),
         ("env::var_os(", "env::var_os"),
+        ("env::temp_dir(", "env::temp_dir"),
+        ("env::current_dir(", "env::current_dir"),
+        (
+            "pub fn package_build_pack(",
+            "out-of-scope Lab::package_build_pack",
+        ),
+        (
+            "pub fn compile_maa_tasks(",
+            "out-of-scope Lab::compile_maa_tasks",
+        ),
         ("println!(", "println!"),
         ("eprintln!(", "eprintln!"),
     ];
@@ -751,7 +761,12 @@ mod tests {
                 eprintln!("bad");
                 std::process::exit(1);
                 let _ = std::env::var("ACTINGCOMMAND_CONFIG");
+                let _ = std::env::var_os("ACTINGCOMMAND_CONFIG");
+                let _ = std::env::temp_dir();
+                let _ = std::env::current_dir();
             }
+            pub fn package_build_pack() {}
+            pub fn compile_maa_tasks() {}
         "#;
 
         let violations = super::inspect_lab_source("fixture.rs", source).unwrap();
@@ -761,5 +776,22 @@ mod tests {
         assert!(violations.iter().any(|item| item.contains("eprintln!")));
         assert!(violations.iter().any(|item| item.contains("process::exit")));
         assert!(violations.iter().any(|item| item.contains("env::var")));
+        assert!(violations.iter().any(|item| item.contains("env::var_os")));
+        assert!(violations.iter().any(|item| item.contains("env::temp_dir")));
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("env::current_dir"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("Lab::package_build_pack"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|item| item.contains("Lab::compile_maa_tasks"))
+        );
     }
 }

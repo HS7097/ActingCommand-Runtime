@@ -27,6 +27,7 @@ pub struct PackageResolution {
 #[derive(Debug, Clone)]
 pub struct PackageBuildTaskRequest {
     pub source: PackageSource,
+    pub temporary_root: PathBuf,
     pub task_id: String,
     pub game: Option<String>,
     pub server: Option<String>,
@@ -60,67 +61,44 @@ pub struct PackageBuildTaskResponse {
 }
 
 #[derive(Debug, Clone)]
-pub struct PackageBuildPackRequest {
+pub struct PackageBuildCatalogRequest {
     pub source: PackageSource,
+    pub temporary_root: PathBuf,
     pub game: Option<String>,
     pub server: Option<String>,
     pub locale: Option<String>,
-    pub package_id: Option<String>,
-    pub execution_mode: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageTaskArchiveRequest {
+    pub task_id: String,
+    pub package_id: String,
+    pub execution_mode: String,
     pub resolution: Option<PackageResolution>,
-    pub entry_task: Option<String>,
-    pub out: Option<PathBuf>,
-    pub split_dir: Option<PathBuf>,
+    pub out: PathBuf,
     pub dry_run: bool,
     pub env: PackageEnvOptions,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub enum PackageBuildPackResponse {
-    Split(Box<PackageBuildPackSplitResponse>),
-    Full(Box<PackageBuildPackFullResponse>),
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PackageBuildPackSplitResponse {
-    pub status: String,
-    pub mode: String,
-    pub repo: String,
-    pub resource_root: String,
-    pub resource_layout: String,
-    pub from_remote: Option<String>,
-    pub game: String,
-    pub server: String,
-    pub dry_run: bool,
-    pub package_count: usize,
-    pub packages: Vec<PackageBuildPackItemResponse>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PackageBuildPackItemResponse {
-    pub task_id: String,
-    pub out: Option<String>,
-    pub validation: LabPackageValidationResponse,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PackageBuildPackFullResponse {
-    pub status: String,
-    pub mode: String,
-    pub repo: String,
-    pub resource_root: String,
-    pub resource_layout: String,
-    pub from_remote: Option<String>,
-    pub game: String,
-    pub server: String,
+#[derive(Debug, Clone)]
+pub struct PackageFullArchiveRequest {
     pub entry_task_id: String,
     pub package_id: String,
     pub execution_mode: String,
-    pub task_count: usize,
+    pub resolution: Option<PackageResolution>,
+    pub out: PathBuf,
     pub dry_run: bool,
-    pub out: Option<String>,
-    pub validation: LabPackageValidationResponse,
+    pub env: PackageEnvOptions,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageBuildCatalogMetadata {
+    pub repo: PathBuf,
+    pub resource_root: PathBuf,
+    pub resource_layout: String,
+    pub from_remote: Option<String>,
+    pub game: String,
+    pub server: String,
 }
 
 #[derive(Debug, Clone)]
@@ -220,34 +198,6 @@ pub struct ResourceConvertResponse {
     pub maa_tasks_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maa_compiled_tasks: Option<usize>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MaaTaskCompileRequest {
-    pub tasks_root: PathBuf,
-    pub repo: PathBuf,
-    pub resource_root: PathBuf,
-    pub resource_layout: String,
-    pub selected_task: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MaaTaskCompileResponse {
-    pub schema_version: String,
-    pub source_files: usize,
-    pub raw_tasks: usize,
-    pub compiled_tasks: usize,
-    pub base_task_derivations: usize,
-    pub explicit_at_tasks: usize,
-    pub implicit_at_tasks: usize,
-    pub virtual_references: usize,
-    pub task_ids: Vec<String>,
-    pub repo: String,
-    pub resource_root: String,
-    pub resource_layout: String,
-    pub maa_tasks_root: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_task: Option<JsonDocument>,
 }
 
 #[derive(Debug, Clone, Serialize)]

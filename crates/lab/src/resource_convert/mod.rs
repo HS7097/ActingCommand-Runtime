@@ -264,7 +264,7 @@ impl OperationConverter {
     }
 
     pub(super) fn load_maa_task_overlays(&mut self, tasks_root: &Path) -> CliOutcome<()> {
-        let graph = maa_task_graph::compile_maa_task_graph_family(tasks_root)?;
+        let graph = maa_task_graph::compile_maa_task_graph(tasks_root)?;
         self.maa_task_overlays = graph
             .tasks()
             .iter()

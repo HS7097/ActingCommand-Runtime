@@ -364,7 +364,7 @@ fn build_pack_includes_color_probe_targets() {
 
 #[test]
 fn build_pack_includes_verify_template_targets() {
-    let root = std::env::current_dir().unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let converter = OperationConverter {
         root: root.clone(),
         game: "arknights".to_string(),
@@ -570,7 +570,7 @@ fn resource_convert_accepts_explicit_maa_tasks_mode() {
 
 #[test]
 fn default_operation_bundle_mode_does_not_apply_maa_overlay_fields() {
-    let root = std::env::current_dir().unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let converter = OperationConverter {
         root: root.clone(),
         game: "arknights".to_string(),

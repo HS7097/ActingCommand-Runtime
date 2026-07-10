@@ -18,6 +18,7 @@ fn package_family_exposes_typed_requests_and_responses() {
     };
     let _build = PackageBuildTaskRequest {
         source: PackageSource::Local(PathBuf::from("resources")),
+        temporary_root: PathBuf::from("target/tmp"),
         task_id: "task".to_string(),
         game: Some("arknights".to_string()),
         server: Some("cn".to_string()),
