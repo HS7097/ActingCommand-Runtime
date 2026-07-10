@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening Task 5 owned startup
+
+### Current status
+
+- Completed hardening Task 5 in source commit `9f9da2b`.
+- Removed the startup-timeout/detached-initializer path. A spawned writer first blocks on a one-shot store receiver and cannot touch the ledger root; the caller opens `SegmentStore` synchronously and transfers its owned value only after success.
+- Store-open failure closes the one-shot channel and joins the waiting writer before returning the original error. Store-transfer failure recovers and closes the store and joins the writer before returning fatal `writer_unavailable`.
+- Immediate retry after failed open no longer races a future background owner.
+- Writer start/close wall-clock values are validated as nonzero diagnostics without requiring close time to be later than start time.
+- Zero-record non-final segments now fail as `corrupt_segment`; a final empty segment remains valid.
+- `GlobalLedgerConfig` debug output redacts both root and owner ID.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/storage.rs`
+- `crates/ledger/src/global/tests.rs`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-ledger global::tests -- --nocapture` (RED, then GREEN)
+- `cargo test -p actingcommand-ledger -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n 'writer_start_timeout|drop\\(writer\\)|field\\("owner_id", &self\\.owner_id\\)' crates/ledger/src`
+
+### Test results
+
+- All 45 filtered global-ledger tests passed, including all seven new Task 5 acceptance cases.
+- All 95 ledger unit tests, 5 process tests, and 2 compile-fail documentation tests passed.
+- Full workspace tests passed.
+- Full workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- The detached-startup and owner-disclosure source scan returned no matches.
+
+### Current blocker
+
+- None for hardening Task 5.
+
+### Next step
+
+1. Commit and push the Task 5 planning/checkpoint closeout with source commit `9f9da2b`.
+2. Record Task 5 evidence in Issue #36.
+3. Begin hardening Task 6: crash-atomic tail repair journal, without broadening into Task 7.
+
 ## 2026-07-11 Issue 35 C1 hardening Task 4 bounded replay
 
 ### Current status

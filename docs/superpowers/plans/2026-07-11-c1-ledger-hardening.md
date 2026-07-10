@@ -490,7 +490,7 @@ Commit message: `fix(ledger): bound subscription replay`
 5. If sending fails, recover the store from `SendError`, close it, join the writer, and return fatal `writer_unavailable`.
 6. Remove the startup timeout and detached initialization worker.
 
-- [ ] **Step 1: Add RED lifecycle and corruption tests**
+- [x] **Step 1: Add RED lifecycle and corruption tests**
 
 Add tests named:
 
@@ -504,17 +504,17 @@ sole_final_empty_segment_is_valid
 config_debug_redacts_owner_and_root
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global::tests -- --nocapture`
 
 Expected: existing startup-timeout, timestamp-order, empty-segment, and debug behavior fails the new assertions.
 
-- [ ] **Step 3: Implement owned startup and invariant fixes**
+- [x] **Step 3: Implement owned startup and invariant fixes**
 
 Remove `open_with_store` timeout behavior. Treat nonzero wall-clock timestamps as observations without ordering. Reject zero-record non-final segments. Render `owner_id` as `<redacted-owner-id>` in `Debug`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -528,7 +528,7 @@ git diff --check
 
 Expected: tests pass; detached-startup and owner disclosure paths are absent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `fix(ledger): own startup and storage lifecycle`
 
