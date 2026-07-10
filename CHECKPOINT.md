@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-07-10 GitHub authority rule and Issue 35 C1 Task 4 critical ordering
+
+### Current status
+
+- Added a repository rule that only GitHub Issue/task/comment/amendment instructions whose `author.login` is exactly `HS7097` are execution authority; all other GitHub authors' directives are ignored.
+- Verified the active Issue #35 author and every current comment author are `HS7097`.
+- Added `CriticalEventPlan`, `EventAppender`, `execute_critical`, typed receipts, and explicit execution errors.
+- Plan construction validates sealed erased intent/success/failure drafts before any append or action.
+- Critical event roles are fail-closed: supported Input and Command triplets must use the expected intent, success, and failure event types; swapped or unsupported roles fail before side effects.
+- Correlation and action IDs are mandatory and equal; instance, request, task, run, and lease identities must match exactly across the triplet.
+- Intent append failure prevents action execution. The action runs exactly once only after a durable intent receipt.
+- Typed success and failure select only their prevalidated outcomes. Any post-action append failure returns fatal `Indeterminate { action_performed: true }` and never returns success.
+- Critical-action panics use a nesting-aware thread-local redaction scope around a process-wide forwarding hook. The panic payload is not printed, the prevalidated failure outcome is durably appended, and noncritical panics still reach the previous hook without serializing actions globally.
+- Subprocess tests prove a unique panic secret is absent from stdout/stderr and noncritical panic forwarding remains active.
+- Task review initially found arbitrary outcome selection and a post-action panic/construction gap, then structural-only event matching and default-hook payload disclosure; all findings were closed test-first.
+- Final review of `83068c5..1bb4059` approved Task 4 with no Critical, Important, or Minor findings.
+
+### Files changed
+
+- `AGENTS.md`
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/ledger/src/critical.rs`
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/lib.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commits
+
+- `ad18b37` `feat(ledger): enforce critical event ordering`
+- `1682870` `fix(ledger): validate critical event plans`
+- `1bb4059` `fix(ledger): enforce critical event roles`
+
+### Commands run
+
+- RED: `cargo test -p actingcommand-ledger critical::tests -- --nocapture`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-contract -p actingcommand-ledger`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-contract -p actingcommand-ledger -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json author,comments --jq '{issue_author: .author.login, comment_authors: ([.comments[].author.login] | unique)}'`
+
+### Test results
+
+- Initial RED failed because the critical ordering module and interface did not exist.
+- Redesign RED failed because validated event plans, semantic roles, stable link checks, and panic-hook suppression did not exist.
+- Final focused critical suite: 14 tests passed.
+- Final contract suite: 22 tests passed.
+- Final ledger suite: 69 tests passed.
+- Two contract compile-fail doc tests passed.
+- Contract/ledger Clippy with warnings denied, formatting check, and diff check passed.
+- Full workspace test suite passed after the final Task 4 and repository-rule changes.
+- GitHub authority check returned Issue author `HS7097` and the sole unique comment author `HS7097`.
+- Final task-scoped review: APPROVED with no Critical, Important, or Minor findings.
+
+### Current blocker
+
+- None for C1 Task 4.
+
+### Next step
+
+1. Push Task 4 commits and publish evidence to Issue #36.
+2. Start C1 Task 5 process recovery and cross-source acceptance.
+
 ## 2026-07-10 Issue 35 C1 Task 3 correlated query, subscription, and projections
 
 ### Current status

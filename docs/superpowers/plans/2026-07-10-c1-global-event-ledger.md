@@ -308,13 +308,14 @@ Commit message: `feat(ledger): add correlated query and projections`
 
 **Files:**
 - Create: `crates/ledger/src/critical.rs`
+- Modify: `crates/ledger/src/global.rs`
 - Modify: `crates/ledger/src/lib.rs`
 
 **Interfaces:**
 - Consumes: erased sanitized event drafts and persisted append receipts.
 - Produces: narrow `EventAppender` seam and `execute_critical` orchestration.
 
-- [ ] **Step 1: Add RED tests for each failure position**
+- [x] **Step 1: Add RED tests for each failure position**
 
 Add tests named:
 
@@ -328,23 +329,23 @@ successful_path_orders_intent_action_outcome
 
 Use an in-memory test adapter with an append call counter and an action closure counter; do not mock filesystem behavior covered by Task 2.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger critical::tests -- --nocapture`
 
 Expected: compile failure because the module does not exist.
 
-- [ ] **Step 3: Implement the minimal ordering module**
+- [x] **Step 3: Implement the minimal ordering module**
 
-`execute_critical` appends sanitized intent first. It invokes the action only after a persisted intent receipt. It then requires a sanitized success or failure outcome. Outcome persistence failure returns a fatal indeterminate-persistence error with a typed `action_performed` flag and never returns success.
+`execute_critical` appends sanitized intent first. It invokes the action only after a persisted intent receipt. It then requires a sanitized success or failure outcome. Outcome persistence failure returns a fatal indeterminate-persistence error with a typed `action_performed` flag and never returns success. Implement the narrow `EventAppender` seam for `GlobalLedger` without exposing raw writer internals.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `cargo test -p actingcommand-ledger critical::tests -- --nocapture`
 
 Expected: all pass with exact call ordering.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `feat(ledger): enforce critical event ordering`
 
