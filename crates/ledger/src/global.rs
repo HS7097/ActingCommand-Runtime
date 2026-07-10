@@ -125,7 +125,7 @@ impl fmt::Debug for GlobalLedgerConfig {
         formatter
             .debug_struct("GlobalLedgerConfig")
             .field("root", &"<redacted-root>")
-            .field("owner_id", &self.owner_id)
+            .field("owner_id", &"<redacted-owner-id>")
             .field("segment_max_bytes", &self.segment_max_bytes)
             .field("ingress_capacity", &self.ingress_capacity)
             .field("subscription_capacity", &self.subscription_capacity)
@@ -483,59 +483,50 @@ impl fmt::Debug for GlobalLedger {
 
 impl GlobalLedger {
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
-        Self::open_with_store(config, COMMAND_TIMEOUT, SegmentStore::open)
+        Self::open_with_store(config, SegmentStore::open)
     }
 
-    fn open_with_store<F>(
-        config: GlobalLedgerConfig,
-        startup_timeout: Duration,
-        open_store: F,
-    ) -> GlobalLedgerResult<Self>
+    fn open_with_store<F>(config: GlobalLedgerConfig, open_store: F) -> GlobalLedgerResult<Self>
     where
-        F: FnOnce(GlobalLedgerConfig) -> GlobalLedgerResult<SegmentStore> + Send + 'static,
+        F: FnOnce(GlobalLedgerConfig) -> GlobalLedgerResult<SegmentStore>,
     {
         config.validate()?;
         let capacity = config.ingress_capacity;
         let subscription_capacity = config.subscription_capacity;
         let (sender, receiver) = mpsc::sync_channel(capacity);
-        let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+        let (store_sender, store_receiver) = mpsc::sync_channel(0);
         let writer = thread::Builder::new()
             .name("actingcommand-global-ledger".to_string())
             .spawn(move || {
-                let store = match open_store(config) {
-                    Ok(store) => {
-                        let _ = startup_sender.send(Ok(()));
-                        store
-                    }
-                    Err(error) => {
-                        let _ = startup_sender.send(Err(error.clone()));
-                        return Err(error);
-                    }
-                };
+                let store = store_receiver.recv().map_err(|_| {
+                    GlobalLedgerError::fatal("writer_start_cancelled", "start_writer")
+                })?;
                 writer_loop(store, receiver, subscription_capacity)
             })
             .map_err(|error| {
                 GlobalLedgerError::io("writer_spawn_failed", "spawn_writer", &error)
             })?;
-        match startup_receiver.recv_timeout(startup_timeout) {
-            Ok(Ok(())) => Ok(Self {
+
+        let store = match open_store(config) {
+            Ok(store) => store,
+            Err(store_error) => {
+                drop(store_sender);
+                drop(sender);
+                join_cancelled_writer(writer)?;
+                return Err(store_error);
+            }
+        };
+        match store_sender.send(store) {
+            Ok(()) => Ok(Self {
                 sender: Some(sender),
                 writer: Some(writer),
             }),
-            Ok(Err(error)) => {
-                let _ = writer.join();
-                Err(error)
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(mpsc::SendError(store)) => {
                 drop(sender);
-                drop(writer);
-                Err(GlobalLedgerError::fatal(
-                    "writer_start_timeout",
-                    "start_writer",
-                ))
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = writer.join();
+                let close_result = store.close();
+                let join_result = join_cancelled_writer(writer);
+                close_result?;
+                join_result?;
                 Err(GlobalLedgerError::fatal(
                     "writer_unavailable",
                     "start_writer",
@@ -655,6 +646,21 @@ impl GlobalLedger {
             .join()
             .map_err(|_| GlobalLedgerError::fatal("writer_panicked", "join_writer"))?;
         response_result.and(join_result)
+    }
+}
+
+fn join_cancelled_writer(writer: JoinHandle<GlobalLedgerResult<()>>) -> GlobalLedgerResult<()> {
+    match writer.join() {
+        Ok(Err(error)) if error.code() == "writer_start_cancelled" => Ok(()),
+        Ok(Ok(())) => Err(GlobalLedgerError::fatal(
+            "writer_unavailable",
+            "join_cancelled_writer",
+        )),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(GlobalLedgerError::fatal(
+            "writer_panicked",
+            "join_cancelled_writer",
+        )),
     }
 }
 

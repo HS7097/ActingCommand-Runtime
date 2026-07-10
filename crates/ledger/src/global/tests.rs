@@ -75,43 +75,56 @@ fn recognition_id() -> IssuedRecognitionId {
 }
 
 #[test]
-fn startup_timeout_returns_before_delayed_store_open_finishes() {
+fn open_never_returns_with_a_detached_future_owner() {
     let temp = TempDir::new().expect("temp");
-    let startup_config = config(&temp, "writer-timeout");
-    let delayed_config = startup_config.clone();
     let started = Instant::now();
 
-    let error =
-        GlobalLedger::open_with_store(startup_config, Duration::from_millis(20), move |_| {
-            thread::sleep(Duration::from_millis(200));
-            SegmentStore::open(delayed_config)
-        })
-        .expect_err("delayed startup must time out");
+    let ledger = GlobalLedger::open_with_store(config(&temp, "writer-delayed"), |config| {
+        thread::sleep(Duration::from_millis(100));
+        SegmentStore::open(config)
+    })
+    .expect("delayed store open must finish before return");
 
-    assert_eq!(error.code(), "writer_start_timeout");
-    assert!(started.elapsed() < Duration::from_millis(150));
-
-    thread::sleep(Duration::from_millis(250));
-    let segment_lengths = segment_paths(temp.path())
-        .into_iter()
-        .map(|path| fs::metadata(path).expect("segment metadata").len())
-        .collect::<Vec<_>>();
-    assert!(
-        segment_lengths.iter().all(|length| *length == 0),
-        "timed-out startup wrote unexpected segment bytes: {segment_lengths:?}"
-    );
-    let replacement =
-        GlobalLedger::open(config(&temp, "writer-after-timeout")).unwrap_or_else(|error| {
-            let segments = segment_paths(temp.path())
-                .into_iter()
-                .map(|path| {
-                    let bytes = fs::read(&path).expect("segment bytes");
-                    (path, bytes)
-                })
-                .collect::<Vec<_>>();
-            panic!("timed-out writer must release ownership: {error:?}; segments={segments:?}");
-        });
+    assert!(started.elapsed() >= Duration::from_millis(90));
+    ledger.close().expect("close delayed writer");
+    let replacement = GlobalLedger::open(config(&temp, "writer-after-delay"))
+        .expect("replacement writer must open immediately");
     replacement.close().expect("close replacement writer");
+}
+
+#[test]
+fn store_open_failure_joins_waiting_writer() {
+    let temp = TempDir::new().expect("temp");
+    let error = GlobalLedger::open_with_store(config(&temp, "writer-failed"), |_| {
+        Err(GlobalLedgerError::fatal(
+            "test_store_open_failed",
+            "open_test_store",
+        ))
+    })
+    .expect_err("store open must fail");
+
+    assert_eq!(error.code(), "test_store_open_failed");
+    GlobalLedger::open(config(&temp, "writer-after-failure"))
+        .expect("joined waiting writer must not conflict")
+        .close()
+        .expect("close replacement writer");
+}
+
+#[test]
+fn immediate_retry_after_failed_open_has_no_writer_conflict() {
+    let temp = TempDir::new().expect("temp");
+    let root = temp.path().join("ledger-root");
+    fs::write(&root, b"not a directory").expect("blocking root file");
+    let failed = GlobalLedgerConfig::new(&root, "writer-failed");
+
+    let error = GlobalLedger::open(failed).expect_err("file root must fail store open");
+    assert_eq!(error.code(), "ledger_io");
+
+    fs::remove_file(&root).expect("remove blocking root file");
+    GlobalLedger::open(GlobalLedgerConfig::new(&root, "writer-retry"))
+        .expect("retry must not conflict with a detached writer")
+        .close()
+        .expect("close retry writer");
 }
 
 #[test]
@@ -1031,14 +1044,17 @@ fn sha256_fingerprinter_returns_fixed_lowercase_fingerprint() {
 }
 
 #[test]
-fn config_debug_hides_machine_path() {
+fn config_debug_redacts_owner_and_root() {
     let temp = TempDir::new().expect("temp");
-    let config = config(&temp, "writer-one");
+    let owner = "private-writer-owner";
+    let config = config(&temp, owner);
 
     let debug = format!("{config:?}");
 
     assert!(!debug.contains(&temp.path().display().to_string()));
+    assert!(!debug.contains(owner));
     assert!(debug.contains("<redacted-root>"));
+    assert!(debug.contains("<redacted-owner-id>"));
 }
 
 #[test]
@@ -1121,14 +1137,6 @@ fn contradictory_writer_metadata_is_fatal() {
             "started_at_unix_ms": 10,
             "closed_at_unix_ms": Value::Null
         }),
-        serde_json::json!({
-            "schema_version": "actingcommand.ledger-writer.v1",
-            "owner_id": "previous-owner",
-            "pid": 42,
-            "active": false,
-            "started_at_unix_ms": 10,
-            "closed_at_unix_ms": 9
-        }),
     ];
     for metadata in cases {
         let temp = TempDir::new().expect("temp");
@@ -1139,6 +1147,29 @@ fn contradictory_writer_metadata_is_fatal() {
 
         assert_eq!(error.code(), "malformed_owner_metadata");
     }
+}
+
+#[test]
+fn backward_close_wall_clock_is_valid_diagnostic_metadata() {
+    let temp = TempDir::new().expect("temp");
+    fs::write(
+        temp.path().join("writer.lock"),
+        serde_json::json!({
+            "schema_version": "actingcommand.ledger-writer.v1",
+            "owner_id": "previous-owner",
+            "pid": 42,
+            "active": false,
+            "started_at_unix_ms": 10,
+            "closed_at_unix_ms": 9
+        })
+        .to_string(),
+    )
+    .expect("metadata");
+
+    GlobalLedger::open(config(&temp, "writer-new"))
+        .expect("wall-clock ordering is diagnostic only")
+        .close()
+        .expect("close writer");
 }
 
 #[test]
@@ -1313,6 +1344,33 @@ fn non_final_segment_corruption_is_fatal() {
         .expect_err("non-final corruption must fail");
 
     assert_eq!(error.code(), "corrupt_segment");
+}
+
+#[test]
+fn empty_non_final_segment_is_fatal() {
+    let temp = TempDir::new().expect("temp");
+    let segments = temp.path().join("segments");
+    fs::create_dir_all(&segments).expect("segments");
+    fs::write(segments.join("segment-000001.jsonl"), []).expect("empty first segment");
+    fs::write(segments.join("segment-000002.jsonl"), []).expect("empty final segment");
+
+    let error = GlobalLedger::open(config(&temp, "writer-one"))
+        .expect_err("empty non-final segment must fail");
+
+    assert_eq!(error.code(), "corrupt_segment");
+}
+
+#[test]
+fn sole_final_empty_segment_is_valid() {
+    let temp = TempDir::new().expect("temp");
+    let segments = temp.path().join("segments");
+    fs::create_dir_all(&segments).expect("segments");
+    fs::write(segments.join("segment-000001.jsonl"), []).expect("empty final segment");
+
+    GlobalLedger::open(config(&temp, "writer-one"))
+        .expect("sole final empty segment is valid")
+        .close()
+        .expect("close writer");
 }
 
 #[test]

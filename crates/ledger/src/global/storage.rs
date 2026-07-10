@@ -259,6 +259,12 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
         let is_last = position + 1 == segments.len();
         let mut bytes = fs::read(path)
             .map_err(|error| GlobalLedgerError::io("ledger_io", "read_segment", &error))?;
+        if bytes.is_empty() && !is_last {
+            return Err(GlobalLedgerError::fatal(
+                "corrupt_segment",
+                "recover_empty_non_final_segment",
+            ));
+        }
         let complete_len = bytes
             .iter()
             .rposition(|byte| *byte == b'\n')
@@ -585,7 +591,7 @@ fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterMetadata> {
     })?;
     let lifecycle_valid = match (metadata.active, metadata.closed_at_unix_ms) {
         (true, None) => true,
-        (false, Some(closed_at)) => closed_at >= metadata.started_at_unix_ms,
+        (false, Some(closed_at)) => closed_at > 0,
         _ => false,
     };
     let valid = metadata.schema_version == WRITER_SCHEMA_VERSION
