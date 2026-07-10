@@ -17,7 +17,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Weak,
-    mpsc::{self, Receiver, SyncSender, TrySendError},
+    mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -28,6 +28,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SEGMENT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_INGRESS_CAPACITY: usize = 256;
 const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 64;
+const DEFAULT_REPLAY_PAGE_EVENTS: usize = 256;
+const MAX_REPLAY_PAGE_EVENTS: usize = 1024;
 
 pub type GlobalLedgerResult<T> = Result<T, GlobalLedgerError>;
 
@@ -192,6 +194,31 @@ impl GlobalLedgerConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubscriptionOptions {
+    replay_page_events: usize,
+}
+
+impl SubscriptionOptions {
+    pub fn new(replay_page_events: usize) -> GlobalLedgerResult<Self> {
+        if !(1..=MAX_REPLAY_PAGE_EVENTS).contains(&replay_page_events) {
+            return Err(GlobalLedgerError::fatal(
+                "invalid_replay_page_size",
+                "configure_subscription",
+            ));
+        }
+        Ok(Self { replay_page_events })
+    }
+}
+
+impl Default for SubscriptionOptions {
+    fn default() -> Self {
+        Self {
+            replay_page_events: DEFAULT_REPLAY_PAGE_EVENTS,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Sha256SecretFingerprinter {
     private_salt: Vec<u8>,
@@ -254,7 +281,13 @@ enum WriterCommand {
     },
     Subscribe {
         cursor: SubscriptionCursor,
-        response: SyncSender<GlobalLedgerResult<LedgerSubscription>>,
+        response: SyncSender<GlobalLedgerResult<SubscriptionRegistration>>,
+    },
+    ReplayPage {
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+        response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
     },
     Project {
         query: EventQuery,
@@ -276,40 +309,160 @@ pub struct GlobalLedger {
 }
 
 pub struct LedgerSubscription {
+    sender: SyncSender<WriterCommand>,
     replay: VecDeque<PersistedEvent>,
+    replay_fetch_after_sequence: u64,
+    last_delivered_sequence: u64,
+    replay_through_sequence: u64,
+    replay_page_events: usize,
     live: Receiver<PersistedEvent>,
     terminal: Receiver<GlobalLedgerError>,
+    terminal_error: Option<GlobalLedgerError>,
     _liveness: Arc<()>,
 }
 
 impl LedgerSubscription {
     pub fn recv_timeout(&mut self, timeout: Duration) -> GlobalLedgerResult<PersistedEvent> {
-        if let Some(error) = self.terminal_error() {
-            return Err(error);
+        loop {
+            self.check_terminal()?;
+            if let Some(event) = self.replay.pop_front() {
+                self.check_terminal()?;
+                return self.deliver(event);
+            }
+            if self.replay_fetch_after_sequence < self.replay_through_sequence {
+                self.fetch_replay_page()?;
+                continue;
+            }
+            let result = self.live.recv_timeout(timeout);
+            self.check_terminal()?;
+            return match result {
+                Ok(event) => self.deliver(event),
+                Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
+                    "subscription_timeout",
+                    "receive_subscription",
+                )),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(self.latch_after_terminal_check(
+                    GlobalLedgerError::fatal("writer_unavailable", "receive_subscription"),
+                )),
+            };
         }
-        if let Some(event) = self.replay.pop_front() {
-            return Ok(event);
-        }
-        let result = match self.live.recv_timeout(timeout) {
-            Ok(event) => Ok(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
-                "subscription_timeout",
-                "receive_subscription",
-            )),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(GlobalLedgerError::request(
-                "subscription_closed",
-                "receive_subscription",
-            )),
-        };
-        if let Some(error) = self.terminal_error() {
-            return Err(error);
-        }
-        result
     }
 
-    fn terminal_error(&self) -> Option<GlobalLedgerError> {
-        self.terminal.try_recv().ok()
+    pub fn resume_cursor(&self) -> SubscriptionCursor {
+        SubscriptionCursor {
+            after_sequence: self.last_delivered_sequence,
+        }
     }
+
+    pub const fn replay_through_sequence(&self) -> u64 {
+        self.replay_through_sequence
+    }
+
+    fn fetch_replay_page(&mut self) -> GlobalLedgerResult<()> {
+        self.check_terminal()?;
+        let after_sequence = self.replay_fetch_after_sequence;
+        let (response, receiver) = mpsc::sync_channel(1);
+        if let Err(error) = send_command(
+            &self.sender,
+            WriterCommand::ReplayPage {
+                after_sequence,
+                through_sequence: self.replay_through_sequence,
+                page_events: self.replay_page_events,
+                response,
+            },
+            "replay_subscription",
+        ) {
+            return Err(self.latch_after_terminal_check(error));
+        }
+        let page = match receive_response(receiver, "replay_subscription") {
+            Ok(Ok(page)) => page,
+            Ok(Err(error)) | Err(error) => {
+                return Err(self.latch_after_terminal_check(error));
+            }
+        };
+        self.check_terminal()?;
+        if page.is_empty() || page.len() > self.replay_page_events {
+            return Err(self.latch_terminal(GlobalLedgerError::fatal(
+                "subscription_replay_invalid",
+                "validate_replay_page",
+            )));
+        }
+        let mut expected_sequence = after_sequence.checked_add(1).ok_or_else(|| {
+            self.latch_terminal(GlobalLedgerError::fatal(
+                "subscription_replay_invalid",
+                "validate_replay_page",
+            ))
+        })?;
+        for event in &page {
+            if event.sequence() != expected_sequence
+                || event.sequence() > self.replay_through_sequence
+            {
+                return Err(self.latch_terminal(GlobalLedgerError::fatal(
+                    "subscription_replay_invalid",
+                    "validate_replay_page",
+                )));
+            }
+            expected_sequence = expected_sequence.saturating_add(1);
+        }
+        self.replay_fetch_after_sequence = page
+            .last()
+            .expect("validated replay page is non-empty")
+            .sequence();
+        self.replay.extend(page);
+        Ok(())
+    }
+
+    fn deliver(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
+        let expected_sequence = self.last_delivered_sequence.checked_add(1).ok_or_else(|| {
+            self.latch_terminal(GlobalLedgerError::fatal(
+                "subscription_sequence_invalid",
+                "deliver_subscription",
+            ))
+        })?;
+        if event.sequence() != expected_sequence {
+            return Err(self.latch_terminal(GlobalLedgerError::fatal(
+                "subscription_sequence_invalid",
+                "deliver_subscription",
+            )));
+        }
+        self.last_delivered_sequence = event.sequence();
+        Ok(event)
+    }
+
+    fn check_terminal(&mut self) -> GlobalLedgerResult<()> {
+        if let Some(error) = &self.terminal_error {
+            return Err(error.clone());
+        }
+        match self.terminal.try_recv() {
+            Ok(error) => Err(self.latch_terminal(error)),
+            Err(TryRecvError::Empty) => Ok(()),
+            Err(TryRecvError::Disconnected) => Err(self.latch_terminal(GlobalLedgerError::fatal(
+                "writer_unavailable",
+                "receive_subscription_terminal",
+            ))),
+        }
+    }
+
+    fn latch_after_terminal_check(&mut self, fallback: GlobalLedgerError) -> GlobalLedgerError {
+        match self.check_terminal() {
+            Err(error) => error,
+            Ok(()) => self.latch_terminal(fallback),
+        }
+    }
+
+    fn latch_terminal(&mut self, error: GlobalLedgerError) -> GlobalLedgerError {
+        self.replay.clear();
+        while self.live.try_recv().is_ok() {}
+        self.terminal_error = Some(error.clone());
+        error
+    }
+}
+
+struct SubscriptionRegistration {
+    replay_through_sequence: u64,
+    live: Receiver<PersistedEvent>,
+    terminal: Receiver<GlobalLedgerError>,
+    liveness: Arc<()>,
 }
 
 struct ActiveSubscription {
@@ -423,6 +576,14 @@ impl GlobalLedger {
     }
 
     pub fn subscribe(&self, cursor: SubscriptionCursor) -> GlobalLedgerResult<LedgerSubscription> {
+        self.subscribe_with_options(cursor, SubscriptionOptions::default())
+    }
+
+    pub fn subscribe_with_options(
+        &self,
+        cursor: SubscriptionCursor,
+        options: SubscriptionOptions,
+    ) -> GlobalLedgerResult<LedgerSubscription> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -433,7 +594,19 @@ impl GlobalLedger {
             WriterCommand::Subscribe { cursor, response },
             "subscribe_events",
         )?;
-        receive_response(receiver, "subscribe_events")?
+        let registration = receive_response(receiver, "subscribe_events")??;
+        Ok(LedgerSubscription {
+            sender: sender.clone(),
+            replay: VecDeque::new(),
+            replay_fetch_after_sequence: cursor.after_sequence,
+            last_delivered_sequence: cursor.after_sequence,
+            replay_through_sequence: registration.replay_through_sequence,
+            replay_page_events: options.replay_page_events,
+            live: registration.live,
+            terminal: registration.terminal,
+            terminal_error: None,
+            _liveness: registration.liveness,
+        })
     }
 
     pub fn project(
@@ -527,24 +700,40 @@ fn writer_loop(
                 let _ = response.send(Ok(store.query(&query)));
             }
             WriterCommand::Subscribe { cursor, response } => {
-                let replay = VecDeque::from(store.events_after(cursor.after_sequence));
+                let replay_through_sequence = store.latest_sequence();
                 let (live, live_receiver) = mpsc::sync_channel(subscription_capacity);
                 let (terminal, terminal_receiver) = mpsc::sync_channel(1);
                 let liveness = Arc::new(());
-                let subscription = LedgerSubscription {
-                    replay,
+                let registration = SubscriptionRegistration {
+                    replay_through_sequence,
                     live: live_receiver,
                     terminal: terminal_receiver,
-                    _liveness: Arc::clone(&liveness),
+                    liveness: Arc::clone(&liveness),
                 };
-                if response.send(Ok(subscription)).is_ok() {
+                if response.send(Ok(registration)).is_ok() {
                     subscribers.push(ActiveSubscription {
-                        after_sequence: cursor.after_sequence,
+                        after_sequence: cursor.after_sequence.max(replay_through_sequence),
                         live,
                         terminal,
                         liveness: Arc::downgrade(&liveness),
                     });
                 }
+            }
+            WriterCommand::ReplayPage {
+                after_sequence,
+                through_sequence,
+                page_events,
+                response,
+            } => {
+                let result = if (1..=MAX_REPLAY_PAGE_EVENTS).contains(&page_events) {
+                    Ok(store.replay_page(after_sequence, through_sequence, page_events))
+                } else {
+                    Err(GlobalLedgerError::fatal(
+                        "invalid_replay_page_size",
+                        "replay_subscription",
+                    ))
+                };
+                let _ = response.send(result);
             }
             WriterCommand::Project {
                 query,
@@ -562,6 +751,10 @@ fn writer_loop(
                 let result = store.close();
                 match result {
                     Ok(()) => {
+                        notify_terminal_failure(
+                            &mut subscribers,
+                            GlobalLedgerError::request("subscription_closed", "shutdown_writer"),
+                        );
                         let _ = response.send(Ok(()));
                         return Ok(());
                     }
@@ -584,8 +777,12 @@ fn writer_loop(
         }
     }
     let result = store.close();
-    if let Err(error) = &result {
-        notify_terminal_failure(&mut subscribers, error.clone());
+    match &result {
+        Ok(()) => notify_terminal_failure(
+            &mut subscribers,
+            GlobalLedgerError::request("subscription_closed", "close_writer"),
+        ),
+        Err(error) => notify_terminal_failure(&mut subscribers, error.clone()),
     }
     result
 }

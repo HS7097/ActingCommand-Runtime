@@ -272,6 +272,268 @@ fn subscription_replays_after_cursor_then_receives_live_events() {
     );
 }
 
+mod subscription {
+    use super::*;
+
+    #[test]
+    fn subscription_registration_does_not_clone_unbounded_history() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        for index in 0..32 {
+            ledger
+                .append(event(&format!("evt-registration-{index}")))
+                .expect("append history");
+        }
+
+        let subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor::default(),
+                SubscriptionOptions::new(2).expect("subscription options"),
+            )
+            .expect("subscribe");
+
+        assert!(subscription.replay.is_empty());
+        assert_eq!(subscription.replay_through_sequence(), 32);
+    }
+
+    #[test]
+    fn replay_pages_are_bounded_and_writer_remains_responsive() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        for index in 0..8 {
+            ledger
+                .append(event(&format!("evt-page-{index}")))
+                .expect("append history");
+        }
+        let mut subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor::default(),
+                SubscriptionOptions::new(2).expect("subscription options"),
+            )
+            .expect("subscribe");
+
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first replay")
+                .sequence(),
+            1
+        );
+        assert!(subscription.replay.len() <= 1);
+
+        let live = ledger
+            .append(event("evt-writer-responsive"))
+            .expect("writer remains responsive");
+        let mut sequences = vec![1];
+        while sequences.len() < 9 {
+            sequences.push(
+                subscription
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("remaining replay or live")
+                    .sequence(),
+            );
+            assert!(subscription.replay.len() <= 1);
+        }
+        assert_eq!(sequences, (1..=live.sequence()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn paged_replay_then_live_is_gap_free_and_ordered() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        for index in 0..5 {
+            ledger
+                .append(event(&format!("evt-ordered-{index}")))
+                .expect("append history");
+        }
+        let mut subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor { after_sequence: 1 },
+                SubscriptionOptions::new(2).expect("subscription options"),
+            )
+            .expect("subscribe");
+        let live = ledger
+            .append(event("evt-ordered-live"))
+            .expect("append live");
+
+        let mut sequences = Vec::new();
+        while sequences.len() < 5 {
+            sequences.push(
+                subscription
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("ordered event")
+                    .sequence(),
+            );
+        }
+
+        assert_eq!(sequences, vec![2, 3, 4, 5, live.sequence()]);
+    }
+
+    #[test]
+    fn subscription_lag_is_absorbing_and_discards_buffered_events() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one").with_subscription_capacity(1))
+            .expect("ledger");
+        ledger.append(event("evt-replay")).expect("append replay");
+        let mut subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor::default(),
+                SubscriptionOptions::new(1).expect("subscription options"),
+            )
+            .expect("subscribe");
+
+        ledger.append(event("evt-live-one")).expect("first live");
+        ledger.append(event("evt-live-two")).expect("second live");
+
+        let first = subscription
+            .recv_timeout(Duration::from_secs(1))
+            .expect_err("lag must preempt buffered events");
+        let second = subscription
+            .recv_timeout(Duration::from_secs(1))
+            .expect_err("lag must remain terminal");
+        assert_eq!(first.code(), "subscription_lagged");
+        assert_eq!(first, second);
+        assert!(subscription.replay.is_empty());
+    }
+
+    #[test]
+    fn terminal_writer_failure_preempts_replay_and_is_stable() {
+        let temp = TempDir::new().expect("temp");
+        let mut ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        for index in 0..3 {
+            ledger
+                .append(event(&format!("evt-terminal-{index}")))
+                .expect("append history");
+        }
+        let mut subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor::default(),
+                SubscriptionOptions::new(2).expect("subscription options"),
+            )
+            .expect("subscribe");
+        let terminal = GlobalLedgerError::fatal("test_terminal", "test_writer_failure");
+        ledger
+            .sender
+            .as_ref()
+            .expect("writer sender")
+            .send(WriterCommand::TestTerminalFailure {
+                error: terminal.clone(),
+            })
+            .expect("inject terminal failure");
+
+        let first = subscription
+            .recv_timeout(Duration::from_secs(1))
+            .expect_err("terminal error must preempt replay");
+        let second = subscription
+            .recv_timeout(Duration::from_secs(1))
+            .expect_err("terminal error must be stable");
+        assert_eq!(first, terminal);
+        assert_eq!(second, terminal);
+        assert!(subscription.replay.is_empty());
+
+        ledger.sender.take();
+        let writer = ledger.writer.take().expect("writer handle");
+        assert_eq!(
+            writer
+                .join()
+                .expect("writer must not panic")
+                .expect_err("writer must return terminal error"),
+            terminal
+        );
+    }
+
+    #[test]
+    fn resume_cursor_recovers_every_missing_event() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        for index in 0..6 {
+            ledger
+                .append(event(&format!("evt-resume-{index}")))
+                .expect("append history");
+        }
+        let options = SubscriptionOptions::new(4).expect("subscription options");
+        let mut first = ledger
+            .subscribe_with_options(SubscriptionCursor::default(), options)
+            .expect("first subscription");
+        assert_eq!(
+            first
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first event")
+                .sequence(),
+            1
+        );
+        assert_eq!(
+            first
+                .recv_timeout(Duration::from_secs(1))
+                .expect("second event")
+                .sequence(),
+            2
+        );
+        let resume = first.resume_cursor();
+        drop(first);
+
+        let mut resumed = ledger
+            .subscribe_with_options(resume, options)
+            .expect("resumed subscription");
+        let mut sequences = Vec::new();
+        while sequences.len() < 4 {
+            sequences.push(
+                resumed
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("resumed event")
+                    .sequence(),
+            );
+        }
+        assert_eq!(sequences, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn future_cursor_remains_gap_free() {
+        let temp = TempDir::new().expect("temp");
+        let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
+        let mut subscription = ledger
+            .subscribe_with_options(
+                SubscriptionCursor { after_sequence: 3 },
+                SubscriptionOptions::new(1).expect("subscription options"),
+            )
+            .expect("subscribe");
+
+        for index in 1..=3 {
+            ledger
+                .append(event(&format!("evt-future-{index}")))
+                .expect("append suppressed event");
+        }
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_millis(50))
+                .expect_err("events through the future cursor stay suppressed")
+                .code(),
+            "subscription_timeout"
+        );
+        let visible = ledger
+            .append(event("evt-future-visible"))
+            .expect("append visible event");
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_secs(1))
+                .expect("visible event"),
+            visible
+        );
+        assert_eq!(subscription.resume_cursor().after_sequence, 4);
+    }
+
+    #[test]
+    fn invalid_replay_page_size_is_rejected() {
+        for page_size in [0, 1025] {
+            let error = SubscriptionOptions::new(page_size).expect_err("invalid page size");
+            assert_eq!(error.code(), "invalid_replay_page_size");
+            assert!(error.is_fatal());
+        }
+        assert!(SubscriptionOptions::new(1).is_ok());
+        assert!(SubscriptionOptions::new(1024).is_ok());
+    }
+}
+
 #[test]
 fn subscription_reports_timeout_and_clean_close_separately() {
     let temp = TempDir::new().expect("temp");
@@ -286,12 +548,21 @@ fn subscription_reports_timeout_and_clean_close_separately() {
     assert_eq!(timeout.code(), "subscription_timeout");
     assert!(!timeout.is_fatal());
 
+    ledger
+        .append(event("evt-buffered-before-close"))
+        .expect("append buffered event");
     ledger.close().expect("close ledger");
     let closed = subscription
         .recv_timeout(Duration::from_millis(50))
         .expect_err("closed subscription must report closure");
     assert_eq!(closed.code(), "subscription_closed");
     assert!(!closed.is_fatal());
+    assert_eq!(
+        subscription
+            .recv_timeout(Duration::from_millis(50))
+            .expect_err("clean closure must remain latched"),
+        closed
+    );
 }
 
 #[test]

@@ -142,10 +142,23 @@ impl SegmentStore {
         self.indexes.query(&self.events, query)
     }
 
-    pub(super) fn events_after(&self, sequence: u64) -> Vec<PersistedEvent> {
-        self.events
+    pub(super) fn latest_sequence(&self) -> u64 {
+        self.events.last().map_or(0, PersistedEvent::sequence)
+    }
+
+    pub(super) fn replay_page(
+        &self,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+    ) -> Vec<PersistedEvent> {
+        let start = self
+            .events
+            .partition_point(|event| event.sequence() <= after_sequence);
+        self.events[start..]
             .iter()
-            .filter(|event| event.sequence() > sequence)
+            .take_while(|event| event.sequence() <= through_sequence)
+            .take(page_events)
             .cloned()
             .collect()
     }
