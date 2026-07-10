@@ -26,6 +26,8 @@ use tempfile::TempDir;
 
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_ROOT";
 const CHILD_READY_ENV: &str = "ACTINGCOMMAND_LEDGER_PROCESS_READY";
+const CRITICAL_CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_CRITICAL_PROCESS_ROOT";
+const CRITICAL_CHILD_READY_ENV: &str = "ACTINGCOMMAND_CRITICAL_PROCESS_READY";
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
@@ -268,7 +270,91 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
 }
 
 #[test]
-fn five_sources_share_one_correlated_ledger() {
+fn critical_intent_process_child() {
+    let (Ok(root), Ok(ready_path)) = (
+        env::var(CRITICAL_CHILD_ROOT_ENV),
+        env::var(CRITICAL_CHILD_READY_ENV),
+    ) else {
+        return;
+    };
+    let ledger = GlobalLedger::open(config(Path::new(&root), "critical-child"))
+        .expect("child opens critical ledger");
+    let plan = CriticalEventPlan::new(
+        CriticalOperation::DeviceWrite,
+        input_event(
+            "crash-intent",
+            InputKind::Intent,
+            "crash-correlation",
+            "crash-action",
+        ),
+    )
+    .expect("critical plan");
+
+    let _ = execute_critical::<(), (), _, _>(
+        &ledger,
+        &fingerprinter(),
+        plan,
+        || {
+            fs::write(&ready_path, "intent-durable").expect("write critical ready marker");
+            loop {
+                thread::sleep(Duration::from_millis(50));
+            }
+        },
+        |_, _| {
+            Ok(input_draft(
+                "crash-success",
+                InputKind::Committed,
+                "crash-correlation",
+                "crash-action",
+            ))
+        },
+        |_, _| {
+            Ok(input_draft(
+                "crash-failure",
+                InputKind::Failed,
+                "crash-correlation",
+                "crash-action",
+            ))
+        },
+    );
+}
+
+#[test]
+fn crash_after_intent_never_forges_an_outcome() {
+    let temp = TempDir::new().expect("temp root");
+    let ready_path = temp.path().join("critical-ready");
+    let mut child = Command::new(env::current_exe().expect("test executable"))
+        .args(["--exact", "critical_intent_process_child", "--nocapture"])
+        .env(CRITICAL_CHILD_ROOT_ENV, temp.path())
+        .env(CRITICAL_CHILD_READY_ENV, &ready_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn critical child");
+
+    wait_for_ready(&mut child, &ready_path);
+    child.kill().expect("hard-kill critical child");
+    child.wait().expect("wait for critical child");
+
+    let ledger = GlobalLedger::open(config(temp.path(), "critical-recovery"))
+        .expect("reopen ledger after critical crash");
+    let events = ledger.query(EventQuery::default()).expect("query events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::InputIntent)
+            .count(),
+        1
+    );
+    assert!(events.iter().all(|event| !matches!(
+        event.event_type(),
+        EventType::InputCommitted | EventType::InputFailed
+    )));
+    ledger.close().expect("close critical recovery ledger");
+}
+
+#[test]
+fn five_sources_share_one_correlated_typed_ledger() {
     let temp = TempDir::new().expect("temp root");
     let ledger = GlobalLedger::open(config(temp.path(), "correlation-writer")).expect("ledger");
     let correlation_id = "all-sources-correlation";
@@ -389,7 +475,7 @@ fn five_sources_share_one_correlated_ledger() {
 }
 
 #[test]
-fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
+fn all_secret_classes_are_absent_from_files_indexes_errors_and_every_projection() {
     const TOKEN: &str = "token-secret-7d141b7b";
     const ACCOUNT: &str = "account-secret-5a9c8f3e";
     const MACHINE_PATH: &str = r"C:\Users\process-secret\runtime-state";

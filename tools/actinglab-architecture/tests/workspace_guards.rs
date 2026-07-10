@@ -124,7 +124,7 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn event_v2_append_ingress_and_producer_capabilities_are_exact() {
+fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");
     let global = fs::read_to_string(&global_path).expect("read global ledger source");
@@ -163,7 +163,7 @@ fn event_v2_append_ingress_and_producer_capabilities_are_exact() {
 }
 
 #[test]
-fn event_v2_public_surfaces_have_no_json_value_payloads() {
+fn contract_has_no_public_value_payload_or_persisted_fact() {
     let root = workspace_root();
     let mut files = vec![
         root.join("crates/actingcommand-contract/src/event.rs"),
@@ -189,6 +189,62 @@ fn event_v2_public_surfaces_have_no_json_value_payloads() {
     assert!(
         violations.is_empty(),
         "event v2 public Value violations:\n{}",
+        violations.join("\n")
+    );
+
+    let fact = fs::read_to_string(root.join("crates/ledger/src/fact.rs"))
+        .expect("read persisted fact source");
+    let ownership = inspect_persisted_event_ownership("crates/ledger/src/fact.rs", &fact)
+        .expect("inspect persisted fact");
+    assert!(
+        ownership.is_empty(),
+        "persisted fact ownership violations:\n{}",
+        ownership.join("\n")
+    );
+}
+
+#[test]
+fn c1_hardening_forbidden_source_surfaces_are_absent() {
+    let root = workspace_root();
+    let mut files = vec![root.join("crates/actingcommand-contract/src/event.rs")];
+    collect_rust_files(
+        &root.join("crates/actingcommand-contract/src/event"),
+        &mut files,
+    );
+    files.extend([
+        root.join("crates/ledger/src/critical.rs"),
+        root.join("crates/ledger/src/fact.rs"),
+        root.join("crates/ledger/src/global.rs"),
+        root.join("crates/ledger/src/global/projection.rs"),
+        root.join("crates/ledger/src/global/storage.rs"),
+    ]);
+    let forbidden = [
+        "ClassifiedField",
+        "StructuredPayloadDraft",
+        "ErasedSanitizedEventDraft",
+        "take_hook",
+        "set_hook",
+        "catch_unwind",
+        "events_after(",
+    ];
+    let mut violations = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for token in forbidden {
+            if source.contains(token) {
+                violations.push(format!("{display}: forbidden source token {token}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "C1 hardening source violations:\n{}",
         violations.join("\n")
     );
 }
@@ -416,7 +472,7 @@ fn feature_gated_forbidden_dependency_paths_are_detected() {
 }
 
 #[test]
-fn all_non_lab_workspace_packages_do_not_depend_on_optional_lab() {
+fn all_non_lab_packages_remain_lab_free_with_all_features() {
     let metadata = workspace_metadata();
     let violations =
         lab_removability_violations(&metadata, &["actingcommand-lab", "actingcommand-actinglab"])

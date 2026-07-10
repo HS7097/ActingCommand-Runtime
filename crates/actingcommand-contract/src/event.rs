@@ -5,12 +5,6 @@
 //! Producers can supply semantic event data, but cannot choose field sensitivity or
 //! redaction policy. The contract owns both the raw draft schema and its sanitized form.
 //!
-//! Caller-selected policy types are intentionally unavailable:
-//!
-//! ```compile_fail
-//! use actingcommand_contract::{ClassifiedField, StructuredPayloadDraft};
-//! ```
-//!
 //! Raw audit fields cannot be assigned directly:
 //!
 //! ```compile_fail
