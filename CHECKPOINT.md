@@ -21,6 +21,8 @@
 - `PayloadKind` is now sealed, and sanitization independently verifies the payload's declared family against the event type family.
 - Fingerprint validation accepts any correctly encoded lowercase SHA-256 digest while rejecting exact raw-value echo; it no longer uses substring matching.
 - Raw `EventLinks`, `ArtifactReference`, and `EventDraft` Debug output now exposes only presence/count/state metadata, never unvalidated values.
+- Task 1 source commits are `4b8835c`, `7e9c1e7`, and `49cc90b`.
+- The final task-scoped contract/security re-review reported no Critical or Important findings and approved Task 1.
 
 ### Files changed
 
