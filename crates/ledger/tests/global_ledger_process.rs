@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use actingcommand_contract::{
     ClassifiedField, ClientActionKind, ClientPayload, ClientPayloadDraft, EventActor, EventDraft,
     EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource, EventType, InputPayload,
-    InputPayloadDraft, InputTransition, PayloadKind, ProjectionProfile, SchedulerDecision,
-    SchedulerPayload, SchedulerPayloadDraft,
+    InputPayloadDraft, InputTransition, PayloadKind, ProjectionProfile, SanitizationError,
+    SchedulerDecision, SchedulerPayload, SchedulerPayloadDraft,
 };
 use actingcommand_ledger::critical::{CriticalEventPlan, CriticalExecutionError, execute_critical};
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256FieldRedactor};
@@ -40,6 +40,19 @@ fn client_event(
     correlation_id: Option<&str>,
     fields: Vec<ClassifiedField>,
 ) -> actingcommand_contract::SanitizedEventDraft<ClientPayload> {
+    client_draft(event_id, kind, source, actor, correlation_id, fields)
+        .sanitize(&redactor())
+        .expect("sanitize client event")
+}
+
+fn client_draft(
+    event_id: &str,
+    kind: ClientActionKind,
+    source: EventSource,
+    actor: EventActor,
+    correlation_id: Option<&str>,
+    fields: Vec<ClassifiedField>,
+) -> EventDraft<ClientPayloadDraft> {
     EventDraft::new(
         event_id,
         1_752_147_200_000,
@@ -52,8 +65,14 @@ fn client_event(
         },
         ClientPayloadDraft::new(kind, "process.acceptance", fields).expect("client payload"),
     )
-    .sanitize(&redactor())
-    .expect("sanitize client event")
+}
+
+struct FailingBoundaryRedactor;
+
+impl actingcommand_contract::FieldRedactor for FailingBoundaryRedactor {
+    fn fingerprint(&self, _field_name: &str, _value: &str) -> Result<String, SanitizationError> {
+        Err(SanitizationError::redactor_failure())
+    }
 }
 
 fn scheduler_event(
@@ -276,7 +295,22 @@ fn five_sources_share_one_correlated_ledger() {
 
 #[test]
 fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
-    const SECRET: &str = "process-secret-7d141b7b";
+    const TOKEN: &str = "token-secret-7d141b7b";
+    const ACCOUNT: &str = "account-secret-5a9c8f3e";
+    const MACHINE_PATH: &str = r"C:\Users\process-secret\runtime-state";
+    const ENDPOINT: &str = "https://process-secret.example.invalid:4876/api";
+    const CORRELATION_ID: &str = "redaction-index-correlation";
+    let sentinels = [TOKEN, ACCOUNT, MACHINE_PATH, ENDPOINT];
+
+    let secret_fields = || {
+        vec![
+            ClassifiedField::secret_fingerprint("access-token", TOKEN).expect("token field"),
+            ClassifiedField::secret_fingerprint("account-id", ACCOUNT).expect("account field"),
+            ClassifiedField::secret_fingerprint("machine-path", MACHINE_PATH)
+                .expect("machine path field"),
+            ClassifiedField::secret_fingerprint("endpoint", ENDPOINT).expect("endpoint field"),
+        ]
+    };
 
     let temp = TempDir::new().expect("temp root");
     let ledger = GlobalLedger::open(config(temp.path(), "redaction-writer")).expect("ledger");
@@ -285,49 +319,92 @@ fn secret_injection_is_absent_from_files_queries_errors_and_projections() {
         ClientActionKind::CliCommand,
         EventSource::Cli,
         EventActor::Cli,
-        Some("redaction-correlation"),
-        vec![
-            ClassifiedField::secret_drop("access-token", SECRET).expect("secret field"),
-            ClassifiedField::secret_fingerprint("session-token", SECRET)
-                .expect("fingerprinted secret field"),
-        ],
+        Some(CORRELATION_ID),
+        secret_fields(),
     );
     ledger.append(event.clone()).expect("append redacted event");
+    ledger.close().expect("close before recovered index query");
 
-    let query = ledger.query(EventQuery::default()).expect("query ledger");
+    let ledger = GlobalLedger::open(config(temp.path(), "redaction-query-writer"))
+        .expect("reopen redaction ledger");
+    let query = ledger
+        .query(EventQuery {
+            correlation_id: Some(CORRELATION_ID.to_string()),
+            ..EventQuery::default()
+        })
+        .expect("query recovered correlation index");
+    assert_eq!(query.len(), 1, "indexed query must retain the event");
+    assert_eq!(query[0].event_id, "secret-bearing-command");
+
     let duplicate = ledger
         .append(event)
         .expect_err("duplicate append must surface an error");
     let projections = [
-        ledger
-            .project(EventQuery::default(), ProjectionProfile::Cli)
-            .expect("CLI projection"),
-        ledger
-            .project(EventQuery::default(), ProjectionProfile::Ui)
-            .expect("UI projection"),
-        ledger
-            .project(EventQuery::default(), ProjectionProfile::Lab)
-            .expect("Lab projection"),
+        (
+            "CLI projection",
+            ledger
+                .project(
+                    EventQuery {
+                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Cli,
+                )
+                .expect("CLI projection"),
+        ),
+        (
+            "UI projection",
+            ledger
+                .project(
+                    EventQuery {
+                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Ui,
+                )
+                .expect("UI projection"),
+        ),
+        (
+            "Lab projection",
+            ledger
+                .project(
+                    EventQuery {
+                        correlation_id: Some(CORRELATION_ID.to_string()),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Lab,
+                )
+                .expect("Lab projection"),
+        ),
     ];
+    for (label, projection) in &projections {
+        assert_eq!(projection.len(), 1, "{label} must retain the event");
+        assert_eq!(projection[0].event_id, "secret-bearing-command");
+        let projection_text = serde_json::to_string(projection).expect("serialize projection");
+        assert_sentinels_absent(label, &projection_text, &sentinels);
+    }
+    let boundary_error = client_draft(
+        "redaction-boundary-error",
+        ClientActionKind::CliCommand,
+        EventSource::Cli,
+        EventActor::Cli,
+        Some(CORRELATION_ID),
+        secret_fields(),
+    )
+    .sanitize(&FailingBoundaryRedactor)
+    .expect_err("redaction-boundary failure must surface");
+    assert_eq!(boundary_error.code(), "redactor_failed");
 
     let query_text = serde_json::to_string(&query).expect("serialize query");
-    let error_text = format!("{duplicate:?}{duplicate}");
-    let projection_text = projections
-        .iter()
-        .map(|projection| serde_json::to_string(projection).expect("serialize projection"))
-        .collect::<String>();
+    let error_text = format!("{duplicate:?}{duplicate}{boundary_error:?}{boundary_error}");
     ledger.close().expect("close redaction ledger");
     let observed = [
-        read_tree_text(temp.path()),
-        query_text,
-        error_text,
-        projection_text,
+        ("durable files", read_tree_text(temp.path())),
+        ("indexed query", query_text),
+        ("errors", error_text),
     ];
-    for value in observed {
-        assert!(
-            !value.contains(SECRET),
-            "secret must not cross the ledger boundary"
-        );
+    for (surface, value) in observed {
+        assert_sentinels_absent(surface, &value, &sentinels);
     }
 }
 
@@ -412,4 +489,13 @@ fn read_tree_text(root: &Path) -> String {
         }
     }
     text
+}
+
+fn assert_sentinels_absent(surface: &str, value: &str, sentinels: &[&str]) {
+    for sentinel in sentinels {
+        assert!(
+            !value.contains(sentinel),
+            "{surface} must not disclose a redaction sentinel"
+        );
+    }
 }

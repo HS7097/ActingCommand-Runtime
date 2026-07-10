@@ -251,9 +251,49 @@ fn workspace_packages_do_not_depend_on_apps() {
 #[test]
 fn actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger() {
     let metadata = workspace_metadata();
+    let path = dependency_path(&metadata, "actingcommand-contract", "actingcommand-ledger");
     assert!(
-        dependency_path(&metadata, "actingcommand-contract", "actingcommand-ledger").is_none(),
-        "actingcommand-contract must not reach actingcommand-ledger"
+        path.is_none(),
+        "actingcommand-contract must not reach actingcommand-ledger: {}",
+        path.as_ref()
+            .map(|path| path.join(" -> "))
+            .unwrap_or_else(|| "no path".to_string())
+    );
+}
+
+#[test]
+fn dependency_metadata_requests_all_features() {
+    assert_eq!(
+        cargo_metadata_args(),
+        ["metadata", "--format-version", "1", "--all-features"]
+    );
+}
+
+#[test]
+fn feature_gated_forbidden_dependency_paths_are_detected() {
+    let contract_path = dependency_path(
+        FEATURE_GATED_FORBIDDEN_PATH_METADATA,
+        "actingcommand-contract",
+        "actingcommand-ledger",
+    );
+    assert_eq!(
+        contract_path,
+        Some(vec![
+            "actingcommand-contract".to_string(),
+            "contract-feature-bridge".to_string(),
+            "actingcommand-ledger".to_string(),
+        ])
+    );
+    let lab_violations = lab_removability_violations(
+        FEATURE_GATED_FORBIDDEN_PATH_METADATA,
+        &["actingcommand-lab", "actingcommand-actinglab"],
+    )
+    .expect("inspect feature-gated Lab path");
+    assert_eq!(
+        lab_violations,
+        vec![
+            "production package actingcommand-runtime-core reaches actingcommand-lab: actingcommand-runtime-core -> runtime-feature-bridge -> actingcommand-lab"
+        ]
     );
 }
 
@@ -271,11 +311,15 @@ fn all_non_lab_workspace_packages_do_not_depend_on_optional_lab() {
     );
 }
 
+fn cargo_metadata_args() -> [&'static str; 4] {
+    ["metadata", "--format-version", "1", "--all-features"]
+}
+
 fn workspace_metadata() -> String {
     let root = workspace_root();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1"])
+        .args(cargo_metadata_args())
         .current_dir(&root)
         .output()
         .expect("run cargo metadata");
@@ -286,6 +330,28 @@ fn workspace_metadata() -> String {
     );
     String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON")
 }
+
+const FEATURE_GATED_FORBIDDEN_PATH_METADATA: &str = r#"{
+    "packages": [
+        {"id": "contract", "name": "actingcommand-contract"},
+        {"id": "contract-bridge", "name": "contract-feature-bridge"},
+        {"id": "ledger", "name": "actingcommand-ledger"},
+        {"id": "runtime", "name": "actingcommand-runtime-core"},
+        {"id": "runtime-bridge", "name": "runtime-feature-bridge"},
+        {"id": "lab", "name": "actingcommand-lab"}
+    ],
+    "workspace_members": ["contract", "ledger", "runtime", "lab"],
+    "resolve": {
+        "nodes": [
+            {"id": "contract", "dependencies": ["contract-bridge"]},
+            {"id": "contract-bridge", "dependencies": ["ledger"]},
+            {"id": "ledger", "dependencies": []},
+            {"id": "runtime", "dependencies": ["runtime-bridge"]},
+            {"id": "runtime-bridge", "dependencies": ["lab"]},
+            {"id": "lab", "dependencies": []}
+        ]
+    }
+}"#;
 
 fn dependency_path(metadata: &str, from_name: &str, to_name: &str) -> Option<Vec<String>> {
     let metadata: serde_json::Value = serde_json::from_str(metadata).expect("parse cargo metadata");
