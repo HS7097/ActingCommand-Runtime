@@ -12,6 +12,7 @@
 - Added the Runtime domain glossary in `CONTEXT.md`.
 - Added a transitive Cargo graph guard: every package except the explicit optional Lab roots (`actingcommand-lab`, `actingcommand-actinglab`) fails if it reaches `actingcommand-lab`.
 - Updated project instructions and planning so Issue #35 v3 supersedes the old Lab-as-application-core direction.
+- C0 candidate commits: `979cdc9` and header-normalization follow-up `1fd95bc`.
 - No production behavior, wire schema, device behavior, resource data, game logic, UI, OCR, SQLite, or dependency was added.
 
 ### Frozen C0 decisions
