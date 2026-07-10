@@ -1004,7 +1004,7 @@ fn write_owner_metadata(root: &Path, active: bool, valid: bool) {
     fs::create_dir_all(root).expect("root");
     let content = if valid {
         serde_json::json!({
-            "schema_version": "actingcommand.ledger-writer.v1",
+            "schema_version": "actingcommand.ledger-writer.v2",
             "owner_id": "previous-owner",
             "pid": 999_999_u32,
             "active": active,
@@ -1122,7 +1122,7 @@ fn malformed_writer_metadata_is_fatal_without_path_disclosure() {
 fn contradictory_writer_metadata_is_fatal() {
     let cases = [
         serde_json::json!({
-            "schema_version": "actingcommand.ledger-writer.v1",
+            "schema_version": "actingcommand.ledger-writer.v2",
             "owner_id": "previous-owner",
             "pid": 42,
             "active": true,
@@ -1130,7 +1130,7 @@ fn contradictory_writer_metadata_is_fatal() {
             "closed_at_unix_ms": 11
         }),
         serde_json::json!({
-            "schema_version": "actingcommand.ledger-writer.v1",
+            "schema_version": "actingcommand.ledger-writer.v2",
             "owner_id": "previous-owner",
             "pid": 42,
             "active": false,
@@ -1155,7 +1155,7 @@ fn backward_close_wall_clock_is_valid_diagnostic_metadata() {
     fs::write(
         temp.path().join("writer.lock"),
         serde_json::json!({
-            "schema_version": "actingcommand.ledger-writer.v1",
+            "schema_version": "actingcommand.ledger-writer.v2",
             "owner_id": "previous-owner",
             "pid": 42,
             "active": false,

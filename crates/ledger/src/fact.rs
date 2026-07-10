@@ -46,9 +46,18 @@ impl PersistedEvent {
         sequence: u64,
         draft: SanitizedEventDraft,
     ) -> Result<Self, FactValidationError> {
+        let event_id = *draft.event_id();
+        Self::from_sanitized_with_event_id(sequence, draft, event_id)
+    }
+
+    pub(crate) fn from_sanitized_with_event_id(
+        sequence: u64,
+        draft: SanitizedEventDraft,
+        event_id: EventId,
+    ) -> Result<Self, FactValidationError> {
         let event = Self {
             schema_version: draft.schema_version().to_string(),
-            event_id: *draft.event_id(),
+            event_id,
             sequence,
             timestamp_unix_ms: draft.timestamp_unix_ms(),
             event_type: draft.event_type(),

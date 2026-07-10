@@ -861,5 +861,8 @@ fn is_identifier(value: &str) -> bool {
 mod tests;
 
 #[cfg(test)]
+mod recovery_tests;
+
+#[cfg(test)]
 #[path = "global/v2_tests.rs"]
 mod v2_tests;
