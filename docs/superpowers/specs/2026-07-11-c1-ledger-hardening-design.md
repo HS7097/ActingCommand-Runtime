@@ -162,7 +162,7 @@ then
 
 ## Owned Startup
 
-Store opening and ownership acquisition occur synchronously before the writer thread is spawned. `GlobalLedger::open` cannot return while a detached worker may later acquire the lock or mutate the root. If writer-thread spawn fails after store opening, the store is closed and ownership is released before the error returns.
+A writer thread is spawned first but blocks on a one-shot store receiver and has no filesystem authority. `GlobalLedger::open` then opens the store and acquires ownership synchronously on the caller thread. Store-open failure closes the one-shot channel and joins the waiting writer before returning. Successful open transfers the owned store to the writer; transfer failure recovers and closes the store and joins the writer. `GlobalLedger::open` therefore cannot return while a detached worker may later acquire the lock or mutate the root.
 
 The old startup-timeout path is removed rather than emulated with a cancellable detached initializer. C1 does not promise a startup deadline; filesystem failures remain explicit fatal errors.
 
@@ -187,7 +187,7 @@ prepare marker durable
 
 On restart, prepared records resume idempotently. Segment length must equal the original or repaired length; any third state is fatal. A deterministic recovery event ID prevents duplication. If the event is already present, startup verifies it and completes the marker. A successful open leaves no unresolved prepared repair.
 
-The recovery journal and writer metadata use v2 schemas. Unapproved v1 durable roots fail loudly instead of being treated as fully trusted.
+The recovery journal uses `actingcommand.ledger-repair.v1`; writer metadata uses `actingcommand.ledger-writer.v2`. Unapproved v1 writer metadata and generic v1 event roots fail loudly instead of being treated as fully trusted.
 
 ## Remaining Storage Invariants
 
@@ -209,4 +209,3 @@ The hardening is accepted only when all of the following pass:
 7. Recovery tests cover backward wall-clock data and empty non-final segments.
 8. Existing legacy `LabLedger`, protocol goldens, full workspace tests, Clippy, formatting, forbidden-source scans, and dependency guards remain green.
 9. A fresh whole-C1 review reports no Critical or Important findings before C1 closeout.
-

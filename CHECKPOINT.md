@@ -1,5 +1,106 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 global-ledger hardening closeout
+
+### Current status
+
+- Issue #35 C1 is complete on `issue-35-runtime-ledger-v3`; implementation, adversarial acceptance, whole-C1 review, planning reconciliation, and rollback preparation are finished.
+- The authoritative Issue #35 remained open, approved, authored by `HS7097`, and unchanged at `updatedAt=2026-07-10T13:55:43Z` during final verification.
+- The frozen v3 local specification SHA-256 remains `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
+- C1 now provides schema-owned typed event v2 drafts, opaque ledger-owned facts, durable single-writer append/query/subscription/projection, pre-persistence redaction, post-action outcomes, bounded replay, absorbing terminal subscription state, owned startup, and crash-atomic final-tail repair.
+- The original generic C1 Task 1-5 plan is explicitly historical where it conflicts with the approved hardening design and plan.
+- Implemented, tested, and reviewed directly without subagents.
+
+### Hardening commits
+
+- Typed event v2 and opaque facts: `0a3b6a6`, `0a610ce`, `6bb3406`, `5a5fd19`; task closeout `2c6b45e`.
+- Post-action critical outcomes: `3848f01`; task closeout `e2ae6a4`.
+- Bounded replay and absorbing subscriptions: `1889901`; task closeout `e256115`.
+- Owned startup and storage invariants: `9f9da2b`; task closeout `e60c322`.
+- Crash-atomic repair journal: `0cabe08`; task closeout `574cf4d`.
+- Final adversarial acceptance: `2bde860`.
+- Final review lifecycle fix: `ad64d8f`.
+- Stable rollback anchor: `checkpoint/20260711-c1-ledger-hardening` at the final C1 closeout commit.
+
+### Schema and boundary result
+
+- Event schema: `actingcommand.event.v2`.
+- Writer metadata: `actingcommand.ledger-writer.v2`.
+- Repair journal: `actingcommand.ledger-repair.v1`.
+- Generic v1 event roots and v1 writer metadata fail loudly; no implicit migration trusts the old generic payload format.
+- Artifact-bearing event recovery fails closed with `artifact_store_verification_unavailable` until C2 provides the durable artifact authority and verifier.
+- The explicitly preserved legacy `LabLedger` compatibility API remains in `crates/ledger/src/lib.rs`; its six public `serde_json::Value` signatures are not GlobalLedger ingress. The final forbidden scan is scoped to the C1 contract, fact, critical, global, and process-test surfaces.
+- Production contract/ledger crates do not depend on `actingcommand-lab`; the all-features reverse tree contains only `actingcommand-actinglab -> actingcommand-lab`.
+
+### RED/GREEN evidence
+
+- Tasks 1-2 began with failing schema-authority, opaque-fact, artifact-capability, recovery-authentication, and architecture-guard cases; the focused contract, ledger v2, compile-fail, and architecture suites are GREEN after the four source/review commits.
+- Task 3 began with failing post-action builder/effect/role-map/panic cases; 16 focused critical tests and process acceptance are GREEN.
+- Task 4 began with failing bounded-paging, replay/live ordering, lag-latching, terminal-priority, resume-cursor, future-cursor, and registration-memory cases; 13 focused subscription cases are GREEN after the final lifecycle fix.
+- Task 5 began with failing detached-startup, failed-open join, immediate-retry, wall-clock, empty-segment, and debug-redaction cases; all seven lifecycle/invariant cases are GREEN.
+- Task 6 began with failing prepared-repair and five process-kill boundaries; all repair state-machine/process cases are GREEN with exactly one deterministic recovery fact and no unresolved prepared repair after successful open.
+- Task 7 adds the required five-source correlation, all-secret-surface, append-before-action, crash-after-intent, typed-ingress, opaque-contract, and all-features Lab-removability acceptance cases; all are GREEN.
+
+### Final commands run
+
+- `cargo test -p actingcommand-contract -p actingcommand-ledger -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo test --workspace`
+- `cargo test --workspace --exclude actingcommand-lab --exclude actingcommand-actinglab`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo tree --workspace --all-features -i actingcommand-lab`
+- `git diff --check`
+- C1 forbidden-surface scan for public `serde_json::Value`, generic payload drafts, panic-hook mutation, and unbounded replay helpers.
+- Contract/ledger scan for `actingcommand-lab` dependency tokens.
+
+### Final test results
+
+- Focused closeout gate passed: 14 architecture-library tests, 16 workspace guards, 18 contract tests, 108 ledger unit tests, 7 ledger process tests, 10 contract compile-fail docs, and 2 ledger compile-fail docs.
+- Full workspace tests passed.
+- Full workspace tests excluding `actingcommand-lab` and `actingcommand-actinglab` passed.
+- Full workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- The scoped C1 forbidden-surface scan returned no matches.
+- The contract/ledger Lab-dependency scan returned no matches.
+- The unscoped compatibility scan returned only the six approved legacy `LabLedger` `serde_json::Value` signatures in `crates/ledger/src/lib.rs`; no GlobalLedger/C1 surface matched.
+
+### Fresh whole-C1 review
+
+- Reviewed `3e65741..ad64d8f` directly against Issue #35, frozen v3, C0, and the approved hardening design.
+- One additional Important issue was found: after a subscription locally latched a terminal state, it could retain the liveness token and leave a writer registration active until drop.
+- `ad64d8f` makes terminal latching clear buffered events, release liveness immediately, and absorb later receives; `local_terminal_state_detaches_writer_registration` proves the writer prunes the registration.
+- The repeated review found no remaining Critical or Important finding.
+
+### Deferred to C3a
+
+- Cross-call exactly-once execution is not claimed by C1.
+- Request idempotency, retries, action-id deduplication, pending-intent reconciliation, compensation, owner-epoch fencing, lease lifecycle, and production recovery decisions belong to C3a.
+- C1 records unresolved durable intents after process death; it does not guess an outcome or replay an action.
+
+### Files changed in final closeout
+
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/tests.rs`
+- `crates/ledger/tests/global_ledger_process.rs`
+- `crates/actingcommand-contract/src/event.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/superpowers/plans/2026-07-10-c1-global-event-ledger.md`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `docs/superpowers/specs/2026-07-11-c1-ledger-hardening-design.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Current blocker
+
+- None for C1.
+
+### Next step
+
+1. Commit and push the C1 closeout plus the two pending Task 7 source commits.
+2. Create and push `checkpoint/20260711-c1-ledger-hardening`.
+3. Record final commits, gate evidence, and rollback tag in Issue #36.
+4. Continue the approved critical path with C3a; C2 remains parallel-ready.
+
 ## 2026-07-11 Issue 35 C1 hardening Task 6 crash-atomic repair
 
 ### Current status

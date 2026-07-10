@@ -1,6 +1,10 @@
 # C1 Global Event Contract And Ledger Skeleton Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Superseded implementation record:** Issue #35 C1 was hardened and closed through
+> `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`. This file preserves the
+> original Task 1-5 history only. Where its generic interfaces, startup sequence, recovery
+> schema, or closeout instructions conflict with the approved hardening plan and design,
+> the 2026-07-11 documents are authoritative. Do not resume implementation from this file.
 
 **Goal:** Deliver the Issue #35 C1 typed event contract and recoverable single-writer global ledger needed by C3a without changing Runtime, scheduler, device, Lab, UI, resource, or game behavior.
 
