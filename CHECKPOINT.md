@@ -1,5 +1,48 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening design and implementation plan
+
+### Current status
+
+- Re-read GitHub Issue #35 and verified its author plus every current relied-on comment author are `HS7097`.
+- Recomputed the local v3 and resource-authoring amendment hashes; both match the values bound by Issue #35.
+- Alice approved the recommended path: strengthen C1 now instead of narrowing or deferring its guarantees.
+- Added a narrow C1 hardening design covering schema-owned redaction, typed ledger facts/projections, complete artifact references, post-action critical outcomes, bounded replay, absorbing subscription terminals, owned startup, crash-atomic repair, and the three remaining storage/diagnostic invariants.
+- Added a seven-task test-driven implementation plan. No Runtime production behavior or business code has been changed by this planning commit.
+
+### Files changed
+
+- `docs/superpowers/specs/2026-07-11-c1-ledger-hardening-design.md`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+- `Get-FileHash -Algorithm SHA256` for the v3 specification and approved amendment
+- design exploration over contract, critical, subscription, startup, and storage recovery code
+- placeholder and contradiction scans over the new design and plan
+- `git diff --check`
+
+### Test results
+
+- Issue #35 author: `HS7097`.
+- All current Issue #35 comment authors: `HS7097`.
+- v3 SHA-256 matches `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
+- Resource-authoring amendment SHA-256 matches `de039ad910b0b8208d52b8582b260868d4bcd2b04ec2b272977890661a136b54`.
+- Design and plan placeholder scans found no unresolved `TODO` or `TBD` entries.
+- Diff check passed.
+
+### Current blocker
+
+- None. The approved hardening plan can execute continuously.
+
+### Next step
+
+1. Implement Task 1 schema-owned event contract v2 test-first.
+2. Review, commit, push, and record Task 1 before starting Task 2.
+
 ## 2026-07-11 Issue 35 C1 whole-branch review decision gate
 
 ### Current status
