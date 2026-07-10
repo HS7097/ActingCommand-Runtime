@@ -561,7 +561,7 @@ struct TailRepairRecord {
 
 `repair_id` is deterministic SHA-256 over segment index, original length, repaired length, and tail hash. Journal records are append-only JSONL with duplicate-key rejection and `sync_all` after every record. The deterministic recovery event ID is derived from `repair_id`.
 
-- [ ] **Step 1: Add RED repair state-machine and process tests**
+- [x] **Step 1: Add RED repair state-machine and process tests**
 
 Add tests named:
 
@@ -579,19 +579,19 @@ kill_after_completion_reopens_cleanly
 
 Process tests use `#[cfg(test)]` barriers in the unit-test binary. No production environment-variable failpoint is compiled.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global::recovery_tests -- --nocapture`
 
 Expected: tests fail because destructive truncation currently precedes its recovery fact.
 
-- [ ] **Step 3: Implement prepare/quarantine/truncate/event/complete recovery**
+- [x] **Step 3: Implement prepare/quarantine/truncate/event/complete recovery**
 
 Write and sync `Prepared` before quarantine or truncation. Resume idempotently on startup. If a deterministic recovery event already exists, verify it and append `Completed` without duplication. Any unrecognized journal schema, duplicate key, inconsistent state transition, or unexpected segment length is fatal.
 
 Bump writer metadata to `actingcommand.ledger-writer.v2`. Because no production C1 root is approved, reject v1 writer metadata and v1 event segments explicitly instead of silently upgrading them.
 
-- [ ] **Step 4: Verify GREEN and process matrix**
+- [x] **Step 4: Verify GREEN and process matrix**
 
 Run:
 
@@ -605,7 +605,7 @@ git diff --check
 
 Expected: every kill boundary yields exactly one recovery fact, contiguous sequence, one quarantine object, and no unresolved prepared repair after successful open.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `fix(ledger): journal tail recovery atomically`
 

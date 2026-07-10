@@ -1,5 +1,60 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening Task 6 crash-atomic repair
+
+### Current status
+
+- Completed hardening Task 6 in source commit `0cabe08`.
+- Tail repair now appends and syncs `actingcommand.ledger-repair.v1` `prepared` before creating quarantine data or truncating a segment, then appends `completed` only after the deterministic `ledger.recovered` fact is durable and verified.
+- Repair IDs derive from segment index, original/repaired lengths, and tail SHA-256. Quarantine object keys and recovery event IDs derive deterministically from that repair ID.
+- Startup parses the append-only journal with duplicate-key rejection, validates state transitions and record identity, and resumes only when segment length equals the recorded original or repaired length. Any third length, missing/mismatched quarantine, unknown schema, or inconsistent transition is fatal.
+- A recovery fact already present after a crash is verified and reused rather than duplicated; successful open leaves no unresolved prepared repair.
+- Test-only process barriers cover kills after prepare, quarantine, truncate, recovery append, and completion. No production environment-variable failpoint is compiled.
+- Writer metadata is now `actingcommand.ledger-writer.v2`; v1 writer metadata and non-v2 event segments fail explicitly.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/ledger/src/fact.rs`
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/storage.rs`
+- `crates/ledger/src/global/tests.rs`
+- `crates/ledger/src/global/recovery_tests.rs`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-ledger global::recovery_tests -- --nocapture` (RED, then GREEN)
+- `cargo test -p actingcommand-ledger --test global_ledger_process -- --nocapture`
+- `cargo test -p actingcommand-ledger -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-ledger -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- All 12 repair tests passed: the nine required state/process cases, test child, explicit v1 writer rejection, and journal schema/duplicate/transition rejection.
+- All 107 ledger unit tests, 5 process tests, and 2 compile-fail documentation tests passed.
+- Every kill boundary reopens with contiguous sequence numbers, exactly one truncated-tail recovery fact, one deterministic quarantine object, and no unresolved prepared record.
+- Full workspace tests passed.
+- Ledger and full-workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+
+### Current blocker
+
+- None for hardening Task 6.
+
+### Next step
+
+1. Commit and push the Task 6 planning/checkpoint closeout with source commit `0cabe08`.
+2. Record Task 6 evidence in Issue #36.
+3. Execute hardening Task 7 adversarial acceptance and close the C1 hardening plan if every gate passes.
+
 ## 2026-07-11 Issue 35 C1 hardening Task 5 owned startup
 
 ### Current status
