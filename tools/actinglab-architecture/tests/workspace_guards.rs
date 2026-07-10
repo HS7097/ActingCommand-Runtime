@@ -249,7 +249,29 @@ fn workspace_packages_do_not_depend_on_apps() {
 }
 
 #[test]
-fn production_workspace_does_not_depend_on_optional_lab() {
+fn actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger() {
+    let metadata = workspace_metadata();
+    assert!(
+        dependency_path(&metadata, "actingcommand-contract", "actingcommand-ledger").is_none(),
+        "actingcommand-contract must not reach actingcommand-ledger"
+    );
+}
+
+#[test]
+fn all_non_lab_workspace_packages_do_not_depend_on_optional_lab() {
+    let metadata = workspace_metadata();
+    let violations =
+        lab_removability_violations(&metadata, &["actingcommand-lab", "actingcommand-actinglab"])
+            .unwrap();
+
+    assert!(
+        violations.is_empty(),
+        "production-to-Lab dependency violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn workspace_metadata() -> String {
     let root = workspace_root();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
@@ -262,16 +284,66 @@ fn production_workspace_does_not_depend_on_optional_lab() {
         "cargo metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let metadata = String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON");
-    let violations =
-        lab_removability_violations(&metadata, &["actingcommand-lab", "actingcommand-actinglab"])
-            .unwrap();
+    String::from_utf8(output.stdout).expect("cargo metadata must emit UTF-8 JSON")
+}
 
-    assert!(
-        violations.is_empty(),
-        "production-to-Lab dependency violations:\n{}",
-        violations.join("\n")
-    );
+fn dependency_path(metadata: &str, from_name: &str, to_name: &str) -> Option<Vec<String>> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let package_names = packages
+        .iter()
+        .map(|package| {
+            (
+                package["id"].as_str().expect("package id"),
+                package["name"].as_str().expect("package name"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let from = package_names
+        .iter()
+        .find_map(|(id, name)| (*name == from_name).then_some(*id))
+        .expect("source package");
+    let to = package_names
+        .iter()
+        .find_map(|(id, name)| (*name == to_name).then_some(*id))
+        .expect("target package");
+    let dependencies = metadata["resolve"]["nodes"]
+        .as_array()
+        .expect("metadata resolve nodes")
+        .iter()
+        .map(|node| {
+            (
+                node["id"].as_str().expect("node id"),
+                node["dependencies"]
+                    .as_array()
+                    .expect("node dependencies")
+                    .iter()
+                    .map(|dependency| dependency.as_str().expect("dependency id"))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut pending = std::collections::VecDeque::from([vec![from]]);
+    let mut visited = std::collections::BTreeSet::from([from]);
+
+    while let Some(path) = pending.pop_front() {
+        let current = path.last().expect("non-empty dependency path");
+        if *current == to {
+            return Some(
+                path.iter()
+                    .map(|id| package_names[id].to_string())
+                    .collect(),
+            );
+        }
+        for dependency in dependencies.get(current).into_iter().flatten() {
+            if visited.insert(dependency) {
+                let mut next = path.clone();
+                next.push(dependency);
+                pending.push_back(next);
+            }
+        }
+    }
+    None
 }
 
 #[test]
