@@ -428,7 +428,7 @@ impl LedgerSubscription {
 
 Registration captures high-water `S`, registers live events for `> S`, and returns without cloning history. `WriterCommand::ReplayPage` returns at most `replay_page_events` events in `(after, S]`. Fatal lag/replay/writer errors and clean closure latch permanently; timeout does not.
 
-- [ ] **Step 1: Add RED subscription tests**
+- [x] **Step 1: Add RED subscription tests**
 
 Add tests named:
 
@@ -443,17 +443,17 @@ future_cursor_remains_gap_free
 invalid_replay_page_size_is_rejected
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test -p actingcommand-ledger global::tests::subscription -- --nocapture`
 
 Expected: tests fail because replay is currently one unbounded clone and terminal errors are consumable.
 
-- [ ] **Step 3: Implement bounded page commands and terminal state machine**
+- [x] **Step 3: Implement bounded page commands and terminal state machine**
 
 Use the existing in-memory durable event vector for bounded page reads. A page command may clone at most 1024 events. The subscription checks terminal state before and after every page/live receive and clears all buffers when terminal.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -468,7 +468,7 @@ git diff --check
 
 Expected: tests pass and the unbounded replay-clone path is absent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit message: `fix(ledger): bound subscription replay`
 

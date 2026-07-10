@@ -1,5 +1,57 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C1 hardening Task 4 bounded replay
+
+### Current status
+
+- Completed hardening Task 4 in source commit `1889901`.
+- Added validated `SubscriptionOptions` with a 256-event default and a strict `1..=1024` replay-page range.
+- Subscription registration now captures a fixed durable high-water sequence and registers bounded live delivery above the greater of that high-water and a future cursor, without cloning history into the registration response.
+- Replay uses bounded writer commands and binary-search page starts; each command clones at most the selected page and the old unbounded `events_after` helper is removed.
+- Replay and live delivery preserve one contiguous sequence. `resume_cursor` advances only after an event is returned, so dropping a partially buffered subscription does not lose unseen events.
+- Lag, invalid replay, writer failure, and clean closure are absorbing. Terminal detection clears replay and live buffers and returns the same latched result on every later receive; timeout remains transient.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/ledger/src/global.rs`
+- `crates/ledger/src/global/storage.rs`
+- `crates/ledger/src/global/tests.rs`
+- `docs/superpowers/plans/2026-07-11-c1-ledger-hardening.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-ledger global::tests::subscription -- --nocapture` (RED, then GREEN)
+- `cargo test -p actingcommand-ledger -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-ledger -- -D warnings`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "events_after\\(|VecDeque::from\\(store\\.events" crates/ledger/src`
+
+### Test results
+
+- All 12 filtered subscription tests passed, including all eight new Task 4 acceptance cases.
+- All 90 ledger unit tests, 5 ledger process tests, and 2 compile-fail documentation tests passed.
+- Full workspace tests passed.
+- Ledger and full-workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- The prohibited unbounded replay-clone scan returned no matches.
+
+### Current blocker
+
+- None for hardening Task 4.
+
+### Next step
+
+1. Commit and push the Task 4 planning/checkpoint closeout with source commit `1889901`.
+2. Record Task 4 evidence in Issue #36.
+3. Begin hardening Task 5: owned startup and storage invariants, without broadening into Task 6.
+
 ## 2026-07-11 Issue 35 C1 hardening Task 3 post-action critical outcomes
 
 ### Current status
