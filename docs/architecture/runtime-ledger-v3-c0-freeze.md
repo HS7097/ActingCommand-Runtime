@@ -1,10 +1,10 @@
 # Runtime Ledger V3 C0 Architecture Freeze
 
-Status: C0 approval candidate for GitHub Issue #35  
-Source specification: `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`  
-Source specification SHA-256: `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`  
-Implementation baseline: `981f61f650c51a62f3c6c22fda781d2b98b3ceb8`  
-Paused RED evidence: `ead23d2acb3752507b5c6110c1cbf049e878cbbd`  
+- Status: C0 approval candidate for GitHub Issue #35
+- Source specification: `TASK-runtime-ledger-core-and-optional-lab-correction-v3.md`
+- Source specification SHA-256: `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`
+- Implementation baseline: `981f61f650c51a62f3c6c22fda781d2b98b3ceb8`
+- Paused RED evidence: `ead23d2acb3752507b5c6110c1cbf049e878cbbd`
 Frozen payload SHA-256: `6c72a9c39ff67ec5a2868e0ed262d2a2f0a2c4b0fbfc473b7c55a9df610bf0a7`
 
 This document is the C0 design candidate. It becomes the binding C1-C7 architecture only after Alice explicitly approves its frozen hash on Issue #35.
