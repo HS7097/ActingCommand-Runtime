@@ -2,17 +2,19 @@
 
 //! Recoverable single-writer storage for the global Runtime event ledger.
 
+mod projection;
 mod storage;
 
 use actingcommand_contract::{
-    EventContractError, FieldRedactor, PersistedEvent, SanitizationError, SanitizedEventDraft,
-    SanitizedPayload,
+    EventContractError, EventQuery, FieldRedactor, PersistedEvent, ProjectedEvent,
+    ProjectionProfile, SanitizationError, SanitizedEventDraft, SanitizedPayload,
+    SubscriptionCursor,
 };
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -227,6 +229,19 @@ enum WriterCommand {
         draft: Box<actingcommand_contract::ErasedSanitizedEventDraft>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
+    Query {
+        query: EventQuery,
+        response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    Subscribe {
+        cursor: SubscriptionCursor,
+        response: SyncSender<GlobalLedgerResult<LedgerSubscription>>,
+    },
+    Project {
+        query: EventQuery,
+        profile: ProjectionProfile,
+        response: SyncSender<GlobalLedgerResult<Vec<ProjectedEvent>>>,
+    },
     Shutdown {
         response: SyncSender<GlobalLedgerResult<()>>,
     },
@@ -235,6 +250,19 @@ enum WriterCommand {
 pub struct GlobalLedger {
     sender: Option<SyncSender<WriterCommand>>,
     writer: Option<JoinHandle<GlobalLedgerResult<()>>>,
+}
+
+pub struct LedgerSubscription {
+    receiver: Receiver<PersistedEvent>,
+}
+
+impl LedgerSubscription {
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<PersistedEvent, mpsc::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
 }
 
 impl fmt::Debug for GlobalLedger {
@@ -329,6 +357,56 @@ impl GlobalLedger {
         receive_response(receiver, "append_event")?
     }
 
+    pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "query_events"))?;
+        send_command(
+            sender,
+            WriterCommand::Query { query, response },
+            "query_events",
+        )?;
+        receive_response(receiver, "query_events")?
+    }
+
+    pub fn subscribe(&self, cursor: SubscriptionCursor) -> GlobalLedgerResult<LedgerSubscription> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "subscribe_events"))?;
+        send_command(
+            sender,
+            WriterCommand::Subscribe { cursor, response },
+            "subscribe_events",
+        )?;
+        receive_response(receiver, "subscribe_events")?
+    }
+
+    pub fn project(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+    ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "project_events"))?;
+        send_command(
+            sender,
+            WriterCommand::Project {
+                query,
+                profile,
+                response,
+            },
+            "project_events",
+        )?;
+        receive_response(receiver, "project_events")?
+    }
+
     pub fn close(mut self) -> GlobalLedgerResult<()> {
         self.shutdown()
     }
@@ -373,15 +451,45 @@ fn writer_loop(
     mut store: SegmentStore,
     receiver: Receiver<WriterCommand>,
 ) -> GlobalLedgerResult<()> {
+    let mut subscribers = Vec::new();
     while let Ok(command) = receiver.recv() {
         match command {
             WriterCommand::Append { draft, response } => {
                 let result = store.append(*draft);
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
                 let _ = response.send(result.clone());
-                if terminal {
-                    return result.map(|_| ());
+                if let Ok(event) = &result {
+                    subscribers.retain(|subscriber: &Sender<PersistedEvent>| {
+                        subscriber.send(event.clone()).is_ok()
+                    });
                 }
+                if terminal {
+                    return Err(result.expect_err("terminal append result must be an error"));
+                }
+            }
+            WriterCommand::Query { query, response } => {
+                let _ = response.send(Ok(store.query(&query)));
+            }
+            WriterCommand::Subscribe { cursor, response } => {
+                let replay = store.events_after(cursor.after_sequence);
+                let (subscriber, receiver) = mpsc::channel();
+                for event in replay {
+                    let _ = subscriber.send(event);
+                }
+                subscribers.push(subscriber);
+                let _ = response.send(Ok(LedgerSubscription { receiver }));
+            }
+            WriterCommand::Project {
+                query,
+                profile,
+                response,
+            } => {
+                let projected = store
+                    .query(&query)
+                    .iter()
+                    .map(|event| projection::project(event, profile))
+                    .collect();
+                let _ = response.send(Ok(projected));
             }
             WriterCommand::Shutdown { response } => {
                 let result = store.close();

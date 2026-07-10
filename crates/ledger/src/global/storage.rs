@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult, is_identifier};
+use super::{
+    GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerResult, is_identifier,
+    projection::EventIndexes,
+};
 use actingcommand_contract::{
     ClassifiedField, ErasedSanitizedEventDraft, EventActor, EventDraft, EventLinks, EventOrigin,
     EventSeverity, EventSource, EventType, FieldRedactor, LedgerPayloadDraft, LedgerTransition,
@@ -27,7 +30,8 @@ pub(super) struct SegmentStore {
     active_bytes: u64,
     active_file: File,
     next_sequence: u64,
-    event_ids: BTreeSet<String>,
+    events: Vec<PersistedEvent>,
+    indexes: EventIndexes,
 }
 
 impl SegmentStore {
@@ -76,7 +80,8 @@ impl SegmentStore {
             active_bytes,
             active_file,
             next_sequence: recovery.next_sequence,
-            event_ids: recovery.event_ids,
+            indexes: EventIndexes::from_events(&recovery.events),
+            events: recovery.events,
         };
         if let Some(owner_id) = stale_owner {
             store.append_recovery("stale_owner", Some(owner_id), None)?;
@@ -100,7 +105,7 @@ impl SegmentStore {
         event
             .validate()
             .map_err(|_| GlobalLedgerError::request("invalid_sanitized_event", "validate_event"))?;
-        if self.event_ids.contains(&event.event_id) {
+        if self.indexes.contains_event_id(&event.event_id) {
             return Err(GlobalLedgerError::request(
                 "duplicate_event_id",
                 "append_event",
@@ -127,8 +132,21 @@ impl SegmentStore {
             .map_err(|error| GlobalLedgerError::io("ledger_io", "sync_event", &error))?;
         self.active_bytes = self.active_bytes.saturating_add(bytes.len() as u64);
         self.next_sequence = following_sequence;
-        self.event_ids.insert(event.event_id.clone());
+        self.indexes.insert(&event, self.events.len());
+        self.events.push(event.clone());
         Ok(event)
+    }
+
+    pub(super) fn query(&self, query: &actingcommand_contract::EventQuery) -> Vec<PersistedEvent> {
+        self.indexes.query(&self.events, query)
+    }
+
+    pub(super) fn events_after(&self, sequence: u64) -> Vec<PersistedEvent> {
+        self.events
+            .iter()
+            .filter(|event| event.sequence > sequence)
+            .cloned()
+            .collect()
     }
 
     pub(super) fn close(mut self) -> GlobalLedgerResult<()> {
@@ -224,7 +242,7 @@ struct StoredLine {
 
 struct RecoveryState {
     next_sequence: u64,
-    event_ids: BTreeSet<String>,
+    events: Vec<PersistedEvent>,
     last_segment_index: u64,
     truncated_tail: Option<TruncatedTail>,
 }
@@ -238,6 +256,7 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
     let segments = list_segments(segments_dir)?;
     let mut next_sequence = 1_u64;
     let mut event_ids = BTreeSet::new();
+    let mut events = Vec::new();
     let mut truncated_tail = None;
     for (position, (index, path)) in segments.iter().enumerate() {
         let is_last = position + 1 == segments.len();
@@ -312,18 +331,19 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
                     "recover_sequence",
                 ));
             }
-            if !event_ids.insert(stored.event.event_id) {
+            if !event_ids.insert(stored.event.event_id.clone()) {
                 return Err(GlobalLedgerError::fatal(
                     "duplicate_event_id",
                     "recover_event_ids",
                 ));
             }
+            events.push(stored.event);
             next_sequence = increment_sequence(next_sequence)?;
         }
     }
     Ok(RecoveryState {
         next_sequence,
-        event_ids,
+        events,
         last_segment_index: segments.last().map_or(1, |(index, _)| *index),
         truncated_tail,
     })
