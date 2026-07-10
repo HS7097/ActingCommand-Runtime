@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+
+const LAB2_ARBITRATOR_LOCK_SCHEMA: &str = "actingcommand.lab2.arbitrator_lock.v0.1";
 
 fn actinglab_binary() -> &'static str {
     env!("CARGO_BIN_EXE_actinglab")
@@ -89,6 +94,82 @@ fn spawn_actinglab(args: &[String], local_app_data: &Path) -> Child {
         .expect("actinglab child process should spawn")
 }
 
+fn arbitrator_state_path(state_dir: &Path) -> std::path::PathBuf {
+    state_dir.join("lab2-arbitrator-state.json")
+}
+
+fn arbitrator_lock_path(state_dir: &Path) -> std::path::PathBuf {
+    state_dir.join("lab2-arbitrator-state.json.lock")
+}
+
+fn write_arbitrator_lock(state_dir: &Path, owner_pid: u32, acquired_at_unix_ms: u64) {
+    fs::create_dir_all(state_dir).expect("state dir");
+    fs::write(
+        arbitrator_lock_path(state_dir),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": LAB2_ARBITRATOR_LOCK_SCHEMA,
+            "owner_pid": owner_pid,
+            "owner_token": "a8a-test-owner",
+            "acquired_at_unix_ms": acquired_at_unix_ms
+        }))
+        .expect("lock metadata"),
+    )
+    .expect("write lock metadata");
+}
+
+fn arbitrator_mutation_args(
+    state_dir: &Path,
+    hold_ms: Option<u64>,
+    ready_file: Option<&Path>,
+) -> Vec<String> {
+    let mut args = vec![
+        "--json".to_string(),
+        "--game".to_string(),
+        "ark".to_string(),
+        "lab".to_string(),
+        "arbitrator".to_string(),
+        "mark-destructive".to_string(),
+        "--instance".to_string(),
+        "ak".to_string(),
+        "--state-dir".to_string(),
+        state_dir.display().to_string(),
+    ];
+    if let Some(hold_ms) = hold_ms {
+        args.extend([
+            "--test-arbitrator-lock-hold-ms".to_string(),
+            hold_ms.to_string(),
+        ]);
+    }
+    if let Some(ready_file) = ready_file {
+        args.extend([
+            "--test-arbitrator-lock-ready-file".to_string(),
+            ready_file.display().to_string(),
+        ]);
+    }
+    args
+}
+
+fn wait_for_file(path: &Path, child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if path.is_file() {
+            return;
+        }
+        if let Some(status) = child.try_wait().expect("child status") {
+            panic!("child exited before creating {}: {status}", path.display());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_millis() as u64
+}
+
 fn parse_stdout_json(output: &Output) -> Value {
     serde_json::from_slice::<Value>(&output.stdout).expect("stdout should parse as JSON")
 }
@@ -158,6 +239,168 @@ fn tree_contains(path: &Path, needle: &str) -> bool {
         }
     }
     false
+}
+
+#[test]
+fn a8a_live_arbitrator_lock_conflict_fails_loudly() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    write_arbitrator_lock(&state_dir, std::process::id(), unix_ms_now());
+
+    let output = run_actinglab_owned(
+        &arbitrator_mutation_args(&state_dir, None, None),
+        local.path(),
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("lab2_arbitrator_lock_conflict"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(arbitrator_lock_path(&state_dir).is_file());
+}
+
+#[test]
+fn a8a_stale_arbitrator_lock_is_recovered() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    write_arbitrator_lock(&state_dir, u32::MAX, unix_ms_now());
+
+    let output = run_actinglab_owned(
+        &arbitrator_mutation_args(&state_dir, None, None),
+        local.path(),
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice::<Value>(&fs::read(arbitrator_state_path(&state_dir)).unwrap())
+        .expect("arbitrator state remains readable");
+    assert!(!arbitrator_lock_path(&state_dir).exists());
+}
+
+#[test]
+fn a8a_max_age_recovers_arbitrator_lock_even_if_recorded_pid_is_live() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    write_arbitrator_lock(&state_dir, std::process::id(), 1);
+
+    let output = run_actinglab_owned(
+        &arbitrator_mutation_args(&state_dir, None, None),
+        local.path(),
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!arbitrator_lock_path(&state_dir).exists());
+}
+
+#[test]
+fn a8a_malformed_arbitrator_lock_metadata_is_fatal_and_preserved() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(arbitrator_lock_path(&state_dir), b"{not-json").unwrap();
+
+    let output = run_actinglab_owned(
+        &arbitrator_mutation_args(&state_dir, None, None),
+        local.path(),
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("invalid Lab-2 arbitrator lock metadata"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        fs::read(arbitrator_lock_path(&state_dir)).unwrap(),
+        b"{not-json"
+    );
+}
+
+#[test]
+fn a8a_zero_stagger_barrier_contention_has_one_winner_and_clean_state() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    let barrier = Arc::new(Barrier::new(3));
+    let mut contenders = Vec::new();
+    for _ in 0..2 {
+        let barrier = Arc::clone(&barrier);
+        let state_dir = state_dir.clone();
+        let local_path = local.path().to_path_buf();
+        contenders.push(thread::spawn(move || {
+            let args = arbitrator_mutation_args(&state_dir, Some(750), None);
+            barrier.wait();
+            run_actinglab_owned(&args, &local_path)
+        }));
+    }
+
+    barrier.wait();
+    let outputs = contenders
+        .into_iter()
+        .map(|contender| contender.join().expect("contender thread"))
+        .collect::<Vec<_>>();
+    let successes = outputs
+        .iter()
+        .filter(|output| output.status.success())
+        .count();
+
+    assert_eq!(successes, 1, "outputs: {outputs:?}");
+    let conflict = outputs
+        .iter()
+        .find(|output| !output.status.success())
+        .expect("one contender must fail");
+    assert!(
+        String::from_utf8_lossy(&conflict.stdout).contains("lab2_arbitrator_lock_conflict"),
+        "{}",
+        String::from_utf8_lossy(&conflict.stdout)
+    );
+    serde_json::from_slice::<Value>(&fs::read(arbitrator_state_path(&state_dir)).unwrap())
+        .expect("arbitrator state remains readable");
+    assert!(!arbitrator_lock_path(&state_dir).exists());
+}
+
+#[test]
+fn a8a_hard_killed_arbitrator_owner_is_recovered_without_residual_lock() {
+    let local = TempDir::new().unwrap();
+    let state_dir = local.path().join("state");
+    let ready_file = local.path().join("lock-ready");
+    let args = arbitrator_mutation_args(&state_dir, Some(30_000), Some(&ready_file));
+    let mut owner = spawn_actinglab(&args, local.path());
+    wait_for_file(&ready_file, &mut owner);
+    assert!(arbitrator_lock_path(&state_dir).is_file());
+
+    owner.kill().expect("hard kill lock owner");
+    owner.wait().expect("reap lock owner");
+    let recovered = run_actinglab_owned(
+        &arbitrator_mutation_args(&state_dir, None, None),
+        local.path(),
+    );
+
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stdout)
+    );
+    serde_json::from_slice::<Value>(&fs::read(arbitrator_state_path(&state_dir)).unwrap())
+        .expect("arbitrator state remains readable");
+    assert!(!arbitrator_lock_path(&state_dir).exists());
+    let residual_locks = fs::read_dir(&state_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".lock"))
+        .collect::<Vec<_>>();
+    assert!(
+        residual_locks.is_empty(),
+        "residual locks: {residual_locks:?}"
+    );
 }
 
 fn encode_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {

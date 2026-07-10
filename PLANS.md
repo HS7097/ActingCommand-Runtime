@@ -36,9 +36,9 @@ A0 implementation is complete and verified on its task branch:
 - deliberate line growth and stale command-count mutations both failed before restoration;
 - focused tests, formatting, diff checks, workspace Clippy, and workspace tests pass.
 
-Alice authorized the full A0-A9 chain to run continuously in this work round. A1-A9 are recorded as sequential comments in issue #34 rather than separate child issues; each node keeps an independent commit and verification boundary, while acceptance occurs only after the complete chain.
+Alice originally authorized the full A0-A9 chain to run continuously in this work round. On 2026-07-10 Alice paused that direction while A8a was in its RED-test stage so the remaining architecture direction can be re-specified. A1-A9 remain recorded as sequential comments in issue #34 rather than separate child issues; each completed node keeps an independent commit and verification boundary.
 
-Current node: A7 Lab run/validate migration is implemented and verified; A8a concurrency/crash-recovery and ledger-conflict repair is next.
+Current node: paused after A7 completion and the initial A8a RED-test scaffold. A8a production implementation, golden re-freeze, A8b, A8c, and A9 have not been completed and must not resume until Alice provides the replacement direction.
 
 Approved amendments:
 

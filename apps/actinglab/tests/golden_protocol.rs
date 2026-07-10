@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -35,6 +36,7 @@ enum Preparation {
     None,
     Detect,
     DetectThenStale,
+    LiveArbitratorLock,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +125,12 @@ const CASES: &[CaseSpec] = &[
     case("observe_failure", "observe", ExpectedKind::Failure),
     case("do_success", "do", ExpectedKind::Success),
     case("do_failure", "do", ExpectedKind::Failure),
+    prepared_case(
+        "do_lock_conflict",
+        "do",
+        ExpectedKind::Failure,
+        Preparation::LiveArbitratorLock,
+    ),
 ];
 
 const fn case(name: &'static str, command: &'static str, expected_kind: ExpectedKind) -> CaseSpec {
@@ -520,6 +528,24 @@ impl Fixture {
     fn prepare(&self, preparation: Preparation) {
         match preparation {
             Preparation::None => {}
+            Preparation::LiveArbitratorLock => {
+                let state_dir = self.state_root.join("session");
+                fs::create_dir_all(&state_dir).expect("arbitrator state dir");
+                fs::write(
+                    state_dir.join("lab2-arbitrator-state.json.lock"),
+                    serde_json::to_vec_pretty(&json!({
+                        "schema_version": "actingcommand.lab2.arbitrator_lock.v0.1",
+                        "owner_pid": std::process::id(),
+                        "owner_token": "golden-live-owner",
+                        "acquired_at_unix_ms": SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("system time")
+                            .as_millis() as u64
+                    }))
+                    .expect("lock metadata"),
+                )
+                .expect("write live arbitrator lock");
+            }
             Preparation::Detect | Preparation::DetectThenStale => {
                 let output = self.run(&self.detect_args("detect_resolution"));
                 assert_eq!(
@@ -740,6 +766,10 @@ impl Fixture {
             "do_failure" => {
                 args.extend([os("--dry-run"), os("do"), os("home_button")]);
                 scene(&mut args, &self.blue_scene);
+            }
+            "do_lock_conflict" => {
+                args.extend([os("--dry-run"), os("do"), os("home_button")]);
+                scene(&mut args, &self.red_scene);
             }
             other => panic!("unknown golden case {other}"),
         }

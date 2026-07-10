@@ -1,5 +1,50 @@
 # CHECKPOINT.md
 
+## 2026-07-10 issue 33 paused during A8a RED stage
+
+### Current status
+
+- Alice directed the active A8a implementation to stop so the architecture direction can be re-specified.
+- The A8a worker was stopped while still writing failing tests. No A8a production lock, stale-recovery, or ledger-ownership implementation was added.
+- The retained work is intentionally an incomplete RED checkpoint: six Lab2 arbitrator tests, two runtime-ledger ownership behavior tests plus their child harness, and one pending lock-conflict golden case.
+- A7 remains the last completed and fully verified chain node at commit `981f61f650c51a62f3c6c22fda781d2b98b3ceb8`, tagged `checkpoint/20260710-issue33-a7`, pushed to `origin/issue-34-lab-extraction-chain`, and recorded on issue #34.
+- A8a is not complete or accepted. A8b, A8c, and A9 have not started.
+
+### Files changed
+
+- `apps/actinglab/tests/golden_protocol.rs`
+- `apps/actinglab/tests/lab2_cli_contract.rs`
+- `crates/ledger/tests/session_ownership.rs`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- Stopped subagent `019f4ac9-fcd1-7023-9be6-f7953546ef1d` while its status was `running`.
+- Checked for lingering `cargo`, `rustc`, and `actinglab` processes tied to this worktree; none remained.
+- `cargo test -p actingcommand-actinglab --test lab2_cli_contract a8a_ -- --nocapture`.
+- `cargo test -p actingcommand-ledger --test session_ownership -- --nocapture`.
+- `cargo test -p actingcommand-actinglab --test golden_protocol protocol_goldens_match_current_cli -- --nocapture`.
+- `git diff --check` and focused diff/status inspection before the pause commit.
+
+### Test results
+
+- Lab2 A8a RED set: `0 passed; 6 failed`, as expected because the production arbitrator lock and test-only lock-hold seam do not exist yet.
+- Ledger ownership RED set: child harness passed; the two ownership requirements failed, as expected because the owner record and live-owner rejection do not exist yet.
+- Golden RED set: failed on the new `do_lock_conflict` case because the current command still succeeds and the static expectation has not been reviewed or re-frozen.
+- These failures are deliberate evidence of the unfinished behavior. The branch is not currently workspace-green and this checkpoint must not be treated as a stable release tag.
+
+### Current blocker
+
+- Execution is paused by Alice pending a replacement architecture direction.
+- No technical blocker has been declared.
+
+### Next step
+
+1. Wait for Alice's replacement direction.
+2. Reconcile or discard the retained RED tests against that direction before resuming production work.
+3. Do not claim A8a complete, update its goldens, or begin A8b/A8c/A9 until the new direction is explicit.
+
 ## 2026-07-10 issue 33 A7 Lab run/validate migration complete
 
 ### Current status
