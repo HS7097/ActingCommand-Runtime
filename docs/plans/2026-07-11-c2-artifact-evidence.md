@@ -158,7 +158,7 @@ Status: complete.
 
 ### Task 5: Sealed/global-ledger acceptance
 
-Status: active.
+Status: complete.
 
 - Run a sealed record/replay-style fixture through frame pipeline, artifact store, real global
   ledger ingress, and evidence exporter.
@@ -168,6 +168,8 @@ Status: active.
 - Prove artifact/event failure cannot return a successful receipt or leave a published archive.
 
 ### Task 6: Closeout
+
+Status: active.
 
 - Run focused contract, artifact-store, ledger integration, Lab compatibility, and architecture
   suites.

@@ -18,4 +18,5 @@ time = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+actingcommand-ledger = { workspace = true }
 tempfile = "3"

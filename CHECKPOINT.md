@@ -1,5 +1,65 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 Task 5 sealed GlobalLedger acceptance
+
+### Current status
+
+- Added a sealed integration fixture that runs the production frame pipeline and artifact store
+  through real `GlobalLedger` sanitized ingress, correlation query, forensic projection, and the
+  shared evidence exporter.
+- The accepted run produces and queries `capture.policy_changed`, `capture.pressure_changed`,
+  `capture.dedup_window`, `artifact.created`, `artifact.verified`, and
+  `artifact.export_completed` from one correlation.
+- The fixture independently verifies ledger bounds, terminal receipt, captured/deduplicated/
+  dropped/persisted counts, pinned reason distribution, missing-pinned list, every archived entry
+  SHA-256/byte count, every source artifact hash, final ZIP hash/size, and the archive attachment
+  on the completed event.
+- Added a required GlobalLedger append-failure path: rejected `artifact.export_completed` rolls
+  back the output ZIP and stored archive, records `artifact.export_failed`, and returns no receipt.
+- Added a corrupted source-artifact path: source hash mismatch is fatal, publishes no ZIP, records
+  `artifact.export_failed`, and never records completed export.
+- The real ledger dependency is test-only; production artifact-store remains behind its typed
+  event sink and does not depend on ledger storage implementation.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `crates/artifact-store/Cargo.toml`
+- `crates/artifact-store/tests/sealed_global_ledger.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-artifact-store --test sealed_global_ledger -- --nocapture`
+- `cargo test -p actingcommand-artifact-store`
+- `cargo clippy -p actingcommand-artifact-store --all-targets -- -D warnings`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `git diff --check`
+
+### Test results
+
+- Sealed real-GlobalLedger acceptance passed: 3 integration tests.
+- Artifact-store suite passed: 48 unit tests, 3 sealed integration tests, and doctests.
+- Architecture suite passed: 14 unit tests and 18 workspace guards.
+- Artifact-store all-target Clippy passed with warnings denied.
+- The success fixture proves correlation queries and end-to-end evidence reconstruction; the two
+  adversarial fixtures prove required ledger failure and corrupted artifacts cannot report or
+  leave export success.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this completed sealed-acceptance unit.
+2. Run C2 Task 6 full closeout gates, update final planning/checkpoint state, create and push the
+   stable C2 rollback tag, and record final evidence in Issue #36.
+
 ## 2026-07-11 Issue 35 C2 Task 4 evidence exporter
 
 ### Current status
