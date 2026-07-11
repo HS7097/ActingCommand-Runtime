@@ -2,17 +2,17 @@
 
 use crate::env_detection::load_scene;
 use crate::{Lab, LabPorts};
-use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
-use actingcommand_page_detector::{
-    PageDetector, PageEvaluation, PageTargetEvaluation, load_page_set_from_json_str,
-};
-use actingcommand_recognition::{MatchMetric, Scene};
-use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
-};
+use actingcommand_contract::{EnvResolved, LabError, LabResult};
+use actingcommand_execution_kernel::{ReadonlyRecognitionEngine, ReadonlyRecognitionError};
+use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
+use actingcommand_recognition::Scene;
+use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
 use serde_json::Value;
-use std::collections::BTreeSet;
 use std::fs;
+
+pub(crate) use actingcommand_execution_kernel::{
+    needs_detection, rect_response, target_evaluation_response,
+};
 
 impl<P: LabPorts> Lab<P> {
     pub fn recognize(
@@ -20,53 +20,18 @@ impl<P: LabPorts> Lab<P> {
         mut request: crate::RecognizeRequest,
     ) -> LabResult<crate::RecognizeResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
-        if evaluator
-            .target_kind(&request.target)
-            .map_err(|error| LabError::usage(error.to_string()))?
-            == TargetKind::ClickOnly
+        let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
+        let scene = if engine
+            .target_requires_scene(&request.target)
+            .map_err(readonly_error)?
         {
-            let click = evaluator
-                .get_click_target(&request.target)
-                .map_err(|error| LabError::usage(error.to_string()))?;
-            return Ok(crate::RecognizeResponse::ClickOnly(
-                crate::RecognizeClickOnlyResponse {
-                    target: request.target,
-                    kind: "click_only".to_string(),
-                    evaluated: false,
-                    click: rect_response(click),
-                    match_metric: match_metric_name(evaluator.default_match_metric()).to_string(),
-                    env_resolved,
-                },
-            ));
-        }
-        let scene = recognition_scene(self, &mut request.input)?;
-        let evaluation = evaluator
-            .evaluate_target(&scene, &request.target)
-            .map_err(|error| LabError::usage(error.to_string()))?;
-        let evaluation_response = target_evaluation_response(&evaluation);
-        Ok(crate::RecognizeResponse::Evaluated(Box::new(
-            crate::RecognizeEvaluatedResponse {
-                target: request.target.clone(),
-                passed: evaluation.passed,
-                message: evaluation.message.clone(),
-                matched_rect: evaluation_response.matched_rect,
-                template: evaluation_response.template,
-                color: evaluation_response.color,
-                evaluation: evaluation_response,
-                match_metric: match_metric_name(evaluator.default_match_metric()).to_string(),
-                needs_detection: (!evaluation.passed)
-                    .then(|| {
-                        needs_detection(
-                            "recognize",
-                            "target_below_threshold",
-                            &request.target,
-                            &env_resolved,
-                        )
-                    })
-                    .flatten(),
-                env_resolved,
-            },
-        )))
+            Some(recognition_scene(self, &mut request.input)?)
+        } else {
+            None
+        };
+        engine
+            .recognize(&request.target, scene.as_ref())
+            .map_err(readonly_error)
     }
 
     pub fn detect_page(
@@ -78,29 +43,15 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "detect-page requires --pages or --resource-root --game",
         )?;
-        detector
-            .validate(&evaluator)
-            .map_err(|error| LabError::usage(error.to_string()))?;
-        if request.check_pages {
-            return Ok(crate::DetectPageOutput {
-                response: crate::DetectPageResponse::Check(crate::DetectPageCheckResponse {
-                    check_pages: "passed".to_string(),
-                }),
-                env_resolved,
-            });
-        }
-        let scene = recognition_scene(self, &mut request.input)?;
-        let response = detect_current_page(
-            &evaluator,
-            &detector,
-            &scene,
-            "detect-page",
-            env_resolved.clone(),
-        )?;
-        Ok(crate::DetectPageOutput {
-            response: crate::DetectPageResponse::Detection(Box::new(response)),
-            env_resolved,
-        })
+        let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
+        let scene = if request.check_pages {
+            None
+        } else {
+            Some(recognition_scene(self, &mut request.input)?)
+        };
+        engine
+            .detect_page(&detector, scene.as_ref(), request.check_pages)
+            .map_err(readonly_error)
     }
 
     pub fn current_page(
@@ -112,11 +63,10 @@ impl<P: LabPorts> Lab<P> {
             &request.input,
             "semantic page commands require --pages or --resource-root --game",
         )?;
-        detector
-            .validate(&evaluator)
-            .map_err(|error| LabError::usage(error.to_string()))?;
         let scene = recognition_scene(self, &mut request.input)?;
-        detect_current_page(&evaluator, &detector, &scene, "current-page", env_resolved)
+        ReadonlyRecognitionEngine::new(evaluator, env_resolved)
+            .current_page(&detector, &scene)
+            .map_err(readonly_error)
     }
 
     pub fn is_visible(
@@ -124,37 +74,18 @@ impl<P: LabPorts> Lab<P> {
         mut request: crate::IsVisibleRequest,
     ) -> LabResult<crate::IsVisibleResponse> {
         let (evaluator, env_resolved) = load_evaluator(self, &mut request.input)?;
-        if evaluator
-            .target_kind(&request.target)
-            .map_err(|error| LabError::usage(error.to_string()))?
-            == TargetKind::ClickOnly
+        let engine = ReadonlyRecognitionEngine::new(evaluator, env_resolved);
+        let scene = if engine
+            .target_requires_scene(&request.target)
+            .map_err(readonly_error)?
         {
-            return Err(LabError::usage(format!(
-                "target '{}' is click-only and cannot be evaluated for visibility",
-                request.target
-            )));
-        }
-        let scene = recognition_scene(self, &mut request.input)?;
-        let evaluation = evaluator
-            .evaluate_target(&scene, &request.target)
-            .map_err(|error| LabError::usage(error.to_string()))?;
-        Ok(crate::IsVisibleResponse {
-            target: request.target.clone(),
-            visible: evaluation.passed,
-            evaluation: target_evaluation_response(&evaluation),
-            match_metric: match_metric_name(evaluator.default_match_metric()).to_string(),
-            needs_detection: (!evaluation.passed)
-                .then(|| {
-                    needs_detection(
-                        "is-visible",
-                        "target_below_threshold",
-                        &request.target,
-                        &env_resolved,
-                    )
-                })
-                .flatten(),
-            env_resolved,
-        })
+            Some(recognition_scene(self, &mut request.input)?)
+        } else {
+            None
+        };
+        engine
+            .is_visible(&request.target, scene.as_ref())
+            .map_err(readonly_error)
     }
 }
 
@@ -227,134 +158,18 @@ pub(crate) fn detect_current_page(
     command: &str,
     env_resolved: Vec<EnvResolved>,
 ) -> LabResult<crate::PageDetectionResponse> {
-    let evaluations = detector
-        .evaluate_all(evaluator, scene)
-        .map_err(|error| LabError::usage(error.to_string()))?;
-    let matched = evaluations.iter().find(|evaluation| evaluation.matched);
-    let page = matched
-        .map(|evaluation| evaluation.page_id.clone())
-        .unwrap_or_else(|| "standby".to_string());
-    let standby = matched.is_none();
-    Ok(crate::PageDetectionResponse {
-        page: page.clone(),
-        matched: !standby,
-        standby,
-        evaluations: evaluations.iter().map(page_evaluation_response).collect(),
-        recovery_hint: standby.then(|| crate::RecoveryHintResponse {
-            action: "wake_safe_point".to_string(),
-            point: crate::PointResponse { x: 300, y: 2 },
-            note: "CLI does not click automatically".to_string(),
-        }),
-        req_id: None,
-        reco_id: None,
-        needs_detection: standby
-            .then(|| needs_detection(command, "current_page_unknown", &page, &env_resolved))
-            .flatten(),
+    actingcommand_execution_kernel::detect_current_page(
+        evaluator,
+        detector,
+        scene,
+        command,
         env_resolved,
-    })
+    )
+    .map_err(readonly_error)
 }
 
-pub(crate) fn needs_detection(
-    command: &str,
-    reason: &str,
-    subject: &str,
-    values: &[EnvResolved],
-) -> Option<NeedsDetection> {
-    if values.is_empty() {
-        return None;
-    }
-    Some(NeedsDetection {
-        status: "needs_detection".to_string(),
-        reason: reason.to_string(),
-        command: Some(command.to_string()),
-        subject: Some(subject.to_string()),
-        detector_ids: values
-            .iter()
-            .map(|value| value.detector_id.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-        keys: values.to_vec(),
-        recommended_action: "run_detect".to_string(),
-    })
-}
-
-pub(crate) fn target_evaluation_response(
-    evaluation: &TargetEvaluation,
-) -> crate::TargetEvaluationResponse {
-    crate::TargetEvaluationResponse {
-        target: evaluation.id.clone(),
-        kind: format!("{:?}", evaluation.kind),
-        passed: evaluation.passed,
-        message: evaluation.message.clone(),
-        matched_rect: evaluation.template.map(|template| crate::RectResponse {
-            x: template.x,
-            y: template.y,
-            width: template.width,
-            height: template.height,
-        }),
-        template: evaluation
-            .template
-            .map(|template| crate::TemplateEvaluationResponse {
-                x: template.x,
-                y: template.y,
-                width: template.width,
-                height: template.height,
-                score: template.score,
-                raw_score: template.raw_score,
-                threshold: template.threshold,
-            }),
-        color: evaluation
-            .color
-            .map(|color| crate::ColorEvaluationResponse {
-                distance: color.distance,
-                max_distance: color.max_distance,
-                mean: color.mean,
-                expected: color.expected,
-            }),
-    }
-}
-
-fn page_evaluation_response(evaluation: &PageEvaluation) -> crate::PageEvaluationResponse {
-    crate::PageEvaluationResponse {
-        page: evaluation.page_id.clone(),
-        matched: evaluation.matched,
-        message: evaluation.message.clone(),
-        any_of_passed: evaluation.any_of_passed,
-        any_of_total: evaluation.any_of_total,
-        targets: evaluation
-            .target_results
-            .iter()
-            .map(page_target_evaluation_response)
-            .collect(),
-    }
-}
-
-fn page_target_evaluation_response(
-    evaluation: &PageTargetEvaluation,
-) -> crate::PageTargetEvaluationResponse {
-    crate::PageTargetEvaluationResponse {
-        id: evaluation.target_id.clone(),
-        role: format!("{:?}", evaluation.role),
-        passed: evaluation.passed,
-        message: evaluation.message.clone(),
-    }
-}
-
-pub(crate) fn rect_response(rect: PackRect) -> crate::RectResponse {
-    crate::RectResponse {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-    }
-}
-
-fn match_metric_name(metric: MatchMetric) -> &'static str {
-    match metric {
-        MatchMetric::CrossCorrelationNormalized => "ccorr_normed",
-        MatchMetric::CorrelationCoefficientNormalized => "ccoeff_normed",
-    }
+fn readonly_error(error: ReadonlyRecognitionError) -> LabError {
+    LabError::usage(error.message())
 }
 
 #[cfg(test)]

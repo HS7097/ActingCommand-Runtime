@@ -12,6 +12,7 @@ publish = false
 actingcommand-contract = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
+actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-page-detector = { workspace = true }

@@ -11,12 +11,14 @@ mod error;
 mod kernel;
 mod planning;
 mod provider;
+mod readonly;
 mod session;
 
 pub use error::*;
 pub use kernel::*;
 pub use planning::*;
 pub use provider::*;
+pub use readonly::*;
 pub use session::*;
 
 #[cfg(test)]

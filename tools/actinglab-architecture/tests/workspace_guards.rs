@@ -468,6 +468,7 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
                     "actingcommand-runtime-host"
                         | "actingcommand-actingd"
                         | "actingcommand-device-test"
+                        | "actingcommand-lab"
                 ),
                 "package {name} must not access execution-kernel"
             );
@@ -484,6 +485,11 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
             "GlobalLedger",
             "SeedScheduler",
             "RuntimeClient",
+            "actingcommand_lab",
+            "CaptureBackendConfig",
+            "CaptureBackendFactory",
+            "InputBackendFactory",
+            "std::fs",
             "create_touch_backend",
             "create_capture_backend",
         ] {
@@ -494,6 +500,36 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
             );
         }
     }
+}
+
+#[test]
+fn c5_readonly_recognition_is_pure_and_execution_owned() {
+    let root = workspace_root();
+    let source_path = root.join("crates/execution-kernel/src/readonly.rs");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+    for forbidden in [
+        "actingcommand_lab",
+        "CaptureBackendConfig",
+        "CaptureBackendFactory",
+        "InputBackendFactory",
+        "RuntimeClient",
+        "std::fs",
+        "create_capture_backend",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "{} contains forbidden read-only ownership token {forbidden}",
+            source_path.display()
+        );
+    }
+
+    let lab_source_path = root.join("crates/lab/src/readonly.rs");
+    let lab_source = fs::read_to_string(&lab_source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", lab_source_path.display()));
+    assert!(lab_source.contains("ReadonlyRecognitionEngine"));
+    assert!(!lab_source.contains("evaluate_target("));
+    assert!(!lab_source.contains("evaluate_all("));
 }
 
 #[test]

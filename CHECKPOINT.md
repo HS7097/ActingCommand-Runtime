@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 4a read-only recognition ownership
+
+### Current status
+
+- Moved pure read-only target recognition, visibility evaluation, page validation, and page
+  detection from Lab into `actingcommand-execution-kernel::ReadonlyRecognitionEngine`.
+- Moved the established response DTOs with the decision owner and kept Lab re-exports so the CLI
+  protocol surface remains unchanged.
+- Reduced the Lab read-only module to temporary path/JSON loading, environment-marker resolution,
+  scene/capture preparation, and typed error adaptation. Lab no longer calls `evaluate_target` or
+  `evaluate_all` for these use cases.
+- Added execution-kernel unit coverage for evaluated targets, click-only targets, page detection,
+  negative visibility, and missing-scene failure.
+- Extended architecture guards so the execution-owned read-only core cannot reach Lab, filesystem,
+  capture/input factories, Runtime clients, or backend construction. Lab is admitted only as a
+  removable client of the execution kernel; production packages remain Lab-free.
+- Preserved all 30 protocol golden envelopes and passed the full workspace and all-target/all-feature
+  Clippy gates.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `crates/execution-kernel/src/lib.rs`
+- `crates/execution-kernel/src/readonly.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/readonly.rs`
+- `crates/lab/src/readonly_api.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-execution-kernel readonly --no-fail-fast`
+- `cargo test -p actingcommand-lab readonly --no-fail-fast`
+- `cargo test -p actingcommand-actinglab-architecture c3b_execution_kernel_is_a_daemon_only_backend_shell -- --nocapture` (expected RED before updating the consumer boundary)
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`
+- `cargo clippy -p actingcommand-execution-kernel -p actingcommand-lab -p actingcommand-actinglab-architecture --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json number,state,title,author,labels,updatedAt,comments`
+
+### Test results
+
+- Execution-kernel read-only suite passed 5 tests; the crate now has 49 tests in the full workspace
+  run, including the 44 pre-existing execution/planning tests.
+- Lab read-only compatibility suite passed all 4 established tests.
+- Architecture passed all 22 workspace guards, including pure read-only ownership and unchanged
+  all-feature production-to-Lab dependency constraints.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Full `cargo test --workspace` passed.
+- Full all-target/all-feature Clippy passed with warnings denied; formatting and whitespace checks
+  passed.
+- Issue #35 remains open, approved, and unchanged; every instruction/comment is authored by
+  repository owner `HS7097`.
+
+### Current blocker
+
+- No blocker for C5 Task 4a.
+- Environment state/decision ownership and production daemon observation are still pending in
+  Task 4b and Task 4c respectively.
+
+### Next step
+
+1. Commit and push Task 4a and record its evidence in Issue #36.
+2. Begin Task 4b by separating pure environment catalog/result validation, freshness, marker
+   resolution, and detector decisions from Lab persistence and device adapters.
+
 ## 2026-07-11 Issue 35 C5 Task 3b task-loop retirement
 
 ### Current status

@@ -154,6 +154,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-execution-kernel",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-page-detector",

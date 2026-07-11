@@ -131,7 +131,23 @@ Progress:
 
 ### Task 4: Move environment and read-only recognition
 
-Status: pending.
+Status: active.
+
+- Subtask 4a complete: `ReadonlyRecognitionEngine` and the existing response models now live in
+  execution-kernel. The engine owns pure target recognition, visibility, page evaluation, page
+  detection, and detection-hint decisions over caller-supplied evaluators, detectors, scenes, and
+  resolved environment facts.
+- Lab retains only the temporary compatibility adapter that reads paths, resolves environment
+  markers, prepares an offline scene or capture, and maps typed execution errors into the existing
+  Lab protocol. It no longer evaluates targets or pages itself.
+- Architecture guards allow Lab to consume execution-kernel only as a removable client while
+  keeping all production packages Lab-free. The read-only module rejects filesystem, capture
+  factory, input factory, Runtime client, and Lab ownership tokens.
+- Subtask 4b next: move environment result validation, freshness, marker resolution, and pure
+  detector decisions behind typed execution-owned state/decision APIs while leaving persistence
+  and effect adapters outside the core.
+- Subtask 4c pending: replace production Lab capture construction with a daemon-owned observation
+  request without weakening sealed/offline scene adapters.
 
 - Move environment detection/resolution and read-only recognition/page evaluation from Lab into
   execution ownership with typed ports and results.
