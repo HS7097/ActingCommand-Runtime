@@ -326,6 +326,104 @@
         );
     }
 
+    fn write_recovery_suggestion_lab_package(path: &Path) {
+        write_test_zip(
+            path,
+            &[
+                (
+                    "control.json",
+                    br#"{
+                        "schema_version":"Lab-1y.control.v1",
+                        "package_id":"fixture.recovery",
+                        "execution_mode":"navigable_route",
+                        "game":"arknights",
+                        "server":"cn",
+                        "resolution":{"width":1280,"height":720},
+                        "entry_task_id":"task",
+                        "capture_interval_ms":1,
+                        "step_timeout_ms":1,
+                        "max_steps":3
+                    }"#,
+                ),
+                (
+                    "resources/manifest.json",
+                    br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+                ),
+                (
+                    "resources/operations/task/task.json",
+                    br#"{
+                        "schema_version":"0.6",
+                        "task_id":"task",
+                        "game":"arknights",
+                        "server_scope":["cn"],
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
+                        "entry_page":"home",
+                        "target_page":"terminal",
+                        "recovery":{"kind":"return_home","task_id":"return_home"},
+                        "max_task_retries":1,
+                        "on_exhausted":"pause",
+                        "operations":[{
+                            "id":"open_terminal",
+                            "purpose":"force a sealed recovery suggestion",
+                            "from":"home",
+                            "to":"terminal",
+                            "click":{"kind":"point","x":1,"y":1},
+                            "retryable":true,
+                            "effect":"navigation_only",
+                            "unguarded_trusted_coordinate":true
+                        }]
+                    }"#,
+                ),
+                (
+                    "resources/operations/return_home/task.json",
+                    br#"{
+                        "schema_version":"0.6",
+                        "task_id":"return_home",
+                        "game":"arknights",
+                        "server_scope":["cn"],
+                        "coordinate_space":{"width":1280,"height":720},
+                        "target_page":"home",
+                        "operations":[{
+                            "id":"return_home_action",
+                            "purpose":"sealed successor fixture",
+                            "from":"any",
+                            "to":"home",
+                            "click":{"kind":"point","x":2,"y":2},
+                            "effect":"navigation_only",
+                            "unguarded_trusted_coordinate":true
+                        }]
+                    }"#,
+                ),
+                (
+                    "resources/recognition/arknights.cn.pack.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "game":"arknights",
+                        "server":"cn",
+                        "locale":"zh-CN",
+                        "coordinate_space":{"width":1280,"height":720},
+                        "defaults":{"color_max_distance":0.0},
+                        "targets":[
+                            {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,0]},
+                            {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,255]}
+                        ]
+                    }"#,
+                ),
+                (
+                    "resources/recognition/arknights.cn.pages.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "pages":[
+                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
+                            {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                        ]
+                    }"#,
+                ),
+            ],
+        );
+    }
+
     fn write_lab_package_with_unsupported_recognition(path: &Path) {
         write_test_zip(
             path,

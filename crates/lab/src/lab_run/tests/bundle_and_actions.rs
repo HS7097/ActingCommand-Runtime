@@ -36,6 +36,51 @@
     }
 
     #[test]
+    fn recovery_suggestion_is_terminal_and_never_chains_the_successor_task() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_recovery_suggestion_lab_package(&zip);
+        let out = temp.path().join("out.zip");
+        let mut request = test_run_request(zip, out.clone(), temp.path());
+        request.instance = Some("fixture".to_string());
+        request.device_resolver = test_device_resolver(
+            "fixture",
+            "fixture",
+            Arc::new(DeviceResolverCounters::default()),
+            temp.path().join("locks"),
+        );
+        let mut lab = test_lab(temp.path());
+
+        let error = lab.lab_run(request).expect_err("successor suggestion");
+
+        assert_eq!(error.code, "successor_suggested");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.pointer("/suggestion/task_id"))
+                .and_then(Value::as_str),
+            Some("return_home")
+        );
+        assert_eq!(lab.ports().input.opens.load(Ordering::SeqCst), 1);
+        let file = File::open(out).expect("failure zip");
+        let mut archive = ZipArchive::new(file).expect("failure archive");
+        let events = zip_text(&mut archive, "logs/events.jsonl");
+        assert_ordered(
+            &events,
+            &[
+                "operation_recovery_required",
+                "run_terminal_decided",
+                "successor_suggested",
+                "run_failed",
+            ],
+        );
+        assert_eq!(events.matches("\"event\":\"click_started\"").count(), 1);
+        assert!(!events.contains("recovery_started"));
+        assert!(!events.contains("recovery_result"));
+    }
+
+    #[test]
     fn selected_provenance_failure_precedes_context_and_normal_ledger_creation() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
