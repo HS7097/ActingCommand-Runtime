@@ -3,8 +3,8 @@
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
     parse_optional_duration_ms, read_user_config, recognition_resources,
-    record_env_needs_detection, record_env_resolved, resolve_instance_id, semantic_ledger_context,
-    should_route_readonly_via_session_daemon, submit_readonly_session_request, target_argument,
+    record_env_needs_detection, record_env_resolved, reject_legacy_session_routing,
+    resolve_instance_id, semantic_ledger_context, target_argument,
 };
 use actingcommand_lab::{
     CurrentPageRequest, DetectPageOutput, DetectPageRequest, DetectPageResponse,
@@ -17,9 +17,7 @@ use std::time::Duration;
 
 pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "recognize", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let target = flags.required("--target")?;
     let prepared = prepare_recognition_input(global, &flags, false)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
@@ -34,9 +32,7 @@ pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutco
 
 pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "detect_page", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let mut ledger = semantic_ledger_context("detect-page", global, args);
     let result = (|| -> CliOutcome<Value> {
         let prepared = prepare_recognition_input(global, &flags, true)?;
@@ -55,9 +51,7 @@ pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOut
 
 pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "current_page", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let prepared = prepare_recognition_input(global, &flags, true)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
@@ -70,9 +64,7 @@ pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOu
 
 pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "is_visible", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let prepared = prepare_recognition_input(global, &flags, false)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),

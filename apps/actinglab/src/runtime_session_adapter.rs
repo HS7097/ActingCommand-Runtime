@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, SESSION_STATE_ENV, current_unix_ms,
-    monitor_policy_monitor_args, parse_optional_duration_ms, read_user_config,
-    run_session_monitor_policy_in_state_dir, runtime_slice_cli, runtime_state_root,
-    session_state_dir_from_flags, session_status_payload_with_config,
-    submit_readonly_session_request,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, current_unix_ms, monitor_policy_monitor_args,
+    parse_optional_duration_ms, runtime_slice_cli, runtime_state_root,
 };
 use actingcommand_contract::{
     EventActor, EventSource, RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeInfo,
@@ -13,25 +10,13 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
-use std::env;
 use std::path::Path;
 
 pub(super) fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if flags.bool("--via-daemon") {
-        return submit_readonly_session_request(global, &flags, "status", args);
-    }
+    let _ = global;
+    reject_legacy_flags(&flags)?;
     flags.expect_positionals("session status", 0)?;
-    if explicit_legacy_session_state_requested(&flags) {
-        let state_dir = session_state_dir_from_flags(&flags)?;
-        let diagnostics = flags.bool("--diagnostics");
-        let config = if diagnostics {
-            Some(read_user_config()?)
-        } else {
-            None
-        };
-        return session_status_payload_with_config(&state_dir, diagnostics, config.as_ref());
-    }
     runtime_status(&runtime_state_root()?, flags.bool("--diagnostics"))
 }
 
@@ -41,10 +26,8 @@ pub(super) fn run_monitor_policy(global: &GlobalOptions, args: &[String]) -> Cli
         .map(String::as_str)
         .ok_or_else(|| CliError::usage("session monitor-policy requires status|set|clear"))?;
     let flags = FlagArgs::parse(&args[1..])?;
-    if explicit_legacy_session_state_requested(&flags) {
-        let state_dir = session_state_dir_from_flags(&flags)?;
-        return run_session_monitor_policy_in_state_dir(global, args, &state_dir, false);
-    }
+    let _ = global;
+    reject_legacy_flags(&flags)?;
     let state_root = runtime_state_root()?;
     let requested = flags
         .optional("--instance")
@@ -82,10 +65,28 @@ pub(super) fn run_monitor_policy(global: &GlobalOptions, args: &[String]) -> Cli
     }
 }
 
-fn explicit_legacy_session_state_requested(flags: &FlagArgs) -> bool {
-    flags.bool("--local")
+pub(super) fn retired_authority(subcommand: &str, args: &[String]) -> CliOutcome<Value> {
+    let flags = FlagArgs::parse(args)?;
+    reject_legacy_flags(&flags)?;
+    Err(CliError::not_implemented(
+        "legacy_session_authority_retired",
+        format!(
+            "session {subcommand} belonged to the retired Session file-state authority; use Runtime-backed status, monitor-policy, stream, or actingctl"
+        ),
+    ))
+}
+
+fn reject_legacy_flags(flags: &FlagArgs) -> CliOutcome<()> {
+    if flags.bool("--via-daemon")
+        || flags.bool("--local")
         || flags.optional("--state-dir").is_some()
-        || env::var_os(SESSION_STATE_ENV).is_some()
+    {
+        return Err(CliError::not_implemented(
+            "legacy_session_authority_retired",
+            "legacy Session daemon and file-state routing were retired; use the resident Runtime",
+        ));
+    }
+    Ok(())
 }
 
 fn runtime_status(state_root: &Path, diagnostics: bool) -> CliOutcome<Value> {

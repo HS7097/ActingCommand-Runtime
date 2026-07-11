@@ -2,9 +2,8 @@
 
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
-    navigation_path, parse_optional_duration_ms, read_user_config, resolve_instance_id,
-    semantic_ledger_context, should_route_control_via_session_daemon,
-    submit_control_session_request, target_argument,
+    navigation_path, parse_optional_duration_ms, read_user_config, reject_legacy_session_routing,
+    resolve_instance_id, semantic_ledger_context, target_argument,
 };
 use actingcommand_lab::{NavigateRequest, TapTargetRequest};
 use serde::Serialize;
@@ -12,9 +11,7 @@ use serde_json::Value;
 
 pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_control_via_session_daemon(global, &flags)? {
-        return submit_control_session_request(global, &flags, "tap_target", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let target = target_argument(&flags, "tap-target")?;
     let mut ledger = semantic_ledger_context("tap-target", global, args);
     let result = (|| -> CliOutcome<Value> {
@@ -42,9 +39,7 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
 
 pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
-    if should_route_control_via_session_daemon(global, &flags)? {
-        return submit_control_session_request(global, &flags, "navigate", args);
-    }
+    reject_legacy_session_routing(&flags)?;
     let to = flags.required("--to")?;
     let mut ledger = semantic_ledger_context("navigate", global, args);
     let result = (|| -> CliOutcome<Value> {

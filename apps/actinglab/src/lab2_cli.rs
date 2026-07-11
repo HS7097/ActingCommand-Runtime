@@ -71,7 +71,6 @@ const LAB2_ARBITRATOR_STATE_FILE: &str = "lab2-arbitrator-state.json";
 const LAB2_ARBITRATOR_STATE_VERSION: &str = "actingcommand.lab2.arbitrator_state.v0.1";
 const LAB2_LEDGER_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const LAB2_LEDGER_PROTECTED_DAYS: u64 = 7;
-const LAB2_PROJECTED_SESSION_HOLDER: &str = "lab_arbitrator";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Lab2ArbitratorState {
@@ -279,7 +278,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         let device = if dry_run {
             json!({"executed": false, "mode": "dry_run"})
         } else {
-            authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
+            authorize_lab2_device_drive(&flags, &ids.req_id, &instance, &write_lease)?;
             send_semantic_tap(global, &config, point)?
         };
         let after = if dry_run {
@@ -491,7 +490,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             step_timeout,
             poll,
         };
-        authorize_lab2_device_drive(global, &flags, &ids.req_id, &instance, &write_lease)?;
+        authorize_lab2_device_drive(&flags, &ids.req_id, &instance, &write_lease)?;
         let (steps, arrived) = execute_navigation_route(&execution, start.page.clone(), route)?;
         let mut payload = json!({
             "req_id": ids.req_id,
@@ -737,9 +736,7 @@ fn run_arbitrator_inner(
                 "instance": instance,
                 "arbitration": arbitration_json(&outcome.decision)
             });
-            if let ArbitrationDecision::LeaseGranted { lease, .. } = &outcome.decision {
-                data["session_lease"] = project_lab2_lease_to_session(flags, instance, lease)?;
-            }
+            data["session_lease"] = retired_session_lease_projection();
             data
         }
         "release" => {
@@ -764,10 +761,7 @@ fn run_arbitrator_inner(
                 "instance": instance,
                 "arbitration": arbitration_json(&outcome.decision)
             });
-            if let ArbitrationDecision::Released { released_lease, .. } = &outcome.decision {
-                data["session_lease"] =
-                    remove_projected_session_lease(flags, instance, &released_lease.lease_id)?;
-            }
+            data["session_lease"] = retired_session_lease_projection();
             data
         }
         "cancel" => {
@@ -805,13 +799,7 @@ fn run_arbitrator_inner(
                 "liveness_checked": true,
                 "arbitration": arbitration_json(&outcome.decision)
             });
-            if let ArbitrationDecision::Reclaimed {
-                reclaimed_lease, ..
-            } = &outcome.decision
-            {
-                data["session_lease"] =
-                    remove_projected_session_lease(flags, instance, &reclaimed_lease.lease_id)?;
-            }
+            data["session_lease"] = retired_session_lease_projection();
             data
         }
         "force-unlock" => {
@@ -832,13 +820,7 @@ fn run_arbitrator_inner(
                 "warning": "admin_force_unlock_bypassed_liveness_check",
                 "arbitration": arbitration_json(&outcome.decision)
             });
-            if let ArbitrationDecision::Reclaimed {
-                reclaimed_lease, ..
-            } = &outcome.decision
-            {
-                data["session_lease"] =
-                    remove_projected_session_lease(flags, instance, &reclaimed_lease.lease_id)?;
-            }
+            data["session_lease"] = retired_session_lease_projection();
             data
         }
         "mark-destructive" => {
@@ -1155,92 +1137,12 @@ fn save_lab2_arbitrator(path: &Path, arbitrator: &DegradedArbitrator) -> CliOutc
     write_json_file_atomic(path, &state)
 }
 
-fn project_lab2_lease_to_session(
-    flags: &FlagArgs,
-    instance: &str,
-    lease: &LeaseGrant,
-) -> CliOutcome<Value> {
-    let state_dir = session_state_dir_from_flags(flags)?;
-    fs::create_dir_all(&state_dir).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to create SessionLease projection dir {}: {err}",
-            state_dir.display()
-        ))
-    })?;
-    let lease_path = session_lease_path(&state_dir, instance);
-    if let Some(current) = read_json_file::<SessionLease>(&lease_path)? {
-        if current.lease_id != lease.lease_id {
-            return Err(CliError::safety_blocked(
-                "session_lease_conflict",
-                format!(
-                    "cannot project Lab-2 lease {} because SessionLease for {instance} already has id {}",
-                    lease.lease_id, current.lease_id
-                ),
-                &["session_lease", "lab2_arbitrator"],
-            ));
-        }
-        return Ok(json!({
-            "status": "already_projected",
-            "holder": current.holder,
-            "lease_id": current.lease_id,
-            "path": lease_path.display().to_string()
-        }));
-    }
-    let holder = flags
-        .optional("--lease-holder")
-        .or_else(|| flags.optional("--holder"))
-        .filter(|value| value != "true")
-        .unwrap_or_else(|| LAB2_PROJECTED_SESSION_HOLDER.to_string());
-    let session_lease = new_session_lease(
-        instance.to_string(),
-        holder,
-        Some(lease.lease_id.clone()),
-        false,
-        None,
-    );
-    write_json_file_atomic(&lease_path, &session_lease)?;
-    Ok(json!({
-        "status": "projected",
-        "holder": session_lease.holder,
-        "lease_id": session_lease.lease_id,
-        "path": lease_path.display().to_string()
-    }))
-}
-
-fn remove_projected_session_lease(
-    flags: &FlagArgs,
-    instance: &str,
-    lease_id: &str,
-) -> CliOutcome<Value> {
-    let state_dir = session_state_dir_from_flags(flags)?;
-    let lease_path = session_lease_path(&state_dir, instance);
-    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
-        return Ok(json!({
-            "status": "not_found",
-            "lease_id": lease_id,
-            "path": lease_path.display().to_string()
-        }));
-    };
-    if current.lease_id != lease_id {
-        return Ok(json!({
-            "status": "left_unchanged",
-            "reason": "session_lease_id_mismatch",
-            "requested_lease_id": lease_id,
-            "current_lease_id": current.lease_id,
-            "path": lease_path.display().to_string()
-        }));
-    }
-    fs::remove_file(&lease_path).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to remove projected SessionLease {}: {err}",
-            lease_path.display()
-        ))
-    })?;
-    Ok(json!({
-        "status": "removed",
-        "lease_id": lease_id,
-        "path": lease_path.display().to_string()
-    }))
+fn retired_session_lease_projection() -> Value {
+    json!({
+        "status": "retired",
+        "authority": "runtime_scheduler",
+        "file_authority": false
+    })
 }
 
 fn explicit_lab2_state_dir(flags: &FlagArgs) -> CliOutcome<PathBuf> {
@@ -1347,37 +1249,11 @@ fn ensure_lab2_write_admitted(
 }
 
 fn authorize_lab2_device_drive(
-    global: &GlobalOptions,
     flags: &FlagArgs,
     req_id: &str,
     instance: &str,
     lease: &LeaseGrant,
 ) -> CliOutcome<Value> {
-    let session_gate = lab2_session_lease_gate(global, flags)?;
-    if !session_gate
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let details = lab2_error_payload_for_flags(
-            flags,
-            req_id,
-            session_gate
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("lease_held"),
-            "blocked",
-            "acquire-session-lease-and-rerun-with---lease-holder---lease-id",
-            None,
-        )?;
-        return Err(CliError::safety_blocked(
-            "lab_session_lease_required",
-            "Lab-2 real device drive requires a matching SessionLease",
-            &["session_lease", "lab2_arbitrator"],
-        )
-        .with_details(details));
-    }
-
     let (_, arbitrator) = match load_lab2_arbitrator(flags) {
         Ok(loaded) => loaded,
         Err(err) => {
@@ -1394,7 +1270,7 @@ fn authorize_lab2_device_drive(
     let outcome = arbitrator.authorize_device_drive(instance, req_id.to_string(), &lease.lease_id);
     match outcome.decision {
         ArbitrationDecision::ReadonlyAccepted { .. } => Ok(json!({
-            "session_lease": session_gate,
+            "session_lease": retired_session_lease_projection(),
             "arbitrator": arbitration_json(&outcome.decision)
         })),
         decision => {
@@ -1414,68 +1290,6 @@ fn authorize_lab2_device_drive(
             .with_details(details))
         }
     }
-}
-
-fn lab2_session_lease_gate(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
-    let state_dir = session_state_dir_from_flags(flags)?;
-    let mut scoped_global = global.clone();
-    if let Some(instance) = flags.optional("--instance").filter(|value| value != "true") {
-        scoped_global.instance = Some(instance);
-    }
-    if flags
-        .optional("--lease-holder")
-        .or_else(|| flags.optional("--holder"))
-        .filter(|value| value != "true")
-        .is_none()
-        && let Some(lease_id) = lab2_explicit_lease_id(flags)
-    {
-        return lab2_session_lease_gate_by_id(&state_dir, &scoped_global, &lease_id);
-    }
-    session_command_check_lease_gate(&state_dir, &scoped_global, flags, true)
-}
-
-fn lab2_session_lease_gate_by_id(
-    state_dir: &Path,
-    global: &GlobalOptions,
-    lease_id: &str,
-) -> CliOutcome<Value> {
-    let instance = global
-        .instance
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let lease_path = session_lease_path(state_dir, &instance);
-    let Some(current) = read_json_file::<SessionLease>(&lease_path)? else {
-        return Ok(json!({
-            "ok": false,
-            "required": true,
-            "status": "blocked",
-            "code": "lab_lease_missing",
-            "message": format!("control command requires an active projected SessionLease for {instance}"),
-            "instance": instance,
-            "lease_path": lease_path.display().to_string()
-        }));
-    };
-    if current.lease_id != lease_id {
-        return Ok(json!({
-            "ok": false,
-            "required": true,
-            "status": "blocked",
-            "code": "lease_id_mismatch",
-            "message": format!("projected SessionLease for {instance} has id {}, not {lease_id}", current.lease_id),
-            "current_lease": current,
-            "instance": instance,
-            "lease_path": lease_path.display().to_string()
-        }));
-    }
-    Ok(json!({
-        "ok": true,
-        "required": true,
-        "status": "ready",
-        "id_only_match": true,
-        "current_lease": current,
-        "instance": instance,
-        "lease_path": lease_path.display().to_string()
-    }))
 }
 
 fn finish_lab2_response(

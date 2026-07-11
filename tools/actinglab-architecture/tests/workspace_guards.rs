@@ -1197,7 +1197,7 @@ fn c5_bounded_stream_client_uses_runtime_without_local_capture_or_session_queues
         .expect("read Runtime stream adapter");
 
     assert!(main.contains("runtime_stream_adapter::run_stream"));
-    assert!(main.contains("fn run_stream_legacy"));
+    assert!(!main.contains("fn run_stream_legacy"));
     for required in [
         "RuntimeClient::connect",
         ".capture_sequence(",
@@ -1228,6 +1228,76 @@ fn c5_bounded_stream_client_uses_runtime_without_local_capture_or_session_queues
             !adapter.contains(forbidden),
             "Runtime stream adapter regained forbidden authority via {forbidden}"
         );
+    }
+}
+
+#[test]
+fn c5_legacy_session_live_authority_is_retired() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
+        .expect("read ActingLab Lab2 adapter");
+    let session = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
+        .expect("read Runtime session adapter");
+    let stream = fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
+        .expect("read Runtime stream adapter");
+
+    for required in [
+        "runtime_session_adapter::retired_authority(\"monitor\", args)",
+        "\"daemon\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"request\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"journal\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"events\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"response\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"request-state\" => runtime_session_adapter::retired_authority(sub, args)",
+        "\"lease\" => runtime_session_adapter::retired_authority(sub, args)",
+    ] {
+        assert!(
+            main.contains(required),
+            "ActingLab lost retirement route {required}"
+        );
+    }
+    for forbidden in [
+        "struct SessionInfo",
+        "struct SessionHeartbeat",
+        "struct SessionLease",
+        "fn session_info_path",
+        "fn session_heartbeat_path",
+        "fn session_lease_path",
+        "fn run_session_daemon",
+        "fn submit_session_command_request",
+        "fn run_monitor_loop",
+        "fn run_monitor_once",
+        "SessionLayerRecoveryThroat",
+        "SESSION_REQUESTS_DIR",
+        "SESSION_RUNNING_DIR",
+        "SESSION_RESPONSES_DIR",
+        "SESSION_JOURNAL_FILE",
+        "ACTINGLAB_TEST_SESSION_CRASH_POINT",
+    ] {
+        assert!(
+            !main.contains(forbidden),
+            "ActingLab retained legacy Session authority via {forbidden}"
+        );
+    }
+    for forbidden in [
+        "SessionLease",
+        "session_lease_path",
+        "project_lab2_lease_to_session",
+        "remove_projected_session_lease",
+        "lab2_session_lease_gate",
+    ] {
+        assert!(
+            !lab2.contains(forbidden),
+            "Lab2 can reactivate Session file authority via {forbidden}"
+        );
+    }
+    for adapter in [&session, &stream] {
+        assert!(adapter.contains("legacy_session_authority_retired"));
+        assert!(adapter.contains("--via-daemon"));
+        assert!(adapter.contains("--local"));
+        assert!(adapter.contains("--state-dir"));
     }
 }
 

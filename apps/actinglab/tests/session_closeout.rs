@@ -1,291 +1,198 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#[path = "../../../tests/support/c4_runtime.rs"]
+mod support;
+
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 use tempfile::TempDir;
-
-const SESSION_CRASH_INJECTION_ENV: &str = "ACTINGLAB_TEST_SESSION_CRASH_POINT";
 
 fn actinglab_binary() -> &'static str {
     env!("CARGO_BIN_EXE_actinglab")
 }
 
-fn run_json(args: &[&str]) -> Value {
-    let output = Command::new(actinglab_binary())
+fn run_actinglab(
+    config_path: &Path,
+    runtime_root: &Path,
+    local_app_data: &Path,
+    legacy_state: &Path,
+    args: &[&str],
+) -> Output {
+    Command::new(actinglab_binary())
         .args(args)
+        .env("ACTINGLAB_CONFIG_PATH", config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)
+        .env("ACTINGLAB_SESSION_STATE_DIR", legacy_state)
+        .env("LOCALAPPDATA", local_app_data)
         .output()
-        .expect("actinglab command should run");
-    assert!(
-        output.status.success(),
-        "actinglab failed: {}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("actinglab stdout should be JSON")
+        .expect("run ActingLab")
 }
 
-fn stop_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+fn json_output(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "ActingLab did not return JSON: {error}; stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
-fn wait_for<F>(timeout: Duration, mut predicate: F) -> bool
-where
-    F: FnMut() -> bool,
-{
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if predicate() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    false
-}
-
-fn request_path(state_dir: &Path, request_id: &str) -> std::path::PathBuf {
-    state_dir
-        .join("requests")
-        .join(format!("{request_id}.json"))
-}
-
-fn running_path(state_dir: &Path, request_id: &str) -> std::path::PathBuf {
-    state_dir.join("running").join(format!("{request_id}.json"))
-}
-
-fn response_path(state_dir: &Path, request_id: &str) -> std::path::PathBuf {
-    state_dir
-        .join("responses")
-        .join(format!("{request_id}.json"))
-}
-
-fn journal_path(state_dir: &Path) -> std::path::PathBuf {
-    state_dir.join("request-journal.jsonl")
-}
-
-fn write_status_request(state_dir: &Path, request_id: &str) {
-    fs::create_dir_all(state_dir.join("requests")).unwrap();
-    let request = serde_json::json!({
-        "request_id": request_id,
-        "command": "queue",
-        "global": {
-            "instance": null,
-            "game": null,
-            "server": null,
-            "resource_root": null,
-            "capture_backend": null,
-            "dry_run": true
-        },
-        "args": [],
-        "created_at_unix_ms": 1
-    });
-    fs::write(
-        request_path(state_dir, request_id),
-        serde_json::to_vec_pretty(&request).unwrap(),
-    )
-    .unwrap();
-}
-
-fn spawn_daemon(state_dir: &Path, crash_point: Option<&str>) -> Child {
-    let mut command = Command::new(actinglab_binary());
-    command
-        .args([
-            "--json",
-            "session",
-            "daemon",
-            "--state-dir",
-            state_dir.to_str().unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(point) = crash_point {
-        command.env(SESSION_CRASH_INJECTION_ENV, point);
-    }
-    command.spawn().expect("session daemon should start")
-}
-
-fn wait_for_child_exit(child: &mut Child) -> std::process::ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if let Some(status) = child.try_wait().unwrap() {
-            return status;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    stop_child(child);
-    panic!("session daemon did not exit after crash injection");
-}
-
-fn journal_line_count(state_dir: &Path, request_id: &str) -> usize {
-    let Ok(text) = fs::read_to_string(journal_path(state_dir)) else {
-        return 0;
-    };
-    text.lines()
-        .filter(|line| line.contains(&format!("\"request_id\":\"{request_id}\"")))
-        .count()
-}
-
-fn readiness_data(response: &Value) -> &Value {
-    response
-        .pointer("/data/response")
-        .or_else(|| response.get("data"))
-        .expect("readiness data")
-}
-
-#[test]
-fn session_daemon_crash_points_recover_without_duplicate_execution() {
-    for crash_point in [
-        "after_response_write",
-        "after_journal_append",
-        "after_request_remove",
-    ] {
-        let temp = TempDir::new().unwrap();
-        let state_dir = temp.path();
-        let request_id = format!("crash-{crash_point}");
-        write_status_request(state_dir, &request_id);
-
-        let mut crashing = spawn_daemon(state_dir, Some(crash_point));
-        let status = wait_for_child_exit(&mut crashing);
-        assert!(
-            !status.success(),
-            "crash injection {crash_point} should terminate the daemon"
-        );
-        assert!(
-            response_path(state_dir, &request_id).exists(),
-            "response must survive crash point {crash_point}"
-        );
-
-        let mut recovering = spawn_daemon(state_dir, None);
-        let recovered = wait_for(Duration::from_secs(5), || {
-            !request_path(state_dir, &request_id).exists()
-                && !running_path(state_dir, &request_id).exists()
-                && response_path(state_dir, &request_id).exists()
-                && journal_line_count(state_dir, &request_id) == 1
-        });
-        stop_child(&mut recovering);
-
-        assert!(
-            recovered,
-            "daemon restart must recover request state after crash point {crash_point}"
-        );
-    }
-}
-
-#[test]
-fn session_daemon_non_graceful_death_makes_readiness_not_ready() {
-    let temp = TempDir::new().unwrap();
-    let state_dir = temp.path().to_str().unwrap();
-    let mut child = Command::new(actinglab_binary())
-        .args(["--json", "session", "daemon", "--state-dir", state_dir])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("session daemon should start");
-
-    let ready = (0..50).any(|_| {
-        let response = run_json(&["--json", "session", "readiness", "--state-dir", state_dir]);
-        if readiness_data(&response)
-            .get("ready")
-            .and_then(Value::as_bool)
-            == Some(true)
-        {
-            true
-        } else {
-            thread::sleep(Duration::from_millis(100));
-            false
-        }
-    });
-    if !ready {
-        stop_child(&mut child);
-    }
-    assert!(ready, "session daemon should become ready before kill");
-
-    stop_child(&mut child);
-
-    let not_ready = (0..50).any(|_| {
-        let response = run_json(&["--json", "session", "readiness", "--state-dir", state_dir]);
-        let data = readiness_data(&response);
-        let ready = data.get("ready").and_then(Value::as_bool) == Some(true);
-        let status = data.pointer("/daemon/status").and_then(Value::as_str);
-        if !ready && status != Some("alive") {
-            true
-        } else {
-            thread::sleep(Duration::from_millis(100));
-            false
-        }
-    });
-    assert!(
-        not_ready,
-        "readiness must reject residual daemon state after non-graceful death"
-    );
-}
-
-#[test]
-fn session_daemon_no_wait_request_returns_after_ack() {
-    let temp = TempDir::new().unwrap();
-    let state_dir = temp.path();
-    let state_dir_text = state_dir.to_str().unwrap();
-    let mut child = spawn_daemon(state_dir, None);
-
-    let ready = wait_for(Duration::from_secs(5), || {
-        let response = run_json(&[
-            "--json",
-            "session",
-            "readiness",
-            "--state-dir",
-            state_dir_text,
-        ]);
-        readiness_data(&response)
-            .get("ready")
-            .and_then(Value::as_bool)
-            == Some(true)
-    });
-    if !ready {
-        stop_child(&mut child);
-    }
-    assert!(ready, "session daemon should become ready before request");
-
-    let response = run_json(&[
-        "--json",
-        "session",
-        "request",
-        "status",
-        "--no-wait",
-        "--request-ack-timeout-ms",
-        "2000",
-        "--state-dir",
-        state_dir_text,
-    ]);
-    let data = response.get("data").expect("request data");
-    assert_eq!(data.get("status").and_then(Value::as_str), Some("queued"));
+fn assert_retired(output: Output) {
+    assert_eq!(output.status.code(), Some(6));
+    let envelope = json_output(&output);
+    assert_eq!(envelope["ok"], false);
     assert_eq!(
-        data.get("waited_for_response").and_then(Value::as_bool),
-        Some(false)
+        envelope["error"]["code"],
+        "legacy_session_authority_retired"
     );
-    let ack_status = data
-        .pointer("/acknowledgement/status")
-        .and_then(Value::as_str)
-        .expect("ack status");
-    assert!(
-        ack_status == "running" || ack_status == "response_available",
-        "unexpected ack status {ack_status}"
-    );
-    let request_id = data
-        .get("request_id")
-        .and_then(Value::as_str)
-        .expect("request id");
-    let completed = wait_for(Duration::from_secs(5), || {
-        !request_path(state_dir, request_id).exists()
-            && !running_path(state_dir, request_id).exists()
-            && response_path(state_dir, request_id).exists()
-    });
-    stop_child(&mut child);
+    assert!(envelope["data"].is_null());
+}
 
-    assert!(completed, "daemon should finish acked no-wait request");
+#[test]
+fn session_closeout_runtime_child_process() {
+    support::run_child_if_requested();
+}
+
+#[test]
+fn retired_session_commands_and_selectors_create_no_legacy_state() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actinglab.json");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let legacy_state = root.path().join("legacy-session");
+    fs::write(&config_path, "{}").expect("write config");
+
+    let retired_commands: &[&[&str]] = &[
+        &["--json", "session", "daemon"],
+        &["--json", "session", "queue"],
+        &["--json", "session", "request", "status"],
+        &["--json", "session", "journal"],
+        &["--json", "session", "events"],
+        &["--json", "session", "response"],
+        &["--json", "session", "request-state"],
+        &["--json", "session", "lease"],
+        &["--json", "monitor"],
+    ];
+    for command in retired_commands {
+        assert_retired(run_actinglab(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            &legacy_state,
+            command,
+        ));
+    }
+
+    let retired_selectors: &[&[&str]] = &[
+        &["--json", "session", "status", "--via-daemon"],
+        &["--json", "session", "monitor-policy", "status", "--local"],
+        &[
+            "--json",
+            "session",
+            "stream",
+            "--state-dir",
+            legacy_state.to_str().expect("legacy state path"),
+        ],
+    ];
+    for command in retired_selectors {
+        assert_retired(run_actinglab(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            &legacy_state,
+            command,
+        ));
+    }
+
+    assert!(!legacy_state.exists());
+    assert!(
+        !local_app_data
+            .join("ActingCommand/actinglab/session")
+            .exists()
+    );
+}
+
+#[test]
+fn runtime_clients_reconnect_without_restoring_session_file_authority() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().to_path_buf();
+    let local_app_data = root.path().join("local-app-data");
+    let legacy_state = root.path().join("legacy-session");
+    let config_path = root.path().join("actinglab.json");
+    let frame = root.path().join("sealed.png");
+    fs::write(&config_path, "{}").expect("write config");
+    support::write_sealed_frame(&frame);
+    let mut runtime =
+        support::RuntimeChild::spawn(root.path(), "session_closeout_runtime_child_process");
+    runtime.wait_ready(root.path());
+
+    let first = run_actinglab(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        &legacy_state,
+        &["--json", "session", "status"],
+    );
+    assert!(
+        first.status.success(),
+        "first status failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first = json_output(&first);
+    assert_eq!(first["data"]["running"], true);
+    let runtime_pid = first["data"]["info"]["pid"].clone();
+
+    let stream = run_actinglab(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        &legacy_state,
+        &[
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "stream",
+            "--max-frames",
+            "2",
+        ],
+    );
+    assert!(stream.status.success());
+    let stream = json_output(&stream);
+    assert_eq!(stream["data"]["frames"].as_array().map(Vec::len), Some(2));
+    runtime.assert_alive();
+
+    let reconnected = run_actinglab(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        &legacy_state,
+        &["--json", "session", "status"],
+    );
+    assert!(reconnected.status.success());
+    let reconnected = json_output(&reconnected);
+    assert_eq!(reconnected["data"]["info"]["pid"], runtime_pid);
+    assert!(!legacy_state.exists());
+
+    runtime.stop_clean();
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture", "capture", "capture_close"]
+    );
+    let unavailable = run_actinglab(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        &legacy_state,
+        &["--json", "session", "status"],
+    );
+    assert_eq!(unavailable.status.code(), Some(5));
+    let unavailable = json_output(&unavailable);
+    assert_eq!(unavailable["error"]["code"], "runtime_not_running");
+    assert!(unavailable["data"].is_null());
+    assert!(!legacy_state.exists());
 }
