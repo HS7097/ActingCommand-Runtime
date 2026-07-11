@@ -7,6 +7,10 @@
 - Completed C4 on `issue-35-runtime-ledger-v3` without merging into `main`.
 - C4 implementation and planning commit:
   `7ee35b69f547eb93ef90f39b2388bbde059c3456`.
+- Stable rollback tag `checkpoint/20260711-c4-minimal-vertical-slice` points to
+  `f56b058ac2f7271670d0070d0a29f02e4d08893e`.
+- Final C4 evidence is recorded in Issue #36 comment
+  `https://github.com/HS7097/ActingCommand-Runtime/issues/36#issuecomment-4942087485`.
 - Added typed capture/recognition lifecycle events, Runtime observation/reset operations, and an
   opaque Runtime-issued read capability bound to owner epoch, instance, frame, recognition,
   connection, and correlation context.
@@ -67,6 +71,10 @@
 - C4 Rust-addition forbidden implementation scan.
 - `git diff --check`
 - `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+- `git push origin issue-35-runtime-ledger-v3`
+- `git tag -a checkpoint/20260711-c4-minimal-vertical-slice ...`
+- `git push origin checkpoint/20260711-c4-minimal-vertical-slice`
+- `gh issue comment 36 --repo HS7097/ActingCommand-Runtime ...`
 
 ### Test results
 
@@ -86,9 +94,7 @@
 
 ### Next step
 
-1. Push the completed C4 branch and stable checkpoint tag.
-2. Record the final commit, tag, and verification evidence in Issue #36.
-3. Start C2 independently or continue the critical path with C3b only when selected; do not
+1. Start C2 independently or continue the critical path with C3b only when selected; do not
    merge this branch into `main` without explicit instruction.
 
 ## 2026-07-11 Issue 35 C4 minimal vertical-slice plan freeze
