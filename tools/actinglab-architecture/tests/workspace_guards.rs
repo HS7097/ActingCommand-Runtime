@@ -424,6 +424,41 @@ fn c5_recovery_state_machine_is_execution_owned() {
 }
 
 #[test]
+fn c5_run_state_machine_returns_data_only_successors() {
+    let root = workspace_root();
+    let run = fs::read_to_string(root.join("crates/execution-kernel/src/run.rs"))
+        .expect("read execution run source");
+
+    for required in [
+        "pub struct RunStateMachine",
+        "pub enum RunOperationFailureDecision",
+        "pub struct RunSuccessorSuggestion",
+        "SuccessorSuggested",
+        "PausedNeedsHuman",
+    ] {
+        assert!(run.contains(required), "execution run core lost {required}");
+    }
+    for forbidden in [
+        "actingcommand_lab",
+        "actingcommand_runtime_client",
+        "actingcommand_scheduler",
+        "actingcommand_ledger",
+        "actingcommand_device",
+        "std::fs",
+        "InputBackend",
+        "CaptureBackend",
+        "enqueue(",
+        "start_task(",
+        "submit_task(",
+    ] {
+        assert!(
+            !run.contains(forbidden),
+            "execution run decisions gained side-effect authority via {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");

@@ -16,6 +16,7 @@ mod planning;
 mod provider;
 mod readonly;
 mod recovery;
+mod run;
 mod session;
 
 pub use bundle::*;
@@ -27,6 +28,7 @@ pub use planning::*;
 pub use provider::*;
 pub use readonly::*;
 pub use recovery::*;
+pub use run::*;
 pub use session::*;
 
 #[cfg(test)]
