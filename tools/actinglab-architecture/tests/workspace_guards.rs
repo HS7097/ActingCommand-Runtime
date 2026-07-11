@@ -753,6 +753,9 @@ fn c5_portable_output_archive_is_owned_by_artifact_store() {
     assert!(lab_context.contains("write_portable_projection_archive"));
     assert!(lab_context.contains("portable_evidence_projection"));
     assert!(lab_context.contains("frame_evidence.json"));
+    assert!(lab_context.contains("ScreenshotNameAllocator"));
+    assert!(!lab_context.contains("timestamp_file_stem"));
+    assert!(!lab_context.contains("HashMap<String, usize>"));
     for forbidden in [
         "fn write_output_zip",
         "ZipWriter",

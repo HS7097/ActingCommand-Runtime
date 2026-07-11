@@ -198,11 +198,6 @@ fn timestamp_iso(time: SystemTime) -> String {
     format!("{date}T{h:02}:{m:02}:{s:02}.{ms:03}Z")
 }
 
-fn timestamp_file_stem(time: SystemTime) -> String {
-    let (date, h, m, s, ms) = timestamp_parts(time);
-    format!("{}_{h:02}{m:02}{s:02}_{ms:03}", date.replace('-', ""))
-}
-
 fn timestamp_parts(time: SystemTime) -> (String, u64, u64, u64, u32) {
     let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let seconds = duration.as_secs();

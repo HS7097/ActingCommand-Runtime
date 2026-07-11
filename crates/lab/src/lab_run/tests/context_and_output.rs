@@ -17,12 +17,11 @@
         let temp = TempDir::new().expect("temp");
         let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
         let time = UNIX_EPOCH + Duration::from_millis(1_672_531_200_123);
-        let first = ctx.next_screenshot_name(time);
-        let second = ctx.next_screenshot_name(time);
+        let first = ctx.next_screenshot_name(time).expect("first name");
+        let second = ctx.next_screenshot_name(time).expect("second name");
 
-        assert!(first.ends_with(".png"));
-        assert!(second.ends_with("_02.png"));
-        assert!(first.starts_with("20230101_000000_123"));
+        assert_eq!(first, "20230101000000123.png");
+        assert_eq!(second, "20230101000000123-01.png");
     }
 
     #[test]

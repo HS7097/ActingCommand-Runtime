@@ -10,7 +10,7 @@ use crate::{
 use actingcommand_artifact_store::{
     ArtifactStoreError, FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
     FrameStoreScreenshot as ScreenshotRecord, PortableFrameEvidenceProjection,
-    PortableProjectionArchive, RecognitionState, Tier3PauseCheckpoint,
+    PortableProjectionArchive, RecognitionState, ScreenshotNameAllocator, Tier3PauseCheckpoint,
     write_portable_projection_archive,
 };
 use actingcommand_device::{
@@ -40,7 +40,7 @@ use actingcommand_recognition_pack::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};

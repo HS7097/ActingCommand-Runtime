@@ -20,7 +20,7 @@ struct LabRunContext<'a, L: LedgerSink> {
     input_zip_sha256: Option<String>,
     input_entries: Vec<String>,
     requested_capture_interval_ms: u64,
-    screenshot_names: HashMap<String, usize>,
+    screenshot_names: ScreenshotNameAllocator,
     screenshots: Vec<ScreenshotRecord>,
     screenshot_evidence: Vec<Value>,
     frame_store: FrameStore,
@@ -72,6 +72,8 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 screenshots_dir.display()
             ))
         })?;
+        let screenshot_names =
+            ScreenshotNameAllocator::new(&screenshots_dir).map_err(map_artifact_error)?;
         let frame_store = FrameStore::new(
             run_dir.join("frame-store-temp"),
             FrameStoreConfig::default().with_memory_source(process.memory_source),
@@ -97,7 +99,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             input_zip_sha256: None,
             input_entries: Vec::new(),
             requested_capture_interval_ms: DEFAULT_CAPTURE_INTERVAL_MS,
-            screenshot_names: HashMap::new(),
+            screenshot_names,
             screenshots: Vec::new(),
             screenshot_evidence: Vec::new(),
             frame_store,
@@ -406,7 +408,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         self.capture_durations_ms
             .push(now.elapsed().as_millis() as u64);
         self.frame_index += 1;
-        let file_name = self.next_screenshot_name(self.now()?);
+        let file_name = self.next_screenshot_name(self.now()?)?;
         let width = frame.width;
         let height = frame.height;
         let backend = frame.backend_name.as_str();
@@ -639,15 +641,16 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         })
     }
 
-    fn next_screenshot_name(&mut self, now: SystemTime) -> String {
-        let stem = timestamp_file_stem(now);
-        let count = self.screenshot_names.entry(stem.clone()).or_insert(0);
-        *count += 1;
-        if *count == 1 {
-            format!("{stem}.png")
-        } else {
-            format!("{stem}_{:02}.png", *count)
-        }
+    fn next_screenshot_name(&mut self, now: SystemTime) -> CliOutcome<String> {
+        let timestamp_unix_ms = now
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| CliError::device(format!("screenshot timestamp precedes Unix epoch: {error}")))?
+            .as_millis();
+        let timestamp_unix_ms = u64::try_from(timestamp_unix_ms)
+            .map_err(|_| CliError::device("screenshot timestamp exceeds u64 milliseconds"))?;
+        self.screenshot_names
+            .allocate(timestamp_unix_ms)
+            .map_err(map_artifact_error)
     }
 
     fn finish(
