@@ -114,12 +114,16 @@ completeness are independently verifiable.
 
 ### Task 1: Contract and authority
 
+Status: complete.
+
 - Add closed C2 codes, payloads, event types, projections, and strict serde tests.
 - Replace the test-only artifact issuer with the C2 store issuer boundary.
 - Add compile-fail and architecture guards against transport-to-authority promotion and use of
   the issuer outside artifact-store.
 
 ### Task 2: Durable artifact store
+
+Status: active.
 
 - Add `crates/artifact-store`, typed configuration/error models, atomic writes, hashing,
   verification, safe object paths, screenshot naming, and retention metadata.

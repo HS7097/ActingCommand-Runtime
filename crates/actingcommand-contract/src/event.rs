@@ -99,13 +99,12 @@
 //! let _: ArtifactReference = serde_json::from_str("{}").unwrap();
 //! ```
 //!
-//! Ordinary producers cannot construct artifact-store authority:
+//! Artifact-store authority cannot be reconstructed from transport data:
 //!
 //! ```compile_fail
-//! use actingcommand_contract::{ArtifactKind, ArtifactLinksDraft, ArtifactStoreIssuer};
+//! use actingcommand_contract::ArtifactStoreIssuer;
 //!
-//! let issuer = ArtifactStoreIssuer::new().unwrap();
-//! let _ = issuer.issue_pending(ArtifactKind::CaptureFrame, ArtifactLinksDraft::default(), b"bytes", 1);
+//! let _: ArtifactStoreIssuer = serde_json::from_str("{}").unwrap();
 //! ```
 
 mod artifact;
@@ -156,6 +155,7 @@ pub enum EventFamily {
     Input,
     Capture,
     Recognition,
+    Artifact,
     Client,
     Ledger,
 }
@@ -228,12 +228,26 @@ pub enum EventType {
     CaptureCompleted,
     #[serde(rename = "capture.failed")]
     CaptureFailed,
+    #[serde(rename = "capture.pressure_changed")]
+    CapturePressureChanged,
+    #[serde(rename = "capture.dedup_window")]
+    CaptureDedupWindow,
+    #[serde(rename = "capture.policy_changed")]
+    CapturePolicyChanged,
     #[serde(rename = "recognition.requested")]
     RecognitionRequested,
     #[serde(rename = "recognition.completed")]
     RecognitionCompleted,
     #[serde(rename = "recognition.failed")]
     RecognitionFailed,
+    #[serde(rename = "artifact.created")]
+    ArtifactCreated,
+    #[serde(rename = "artifact.verified")]
+    ArtifactVerified,
+    #[serde(rename = "artifact.export_completed")]
+    ArtifactExportCompleted,
+    #[serde(rename = "artifact.export_failed")]
+    ArtifactExportFailed,
     #[serde(rename = "ui.action")]
     UiAction,
     #[serde(rename = "cli.command")]
@@ -275,12 +289,19 @@ impl EventType {
             Self::InputIntent | Self::InputCommitted | Self::InputCompleted | Self::InputFailed => {
                 EventFamily::Input
             }
-            Self::CaptureRequested | Self::CaptureCompleted | Self::CaptureFailed => {
-                EventFamily::Capture
-            }
+            Self::CaptureRequested
+            | Self::CaptureCompleted
+            | Self::CaptureFailed
+            | Self::CapturePressureChanged
+            | Self::CaptureDedupWindow
+            | Self::CapturePolicyChanged => EventFamily::Capture,
             Self::RecognitionRequested | Self::RecognitionCompleted | Self::RecognitionFailed => {
                 EventFamily::Recognition
             }
+            Self::ArtifactCreated
+            | Self::ArtifactVerified
+            | Self::ArtifactExportCompleted
+            | Self::ArtifactExportFailed => EventFamily::Artifact,
             Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,
             Self::LedgerRecovered => EventFamily::Ledger,
         }

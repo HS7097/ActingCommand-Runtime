@@ -63,7 +63,10 @@ closed_code!(OriginModule {
     Scheduler => "scheduler",
     DeviceProxy => "device-proxy",
     Capture => "capture",
+    CapturePipeline => "capture-pipeline",
     Recognition => "recognition",
+    ArtifactStore => "artifact-store",
+    EvidenceExporter => "evidence-exporter",
     GlobalLedger => "global-ledger",
     ProcessTest => "process-test",
 });
@@ -89,7 +92,13 @@ closed_code!(EventAction {
     InputText => "input.text",
     InputReset => "input.reset",
     CaptureObserve => "capture.observe",
+    CapturePolicy => "capture.policy",
+    CaptureDedup => "capture.dedup",
+    CapturePressure => "capture.pressure",
     RecognitionObserve => "recognition.observe",
+    ArtifactStore => "artifact.store",
+    ArtifactVerify => "artifact.verify",
+    ArtifactExport => "artifact.export",
     CriticalTest => "critical.test",
     LedgerRecovery => "ledger.recovery",
 });
@@ -105,6 +114,10 @@ closed_code!(DiagnosticCode {
     BackendOpenFailed => "backend.open_failed",
     BackendOperationFailed => "backend.operation_failed",
     CaptureFailed => "capture.failed",
+    ArtifactWriteFailed => "artifact.write_failed",
+    ArtifactVerifyFailed => "artifact.verify_failed",
+    ArtifactExportFailed => "artifact.export_failed",
+    PinnedFrameMissing => "artifact.pinned_frame_missing",
     RecognitionFailed => "recognition.failed",
     InputFailed => "input.failed",
     CommandRejected => "command.rejected",
@@ -112,6 +125,43 @@ closed_code!(DiagnosticCode {
 
 closed_code!(RecognitionVerdict {
     FrameDecoded => "frame_decoded",
+});
+
+closed_code!(CapturePressureState {
+    Tier1Dedup => "tier1_dedup",
+    Tier2Flush => "tier2_flush",
+    Tier3Paused => "tier3_paused",
+    Tier3Resumed => "tier3_resumed",
+});
+
+closed_code!(CapturePolicyReason {
+    Default => "default",
+    RequestOverride => "request_override",
+    PressureRecovery => "pressure_recovery",
+});
+
+closed_code!(PinnedFrameReason {
+    PreInput => "pre_input",
+    PostInput => "post_input",
+    RecognitionEvidence => "recognition_evidence",
+    StateTransition => "state_transition",
+    Failure => "failure",
+    Fallback => "fallback",
+    GuardRejection => "guard_rejection",
+    Terminal => "terminal",
+    Explicit => "explicit",
+});
+
+closed_code!(TaskOutcome {
+    Success => "success",
+    Failure => "failure",
+    Cancelled => "cancelled",
+});
+
+closed_code!(EvidenceCompleteness {
+    Complete => "complete",
+    Partial => "partial",
+    Failed => "failed",
 });
 
 closed_code!(RecoveryReason {

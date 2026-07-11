@@ -139,6 +139,21 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        CapturePayloadDraft::pressure_changed(
+            CapturePressureState::Tier2Flush,
+            1_000,
+            750,
+            input(),
+        )
+        .into(),
+        CapturePayloadDraft::dedup_window(3, 900, input()).into(),
+        CapturePayloadDraft::policy_changed(
+            300,
+            RetentionClass::DebugFull,
+            CapturePolicyReason::Default,
+            input(),
+        )
+        .into(),
         RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, input()).into(),
         RecognitionPayloadDraft::completed(
             EventAction::RecognitionObserve,
@@ -153,6 +168,23 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             EventAction::RecognitionObserve,
             DiagnosticCode::RecognitionFailed,
             effect,
+            input(),
+        )
+        .into(),
+        ArtifactPayloadDraft::created(input()).into(),
+        ArtifactPayloadDraft::verified(input()).into(),
+        ArtifactPayloadDraft::export_completed(
+            TaskOutcome::Success,
+            EvidenceCompleteness::Complete,
+            2,
+            input(),
+        )
+        .into(),
+        ArtifactPayloadDraft::export_failed(
+            DiagnosticCode::ArtifactExportFailed,
+            TaskOutcome::Failure,
+            EvidenceCompleteness::Failed,
+            1,
             input(),
         )
         .into(),
@@ -487,7 +519,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 37);
+    assert_eq!(payloads.len(), 44);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -545,4 +577,163 @@ fn artifact_sha256_matches_known_vector() {
         issued.reference().sha256(),
         "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
+}
+
+#[test]
+fn c2_artifact_issuer_preserves_store_owned_metadata() {
+    let identifiers = identifier_issuer();
+    let issuer = ArtifactStoreIssuer::new().expect("artifact issuer");
+    let issued = issuer
+        .issue(
+            ArtifactKind::EvidenceArchive,
+            artifact_links(&identifiers),
+            b"evidence archive bytes",
+            1_752_147_200_001,
+            ArtifactIssuePolicy::new(
+                ArtifactProducer::EvidenceExporter,
+                RetentionClass::DebugFull,
+                ArtifactRedactionState::Applied,
+            ),
+        )
+        .expect("issued artifact");
+
+    let reference = issued.reference();
+    assert_eq!(reference.kind(), ArtifactKind::EvidenceArchive);
+    assert_eq!(reference.media_type(), ArtifactMediaType::ApplicationZip);
+    assert_eq!(reference.producer(), ArtifactProducer::EvidenceExporter);
+    assert_eq!(reference.retention_class(), RetentionClass::DebugFull);
+    assert_eq!(reference.redaction_state(), ArtifactRedactionState::Applied);
+    assert!(reference.object_key().ends_with(".zip"));
+    reference.validate().expect("valid reference");
+}
+
+#[test]
+fn c2_capture_pipeline_and_export_projection_preserve_typed_facts() {
+    let pressure = sanitize(
+        CapturePayloadDraft::pressure_changed(
+            CapturePressureState::Tier3Paused,
+            10_000,
+            9_500,
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let dedup = sanitize(
+        CapturePayloadDraft::dedup_window(4, 1_200, AuditInput::new()).into(),
+        2,
+    );
+    let policy = sanitize(
+        CapturePayloadDraft::policy_changed(
+            300,
+            RetentionClass::DebugFull,
+            CapturePolicyReason::RequestOverride,
+            AuditInput::new(),
+        )
+        .into(),
+        3,
+    );
+    let export = sanitize(
+        ArtifactPayloadDraft::export_completed(
+            TaskOutcome::Cancelled,
+            EvidenceCompleteness::Partial,
+            5,
+            AuditInput::new(),
+        )
+        .into(),
+        4,
+    );
+
+    let pressure =
+        serde_json::to_value(pressure.payload().public_projection()).expect("pressure projection");
+    assert_eq!(
+        pressure["payload"]["capture_pressure_state"],
+        "tier3_paused"
+    );
+    assert_eq!(pressure["payload"]["memory_budget_bytes"], 10_000);
+    assert_eq!(pressure["payload"]["resident_bytes"], 9_500);
+
+    let dedup =
+        serde_json::to_value(dedup.payload().public_projection()).expect("dedup projection");
+    assert_eq!(dedup["payload"]["duplicate_count"], 4);
+    assert_eq!(dedup["payload"]["duration_ms"], 1_200);
+
+    let policy =
+        serde_json::to_value(policy.payload().public_projection()).expect("policy projection");
+    assert_eq!(policy["payload"]["cadence_ms"], 300);
+    assert_eq!(policy["payload"]["retention_class"], "debug_full");
+    assert_eq!(
+        policy["payload"]["capture_policy_reason"],
+        "request_override"
+    );
+
+    let export =
+        serde_json::to_value(export.payload().public_projection()).expect("export projection");
+    assert_eq!(export["family"], "artifact");
+    assert_eq!(export["payload"]["task_outcome"], "cancelled");
+    assert_eq!(export["payload"]["evidence_completeness"], "partial");
+    assert_eq!(export["payload"]["artifact_count"], 5);
+}
+
+#[test]
+fn c2_payloads_reject_invalid_numeric_and_unknown_closed_values() {
+    for payload in [
+        CapturePayloadDraft::pressure_changed(
+            CapturePressureState::Tier1Dedup,
+            0,
+            0,
+            AuditInput::new(),
+        )
+        .into(),
+        CapturePayloadDraft::dedup_window(0, 300, AuditInput::new()).into(),
+        CapturePayloadDraft::policy_changed(
+            0,
+            RetentionClass::Adaptive,
+            CapturePolicyReason::Default,
+            AuditInput::new(),
+        )
+        .into(),
+        ArtifactPayloadDraft::export_completed(
+            TaskOutcome::Success,
+            EvidenceCompleteness::Complete,
+            0,
+            AuditInput::new(),
+        )
+        .into(),
+    ] {
+        let issuer = identifier_issuer();
+        let error = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            1_752_147_200_000,
+            EventSeverity::Info,
+            origin(),
+            links(&issuer),
+            payload,
+        )
+        .sanitize(&SpyFingerprinter::new())
+        .expect_err("invalid C2 payload");
+        assert!(error.code().starts_with("invalid_"));
+    }
+
+    let value = serde_json::json!({
+        "family": "capture",
+        "payload": {
+            "kind": "pressure_changed",
+            "data": {
+                "action": "capture.pressure",
+                "state": "tier4_impossible",
+                "memory_budget_bytes": 1000,
+                "resident_bytes": 900,
+                "audit": {
+                    "account_fingerprint": null,
+                    "authentication_fingerprint": null,
+                    "machine_path_present": false,
+                    "device_endpoint_present": false
+                }
+            }
+        }
+    });
+    let error =
+        serde_json::from_value::<EventPayload>(value).expect_err("unknown pressure state rejected");
+    assert!(!error.to_string().contains("tier4_impossible"));
 }

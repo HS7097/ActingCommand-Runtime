@@ -398,12 +398,16 @@ pub fn inspect_producer_event_capabilities(
                     ));
                 }
             }
-            Item::Struct(item_struct)
-                if is_public(&item_struct.vis) && item_struct.ident == "ArtifactStoreIssuer" =>
-            {
-                violations.push(format!(
-                    "{path}: public ArtifactStoreIssuer is forbidden until the real store boundary exists"
-                ));
+            Item::Struct(item_struct) if item_struct.ident == "ArtifactStoreIssuer" => {
+                if !is_public(&item_struct.vis)
+                    || derives_ident(&item_struct.attrs, "Serialize")
+                    || derives_ident(&item_struct.attrs, "Deserialize")
+                    || item_struct.fields.iter().any(|field| is_public(&field.vis))
+                {
+                    violations.push(format!(
+                        "{path}: ArtifactStoreIssuer must be public, opaque, and non-serializable"
+                    ));
+                }
             }
             Item::Type(item_type) if is_public(&item_type.vis) => {
                 if item_type.ident == "ArtifactStoreIssuer" {
@@ -420,9 +424,6 @@ pub fn inspect_producer_event_capabilities(
             }
             Item::Use(item_use) if is_public(&item_use.vis) => {
                 for (local, target) in public_use_aliases(&item_use.tree) {
-                    if local == "ArtifactStoreIssuer" || target == "ArtifactStoreIssuer" {
-                        violations.push(format!("{path}: public use exposes ArtifactStoreIssuer"));
-                    }
                     if local == "StoreIssuedArtifact" || target == "StoreIssuedArtifact" {
                         violations.push(format!(
                             "{path}: public use exposes StoreIssuedArtifact under {local}"
@@ -673,7 +674,19 @@ fn inspect_public_artifact_capability_routes(
                             aliases,
                         ) || (self_is_capability
                             && signature_returns_ident(&method.sig, &["Self"]));
-                        if externally_callable && returns_capability {
+                        let approved_store_issue = impl_self_ident(item_impl)
+                            .is_some_and(|ident| ident == "ArtifactStoreIssuer")
+                            && method.sig.ident == "issue"
+                            && method_argument_type(method, "kind")
+                                .and_then(|ty| resolved_type_ident(ty, aliases))
+                                .is_some_and(|ident| ident == "ArtifactKind")
+                            && method_argument_type(method, "links")
+                                .and_then(|ty| resolved_type_ident(ty, aliases))
+                                .is_some_and(|ident| ident == "ArtifactLinksDraft")
+                            && method_argument_type(method, "policy")
+                                .and_then(|ty| resolved_type_ident(ty, aliases))
+                                .is_some_and(|ident| ident == "ArtifactIssuePolicy");
+                        if externally_callable && returns_capability && !approved_store_issue {
                             let owner = impl_self_ident(item_impl)
                                 .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
                             violations.push(format!(
@@ -2220,6 +2233,27 @@ mod tests {
                 Ok(StoreIssuedArtifact { reference: 1 })
             }
         "#;
+        let approved_store_issuer = r#"
+            pub struct StoreIssuedArtifact { reference: u64 }
+            pub struct ArtifactStoreIssuer { identifiers: u64 }
+            pub struct ArtifactKind;
+            pub struct ArtifactLinksDraft;
+            pub struct ArtifactIssuePolicy;
+            pub struct SanitizationError;
+            impl ArtifactStoreIssuer {
+                pub fn issue(
+                    &self,
+                    kind: ArtifactKind,
+                    links: ArtifactLinksDraft,
+                    bytes: &[u8],
+                    created_at_unix_ms: u64,
+                    policy: ArtifactIssuePolicy,
+                ) -> Result<StoreIssuedArtifact, SanitizationError> {
+                    let _ = (self, kind, links, bytes, created_at_unix_ms, policy);
+                    Ok(StoreIssuedArtifact { reference: 1 })
+                }
+            }
+        "#;
 
         let issuer_violations =
             super::inspect_producer_event_capabilities("fixture.rs", public_issuer).unwrap();
@@ -2261,6 +2295,12 @@ mod tests {
                 "{label} must be rejected"
             );
         }
+        assert!(
+            super::inspect_producer_event_capabilities("fixture.rs", approved_store_issuer)
+                .unwrap()
+                .is_empty(),
+            "the C2 artifact-store issuer boundary must remain allowed"
+        );
     }
 
     #[test]

@@ -4,7 +4,6 @@ use super::{
     ArtifactId, CorrelationId, FrameId, IssuedCorrelationId, IssuedFrameId, IssuedRunId, RunId,
     SanitizationError, Sensitivity,
 };
-#[cfg(test)]
 use super::{IdentifierIssuanceError, IdentifierIssuer};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -14,24 +13,42 @@ use std::fmt;
 pub enum ArtifactKind {
     #[serde(rename = "capture.frame")]
     CaptureFrame,
+    #[serde(rename = "diagnostic.json")]
+    DiagnosticJson,
+    #[serde(rename = "evidence.archive")]
+    EvidenceArchive,
+    #[serde(rename = "evidence.manifest")]
+    EvidenceManifest,
+    #[serde(rename = "report.text")]
+    TextReport,
 }
 
 impl ArtifactKind {
-    const fn media_type(self) -> ArtifactMediaType {
+    pub const fn media_type(self) -> ArtifactMediaType {
         match self {
             Self::CaptureFrame => ArtifactMediaType::ImagePng,
+            Self::DiagnosticJson | Self::EvidenceManifest => ArtifactMediaType::ApplicationJson,
+            Self::EvidenceArchive => ArtifactMediaType::ApplicationZip,
+            Self::TextReport => ArtifactMediaType::TextPlain,
         }
     }
 
-    const fn retention_class(self) -> RetentionClass {
+    pub const fn default_retention_class(self) -> RetentionClass {
         match self {
-            Self::CaptureFrame => RetentionClass::Adaptive,
+            Self::CaptureFrame
+            | Self::DiagnosticJson
+            | Self::EvidenceArchive
+            | Self::EvidenceManifest
+            | Self::TextReport => RetentionClass::Adaptive,
         }
     }
 
-    const fn extension(self) -> &'static str {
+    pub const fn extension(self) -> &'static str {
         match self {
             Self::CaptureFrame => "png",
+            Self::DiagnosticJson | Self::EvidenceManifest => "json",
+            Self::EvidenceArchive => "zip",
+            Self::TextReport => "txt",
         }
     }
 }
@@ -40,12 +57,21 @@ impl ArtifactKind {
 pub enum ArtifactMediaType {
     #[serde(rename = "image/png")]
     ImagePng,
+    #[serde(rename = "application/json")]
+    ApplicationJson,
+    #[serde(rename = "application/zip")]
+    ApplicationZip,
+    #[serde(rename = "text/plain")]
+    TextPlain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactProducer {
     CaptureStore,
+    CapturePipeline,
+    ArtifactStore,
+    EvidenceExporter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -62,6 +88,27 @@ pub enum ArtifactRedactionState {
     NotRequired,
     Applied,
     Pending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactIssuePolicy {
+    producer: ArtifactProducer,
+    retention_class: RetentionClass,
+    redaction_state: ArtifactRedactionState,
+}
+
+impl ArtifactIssuePolicy {
+    pub const fn new(
+        producer: ArtifactProducer,
+        retention_class: RetentionClass,
+        redaction_state: ArtifactRedactionState,
+    ) -> Self {
+        Self {
+            producer,
+            retention_class,
+            redaction_state,
+        }
+    }
 }
 
 macro_rules! non_disclosing_enum_deserialize {
@@ -99,12 +146,22 @@ macro_rules! non_disclosing_enum_deserialize {
 
 non_disclosing_enum_deserialize!(ArtifactKind {
     "capture.frame" => CaptureFrame,
+    "diagnostic.json" => DiagnosticJson,
+    "evidence.archive" => EvidenceArchive,
+    "evidence.manifest" => EvidenceManifest,
+    "report.text" => TextReport,
 });
 non_disclosing_enum_deserialize!(ArtifactMediaType {
     "image/png" => ImagePng,
+    "application/json" => ApplicationJson,
+    "application/zip" => ApplicationZip,
+    "text/plain" => TextPlain,
 });
 non_disclosing_enum_deserialize!(ArtifactProducer {
     "capture_store" => CaptureStore,
+    "capture_pipeline" => CapturePipeline,
+    "artifact_store" => ArtifactStore,
+    "evidence_exporter" => EvidenceExporter,
 });
 non_disclosing_enum_deserialize!(RetentionClass {
     "debug_full" => DebugFull,
@@ -142,27 +199,28 @@ impl ArtifactLinksDraft {
     }
 }
 
-/// Owner-only store boundary. It is intentionally private until C2 supplies the real durable
-/// artifact-store and verification boundary.
-#[cfg(test)]
-struct ArtifactStoreBoundary {
+/// Mints artifact attachment capabilities for the durable artifact-store boundary.
+///
+/// Workspace architecture guards restrict construction to `actingcommand-artifact-store` and
+/// contract tests. Transport metadata cannot be promoted back into this authority.
+pub struct ArtifactStoreIssuer {
     identifiers: IdentifierIssuer,
 }
 
-#[cfg(test)]
-impl ArtifactStoreBoundary {
-    fn new() -> Result<Self, IdentifierIssuanceError> {
+impl ArtifactStoreIssuer {
+    pub fn new() -> Result<Self, IdentifierIssuanceError> {
         Ok(Self {
             identifiers: IdentifierIssuer::new()?,
         })
     }
 
-    fn issue_pending(
+    pub fn issue(
         &self,
         kind: ArtifactKind,
         links: ArtifactLinksDraft,
         bytes: &[u8],
         created_at_unix_ms: u64,
+        policy: ArtifactIssuePolicy,
     ) -> Result<StoreIssuedArtifact, SanitizationError> {
         if bytes.is_empty() {
             return Err(SanitizationError::new(
@@ -198,9 +256,9 @@ impl ArtifactStoreBoundary {
             byte_count,
             sha256,
             created_at_unix_ms,
-            producer: ArtifactProducer::CaptureStore,
-            retention_class: kind.retention_class(),
-            redaction_state: ArtifactRedactionState::Pending,
+            producer: policy.producer,
+            retention_class: policy.retention_class,
+            redaction_state: policy.redaction_state,
         };
         reference.validate()?;
         Ok(StoreIssuedArtifact { reference })
@@ -208,7 +266,7 @@ impl ArtifactStoreBoundary {
 }
 
 #[cfg(test)]
-impl fmt::Debug for ArtifactStoreBoundary {
+impl fmt::Debug for ArtifactStoreIssuer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ArtifactStoreBoundary(<opaque>)")
     }
@@ -221,9 +279,19 @@ pub(super) fn issue_pending_for_tests(
     bytes: &[u8],
     created_at_unix_ms: u64,
 ) -> Result<StoreIssuedArtifact, SanitizationError> {
-    ArtifactStoreBoundary::new()
+    ArtifactStoreIssuer::new()
         .map_err(|_| SanitizationError::new("artifact_id_issuance_failed", "artifact_id"))?
-        .issue_pending(kind, links, bytes, created_at_unix_ms)
+        .issue(
+            kind,
+            links,
+            bytes,
+            created_at_unix_ms,
+            ArtifactIssuePolicy::new(
+                ArtifactProducer::CaptureStore,
+                kind.default_retention_class(),
+                ArtifactRedactionState::Pending,
+            ),
+        )
 }
 
 /// An attachment capability returned by the artifact-store issuer. It is neither serializable nor
@@ -335,9 +403,6 @@ impl ArtifactReference {
             && self.created_at_unix_ms > 0
             && is_sha256(&self.sha256)
             && self.media_type == self.kind.media_type()
-            && self.producer == ArtifactProducer::CaptureStore
-            && self.retention_class == self.kind.retention_class()
-            && self.redaction_state == ArtifactRedactionState::Pending
             && self.object_key == object_key_for(&self.artifact_id, self.kind, &self.sha256);
         if valid {
             Ok(())
@@ -424,7 +489,6 @@ fn is_sha256(value: &str) -> bool {
     })
 }
 
-#[cfg(test)]
 fn canonical_sha256(bytes: &[u8]) -> String {
     let digest = sha256(bytes);
     let mut value = String::with_capacity(71);
@@ -437,7 +501,6 @@ fn canonical_sha256(bytes: &[u8]) -> String {
 }
 
 // FIPS 180-4 SHA-256 compression. This keeps the contract dependency budget unchanged.
-#[cfg(test)]
 fn sha256(input: &[u8]) -> [u8; 32] {
     const INITIAL: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,

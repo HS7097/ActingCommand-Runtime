@@ -1,5 +1,59 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 Task 1 contract and artifact authority
+
+### Current status
+
+- Added closed capture pressure, policy, pinned reason, task outcome, evidence completeness,
+  artifact kind/media/producer, retention, and diagnostic vocabularies.
+- Added typed `capture.pressure_changed`, `capture.dedup_window`, `capture.policy_changed`,
+  `artifact.created`, `artifact.verified`, `artifact.export_completed`, and
+  `artifact.export_failed` events with strict payload validation and public projections.
+- Replaced the C1 test-only artifact issuer with an opaque C2 `ArtifactStoreIssuer`. It owns
+  artifact ID/object-key/hash issuance and cannot be reconstructed from serialized transport
+  metadata.
+- Extended architecture inspection so only the exact typed C2 issuer method may return a
+  `StoreIssuedArtifact`; free functions, traits, aliases, conversions, public constructors, and
+  renamed ingress remain rejected.
+- No filesystem artifact behavior, resource repository, emulator, live device, upstream source,
+  or subagent was used.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/artifact.rs`
+- `crates/actingcommand-contract/src/event/codes.rs`
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `tools/actinglab-architecture/src/lib.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-contract`
+- `cargo fmt --all`
+- `cargo test -p actingcommand-contract`
+- `cargo clippy -p actingcommand-contract -- -D warnings`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo clippy -p actingcommand-actinglab-architecture -- -D warnings`
+
+### Test results
+
+- Contract tests passed: 34 unit tests and 11 compile-fail doctests.
+- Architecture tests passed: 14 unit tests and 17 workspace guards.
+- Focused Clippy passed with warnings denied.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this completed C2 contract unit.
+2. Add `crates/artifact-store` with atomic writes, hash verification, safe object paths,
+   collision-safe screenshot names, typed event append requirements, and adversarial tests.
+
 ## 2026-07-11 Issue 35 C2 artifact/evidence plan freeze
 
 ### Current status

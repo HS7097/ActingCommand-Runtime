@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    DiagnosticCode, EventAction, EventFamily, EventType, RecognitionVerdict, RecoveryReason,
-    SanitizationError, Sensitivity,
+    CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction, EventFamily, EventType,
+    EvidenceCompleteness, RecognitionVerdict, RecoveryReason, RetentionClass, SanitizationError,
+    Sensitivity, TaskOutcome,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -16,6 +17,7 @@ pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
 pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
+pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
@@ -263,6 +265,58 @@ pub struct ObservationResultPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CapturePressurePayload {
+    action: EventAction,
+    state: CapturePressureState,
+    memory_budget_bytes: u64,
+    resident_bytes: u64,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureDedupWindowPayload {
+    action: EventAction,
+    duplicate_count: u64,
+    duration_ms: u64,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturePolicyPayload {
+    action: EventAction,
+    cadence_ms: u64,
+    retention_class: RetentionClass,
+    reason: CapturePolicyReason,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactExportPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    task_outcome: TaskOutcome,
+    evidence_completeness: EvidenceCompleteness,
+    artifact_count: u64,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactExportFailurePayload {
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
+    effect_disposition: EffectDisposition,
+    task_outcome: TaskOutcome,
+    evidence_completeness: EvidenceCompleteness,
+    artifact_count: u64,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecoveryPayload {
     reason: RecoveryReason,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,6 +351,11 @@ common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(ObservationResultPayload);
+common_detail_accessors!(CapturePressurePayload);
+common_detail_accessors!(CaptureDedupWindowPayload);
+common_detail_accessors!(CapturePolicyPayload);
+common_detail_accessors!(ArtifactExportPayload);
+common_detail_accessors!(ArtifactExportFailurePayload);
 
 impl DiagnosticPayload {
     pub const fn diagnostic_code(&self) -> DiagnosticCode {
@@ -335,6 +394,84 @@ impl ObservationResultPayload {
 
     pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
         self.recognition_verdict
+    }
+}
+
+impl CapturePressurePayload {
+    pub const fn state(&self) -> CapturePressureState {
+        self.state
+    }
+
+    pub const fn memory_budget_bytes(&self) -> u64 {
+        self.memory_budget_bytes
+    }
+
+    pub const fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+}
+
+impl CaptureDedupWindowPayload {
+    pub const fn duplicate_count(&self) -> u64 {
+        self.duplicate_count
+    }
+
+    pub const fn duration_ms(&self) -> u64 {
+        self.duration_ms
+    }
+}
+
+impl CapturePolicyPayload {
+    pub const fn cadence_ms(&self) -> u64 {
+        self.cadence_ms
+    }
+
+    pub const fn retention_class(&self) -> RetentionClass {
+        self.retention_class
+    }
+
+    pub const fn reason(&self) -> CapturePolicyReason {
+        self.reason
+    }
+}
+
+impl ArtifactExportPayload {
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn task_outcome(&self) -> TaskOutcome {
+        self.task_outcome
+    }
+
+    pub const fn evidence_completeness(&self) -> EvidenceCompleteness {
+        self.evidence_completeness
+    }
+
+    pub const fn artifact_count(&self) -> u64 {
+        self.artifact_count
+    }
+}
+
+impl ArtifactExportFailurePayload {
+    pub const fn diagnostic_code(&self) -> DiagnosticCode {
+        self.diagnostic_code
+    }
+
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn task_outcome(&self) -> TaskOutcome {
+        self.task_outcome
+    }
+
+    pub const fn evidence_completeness(&self) -> EvidenceCompleteness {
+        self.evidence_completeness
+    }
+
+    pub const fn artifact_count(&self) -> u64 {
+        self.artifact_count
     }
 }
 
@@ -428,6 +565,68 @@ impl PayloadDetail for ObservationResultPayload {
     }
 }
 
+macro_rules! observation_detail {
+    ($type:ty) => {
+        impl PayloadDetail for $type {
+            fn action(&self) -> EventAction {
+                self.action
+            }
+
+            fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+                None
+            }
+
+            fn effect_disposition(&self) -> Option<EffectDisposition> {
+                None
+            }
+
+            fn audit(&self) -> &SanitizedAudit {
+                &self.audit
+            }
+        }
+    };
+}
+
+observation_detail!(CapturePressurePayload);
+observation_detail!(CaptureDedupWindowPayload);
+observation_detail!(CapturePolicyPayload);
+
+impl PayloadDetail for ArtifactExportPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for ArtifactExportFailurePayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        Some(self.diagnostic_code)
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl RecoveryPayload {
     pub const fn reason(&self) -> RecoveryReason {
         self.reason
@@ -494,6 +693,48 @@ struct ObservationResultDraft {
     frame_width: u32,
     frame_height: u32,
     recognition_verdict: Option<RecognitionVerdict>,
+    audit: AuditInput,
+}
+
+struct CapturePressureDraft {
+    action: EventAction,
+    state: CapturePressureState,
+    memory_budget_bytes: u64,
+    resident_bytes: u64,
+    audit: AuditInput,
+}
+
+struct CaptureDedupWindowDraft {
+    action: EventAction,
+    duplicate_count: u64,
+    duration_ms: u64,
+    audit: AuditInput,
+}
+
+struct CapturePolicyDraft {
+    action: EventAction,
+    cadence_ms: u64,
+    retention_class: RetentionClass,
+    reason: CapturePolicyReason,
+    audit: AuditInput,
+}
+
+struct ArtifactExportDraft {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    task_outcome: TaskOutcome,
+    evidence_completeness: EvidenceCompleteness,
+    artifact_count: u64,
+    audit: AuditInput,
+}
+
+struct ArtifactExportFailureDraft {
+    action: EventAction,
+    diagnostic_code: DiagnosticCode,
+    effect_disposition: EffectDisposition,
+    task_outcome: TaskOutcome,
+    evidence_completeness: EvidenceCompleteness,
+    artifact_count: u64,
     audit: AuditInput,
 }
 
@@ -625,6 +866,107 @@ impl ObservationResultDraft {
             frame_width: self.frame_width,
             frame_height: self.frame_height,
             recognition_verdict: self.recognition_verdict,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl CapturePressureDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CapturePressurePayload, SanitizationError> {
+        if self.memory_budget_bytes == 0 || self.resident_bytes > self.memory_budget_bytes {
+            return Err(SanitizationError::new(
+                "invalid_capture_pressure",
+                "memory_budget_bytes",
+            ));
+        }
+        Ok(CapturePressurePayload {
+            action: self.action,
+            state: self.state,
+            memory_budget_bytes: self.memory_budget_bytes,
+            resident_bytes: self.resident_bytes,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl CaptureDedupWindowDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CaptureDedupWindowPayload, SanitizationError> {
+        if self.duplicate_count == 0 || self.duration_ms == 0 {
+            return Err(SanitizationError::new(
+                "invalid_capture_dedup_window",
+                "duplicate_count",
+            ));
+        }
+        Ok(CaptureDedupWindowPayload {
+            action: self.action,
+            duplicate_count: self.duplicate_count,
+            duration_ms: self.duration_ms,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl CapturePolicyDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CapturePolicyPayload, SanitizationError> {
+        if self.cadence_ms == 0 {
+            return Err(SanitizationError::new(
+                "invalid_capture_policy",
+                "cadence_ms",
+            ));
+        }
+        Ok(CapturePolicyPayload {
+            action: self.action,
+            cadence_ms: self.cadence_ms,
+            retention_class: self.retention_class,
+            reason: self.reason,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ArtifactExportDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ArtifactExportPayload, SanitizationError> {
+        if self.artifact_count == 0 {
+            return Err(SanitizationError::new(
+                "invalid_artifact_export",
+                "artifact_count",
+            ));
+        }
+        Ok(ArtifactExportPayload {
+            action: self.action,
+            effect_disposition: self.effect_disposition,
+            task_outcome: self.task_outcome,
+            evidence_completeness: self.evidence_completeness,
+            artifact_count: self.artifact_count,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ArtifactExportFailureDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ArtifactExportFailurePayload, SanitizationError> {
+        Ok(ArtifactExportFailurePayload {
+            action: self.action,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            task_outcome: self.task_outcome,
+            evidence_completeness: self.evidence_completeness,
+            artifact_count: self.artifact_count,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -938,6 +1280,9 @@ enum CaptureDraftKind {
     Requested(ObservationDraft),
     Completed(ObservationResultDraft),
     Failed(DiagnosticOutcomeDraft),
+    PressureChanged(CapturePressureDraft),
+    DedupWindow(CaptureDedupWindowDraft),
+    PolicyChanged(CapturePolicyDraft),
 }
 
 pub struct CapturePayloadDraft(CaptureDraftKind);
@@ -978,6 +1323,45 @@ impl CapturePayloadDraft {
             effect,
             audit,
         )))
+    }
+
+    pub fn pressure_changed(
+        state: CapturePressureState,
+        memory_budget_bytes: u64,
+        resident_bytes: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::PressureChanged(CapturePressureDraft {
+            action: EventAction::CapturePressure,
+            state,
+            memory_budget_bytes,
+            resident_bytes,
+            audit,
+        }))
+    }
+
+    pub fn dedup_window(duplicate_count: u64, duration_ms: u64, audit: AuditInput) -> Self {
+        Self(CaptureDraftKind::DedupWindow(CaptureDedupWindowDraft {
+            action: EventAction::CaptureDedup,
+            duplicate_count,
+            duration_ms,
+            audit,
+        }))
+    }
+
+    pub fn policy_changed(
+        cadence_ms: u64,
+        retention_class: RetentionClass,
+        reason: CapturePolicyReason,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::PolicyChanged(CapturePolicyDraft {
+            action: EventAction::CapturePolicy,
+            cadence_ms,
+            retention_class,
+            reason,
+            audit,
+        }))
     }
 }
 
@@ -1028,6 +1412,69 @@ impl RecognitionPayloadDraft {
             effect,
             audit,
         )))
+    }
+}
+
+enum ArtifactDraftKind {
+    Created(OutcomeDraft),
+    Verified(OutcomeDraft),
+    ExportCompleted(ArtifactExportDraft),
+    ExportFailed(ArtifactExportFailureDraft),
+}
+
+pub struct ArtifactPayloadDraft(ArtifactDraftKind);
+
+impl ArtifactPayloadDraft {
+    pub fn created(audit: AuditInput) -> Self {
+        Self(ArtifactDraftKind::Created(OutcomeDraft::new(
+            EventAction::ArtifactStore,
+            EffectDisposition::Performed,
+            audit,
+        )))
+    }
+
+    pub fn verified(audit: AuditInput) -> Self {
+        Self(ArtifactDraftKind::Verified(OutcomeDraft::new(
+            EventAction::ArtifactVerify,
+            EffectDisposition::Performed,
+            audit,
+        )))
+    }
+
+    pub fn export_completed(
+        task_outcome: TaskOutcome,
+        evidence_completeness: EvidenceCompleteness,
+        artifact_count: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ArtifactDraftKind::ExportCompleted(ArtifactExportDraft {
+            action: EventAction::ArtifactExport,
+            effect_disposition: EffectDisposition::Performed,
+            task_outcome,
+            evidence_completeness,
+            artifact_count,
+            audit,
+        }))
+    }
+
+    pub fn export_failed(
+        diagnostic_code: DiagnosticCode,
+        task_outcome: TaskOutcome,
+        evidence_completeness: EvidenceCompleteness,
+        artifact_count: u64,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ArtifactDraftKind::ExportFailed(
+            ArtifactExportFailureDraft {
+                action: EventAction::ArtifactExport,
+                diagnostic_code,
+                effect_disposition: EffectDisposition::NotPerformed,
+                task_outcome,
+                evidence_completeness,
+                artifact_count,
+                audit,
+            },
+        ))
     }
 }
 
@@ -1090,6 +1537,7 @@ pub enum EventPayloadDraft {
     Input(InputPayloadDraft),
     Capture(CapturePayloadDraft),
     Recognition(RecognitionPayloadDraft),
+    Artifact(ArtifactPayloadDraft),
     Client(ClientPayloadDraft),
     Ledger(LedgerPayloadDraft),
 }
@@ -1112,6 +1560,7 @@ payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(InputPayloadDraft, Input);
 payload_draft_from!(CapturePayloadDraft, Capture);
 payload_draft_from!(RecognitionPayloadDraft, Recognition);
+payload_draft_from!(ArtifactPayloadDraft, Artifact);
 payload_draft_from!(ClientPayloadDraft, Client);
 payload_draft_from!(LedgerPayloadDraft, Ledger);
 
@@ -1216,6 +1665,9 @@ pub enum CapturePayload {
     Requested(ObservationPayload),
     Completed(ObservationResultPayload),
     Failed(DiagnosticOutcomePayload),
+    PressureChanged(CapturePressurePayload),
+    DedupWindow(CaptureDedupWindowPayload),
+    PolicyChanged(CapturePolicyPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1229,6 +1681,20 @@ pub enum RecognitionPayload {
     Requested(ObservationPayload),
     Completed(ObservationResultPayload),
     Failed(DiagnosticOutcomePayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ArtifactPayload {
+    Created(OutcomePayload),
+    Verified(OutcomePayload),
+    ExportCompleted(ArtifactExportPayload),
+    ExportFailed(ArtifactExportFailurePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1324,11 +1790,20 @@ family_payload!(CapturePayload, {
     Requested => EventType::CaptureRequested,
     Completed => EventType::CaptureCompleted,
     Failed => EventType::CaptureFailed,
+    PressureChanged => EventType::CapturePressureChanged,
+    DedupWindow => EventType::CaptureDedupWindow,
+    PolicyChanged => EventType::CapturePolicyChanged,
 });
 family_payload!(RecognitionPayload, {
     Requested => EventType::RecognitionRequested,
     Completed => EventType::RecognitionCompleted,
     Failed => EventType::RecognitionFailed,
+});
+family_payload!(ArtifactPayload, {
+    Created => EventType::ArtifactCreated,
+    Verified => EventType::ArtifactVerified,
+    ExportCompleted => EventType::ArtifactExportCompleted,
+    ExportFailed => EventType::ArtifactExportFailed,
 });
 family_payload!(ClientPayload, {
     UiAction => EventType::UiAction,
@@ -1355,6 +1830,7 @@ pub enum EventPayload {
     Input(InputPayload),
     Capture(CapturePayload),
     Recognition(RecognitionPayload),
+    Artifact(ArtifactPayload),
     Client(ClientPayload),
     Ledger(LedgerPayload),
 }
@@ -1477,6 +1953,15 @@ impl EventPayloadDraft {
                 CaptureDraftKind::Failed(detail) => {
                     CapturePayload::Failed(detail.sanitize(fingerprinter)?)
                 }
+                CaptureDraftKind::PressureChanged(detail) => {
+                    CapturePayload::PressureChanged(detail.sanitize(fingerprinter)?)
+                }
+                CaptureDraftKind::DedupWindow(detail) => {
+                    CapturePayload::DedupWindow(detail.sanitize(fingerprinter)?)
+                }
+                CaptureDraftKind::PolicyChanged(detail) => {
+                    CapturePayload::PolicyChanged(detail.sanitize(fingerprinter)?)
+                }
             }),
             Self::Recognition(value) => EventPayload::Recognition(match value.0 {
                 RecognitionDraftKind::Requested(detail) => {
@@ -1487,6 +1972,20 @@ impl EventPayloadDraft {
                 }
                 RecognitionDraftKind::Failed(detail) => {
                     RecognitionPayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Artifact(value) => EventPayload::Artifact(match value.0 {
+                ArtifactDraftKind::Created(detail) => {
+                    ArtifactPayload::Created(detail.sanitize(fingerprinter)?)
+                }
+                ArtifactDraftKind::Verified(detail) => {
+                    ArtifactPayload::Verified(detail.sanitize(fingerprinter)?)
+                }
+                ArtifactDraftKind::ExportCompleted(detail) => {
+                    ArtifactPayload::ExportCompleted(detail.sanitize(fingerprinter)?)
+                }
+                ArtifactDraftKind::ExportFailed(detail) => {
+                    ArtifactPayload::ExportFailed(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Client(value) => EventPayload::Client(match value.0 {
@@ -1528,6 +2027,7 @@ impl EventPayload {
             Self::Input(_) => INPUT_PAYLOAD_SCHEMA,
             Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
             Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
+            Self::Artifact(_) => ARTIFACT_PAYLOAD_SCHEMA,
             Self::Client(_) => CLIENT_PAYLOAD_SCHEMA,
             Self::Ledger(_) => LEDGER_PAYLOAD_SCHEMA,
         }
@@ -1571,6 +2071,37 @@ impl EventPayload {
                     "frame_dimensions",
                 ));
             }
+            Self::Capture(CapturePayload::PressureChanged(value))
+                if value.memory_budget_bytes == 0
+                    || value.resident_bytes > value.memory_budget_bytes =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_capture_pressure",
+                    "memory_budget_bytes",
+                ));
+            }
+            Self::Capture(CapturePayload::DedupWindow(value))
+                if value.duplicate_count == 0 || value.duration_ms == 0 =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_capture_dedup_window",
+                    "duplicate_count",
+                ));
+            }
+            Self::Capture(CapturePayload::PolicyChanged(value)) if value.cadence_ms == 0 => {
+                return Err(SanitizationError::new(
+                    "invalid_capture_policy",
+                    "cadence_ms",
+                ));
+            }
+            Self::Artifact(ArtifactPayload::ExportCompleted(value))
+                if value.artifact_count == 0 =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_artifact_export",
+                    "artifact_count",
+                ));
+            }
             _ => {}
         }
         Ok(())
@@ -1595,6 +2126,18 @@ impl EventPayload {
             frame_height: observation_result(self).map(ObservationResultPayload::frame_height),
             recognition_verdict: observation_result(self)
                 .and_then(ObservationResultPayload::recognition_verdict),
+            capture_pressure_state: capture_pressure(self).map(CapturePressurePayload::state),
+            memory_budget_bytes: capture_pressure(self)
+                .map(CapturePressurePayload::memory_budget_bytes),
+            resident_bytes: capture_pressure(self).map(CapturePressurePayload::resident_bytes),
+            duplicate_count: capture_dedup(self).map(CaptureDedupWindowPayload::duplicate_count),
+            duration_ms: capture_dedup(self).map(CaptureDedupWindowPayload::duration_ms),
+            cadence_ms: capture_policy(self).map(CapturePolicyPayload::cadence_ms),
+            retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
+            capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
+            task_outcome: artifact_export(self).map(|value| value.0),
+            evidence_completeness: artifact_export(self).map(|value| value.1),
+            artifact_count: artifact_export(self).map(|value| value.2),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -1605,6 +2148,7 @@ impl EventPayload {
             Self::Input(_) => PublicEventPayload::Input(payload),
             Self::Capture(_) => PublicEventPayload::Capture(payload),
             Self::Recognition(_) => PublicEventPayload::Recognition(payload),
+            Self::Artifact(_) => PublicEventPayload::Artifact(payload),
             Self::Client(_) => PublicEventPayload::Client(payload),
             Self::Ledger(_) => PublicEventPayload::Ledger(payload),
         }
@@ -1620,6 +2164,7 @@ impl EventPayload {
             Self::Input(value) => value,
             Self::Capture(value) => value,
             Self::Recognition(value) => value,
+            Self::Artifact(value) => value,
             Self::Client(value) => value,
             Self::Ledger(value) => value,
         }
@@ -1630,6 +2175,43 @@ fn observation_result(payload: &EventPayload) -> Option<&ObservationResultPayloa
     match payload {
         EventPayload::Capture(CapturePayload::Completed(result))
         | EventPayload::Recognition(RecognitionPayload::Completed(result)) => Some(result),
+        _ => None,
+    }
+}
+
+fn capture_pressure(payload: &EventPayload) -> Option<&CapturePressurePayload> {
+    match payload {
+        EventPayload::Capture(CapturePayload::PressureChanged(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn capture_dedup(payload: &EventPayload) -> Option<&CaptureDedupWindowPayload> {
+    match payload {
+        EventPayload::Capture(CapturePayload::DedupWindow(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn capture_policy(payload: &EventPayload) -> Option<&CapturePolicyPayload> {
+    match payload {
+        EventPayload::Capture(CapturePayload::PolicyChanged(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn artifact_export(payload: &EventPayload) -> Option<(TaskOutcome, EvidenceCompleteness, u64)> {
+    match payload {
+        EventPayload::Artifact(ArtifactPayload::ExportCompleted(value)) => Some((
+            value.task_outcome,
+            value.evidence_completeness,
+            value.artifact_count,
+        )),
+        EventPayload::Artifact(ArtifactPayload::ExportFailed(value)) => Some((
+            value.task_outcome,
+            value.evidence_completeness,
+            value.artifact_count,
+        )),
         _ => None,
     }
 }
@@ -1651,6 +2233,28 @@ pub struct PublicPayload {
     frame_height: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recognition_verdict: Option<RecognitionVerdict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_pressure_state: Option<CapturePressureState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_budget_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resident_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duplicate_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cadence_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retention_class: Option<RetentionClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_policy_reason: Option<CapturePolicyReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_outcome: Option<TaskOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_completeness: Option<EvidenceCompleteness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_count: Option<u64>,
 }
 
 impl PublicPayload {
@@ -1685,6 +2289,50 @@ impl PublicPayload {
     pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
         self.recognition_verdict
     }
+
+    pub const fn capture_pressure_state(&self) -> Option<CapturePressureState> {
+        self.capture_pressure_state
+    }
+
+    pub const fn memory_budget_bytes(&self) -> Option<u64> {
+        self.memory_budget_bytes
+    }
+
+    pub const fn resident_bytes(&self) -> Option<u64> {
+        self.resident_bytes
+    }
+
+    pub const fn duplicate_count(&self) -> Option<u64> {
+        self.duplicate_count
+    }
+
+    pub const fn duration_ms(&self) -> Option<u64> {
+        self.duration_ms
+    }
+
+    pub const fn cadence_ms(&self) -> Option<u64> {
+        self.cadence_ms
+    }
+
+    pub const fn retention_class(&self) -> Option<RetentionClass> {
+        self.retention_class
+    }
+
+    pub const fn capture_policy_reason(&self) -> Option<CapturePolicyReason> {
+        self.capture_policy_reason
+    }
+
+    pub const fn task_outcome(&self) -> Option<TaskOutcome> {
+        self.task_outcome
+    }
+
+    pub const fn evidence_completeness(&self) -> Option<EvidenceCompleteness> {
+        self.evidence_completeness
+    }
+
+    pub const fn artifact_count(&self) -> Option<u64> {
+        self.artifact_count
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1703,6 +2351,7 @@ pub enum PublicEventPayload {
     Input(PublicPayload),
     Capture(PublicPayload),
     Recognition(PublicPayload),
+    Artifact(PublicPayload),
     Client(PublicPayload),
     Ledger(PublicPayload),
 }
