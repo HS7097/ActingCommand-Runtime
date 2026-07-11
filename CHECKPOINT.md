@@ -1,5 +1,53 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C4 minimal vertical-slice plan freeze
+
+### Current status
+
+- Re-read Issue #35 and all current comments through GitHub metadata; every relied-on instruction
+  is authored by `HS7097`, the Issue remains open and approved, and its authority has not changed.
+- Revalidated the frozen v3 specification SHA-256 as
+  `28273b85491b0b43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6`.
+- Revalidated the approved resource-authoring amendment SHA-256 as
+  `de039ad910b0b8208d52b8582b260868d4bcd2b04ec2b272977890661a136b54`;
+  the amendment does not change C4.
+- Froze the C4 read path as a resource-independent frame observation and the safe control path as
+  `input.reset`.
+- C4 will add thin `actingctl` and ActingLab adapters over one correlation-scoped runtime-client
+  flow. Capture remains client-side and read-only; all writes remain behind scheduler fencing and
+  daemon DeviceProxy.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c4-minimal-vertical-slice.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- GitHub Issue #35 metadata/body/comment reads with author verification.
+- `Get-FileHash -Algorithm SHA256` for the frozen v3 specification and approved amendment.
+- `git status -sb`
+- `git rev-parse HEAD`
+- Repository architecture, contract, host, client, ActingLab, and dependency inventory scans.
+
+### Validation
+
+- Branch baseline is clean and synchronized at
+  `61e9868b03e74eb40f47ad7958b43d405f645ab6` before this planning change.
+- The C4 choices cover the v3 read path, write path, shared contract, ledger projection, process
+  acceptance, sealed regression, and Lab-removability requirements without entering C3b/C2/C5.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this C4 plan freeze and record it in Issue #36.
+2. Implement Task 1 contract and event schema tests before host/client behavior.
+
 ## 2026-07-11 Issue 35 C3a resident Runtime seed closeout
 
 ### Current status
