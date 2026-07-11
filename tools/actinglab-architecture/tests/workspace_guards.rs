@@ -1062,6 +1062,88 @@ fn c5_online_readonly_capture_is_runtime_owned() {
 }
 
 #[test]
+fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
+    let root = workspace_root();
+    let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+        .expect("read Runtime contract");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
+        .expect("read Runtime client");
+
+    for required in [
+        "MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60",
+        "MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000",
+        "MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000",
+        "pub struct CaptureSequenceSpec",
+        "pub struct CaptureSequence",
+        "CaptureSequenceCompleted",
+    ] {
+        assert!(
+            contract.contains(required),
+            "capture sequence lost {required}"
+        );
+    }
+    let operation = contract
+        .split_once("    CaptureSequence {")
+        .and_then(|(_, tail)| tail.split_once("SafeReset {").map(|(value, _)| value))
+        .expect("capture sequence operation slice");
+    for forbidden in ["LeaseToken", "InputAction", "holder_id", "action:"] {
+        assert!(
+            !operation.contains(forbidden),
+            "capture sequence operation gained input authority via {forbidden}"
+        );
+    }
+    assert!(contract.contains("Self::Input { token, action }"));
+
+    let host_sequence = host
+        .split_once("    fn capture_sequence(")
+        .and_then(|(_, tail)| {
+            tail.split_once("    fn capture_readonly_observation(")
+                .map(|(value, _)| value)
+        })
+        .expect("Runtime capture sequence implementation");
+    for required in [
+        "capture_readonly_observation",
+        "thread::sleep",
+        "CaptureSequence::new",
+    ] {
+        assert!(
+            host_sequence.contains(required),
+            "Runtime capture sequence lost {required}"
+        );
+    }
+    for forbidden in [
+        "InputAction",
+        "RuntimeOperation::Input",
+        "LeaseToken",
+        "TcpListener",
+        "WebSocket",
+        "Tls",
+        "remote_stream",
+    ] {
+        assert!(
+            !host_sequence.contains(forbidden),
+            "Runtime capture sequence crossed its bounded read-only seam via {forbidden}"
+        );
+    }
+
+    let client_sequence = client
+        .split_once("    pub fn capture_sequence(")
+        .and_then(|(_, tail)| {
+            tail.split_once("    pub fn safe_reset(")
+                .map(|(value, _)| value)
+        })
+        .expect("Runtime client capture sequence method");
+    for forbidden in ["LeaseToken", "InputAction", "WebSocket", "Tls", "listener"] {
+        assert!(
+            !client_sequence.contains(forbidden),
+            "Runtime client capture sequence gained forbidden surface {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     let root = workspace_root();
     let app_environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))

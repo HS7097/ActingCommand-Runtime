@@ -681,6 +681,85 @@ fn observation_artifact() -> ProjectedArtifactReference {
         .project(true)
 }
 
+fn readonly_observation() -> ReadonlyObservation {
+    ReadonlyObservation::new(
+        1280,
+        720,
+        RecognitionVerdict::FrameDecoded,
+        RuntimeCaptureBackend::NemuIpc,
+        observation_artifact(),
+    )
+    .expect("observation")
+}
+
+#[test]
+fn capture_sequence_contract_is_bounded_exact_and_strict() {
+    let spec = CaptureSequenceSpec::new(60, 1_000).expect("maximum bounded sequence");
+    assert_eq!(spec.frame_count(), 60);
+    assert_eq!(spec.interval_ms(), 1_000);
+    assert_eq!(spec.planned_wait_ms().expect("planned wait"), 59_000);
+
+    for (frame_count, interval_ms) in [(0, 0), (61, 0), (2, 5_001), (60, 5_000)] {
+        assert!(
+            CaptureSequenceSpec::new(frame_count, interval_ms).is_err(),
+            "invalid sequence bounds must fail: {frame_count} frames at {interval_ms} ms"
+        );
+    }
+
+    let pair_spec = CaptureSequenceSpec::new(2, 25).expect("pair spec");
+    let first = readonly_observation();
+    let second = readonly_observation();
+    let sequence =
+        CaptureSequence::new(pair_spec, vec![first.clone(), second]).expect("capture sequence");
+    assert_eq!(sequence.spec(), pair_spec);
+    assert_eq!(sequence.observations().len(), 2);
+    assert_ne!(
+        sequence.observations()[0].artifact().artifact_id,
+        sequence.observations()[1].artifact().artifact_id
+    );
+
+    assert_eq!(
+        CaptureSequence::new(pair_spec, vec![first.clone()])
+            .expect_err("exact observation count")
+            .code(),
+        "invalid_capture_sequence_observation_count"
+    );
+    assert_eq!(
+        CaptureSequence::new(pair_spec, vec![first.clone(), first])
+            .expect_err("duplicate artifact identity")
+            .code(),
+        "duplicate_capture_sequence_artifact_identity"
+    );
+
+    let operation = RuntimeOperation::CaptureSequence {
+        instance_alias: "ak.cn".to_string(),
+        spec: pair_spec,
+    };
+    request(operation.clone())
+        .validate()
+        .expect("capture sequence request");
+    let encoded = serde_json::to_value(operation).expect("capture sequence operation JSON");
+    assert_eq!(encoded["operation"], "capture_sequence");
+    assert!(encoded.get("token").is_none());
+    assert!(encoded.get("action").is_none());
+    let mut unknown = encoded;
+    unknown["spec"]["unexpected"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<RuntimeOperation>(unknown).is_err());
+
+    RuntimeReceipt::success(
+        &request(RuntimeOperation::CaptureSequence {
+            instance_alias: "ak.cn".to_string(),
+            spec: pair_spec,
+        }),
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::CaptureSequenceCompleted { sequence },
+    )
+    .expect("capture sequence receipt")
+    .validate()
+    .expect("capture sequence receipt validation");
+}
+
 #[test]
 fn c4_operations_round_trip_without_generic_payloads() {
     let ids = issuer();

@@ -2,10 +2,10 @@
 
 use super::*;
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    LeasePriority, LeaseQueuePolicy, ProjectionProfile, RuntimeCaptureBackend, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
+    InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeErrorProjection, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -372,6 +372,40 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::RecognitionCompleted,
         ]
     );
+    assert_eq!(state.opens.load(Ordering::Acquire), 0);
+    assert_eq!(state.inputs.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn capture_sequence_client_returns_exact_artifact_backed_frames_without_input() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, Arc::clone(&state), 1_000);
+    let client = client(&root);
+
+    let output = client
+        .capture_sequence(
+            "ak.cn",
+            CaptureSequenceSpec::new(3, 1).expect("sequence spec"),
+        )
+        .expect("capture sequence");
+
+    let sequence = match output.receipt().result() {
+        Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence,
+        other => panic!("unexpected capture sequence result: {other:?}"),
+    };
+    assert_eq!(sequence.observations().len(), 3);
+    assert!(
+        sequence
+            .observations()
+            .iter()
+            .all(|observation| observation.artifact().object_key().is_some())
+    );
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 3);
     assert_eq!(state.opens.load(Ordering::Acquire), 0);
     assert_eq!(state.inputs.load(Ordering::Acquire), 0);
     drop(client);
