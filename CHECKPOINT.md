@@ -1,5 +1,58 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 artifact/evidence plan freeze
+
+### Current status
+
+- Re-read the complete frozen v3 specification and approved resource-authoring amendment.
+- Revalidated their SHA-256 values as
+  `28273b85491b0d43aa7a7b7a7ece10db681de9df4d9100e85f9e9b086dd107a6` and
+  `de039ad910b0b8208d52b8582b260868d4bcd2b04ec2b272977890661a136b54`.
+- Re-read Issue #35 after fetching remote state. It remains open and approved; its latest
+  instruction is authored by `HS7097` and does not alter C2.
+- Audited current C2 assets: the contract has a test-only artifact issuer, the accepted frame
+  store still lives under `crates/lab`, the old `runtime-core::capture_store` has no workspace
+  consumer, and Lab owns a compatibility ZIP writer that is not the terminal shared exporter.
+- Froze the C2 implementation plan at `docs/plans/2026-07-11-c2-artifact-evidence.md` on baseline
+  `3643c5a0ad0867bd893846e13843e3023bbc7e0e`.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags`
+- `git status --short --branch`
+- `git rev-parse HEAD` / `git rev-parse @{upstream}` / `git rev-parse origin/main`
+- SHA-256 verification for the frozen v3 specification and approved amendment.
+- Full local specification and amendment reads.
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime ...`
+- Workspace package, artifact/frame/evidence source, dependency, and symbol inventories.
+
+### Validation
+
+- Branch is clean and synchronized at the C4 closeout baseline before this planning change.
+- The C2 plan covers every v3 §5 and C2 delivery/acceptance item, including retention classes,
+  three-tier watermarks, pinned bypass, 300 ms cadence, collision-safe names, four-way counts,
+  independent task/evidence outcomes, real hashes, fail-loud export, and ledger-visible gaps.
+- The plan preserves the amendment boundary: C2 does not implement resource authoring or move
+  resource tooling into production.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the C2 plan freeze on `issue-35-runtime-ledger-v3`.
+2. Implement C2 contract and artifact authority tests before filesystem behavior.
+3. Continue through durable store, frame pipeline, exporter, and sealed acceptance without a
+   separate approval wait.
+
 ## 2026-07-11 Issue 35 C4 minimal vertical slice complete
 
 ### Current status
