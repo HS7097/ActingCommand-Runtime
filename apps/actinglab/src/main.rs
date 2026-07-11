@@ -59,6 +59,7 @@ mod runtime_capture_backend;
 mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
+mod runtime_stream_adapter;
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
@@ -1183,7 +1184,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "tap-target" => run_tap_target(&invocation.global, &invocation.args),
         [cmd] if cmd == "navigate" => run_navigate(&invocation.global, &invocation.args),
         [cmd] if cmd == "monitor" => run_monitor(&invocation.global, &invocation.args),
-        [cmd] if cmd == "stream" => run_stream(&invocation.global, &invocation.args),
+        [cmd] if cmd == "stream" => {
+            runtime_stream_adapter::run_stream(&invocation.global, &invocation.args)
+        }
         [cmd] if cmd == "record" => run_session_record(&invocation.global, &invocation.args),
         [cmd] if cmd == "explain" => run_explain_run(&invocation.args),
         [group, sub] if group == "config" => run_config(sub, &invocation.args),
@@ -8038,7 +8041,7 @@ fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     run_monitor_loop(global, &flags)
 }
 
-fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+fn run_stream_legacy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if stream_check_requested(&flags) {
         return run_stream_check(global, &flags.without_first_positional());
@@ -8099,7 +8102,7 @@ fn run_stream(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         run_stream_input_relay(global, &config, &relay_actions, dry_run)?
     };
     let frames = if dry_run {
-        stream_dry_run_frames(max_frames)
+        runtime_stream_adapter::dry_run_frames(max_frames)
     } else {
         let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
         stream_capture_frames(
@@ -8352,18 +8355,6 @@ fn stream_events_json(stream_id: &str, frames: &[Value], input_relay: &Value) ->
         "input_relay_status": input_status
     }));
     events
-}
-
-fn stream_dry_run_frames(max_frames: usize) -> Vec<Value> {
-    (0..max_frames)
-        .map(|index| {
-            json!({
-                "index": index,
-                "captured": false,
-                "mode": "dry_run"
-            })
-        })
-        .collect()
 }
 
 fn stream_capture_frames(
@@ -9989,7 +9980,7 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "instance" => run_session_instance(global, args),
         "app" => run_session_app(global, args),
         "capture" => run_capture(global, args),
-        "stream" => run_stream(global, args),
+        "stream" => runtime_stream_adapter::run_stream(global, args),
         "recover" => run_session_recover(global, args),
         "lease" => run_session_lease(global, args),
         "record" => run_session_record(global, args),
@@ -19221,7 +19212,7 @@ fn execute_session_command_request_inner(
                 ensure_session_request_lease(state_dir, request)?;
             }
             let global = request.global.to_global()?;
-            run_stream(&global, &request.args)
+            run_stream_legacy(&global, &request.args)
         }
         "recognize" => {
             let global = request.global.to_global()?;

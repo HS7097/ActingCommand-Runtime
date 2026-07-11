@@ -228,6 +228,79 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
     host.close().expect("close host");
 }
 
+#[test]
+fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let legacy_session_root = local_app_data.join("ActingCommand/actinglab/session");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-stream-adapter-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+
+    let stream = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "stream",
+            "--max-frames",
+            "2",
+            "--interval-ms",
+            "1",
+        ],
+    );
+
+    assert_eq!(stream["data"]["mode"], "bounded_stream");
+    assert_eq!(
+        stream["data"]["contract"]["schema_version"],
+        "session.stream.v0.1"
+    );
+    assert_eq!(stream["data"]["input_relay"]["status"], "disabled");
+    let frames = stream["data"]["frames"].as_array().expect("stream frames");
+    assert_eq!(frames.len(), 2);
+    for (index, frame) in frames.iter().enumerate() {
+        assert_eq!(frame["index"], index);
+        assert_eq!(frame["captured"], true);
+        assert_eq!(frame["frame"]["width"], 2);
+        assert_eq!(frame["frame"]["height"], 2);
+        assert_eq!(frame["freshness"]["status"], "runtime_artifact_verified");
+        assert!(frame["artifact"]["object_key"].is_string());
+        assert_eq!(frame["frame"]["digest"], frame["artifact"]["sha256"]);
+    }
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert!(!legacy_session_root.exists());
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime remains discoverable");
+    client.health().expect("Runtime remains alive");
+    drop(client);
+    host.close().expect("close host");
+}
+
 fn run_actinglab_json<const N: usize>(
     config_path: &Path,
     runtime_root: &Path,

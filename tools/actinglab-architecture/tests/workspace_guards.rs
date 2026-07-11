@@ -1189,6 +1189,49 @@ fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authori
 }
 
 #[test]
+fn c5_bounded_stream_client_uses_runtime_without_local_capture_or_session_queues() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let adapter = fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
+        .expect("read Runtime stream adapter");
+
+    assert!(main.contains("runtime_stream_adapter::run_stream"));
+    assert!(main.contains("fn run_stream_legacy"));
+    for required in [
+        "RuntimeClient::connect",
+        ".capture_sequence(",
+        "CaptureSequenceSpec::new",
+        "run_stream_input_relay",
+        "runtime_artifact_verified",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "Runtime stream adapter lost {required}"
+        );
+    }
+    for forbidden in [
+        "create_capture_backend",
+        "capture_for_command",
+        "stream_capture_frames",
+        "submit_session_command_request",
+        "write_json_file_atomic",
+        "SESSION_REQUESTS_DIR",
+        "SESSION_RUNNING_DIR",
+        "SESSION_RESPONSES_DIR",
+        "TcpListener",
+        "WebSocket",
+        "Tls",
+        "remote_stream",
+    ] {
+        assert!(
+            !adapter.contains(forbidden),
+            "Runtime stream adapter regained forbidden authority via {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     let root = workspace_root();
     let app_environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))
