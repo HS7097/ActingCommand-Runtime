@@ -270,6 +270,22 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
     );
 
     assert_eq!(stream["data"]["mode"], "bounded_stream");
+    for field in [
+        "stream_id",
+        "mode",
+        "instance",
+        "transport",
+        "max_frames",
+        "interval_ms",
+        "capture",
+        "trusted_channel",
+        "contract",
+        "input_relay",
+        "events",
+        "frames",
+    ] {
+        assert!(stream["data"].get(field).is_some(), "missing {field}");
+    }
     assert_eq!(
         stream["data"]["contract"]["schema_version"],
         "session.stream.v0.1"
@@ -286,9 +302,57 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         assert!(frame["artifact"]["object_key"].is_string());
         assert_eq!(frame["frame"]["digest"], frame["artifact"]["sha256"]);
     }
+    let event_types = stream["data"]["events"]
+        .as_array()
+        .expect("stream events")
+        .iter()
+        .map(|event| event["type"].as_str().expect("event type"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        event_types,
+        [
+            "stream.started",
+            "stream.frame_sampled",
+            "stream.frame_sampled",
+            "stream.completed"
+        ]
+    );
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
     assert!(!legacy_session_root.exists());
+
+    let reconnected = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        ["--json", "session", "status"],
+    );
+    assert_eq!(reconnected["data"]["running"], true);
+
+    let (fresh_exit, fresh_error) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "stream",
+            "--max-frames",
+            "2",
+            "--require-fresh",
+        ],
+    );
+    assert_eq!(fresh_exit, 2);
+    assert_eq!(fresh_error["error"]["code"], "validation_failed");
+    assert!(
+        fresh_error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("not supported"))
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
@@ -301,21 +365,66 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
     host.close().expect("close host");
 }
 
+#[test]
+fn runtime_backed_session_clients_fail_visibly_when_runtime_is_unavailable() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("missing-runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let legacy_session_root = local_app_data.join("ActingCommand/actinglab/session");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+
+    let failures = [
+        run_actinglab_failure_json(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            ["--json", "session", "status"],
+        ),
+        run_actinglab_failure_json(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            [
+                "--json",
+                "--instance",
+                "ak.cn",
+                "session",
+                "monitor-policy",
+                "status",
+            ],
+        ),
+        run_actinglab_failure_json(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            [
+                "--json",
+                "--instance",
+                "ak.cn",
+                "session",
+                "stream",
+                "--max-frames",
+                "2",
+            ],
+        ),
+    ];
+    for (exit_code, failure) in failures {
+        assert_eq!(exit_code, 5);
+        assert_eq!(failure["ok"], false);
+        assert_eq!(failure["error"]["code"], "runtime_not_running");
+        assert!(failure["data"].is_null());
+    }
+    assert!(!legacy_session_root.exists());
+}
+
 fn run_actinglab_json<const N: usize>(
     config_path: &Path,
     runtime_root: &Path,
     local_app_data: &Path,
     arguments: [&str; N],
 ) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .args(arguments)
-        .env("ACTINGLAB_CONFIG_PATH", config_path)
-        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)
-        .env("LOCALAPPDATA", local_app_data)
-        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
-        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
-        .output()
-        .expect("run actinglab");
+    let output = run_actinglab_output(config_path, runtime_root, local_app_data, arguments);
     assert!(
         output.status.success(),
         "actinglab failed: stdout={} stderr={}",
@@ -323,6 +432,40 @@ fn run_actinglab_json<const N: usize>(
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("ActingLab JSON")
+}
+
+fn run_actinglab_failure_json<const N: usize>(
+    config_path: &Path,
+    runtime_root: &Path,
+    local_app_data: &Path,
+    arguments: [&str; N],
+) -> (i32, Value) {
+    let output = run_actinglab_output(config_path, runtime_root, local_app_data, arguments);
+    assert!(
+        !output.status.success(),
+        "actinglab unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let exit_code = output.status.code().expect("actinglab exit code");
+    let envelope = serde_json::from_slice(&output.stdout).expect("ActingLab error JSON");
+    (exit_code, envelope)
+}
+
+fn run_actinglab_output<const N: usize>(
+    config_path: &Path,
+    runtime_root: &Path,
+    local_app_data: &Path,
+    arguments: [&str; N],
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .args(arguments)
+        .env("ACTINGLAB_CONFIG_PATH", config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)
+        .env("LOCALAPPDATA", local_app_data)
+        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
+        .output()
+        .expect("run actinglab")
 }
 
 #[test]
