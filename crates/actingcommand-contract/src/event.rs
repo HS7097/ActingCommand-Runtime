@@ -175,6 +175,10 @@ pub enum EventType {
     MonitorProbeCompleted,
     #[serde(rename = "monitor.probe_failed")]
     MonitorProbeFailed,
+    #[serde(rename = "monitor.recovery_admitted")]
+    MonitorRecoveryAdmitted,
+    #[serde(rename = "monitor.recovery_deferred")]
+    MonitorRecoveryDeferred,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -278,7 +282,9 @@ impl EventType {
             Self::MonitorProbeRequested
             | Self::MonitorProbeStarted
             | Self::MonitorProbeCompleted
-            | Self::MonitorProbeFailed => EventFamily::Monitor,
+            | Self::MonitorProbeFailed
+            | Self::MonitorRecoveryAdmitted
+            | Self::MonitorRecoveryDeferred => EventFamily::Monitor,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }

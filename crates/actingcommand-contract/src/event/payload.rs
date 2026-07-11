@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     HolderId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
-    MonitorObservation, MonitorRecoveryKind, RequestId,
+    MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, RequestId,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -268,6 +268,16 @@ pub struct MonitorOutcomePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MonitorRecoveryCoordinationPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    recovery: MonitorRecoveryKind,
+    reason: MonitorRecoveryCoordinationReason,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulerQueuePayload {
     action: EventAction,
     priority: LeasePriority,
@@ -403,6 +413,7 @@ common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(MonitorOutcomePayload);
+common_detail_accessors!(MonitorRecoveryCoordinationPayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -446,6 +457,20 @@ impl MonitorOutcomePayload {
 
     pub const fn decision(&self) -> &MonitorDecision {
         &self.decision
+    }
+}
+
+impl MonitorRecoveryCoordinationPayload {
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn recovery(&self) -> MonitorRecoveryKind {
+        self.recovery
+    }
+
+    pub const fn reason(&self) -> MonitorRecoveryCoordinationReason {
+        self.reason
     }
 }
 
@@ -705,6 +730,24 @@ impl PayloadDetail for MonitorOutcomePayload {
     }
 }
 
+impl PayloadDetail for MonitorRecoveryCoordinationPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for ObservationResultPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -870,6 +913,13 @@ struct MonitorOutcomeDraft {
     effect_disposition: EffectDisposition,
     observation: MonitorObservation,
     decision: MonitorDecision,
+    audit: AuditInput,
+}
+
+struct MonitorRecoveryCoordinationDraft {
+    recovery: MonitorRecoveryKind,
+    reason: MonitorRecoveryCoordinationReason,
+    admitted: bool,
     audit: AuditInput,
 }
 
@@ -1070,6 +1120,27 @@ impl MonitorOutcomeDraft {
             effect_disposition: self.effect_disposition,
             observation: self.observation,
             decision: self.decision,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl MonitorRecoveryCoordinationDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<MonitorRecoveryCoordinationPayload, SanitizationError> {
+        if self.admitted != (self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable) {
+            return Err(SanitizationError::new(
+                "invalid_monitor_recovery_coordination",
+                "reason",
+            ));
+        }
+        Ok(MonitorRecoveryCoordinationPayload {
+            action: EventAction::MonitorRecovery,
+            effect_disposition: EffectDisposition::NotPerformed,
+            recovery: self.recovery,
+            reason: self.reason,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1326,6 +1397,8 @@ enum MonitorDraftKind {
     Started(ObservationDraft),
     Completed(MonitorOutcomeDraft),
     Failed(DiagnosticOutcomeDraft),
+    RecoveryAdmitted(MonitorRecoveryCoordinationDraft),
+    RecoveryDeferred(MonitorRecoveryCoordinationDraft),
 }
 
 pub struct MonitorPayloadDraft(MonitorDraftKind);
@@ -1371,6 +1444,32 @@ impl MonitorPayloadDraft {
             effect_disposition,
             audit,
         )))
+    }
+
+    pub fn recovery_admitted(recovery: MonitorRecoveryKind, audit: AuditInput) -> Self {
+        Self(MonitorDraftKind::RecoveryAdmitted(
+            MonitorRecoveryCoordinationDraft {
+                recovery,
+                reason: MonitorRecoveryCoordinationReason::SchedulerAvailable,
+                admitted: true,
+                audit,
+            },
+        ))
+    }
+
+    pub fn recovery_deferred(
+        recovery: MonitorRecoveryKind,
+        reason: MonitorRecoveryCoordinationReason,
+        audit: AuditInput,
+    ) -> Self {
+        Self(MonitorDraftKind::RecoveryDeferred(
+            MonitorRecoveryCoordinationDraft {
+                recovery,
+                reason,
+                admitted: false,
+                audit,
+            },
+        ))
     }
 }
 
@@ -2025,6 +2124,8 @@ pub enum MonitorPayload {
     Started(ObservationPayload),
     Completed(MonitorOutcomePayload),
     Failed(DiagnosticOutcomePayload),
+    RecoveryAdmitted(MonitorRecoveryCoordinationPayload),
+    RecoveryDeferred(MonitorRecoveryCoordinationPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2198,6 +2299,8 @@ family_payload!(MonitorPayload, {
     Started => EventType::MonitorProbeStarted,
     Completed => EventType::MonitorProbeCompleted,
     Failed => EventType::MonitorProbeFailed,
+    RecoveryAdmitted => EventType::MonitorRecoveryAdmitted,
+    RecoveryDeferred => EventType::MonitorRecoveryDeferred,
 });
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
@@ -2310,6 +2413,12 @@ impl EventPayloadDraft {
                 }
                 MonitorDraftKind::Failed(detail) => {
                     MonitorPayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+                MonitorDraftKind::RecoveryAdmitted(detail) => {
+                    MonitorPayload::RecoveryAdmitted(detail.sanitize(fingerprinter)?)
+                }
+                MonitorDraftKind::RecoveryDeferred(detail) => {
+                    MonitorPayload::RecoveryDeferred(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Command(value) => EventPayload::Command(match value.0 {
@@ -2551,6 +2660,26 @@ impl EventPayload {
                     "diagnosis",
                 ));
             }
+            Self::Monitor(MonitorPayload::RecoveryAdmitted(value))
+                if value.action != EventAction::MonitorRecovery
+                    || value.effect_disposition != EffectDisposition::NotPerformed
+                    || value.reason != MonitorRecoveryCoordinationReason::SchedulerAvailable =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_monitor_recovery_coordination",
+                    "reason",
+                ));
+            }
+            Self::Monitor(MonitorPayload::RecoveryDeferred(value))
+                if value.action != EventAction::MonitorRecovery
+                    || value.effect_disposition != EffectDisposition::NotPerformed
+                    || value.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_monitor_recovery_coordination",
+                    "reason",
+                ));
+            }
             Self::Capture(CapturePayload::PressureChanged(value))
                 if value.memory_budget_bytes == 0 =>
             {
@@ -2619,7 +2748,9 @@ impl EventPayload {
             artifact_count: artifact_export(self).map(|value| value.2),
             monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
             monitor_disposition: monitor_outcome(self).map(|value| value.decision.disposition()),
-            monitor_recovery: monitor_outcome(self).and_then(|value| value.decision.recovery()),
+            monitor_recovery: monitor_recovery(self),
+            monitor_recovery_coordination_reason: monitor_recovery_coordination(self)
+                .map(MonitorRecoveryCoordinationPayload::reason),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -2658,6 +2789,25 @@ impl EventPayload {
 fn monitor_outcome(payload: &EventPayload) -> Option<&MonitorOutcomePayload> {
     match payload {
         EventPayload::Monitor(MonitorPayload::Completed(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn monitor_recovery(payload: &EventPayload) -> Option<MonitorRecoveryKind> {
+    match payload {
+        EventPayload::Monitor(MonitorPayload::Completed(value)) => value.decision.recovery(),
+        EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(value))
+        | EventPayload::Monitor(MonitorPayload::RecoveryDeferred(value)) => Some(value.recovery()),
+        _ => None,
+    }
+}
+
+fn monitor_recovery_coordination(
+    payload: &EventPayload,
+) -> Option<&MonitorRecoveryCoordinationPayload> {
+    match payload {
+        EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(value))
+        | EventPayload::Monitor(MonitorPayload::RecoveryDeferred(value)) => Some(value),
         _ => None,
     }
 }
@@ -2752,6 +2902,8 @@ pub struct PublicPayload {
     monitor_disposition: Option<MonitorDisposition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     monitor_recovery: Option<MonitorRecoveryKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monitor_recovery_coordination_reason: Option<MonitorRecoveryCoordinationReason>,
 }
 
 impl PublicPayload {
@@ -2841,6 +2993,12 @@ impl PublicPayload {
 
     pub const fn monitor_recovery(&self) -> Option<MonitorRecoveryKind> {
         self.monitor_recovery
+    }
+
+    pub const fn monitor_recovery_coordination_reason(
+        &self,
+    ) -> Option<MonitorRecoveryCoordinationReason> {
+        self.monitor_recovery_coordination_reason
     }
 }
 

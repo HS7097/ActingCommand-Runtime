@@ -82,6 +82,7 @@ closed_code!(EventAction {
     MonitorConfigure => "monitor.configure",
     MonitorClear => "monitor.clear",
     MonitorProbe => "monitor.probe",
+    MonitorRecovery => "monitor.recovery",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",

@@ -6,12 +6,13 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
-    InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload, ProjectionPayload,
-    ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend, RuntimeErrorCode,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult,
+    EffectDisposition, EventActor, EventPayload, EventQuery, EventSource, EventType,
+    IdentifierIssuer, InputAction, InstanceId, IssuedCorrelationId, LeasePriority,
+    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MonitorDiagnosis, MonitorDisposition,
+    MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
+    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend,
+    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -844,6 +845,132 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
     assert_eq!(
         state.monitor_observation_count.load(Ordering::Acquire),
         observations
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.monitor_mode.store(1, Ordering::Release);
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        !projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorRecoveryAdmitted),
+                ..EventQuery::default()
+            },
+        )
+        .is_empty()
+    });
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+
+    let admitted = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::MonitorRecoveryAdmitted),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(detail))) =
+        &admitted.last().expect("recovery admission").payload
+    else {
+        panic!("expected full recovery admission payload");
+    };
+    assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
+    assert_eq!(
+        detail.reason(),
+        MonitorRecoveryCoordinationReason::SchedulerAvailable
+    );
+    assert_eq!(detail.effect_disposition(), EffectDisposition::NotPerformed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::TaskRequested),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.monitor_mode.store(1, Ordering::Release);
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire("ak.cn");
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        !projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorRecoveryDeferred),
+                ..EventQuery::default()
+            },
+        )
+        .is_empty()
+    });
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+
+    let deferred = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::MonitorRecoveryDeferred),
+            ..EventQuery::default()
+        },
+    );
+    let event = deferred.last().expect("recovery deferral");
+    assert_eq!(event.links.lease_id(), Some(&token.lease_id()));
+    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryDeferred(detail))) =
+        &event.payload
+    else {
+        panic!("expected full recovery deferral payload");
+    };
+    assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
+    assert_eq!(
+        detail.reason(),
+        MonitorRecoveryCoordinationReason::ActiveLease
+    );
+    assert_eq!(detail.effect_disposition(), EffectDisposition::NotPerformed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    let release = client.request(RuntimeOperation::ReleaseLease {
+        token: token.clone(),
+    });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
     );
     drop(client);
     host.close().expect("close host");

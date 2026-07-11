@@ -4,8 +4,8 @@
 
 use crate::{
     ArtifactLinksDraft, EventLinksDraft, IdentifierIssuanceError, IdentifierIssuer,
-    IssuedCorrelationId, IssuedFrameId, IssuedInstanceId, IssuedRecognitionId, IssuedRunId,
-    IssuedTaskId, MAX_INSTANCE_ALIAS_BYTES, OwnerEpoch, RuntimeErrorCode,
+    IssuedCorrelationId, IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId,
+    IssuedRunId, IssuedTaskId, LeaseId, MAX_INSTANCE_ALIAS_BYTES, OwnerEpoch, RuntimeErrorCode,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -144,6 +144,18 @@ pub enum MonitorRecoveryKind {
     WakeStandby,
     ReturnToExpectedPage,
     RefreshCapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorRecoveryCoordinationReason {
+    SchedulerAvailable,
+    ActiveLease,
+    LeaseExpired,
+    DestructiveStepActive,
+    PreemptionPending,
+    TakeoverCooldown,
+    QueuedLeaseRequests,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,6 +452,11 @@ impl IssuedMonitorProbe {
             .with_run_id(self.run_id)
             .with_frame_id(self.frame_id)
             .with_recognition_id(self.recognition_id)
+    }
+
+    pub fn event_links_with_lease(&self, lease_id: LeaseId) -> EventLinksDraft {
+        self.event_links()
+            .with_lease_id(IssuedLeaseId::from_verified_transport(lease_id))
     }
 
     pub fn artifact_links(&self) -> ArtifactLinksDraft {

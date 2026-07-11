@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryKind,
+    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
 };
 use std::sync::Mutex;
 
@@ -122,6 +123,13 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         MonitorPayloadDraft::completed(effect, monitor_observation, monitor_decision, input())
             .into(),
         MonitorPayloadDraft::failed(diagnostic, effect, input()).into(),
+        MonitorPayloadDraft::recovery_admitted(MonitorRecoveryKind::WakeStandby, input()).into(),
+        MonitorPayloadDraft::recovery_deferred(
+            MonitorRecoveryKind::ReturnToExpectedPage,
+            MonitorRecoveryCoordinationReason::ActiveLease,
+            input(),
+        )
+        .into(),
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
@@ -277,6 +285,32 @@ fn monitor_outcome_is_typed_and_public_projection_preserves_the_decision() {
     assert_eq!(
         projected["payload"]["monitor_recovery"],
         "return_to_expected_page"
+    );
+}
+
+#[test]
+fn monitor_recovery_coordination_is_typed_and_never_claims_an_effect() {
+    let sanitized = sanitize(
+        MonitorPayloadDraft::recovery_deferred(
+            MonitorRecoveryKind::WakeStandby,
+            MonitorRecoveryCoordinationReason::TakeoverCooldown,
+            AuditInput::new(),
+        )
+        .into(),
+        9_100,
+    );
+
+    assert_eq!(sanitized.event_type(), EventType::MonitorRecoveryDeferred);
+    assert_eq!(
+        sanitized.payload().effect_disposition(),
+        Some(EffectDisposition::NotPerformed)
+    );
+    let projected = serde_json::to_value(sanitized.payload().public_projection())
+        .expect("monitor recovery projection");
+    assert_eq!(projected["payload"]["monitor_recovery"], "wake_standby");
+    assert_eq!(
+        projected["payload"]["monitor_recovery_coordination_reason"],
+        "takeover_cooldown"
     );
 }
 
@@ -604,7 +638,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 50);
+    assert_eq!(payloads.len(), 52);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

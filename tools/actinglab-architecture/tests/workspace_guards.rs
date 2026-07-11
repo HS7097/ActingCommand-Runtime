@@ -849,6 +849,10 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(host.contains("fn run_monitor_probe"));
     assert!(host.contains("MonitorPayloadDraft::completed"));
     assert!(host.contains("persist_monitor_observation"));
+    assert!(host.contains("fn record_monitor_recovery_coordination"));
+    assert!(host.contains("fn monitor_recovery_admission"));
+    assert!(host.contains("MonitorPayloadDraft::recovery_admitted"));
+    assert!(host.contains("MonitorPayloadDraft::recovery_deferred"));
     assert!(client.contains("pub fn configure_monitor"));
     assert!(client.contains("pub fn clear_monitor"));
     assert!(!lab.contains("RuntimeMonitorRegistryStatus"));

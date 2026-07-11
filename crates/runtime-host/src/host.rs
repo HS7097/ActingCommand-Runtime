@@ -15,13 +15,14 @@ use actingcommand_contract::{
     CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode,
     EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
     EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
-    InputPayloadDraft, InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft,
-    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, OriginModule,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
-    RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    InputPayloadDraft, InstanceId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, LeaseId,
+    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass, RuntimeCaptureBackend,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft,
+    TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
@@ -409,6 +410,17 @@ struct QueuedRequestContext {
 struct QueueTerminalRecord {
     connection_id: ConnectionId,
     terminal: TerminalEvent,
+}
+
+struct MonitorRecoveryAdmission {
+    reason: MonitorRecoveryCoordinationReason,
+    lease_id: Option<LeaseId>,
+}
+
+impl MonitorRecoveryAdmission {
+    fn admitted(&self) -> bool {
+        self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable
+    }
 }
 
 #[derive(Default)]
@@ -1004,13 +1016,98 @@ impl HostShared {
             ),
         )?;
         let completed_at_unix_ms = unix_ms_now()?;
-        lock(&self.monitor_registry, "complete_monitor_probe")?.complete_probe(
+        let current = lock(&self.monitor_registry, "complete_monitor_probe")?.complete_probe(
             probe,
             started_at_unix_ms,
             completed_at_unix_ms,
-            decision,
+            decision.clone(),
+        )?;
+        if current {
+            self.record_monitor_recovery_coordination(&instance, &issued, &decision)?;
+        }
+        Ok(())
+    }
+
+    fn record_monitor_recovery_coordination(
+        &self,
+        instance: &RegisteredInstance,
+        issued: &IssuedMonitorProbe,
+        decision: &actingcommand_contract::MonitorDecision,
+    ) -> RuntimeHostResult<()> {
+        let Some(recovery) = decision.recovery() else {
+            return Ok(());
+        };
+        let admission = self.monitor_recovery_admission(instance.instance_id())?;
+        let links = admission.lease_id.map_or_else(
+            || issued.event_links(),
+            |lease_id| issued.event_links_with_lease(lease_id),
+        );
+        let (severity, payload) = if admission.admitted() {
+            (
+                EventSeverity::Info,
+                MonitorPayloadDraft::recovery_admitted(recovery, AuditInput::new()),
+            )
+        } else {
+            (
+                EventSeverity::Warning,
+                MonitorPayloadDraft::recovery_deferred(
+                    recovery,
+                    admission.reason,
+                    AuditInput::new(),
+                ),
+            )
+        };
+        self.append_event_raw(
+            severity,
+            EventSource::Scheduler,
+            OriginModule::Scheduler,
+            EventActor::Scheduler,
+            links,
+            payload,
         )?;
         Ok(())
+    }
+
+    fn monitor_recovery_admission(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<MonitorRecoveryAdmission> {
+        let now = self.monotonic_ms()?;
+        let scheduler = lock(&self.scheduler, "coordinate_monitor_recovery")?;
+        if let Some(active) = scheduler.active_lease(instance_id) {
+            let token = active.token();
+            if token.owner_epoch() != self.owner_epoch || token.instance_id() != instance_id {
+                return Err(RuntimeHostError::fatal(
+                    "monitor_recovery_fencing_state_invalid",
+                    "coordinate_monitor_recovery",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            let reason = if token.expires_at_monotonic_ms() <= now {
+                MonitorRecoveryCoordinationReason::LeaseExpired
+            } else if active.destructive_step_active() {
+                MonitorRecoveryCoordinationReason::DestructiveStepActive
+            } else if active.preempt_requested() {
+                MonitorRecoveryCoordinationReason::PreemptionPending
+            } else {
+                MonitorRecoveryCoordinationReason::ActiveLease
+            };
+            return Ok(MonitorRecoveryAdmission {
+                reason,
+                lease_id: Some(token.lease_id()),
+            });
+        }
+        let reason = if scheduler.cooldown_active(instance_id, now) {
+            MonitorRecoveryCoordinationReason::TakeoverCooldown
+        } else if scheduler.queued_count(instance_id) > 0 {
+            MonitorRecoveryCoordinationReason::QueuedLeaseRequests
+        } else {
+            MonitorRecoveryCoordinationReason::SchedulerAvailable
+        };
+        Ok(MonitorRecoveryAdmission {
+            reason,
+            lease_id: None,
+        })
     }
 
     fn finish_monitor_failure(
