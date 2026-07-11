@@ -137,6 +137,10 @@ impl Drop for FakeCapture {
 }
 
 impl ExecutionBackendProvider for FakeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec!["ak.cn".to_string()]
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
@@ -214,7 +218,13 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         client.health().expect("health"),
         host.runtime_info().owner_epoch()
     );
+    let status = client.status().expect("status");
+    assert_eq!(status.owner_epoch(), host.runtime_info().owner_epoch());
+    assert_eq!(status.instances().len(), 1);
+    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert!(!status.instances()[0].lease_active());
     let token = client.acquire_lease("ak.cn").expect("lease");
+    assert!(client.status().expect("leased status").instances()[0].lease_active());
     client
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("input");
@@ -232,6 +242,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
             .any(|event| event.event_type == EventType::InputCommitted)
     );
     client.release_lease(&token).expect("release");
+    assert!(!client.status().expect("released status").instances()[0].lease_active());
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 0);

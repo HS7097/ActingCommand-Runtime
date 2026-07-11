@@ -817,6 +817,10 @@ impl CaptureBackend for GoldenCapture {
 }
 
 impl ExecutionBackendProvider for GoldenRuntimeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec!["fixture:5555".to_string()]
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "fixture:5555")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-golden>"))

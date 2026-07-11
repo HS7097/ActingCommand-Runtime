@@ -15,11 +15,12 @@ use actingcommand_contract::{
     EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
     EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
     InputPayloadDraft, InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft,
-    LeaseQueuePolicy, LeaseToken, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft,
-    TerminalEvent, ValidatedRuntimeRequest,
+    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, OriginModule, RUNTIME_INFO_FILE,
+    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass,
+    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft, TerminalEvent,
+    ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel};
@@ -33,7 +34,7 @@ use actingcommand_scheduler::{
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
     SchedulerConfig, SchedulerError, SeedScheduler, TransferPreparation,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -145,6 +146,7 @@ impl RuntimeHost {
         provider: Arc<dyn ExecutionBackendProvider>,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
+        let registered_instances = initial_registered_instances(provider.as_ref())?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
                 "state_root_create_failed",
@@ -217,7 +219,7 @@ impl RuntimeHost {
             artifacts,
             events,
             execution: ExecutionKernel::new(provider),
-            registered_instances: Mutex::new(BTreeMap::new()),
+            registered_instances: Mutex::new(registered_instances),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
             admission_guards: Mutex::new(BTreeMap::new()),
@@ -406,6 +408,64 @@ impl RegisteredInstance {
     }
 }
 
+fn initial_registered_instances(
+    provider: &dyn ExecutionBackendProvider,
+) -> RuntimeHostResult<BTreeMap<InstanceId, RegisteredInstance>> {
+    let aliases = provider.instance_aliases();
+    if aliases.is_empty() {
+        return Err(RuntimeHostError::fatal(
+            "empty_execution_backend_registry",
+            "initialize_runtime_instance_registry",
+            RuntimeErrorCode::RuntimeFatal,
+        ));
+    }
+    let mut seen_aliases = BTreeSet::new();
+    let mut instances = BTreeMap::new();
+    for instance_alias in aliases {
+        if instance_alias.is_empty()
+            || instance_alias.len() > MAX_INSTANCE_ALIAS_BYTES
+            || instance_alias.chars().any(char::is_control)
+            || !seen_aliases.insert(instance_alias.clone())
+        {
+            return Err(RuntimeHostError::fatal(
+                "invalid_execution_backend_registry",
+                "initialize_runtime_instance_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let resolved = provider.resolve(&instance_alias).ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "execution_backend_registry_incomplete",
+                "initialize_runtime_instance_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        if resolved.audit_endpoint().is_empty() {
+            return Err(RuntimeHostError::fatal(
+                "invalid_execution_backend_registry",
+                "initialize_runtime_instance_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let registration = RegisteredInstance {
+            instance_alias,
+            instance_id: resolved.instance_id(),
+            audit_endpoint: resolved.audit_endpoint().to_string(),
+        };
+        if instances
+            .insert(registration.instance_id, registration)
+            .is_some()
+        {
+            return Err(RuntimeHostError::fatal(
+                "duplicate_runtime_instance_id",
+                "initialize_runtime_instance_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+    }
+    Ok(instances)
+}
+
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
@@ -504,6 +564,7 @@ impl HostShared {
                     owner_epoch: self.owner_epoch,
                 },
             }),
+            RuntimeOperation::Status => self.control_plane_status(),
             RuntimeOperation::AcquireLease {
                 instance_alias,
                 holder_id,
@@ -564,6 +625,64 @@ impl HostShared {
                 })
                 .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
         }
+    }
+
+    fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {
+        let now = self
+            .monotonic_ms()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let instances = lock(&self.registered_instances, "read_runtime_status_registry")?
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let scheduler = lock(&self.scheduler, "read_runtime_status_scheduler")?;
+        let mut projected = Vec::with_capacity(instances.len());
+        for instance in instances {
+            let instance_id = instance.instance_id();
+            let active = scheduler.active_lease(instance_id);
+            let queued_request_count =
+                u32::try_from(scheduler.queued_count(instance_id)).map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "runtime_status_queue_count_overflow",
+                        "project_runtime_control_plane_status",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+            projected.push(
+                RuntimeInstanceStatus::new(
+                    instance.instance_alias,
+                    instance_id,
+                    active.is_some(),
+                    queued_request_count,
+                    scheduler.cooldown_active(instance_id, now),
+                    active
+                        .as_ref()
+                        .is_some_and(|lease| lease.destructive_step_active()),
+                    active
+                        .as_ref()
+                        .is_some_and(|lease| lease.preempt_requested()),
+                )
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "runtime_status_projection_invalid",
+                        "project_runtime_control_plane_status",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?,
+            );
+        }
+        let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "runtime_status_projection_invalid",
+                "project_runtime_control_plane_status",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::Status { status },
+        })
     }
 
     fn acquire_lease(
@@ -2923,6 +3042,21 @@ impl HostShared {
     }
 
     fn resolve_instance(&self, instance_alias: &str) -> Result<RegisteredInstance, RequestFailure> {
+        let registered = lock(&self.registered_instances, "read_instance_registry")?
+            .values()
+            .find(|instance| instance.instance_alias == instance_alias)
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        "instance_unknown",
+                        "resolve_runtime_instance",
+                        RuntimeErrorCode::InstanceUnknown,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })?;
         let resolved = self.execution.resolve(instance_alias).map_err(|error| {
             if error.code() == "execution_instance_unknown" {
                 RequestFailure::request(
@@ -2941,26 +3075,18 @@ impl HostShared {
                 ))
             }
         })?;
-        let registration = RegisteredInstance {
-            instance_alias: instance_alias.to_string(),
-            instance_id: resolved.instance_id(),
-            audit_endpoint: resolved.audit_endpoint().to_string(),
-        };
-        let mut instances = lock(&self.registered_instances, "register_runtime_instance")?;
-        if let Some(existing) = instances.get(&registration.instance_id) {
-            if existing != &registration {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        "runtime_instance_identity_mismatch",
-                        "register_runtime_instance",
-                        RuntimeErrorCode::RuntimeFatal,
-                    ),
-                ));
-            }
-            return Ok(existing.clone());
+        if resolved.instance_id() != registered.instance_id
+            || resolved.audit_endpoint() != registered.audit_endpoint
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "runtime_instance_identity_mismatch",
+                    "resolve_runtime_instance",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
         }
-        instances.insert(registration.instance_id, registration.clone());
-        Ok(registration)
+        Ok(registered)
     }
 
     fn instance_guard(&self, instance_id: InstanceId) -> Result<Arc<Mutex<()>>, RequestFailure> {

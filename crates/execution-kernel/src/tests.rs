@@ -47,6 +47,10 @@ impl FakeProvider {
 }
 
 impl ExecutionBackendProvider for FakeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        self.instances.keys().cloned().collect()
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         self.instances.get(instance_alias).cloned()
     }

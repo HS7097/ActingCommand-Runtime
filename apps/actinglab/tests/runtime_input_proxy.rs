@@ -104,6 +104,10 @@ impl CaptureBackend for FakeCapture {
 }
 
 impl ExecutionBackendProvider for FakeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec!["ak.cn".to_string()]
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>"))

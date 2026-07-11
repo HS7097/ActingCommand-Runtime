@@ -5,8 +5,8 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
     IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeInfo, RuntimeOperation,
-    RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeControlPlaneStatus,
+    RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
 };
 use serde::Serialize;
 use std::fmt;
@@ -202,6 +202,13 @@ impl RuntimeClient {
         match self.execute("runtime_health", RuntimeOperation::Health)? {
             RuntimeResult::Health { owner_epoch } => Ok(owner_epoch),
             _ => Err(self.unexpected_result("runtime_health")),
+        }
+    }
+
+    pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
+        match self.execute("runtime_status", RuntimeOperation::Status)? {
+            RuntimeResult::Status { status } => Ok(status),
+            _ => Err(self.unexpected_result("runtime_status")),
         }
     }
 

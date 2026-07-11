@@ -121,6 +121,10 @@ impl fmt::Debug for ExecutionBackendRegistry {
 }
 
 impl ExecutionBackendProvider for ExecutionBackendRegistry {
+    fn instance_aliases(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
         Some(ResolvedExecutionInstance::new(

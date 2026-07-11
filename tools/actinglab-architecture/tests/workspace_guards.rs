@@ -768,6 +768,25 @@ fn c5_portable_output_archive_is_owned_by_artifact_store() {
         );
     }
 }
+
+#[test]
+fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
+    let root = workspace_root();
+    let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+        .expect("read Runtime contract");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
+        .expect("read Runtime client");
+    let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
+
+    assert!(contract.contains("RuntimeControlPlaneStatus"));
+    assert!(host.contains("fn control_plane_status"));
+    assert!(host.contains("initial_registered_instances"));
+    assert!(client.contains("pub fn status"));
+    assert!(!lab.contains("RuntimeControlPlaneStatus"));
+}
+
 #[test]
 fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
     let root = workspace_root();

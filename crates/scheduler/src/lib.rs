@@ -1468,6 +1468,18 @@ impl SeedScheduler {
             })
     }
 
+    pub fn queued_count(&self, instance_id: InstanceId) -> usize {
+        self.instances
+            .get(&instance_id)
+            .map_or(0, |state| state.queue.len())
+    }
+
+    pub fn cooldown_active(&self, instance_id: InstanceId, now_monotonic_ms: u64) -> bool {
+        self.instances
+            .get(&instance_id)
+            .is_some_and(|state| state.cooldown_until_monotonic_ms > now_monotonic_ms)
+    }
+
     pub fn active_instance_ids(&self) -> Vec<InstanceId> {
         self.instances
             .iter()

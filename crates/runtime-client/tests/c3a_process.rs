@@ -92,6 +92,10 @@ struct FileProvider {
 }
 
 impl ExecutionBackendProvider for FileProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec!["ak.cn".to_string()]
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-process-test>"))
@@ -294,6 +298,11 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
         first_client.health().expect("first Runtime health"),
         first_info.owner_epoch()
     );
+    let first_status = first_client.status().expect("first Runtime status");
+    assert_eq!(first_status.owner_epoch(), first_info.owner_epoch());
+    assert_eq!(first_status.instances().len(), 1);
+    assert_eq!(first_status.instances()[0].instance_alias(), "ak.cn");
+    assert!(!first_status.instances()[0].takeover_cooldown_active());
     let old_token = first_client.acquire_lease("ak.cn").expect("old lease");
     first_client
         .input(&old_token, InputAction::Reset)
@@ -307,6 +316,9 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let second_info = second.wait_for_runtime_info(root.path(), Some(first_info.owner_epoch()));
     assert_ne!(second_info.owner_epoch(), first_info.owner_epoch());
     let second_client = client(root.path());
+    let takeover_status = second_client.status().expect("takeover Runtime status");
+    assert_eq!(takeover_status.owner_epoch(), second_info.owner_epoch());
+    assert!(takeover_status.instances()[0].takeover_cooldown_active());
     let cooldown = second_client
         .acquire_lease("ak.cn")
         .expect_err("takeover cooldown must reject acquisition");
@@ -330,6 +342,9 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let new_token = second_client
         .acquire_lease("ak.cn")
         .expect("lease after takeover cooldown");
+    let active_status = second_client.status().expect("active Runtime status");
+    assert!(active_status.instances()[0].lease_active());
+    assert!(!active_status.instances()[0].takeover_cooldown_active());
     second_client
         .input(&new_token, InputAction::Tap { x: 10, y: 20 })
         .expect("new epoch input");

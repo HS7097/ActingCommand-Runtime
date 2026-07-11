@@ -289,6 +289,76 @@ fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
 }
 
 #[test]
+fn runtime_status_is_sorted_strict_and_state_aware() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let ak = RuntimeInstanceStatus::new(
+        "ak.cn",
+        *ids.mint_instance_id().expect("ak instance").transport(),
+        true,
+        1,
+        false,
+        true,
+        true,
+    )
+    .expect("ak status");
+    let ba = RuntimeInstanceStatus::new(
+        "ba.jp",
+        *ids.mint_instance_id().expect("ba instance").transport(),
+        false,
+        0,
+        true,
+        false,
+        false,
+    )
+    .expect("ba status");
+    let status = RuntimeControlPlaneStatus::new(owner_epoch, vec![ba, ak]).expect("status");
+
+    assert_eq!(status.owner_epoch(), owner_epoch);
+    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert!(status.instances()[0].lease_active());
+    assert_eq!(status.instances()[0].queued_request_count(), 1);
+    assert!(status.instances()[0].destructive_step_active());
+    assert!(status.instances()[0].preempt_requested());
+    assert!(status.instances()[1].takeover_cooldown_active());
+
+    let encoded = serde_json::to_value(&status).expect("status JSON");
+    let decoded: RuntimeControlPlaneStatus =
+        serde_json::from_value(encoded.clone()).expect("status decode");
+    decoded.validate().expect("status validation");
+    let request = request(RuntimeOperation::Status);
+    RuntimeReceipt::success(
+        &request,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::Status {
+            status: status.clone(),
+        },
+    )
+    .expect("status receipt")
+    .validate()
+    .expect("status receipt validation");
+
+    let mut unknown = encoded;
+    unknown["unexpected"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<RuntimeControlPlaneStatus>(unknown).is_err());
+    assert_eq!(
+        RuntimeInstanceStatus::new(
+            "ak.cn",
+            status.instances()[0].instance_id(),
+            false,
+            0,
+            false,
+            true,
+            false,
+        )
+        .expect_err("destructive state without lease")
+        .code(),
+        "invalid_runtime_instance_status"
+    );
+}
+
+#[test]
 fn receipt_requires_exactly_one_typed_outcome() {
     let request = request(RuntimeOperation::Health);
     let epoch = *issuer().mint_owner_epoch().expect("epoch").transport();

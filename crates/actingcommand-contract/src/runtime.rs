@@ -21,6 +21,7 @@ use crate::{
     RecognitionId, RecognitionVerdict, RequestId,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -430,6 +431,128 @@ impl fmt::Debug for ReadonlyObservation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInstanceStatus {
+    instance_alias: String,
+    instance_id: InstanceId,
+    lease_active: bool,
+    queued_request_count: u32,
+    takeover_cooldown_active: bool,
+    destructive_step_active: bool,
+    preempt_requested: bool,
+}
+
+impl RuntimeInstanceStatus {
+    pub fn new(
+        instance_alias: impl Into<String>,
+        instance_id: InstanceId,
+        lease_active: bool,
+        queued_request_count: u32,
+        takeover_cooldown_active: bool,
+        destructive_step_active: bool,
+        preempt_requested: bool,
+    ) -> RuntimeContractResult<Self> {
+        let status = Self {
+            instance_alias: instance_alias.into(),
+            instance_id,
+            lease_active,
+            queued_request_count,
+            takeover_cooldown_active,
+            destructive_step_active,
+            preempt_requested,
+        };
+        status.validate()?;
+        Ok(status)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        validate_instance_alias(&self.instance_alias)?;
+        if (self.destructive_step_active || self.preempt_requested) && !self.lease_active {
+            return Err(RuntimeContractError::new("invalid_runtime_instance_status"));
+        }
+        if self.lease_active && self.takeover_cooldown_active {
+            return Err(RuntimeContractError::new("invalid_runtime_instance_status"));
+        }
+        Ok(())
+    }
+
+    pub fn instance_alias(&self) -> &str {
+        &self.instance_alias
+    }
+
+    pub const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    pub const fn lease_active(&self) -> bool {
+        self.lease_active
+    }
+
+    pub const fn queued_request_count(&self) -> u32 {
+        self.queued_request_count
+    }
+
+    pub const fn takeover_cooldown_active(&self) -> bool {
+        self.takeover_cooldown_active
+    }
+
+    pub const fn destructive_step_active(&self) -> bool {
+        self.destructive_step_active
+    }
+
+    pub const fn preempt_requested(&self) -> bool {
+        self.preempt_requested
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeControlPlaneStatus {
+    owner_epoch: OwnerEpoch,
+    instances: Vec<RuntimeInstanceStatus>,
+}
+
+impl RuntimeControlPlaneStatus {
+    pub fn new(
+        owner_epoch: OwnerEpoch,
+        mut instances: Vec<RuntimeInstanceStatus>,
+    ) -> RuntimeContractResult<Self> {
+        instances.sort_by(|left, right| left.instance_alias.cmp(&right.instance_alias));
+        let status = Self {
+            owner_epoch,
+            instances,
+        };
+        status.validate()?;
+        Ok(status)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        let mut aliases = BTreeSet::new();
+        let mut instance_ids = BTreeSet::new();
+        let mut previous_alias = None;
+        for instance in &self.instances {
+            instance.validate()?;
+            if !aliases.insert(instance.instance_alias.as_str())
+                || !instance_ids.insert(instance.instance_id)
+                || previous_alias.is_some_and(|previous| previous >= instance.instance_alias())
+            {
+                return Err(RuntimeContractError::new("invalid_runtime_status_registry"));
+            }
+            previous_alias = Some(instance.instance_alias());
+        }
+        Ok(())
+    }
+
+    pub const fn owner_epoch(&self) -> OwnerEpoch {
+        self.owner_epoch
+    }
+
+    pub fn instances(&self) -> &[RuntimeInstanceStatus] {
+        &self.instances
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadonlyObservationStage {
@@ -473,6 +596,7 @@ impl ReadonlyObservationOutcome {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
     Health,
+    Status,
     AcquireLease {
         instance_alias: String,
         holder_id: HolderId,
@@ -541,6 +665,7 @@ impl RuntimeOperation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Health
+            | Self::Status
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
@@ -587,6 +712,7 @@ impl fmt::Debug for RuntimeOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
+            Self::Status => "RuntimeOperation::Status",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
             Self::QueueLease { .. } => "RuntimeOperation::QueueLease(<redacted>)",
             Self::PollQueuedLease { .. } => "RuntimeOperation::PollQueuedLease(<opaque-request>)",
@@ -880,6 +1006,9 @@ pub enum RuntimeResult {
     Health {
         owner_epoch: OwnerEpoch,
     },
+    Status {
+        status: RuntimeControlPlaneStatus,
+    },
     LeaseGranted {
         token: LeaseToken,
     },
@@ -994,6 +1123,7 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(RuntimeResult::Status { status }) => status.validate()?,
             Some(
                 RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
             ) => status.validate()?,

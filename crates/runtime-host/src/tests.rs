@@ -137,6 +137,7 @@ struct FakeEntry {
 
 struct FakeProvider {
     entries: BTreeMap<String, FakeEntry>,
+    advertised_aliases: Option<Vec<String>>,
 }
 
 impl FakeProvider {
@@ -152,11 +153,23 @@ impl FakeProvider {
                 .into_iter()
                 .map(|(alias, instance_id, state)| (alias, FakeEntry { instance_id, state }))
                 .collect(),
+            advertised_aliases: None,
         }
+    }
+
+    fn with_inventory(mut self, aliases: impl IntoIterator<Item = String>) -> Self {
+        self.advertised_aliases = Some(aliases.into_iter().collect());
+        self
     }
 }
 
 impl ExecutionBackendProvider for FakeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        self.advertised_aliases
+            .clone()
+            .unwrap_or_else(|| self.entries.keys().cloned().collect())
+    }
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
         Some(ResolvedExecutionInstance::new(
@@ -417,6 +430,144 @@ fn concurrent_acquire(
         completed.wait();
         receipt
     })
+}
+
+#[test]
+fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
+    let root = TempDir::new().expect("tempdir");
+    let ak_state = Arc::new(FakeState::default());
+    let ba_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::from_entries([
+            ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
+            ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
+        ])),
+    )
+    .expect("runtime host");
+    let mut owner = TestClient::connect(&host);
+
+    let initial = owner
+        .send_result(&owner.request(RuntimeOperation::Status))
+        .expect("initial status receipt");
+    let RuntimeResult::Status { status } = initial.result().expect("status result") else {
+        panic!("expected runtime status");
+    };
+    assert_eq!(status.owner_epoch(), host.runtime_info().owner_epoch());
+    assert_eq!(status.instances().len(), 2);
+    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert_eq!(status.instances()[1].instance_alias(), "ba.jp");
+    assert!(
+        status
+            .instances()
+            .iter()
+            .all(|instance| !instance.lease_active())
+    );
+    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(ba_state.open_count.load(Ordering::Acquire), 0);
+
+    let acquire = owner.request(RuntimeOperation::acquire_lease(
+        "ak.cn",
+        owner.ids.mint_holder_id().expect("owner holder"),
+    ));
+    let acquire = owner.send(&acquire);
+    assert!(matches!(
+        acquire.result(),
+        Some(RuntimeResult::LeaseGranted { .. })
+    ));
+    let mut waiter = TestClient::connect(&host);
+    let queued = waiter.request(RuntimeOperation::queue_lease(
+        "ak.cn",
+        waiter.ids.mint_holder_id().expect("waiter holder"),
+        LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
+    ));
+    let queued = waiter.send(&queued);
+    assert!(matches!(
+        queued.result(),
+        Some(RuntimeResult::LeaseQueued { .. })
+    ));
+
+    let live = owner
+        .send_result(&owner.request(RuntimeOperation::Status))
+        .expect("live status receipt");
+    let RuntimeResult::Status { status } = live.result().expect("live status result") else {
+        panic!("expected live runtime status");
+    };
+    let ak = &status.instances()[0];
+    assert!(ak.lease_active());
+    assert_eq!(ak.queued_request_count(), 1);
+    assert!(!ak.takeover_cooldown_active());
+    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
+
+    drop(waiter);
+    drop(owner);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
+    let root = TempDir::new().expect("tempdir");
+    let hidden_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(
+            FakeProvider::from_entries([
+                (
+                    "ak.cn".to_string(),
+                    instance_id(),
+                    Arc::new(FakeState::default()),
+                ),
+                (
+                    "hidden.jp".to_string(),
+                    instance_id(),
+                    Arc::clone(&hidden_state),
+                ),
+            ])
+            .with_inventory(["ak.cn".to_string()]),
+        ),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let hidden = client.request(RuntimeOperation::acquire_lease(
+        "hidden.jp",
+        client.ids.mint_holder_id().expect("hidden holder"),
+    ));
+    let hidden = client.send(&hidden);
+    assert_eq!(hidden.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        hidden.error_projection().expect("hidden denial").code,
+        RuntimeErrorCode::InstanceUnknown
+    );
+    assert_eq!(hidden_state.open_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+
+    let duplicate_root = TempDir::new().expect("duplicate tempdir");
+    let duplicate_id = instance_id();
+    let duplicate = RuntimeHost::start(
+        config(&duplicate_root),
+        Arc::new(FakeProvider::from_entries([
+            (
+                "ak.cn".to_string(),
+                duplicate_id,
+                Arc::new(FakeState::default()),
+            ),
+            (
+                "ba.jp".to_string(),
+                duplicate_id,
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    );
+    let error = match duplicate {
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("duplicate instance IDs must fail startup");
+        }
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "duplicate_runtime_instance_id");
+    assert!(error.is_fatal());
 }
 
 #[test]

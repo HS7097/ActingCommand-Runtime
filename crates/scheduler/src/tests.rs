@@ -511,6 +511,42 @@ fn prepared_lease_does_not_mutate_state_before_commit() {
 }
 
 #[test]
+fn status_accessors_report_queue_depth_and_takeover_cooldown() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("holder");
+    scheduler
+        .request_queued(
+            queued_request(
+                request(&issuer),
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::Normal,
+                400,
+            ),
+            2,
+        )
+        .expect("queued request");
+    assert_eq!(scheduler.queued_count(instance_id), 1);
+    assert!(!scheduler.cooldown_active(instance_id, 2));
+
+    let cooldown = SeedScheduler::new(epoch(&issuer), config(), [instance_id], 10)
+        .expect("takeover scheduler");
+    assert!(cooldown.cooldown_active(instance_id, 11));
+    assert!(!cooldown.cooldown_active(instance_id, 161));
+}
+
+#[test]
 fn queue_is_bounded_priority_ordered_and_idempotent() {
     let issuer = ids();
     let instance_id = instance(&issuer);

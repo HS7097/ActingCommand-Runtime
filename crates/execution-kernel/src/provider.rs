@@ -39,6 +39,8 @@ impl fmt::Debug for ResolvedExecutionInstance {
 
 /// Daemon-only factory boundary. Implementations open backends inside execution worker threads.
 pub trait ExecutionBackendProvider: Send + Sync + 'static {
+    fn instance_aliases(&self) -> Vec<String>;
+
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance>;
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
