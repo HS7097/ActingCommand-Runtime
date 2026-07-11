@@ -1,5 +1,49 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b resident control-plane plan freeze
+
+### Current status
+
+- Re-read the approved v3 C3b requirements and verified both frozen local document hashes.
+- Rechecked Issue #35 authority and latest comments: the Issue and every relied-on instruction are
+  authored by `HS7097`; no newer directive changes C3b.
+- C2 is clean, pushed, and tagged at `checkpoint/20260711-c2-artifact-evidence`.
+- Froze the C3b implementation plan at
+  `docs/plans/2026-07-11-c3b-control-plane.md` before production changes.
+- C3b will add bounded per-instance queues, priority/preemption, destructive safe-yield transfer,
+  durable transfer-before-handoff ordering, a daemon-owned execution backend shell, and daemon-only
+  capture.
+- The plan explicitly keeps C5 domain/task migration out of C3b and uses no resource repository,
+  emulator, live device, cooperation-workspace write, or subagent.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+- `Get-FileHash -Algorithm SHA256` for the v3 specification and approved amendment.
+- Source and dependency inspection across contract, scheduler, runtime-host, runtime-client,
+  actingd, device capture, and the legacy degraded arbitrator.
+- `git diff --check`
+
+### Test results
+
+- No production code changed in this planning unit.
+- C2 closeout gates passed immediately before this plan freeze.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the C3b plan freeze and record it in Issue #36.
+2. Implement C3b Task 1 contract and scheduler behavior with adversarial tests.
+
 ## 2026-07-11 Issue 35 C2 artifact and evidence closeout
 
 ### Current status
