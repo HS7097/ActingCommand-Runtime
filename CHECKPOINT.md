@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 4 Runtime client and actingd process
+
+### Current status
+
+- Added `actingcommand-runtime-client` as the typed local client boundary. It discovers and
+  validates `runtime-info.json`, keeps one connection-bound loopback IPC session, creates typed
+  requests, validates receipt identity, and exposes health, read-only admission, lease, input,
+  and event-query methods.
+- Terminal transport, framing, receipt, identity, and fatal Runtime errors latch on the client;
+  later calls return the same failure and never reconnect or silently continue on a potentially
+  desynchronized stream.
+- Added `RuntimeInputProxy` as the only new client input surface. It implements `InputBackend`,
+  owns no device backend, renews its lease with a bounded heartbeat, serializes heartbeat and
+  input on the same connection, and releases authority on close/drop.
+- Ordinary IPC retains the frozen `5_000 ms` timeout. Backend-open waits are separately bounded,
+  while long tap/swipe response waits add only their validated gesture duration so valid long
+  actions do not corrupt the connection through a premature read timeout.
+- Added the thin `actingd` process adapter with a strict typed JSON config, loopback-only bind,
+  explicit backend selection, host/provider assembly, health monitoring, and nonzero fatal exit.
+  Automatic touch selection is rejected at this boundary because its fallback diagnostics do
+  not yet have a Runtime event sink.
+- Added real-process acceptance proving `actingd` survives disposal of one client and accepts a
+  second client on the existing state, plus fatal invalid-startup behavior.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/runtime-client/Cargo.toml`
+- `crates/runtime-client/src/lib.rs`
+- `crates/runtime-client/src/error.rs`
+- `crates/runtime-client/src/ipc.rs`
+- `crates/runtime-client/src/client.rs`
+- `crates/runtime-client/src/input.rs`
+- `crates/runtime-client/src/tests.rs`
+- `apps/actingd/Cargo.toml`
+- `apps/actingd/src/config.rs`
+- `apps/actingd/src/main.rs`
+- `apps/actingd/tests/process.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-runtime-client -p actingcommand-actingd -- --nocapture`
+- `cargo test -p actingcommand-actingd -- --nocapture`
+- `cargo clippy -p actingcommand-runtime-client -p actingcommand-actingd --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "create_touch_backend|MaaTouchBackend|MinitouchBackend|AdbShellInput|reconnect|fallback" crates/runtime-client apps/actingd -g '*.rs'`
+
+### Test results
+
+- Runtime-client tests passed: 5.
+- Actingd unit tests passed: 4; actingd process tests passed: 2.
+- Full workspace tests passed, including unchanged A1 protocol goldens, C1 process tests, C3a
+  host/scheduler tests, and the new daemon/client process boundary.
+- Full workspace Clippy passed with warnings denied.
+- Formatting and diff checks passed.
+- Runtime-client production sources contain no backend constructors, fallback, reconnect, Lab,
+  capture, scheduler policy, UI, game, OCR, or SQLite behavior.
+
+### Current blocker
+
+- None for C3a Task 4.
+
+### Next step
+
+1. Commit and push Task 4 with this planning/checkpoint evidence and record it in Issue #36.
+2. Implement Task 5 by replacing ActingLab production input construction with
+   `RuntimeInputProxy` while preserving dry-run and sealed fake-input paths.
+
 ## 2026-07-11 Issue 35 C3a Task 3 resident Runtime host
 
 ### Current status

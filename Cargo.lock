@@ -19,6 +19,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
+name = "actingcommand-actingd"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-runtime-client",
+ "actingcommand-runtime-host",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-actinglab"
 version = "0.1.0"
 dependencies = [
@@ -194,6 +207,19 @@ name = "actingcommand-runtime-bench"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "actingcommand-runtime-client"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-runtime-host",
+ "actingcommand-scheduler",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

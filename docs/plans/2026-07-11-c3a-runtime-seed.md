@@ -103,7 +103,7 @@ Implemented result:
 
 ## Task 4: Runtime client and actingd process
 
-Status: next.
+Status: complete.
 
 - Create `crates/runtime-client` and `apps/actingd`.
 - Runtime client discovers the daemon from `runtime-info.json`, keeps one local IPC
@@ -114,7 +114,24 @@ Status: next.
   registry and Runtime host, maps fatal startup/run errors to a nonzero exit, and contains no
   scheduler or device policy.
 
+Implemented result:
+
+- `actingcommand-runtime-client` discovers and validates `runtime-info.json`, owns one
+  loopback IPC connection, correlates typed receipts, latches terminal transport/protocol
+  failures without reconnect, and exposes health, read-only admission, lease, input, and event
+  query methods.
+- `RuntimeInputProxy` implements `InputBackend`, renews its lease on a bounded background
+  heartbeat, serializes heartbeat and input over the same connection guard, extends only known
+  long-action response waits, and releases the lease on explicit close or drop.
+- `actingd` accepts one typed JSON config, requires an explicit touch backend so no unreported
+  automatic fallback occurs, assembles the existing host/provider modules, reports fatal errors
+  with exit code 1, and owns no scheduling or device policy.
+- Process acceptance starts the real daemon, closes one disposable client, attaches a second
+  client to the still-running daemon, and verifies invalid startup exits nonzero.
+
 ## Task 5: Remove client-side production input construction
+
+Status: next.
 
 - Replace ActingLab's production `AppInputFactory` and direct write helpers with
   `RuntimeInputProxy`.
