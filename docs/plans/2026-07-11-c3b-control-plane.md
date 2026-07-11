@@ -1,6 +1,6 @@
 # C3b Resident Control Plane Implementation Plan
 
-Status: active.
+Status: complete.
 
 ## Authority and baseline
 
@@ -120,7 +120,7 @@ Status: complete.
 
 ### Task 5: Closeout
 
-Status: active.
+Status: complete.
 
 - Run focused contract, scheduler, execution-kernel, host, client, process, architecture, and
   protocol suites.

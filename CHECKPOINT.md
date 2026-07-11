@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b Task 5 closeout
+
+### Current status
+
+- C3b is complete. Tasks 1-4 delivered the typed scheduler/control contract, resident execution
+  kernel, Runtime-host queue/preemption/transfer integration, and daemon-owned capture hard gate.
+- Task 4 source is pushed as commit `818cf6294f14911ec693807b94444cc6616d90ae`.
+- Full workspace and non-Lab tests passed after the pushed source commit.
+- Workspace all-target/all-feature compilation and Clippy passed with warnings denied.
+- Architecture/dependency/source guards and the protocol golden suite passed independently after the
+  full workspace run.
+- Formatting and whitespace checks passed. The working tree contained only this closeout planning
+  update before the milestone commit.
+- The stable rollback anchor is `checkpoint/20260711-c3b-resident-control-plane`.
+- Issue #35 was re-read after all closeout gates. It remains approved and all comments are authored
+  by `HS7097`; no newer scope change exists.
+- No resource repository, emulator, live device, cooperation-workspace write, main-branch merge, or
+  subagent was used.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test --workspace -j 2`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test --workspace --exclude actingcommand-lab --exclude actingcommand-actinglab -j 2`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo check --workspace --all-targets --all-features -j 2`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo clippy --workspace --all-targets --all-features -j 2 -- -D warnings`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test -p actingcommand-actinglab-architecture`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test -p actingcommand-actinglab --test golden_protocol`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+
+### Test results
+
+- Full workspace tests passed, including 517 ActingLab unit tests and every process, sealed,
+  protocol, architecture, compile-fail, and doctest target in the workspace.
+- Non-Lab workspace tests passed independently.
+- All-target/all-feature workspace compilation passed.
+- All-target/all-feature workspace Clippy passed with warnings denied.
+- Architecture passed 14 unit tests and 19 workspace guards; protocol goldens passed 3 tests.
+- Formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this C3b closeout, create and push the stable checkpoint tag, and record the
+   milestone in Issue #36.
+2. Freeze the C5 implementation slices from the approved v3 specification and resource-authoring
+   amendment before moving production capabilities.
+
 ## 2026-07-11 Issue 35 C3b Task 4 daemon-owned capture hard gate
 
 ### Current status
