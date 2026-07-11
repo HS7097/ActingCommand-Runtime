@@ -787,6 +787,9 @@ fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
             1,
         )
         .expect("current lease");
+    scheduler
+        .begin_destructive_step(&current, connection(1), 2)
+        .expect("begin destructive");
     let queued_id = request(&issuer);
     scheduler
         .request_queued(
@@ -798,13 +801,9 @@ fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
                 LeasePriority::High,
                 400,
             ),
-            2,
+            3,
         )
         .expect("preempt queue");
-
-    scheduler
-        .begin_destructive_step(&current, connection(1), 3)
-        .expect("begin destructive");
     assert!(matches!(
         scheduler
             .prepare_transfer(
@@ -863,6 +862,42 @@ fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
     scheduler
         .validate_write(&next, connection(2), 6)
         .expect("new token active");
+}
+
+#[test]
+fn pending_preemption_blocks_a_new_destructive_step_at_the_safe_boundary() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let current = scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("current lease");
+    scheduler
+        .request_queued(
+            queued_request(
+                request(&issuer),
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::High,
+                400,
+            ),
+            2,
+        )
+        .expect("preempt queue");
+
+    assert_eq!(
+        scheduler
+            .begin_destructive_step(&current, connection(1), 3)
+            .expect_err("safe boundary must yield"),
+        SchedulerError::TransferNotSafe
+    );
 }
 
 #[test]

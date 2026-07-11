@@ -4,10 +4,10 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
-    IssuedCorrelationId, LeaseToken, OwnerEpoch, ProjectedEvent, ProjectionProfile,
-    RUNTIME_INFO_FILE, ReadOnlyCaptureCapability, ReadonlyFrame, ReadonlyObservation,
-    ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict, RuntimeInfo,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
+    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, ReadOnlyCaptureCapability, ReadonlyFrame,
+    ReadonlyObservation, ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict,
+    RequestId, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::CaptureBackend;
 use actingcommand_recognition::Scene;
@@ -129,6 +129,12 @@ pub struct RuntimeFlowOutput {
     events: Vec<ProjectedEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeaseAdmission {
+    Granted(LeaseToken),
+    Queued(LeaseQueueStatus),
+}
+
 impl RuntimeFlowOutput {
     pub const fn receipt(&self) -> &RuntimeReceipt {
         &self.receipt
@@ -216,6 +222,56 @@ impl RuntimeClient {
         )? {
             RuntimeResult::LeaseGranted { token } => Ok(token),
             _ => Err(self.unexpected_result("acquire_lease")),
+        }
+    }
+
+    pub fn queue_lease(
+        &self,
+        instance_alias: &str,
+        policy: LeaseQueuePolicy,
+    ) -> RuntimeClientResult<LeaseAdmission> {
+        let holder = self
+            .connection("issue_queued_lease_holder")?
+            .ids
+            .mint_holder_id()
+            .map_err(|_| {
+                RuntimeClientError::fatal("runtime_identifier_issue_failed", "queue_lease")
+            })?;
+        match self.execute(
+            "queue_lease",
+            RuntimeOperation::queue_lease(instance_alias, holder, policy),
+        )? {
+            RuntimeResult::LeaseGranted { token } => Ok(LeaseAdmission::Granted(token)),
+            RuntimeResult::LeaseQueued { status } => Ok(LeaseAdmission::Queued(status)),
+            _ => Err(self.unexpected_result("queue_lease")),
+        }
+    }
+
+    pub fn poll_queued_lease(
+        &self,
+        queued_request_id: RequestId,
+    ) -> RuntimeClientResult<LeaseAdmission> {
+        match self.execute(
+            "poll_queued_lease",
+            RuntimeOperation::PollQueuedLease { queued_request_id },
+        )? {
+            RuntimeResult::LeaseGranted { token } => Ok(LeaseAdmission::Granted(token)),
+            RuntimeResult::LeasePending { status } => Ok(LeaseAdmission::Queued(status)),
+            _ => Err(self.unexpected_result("poll_queued_lease")),
+        }
+    }
+
+    pub fn cancel_queued_lease(&self, queued_request_id: RequestId) -> RuntimeClientResult<()> {
+        match self.execute(
+            "cancel_queued_lease",
+            RuntimeOperation::CancelQueuedLease { queued_request_id },
+        )? {
+            RuntimeResult::LeaseQueueCancelled { request_id, .. }
+                if request_id == queued_request_id =>
+            {
+                Ok(())
+            }
+            _ => Err(self.unexpected_result("cancel_queued_lease")),
         }
     }
 

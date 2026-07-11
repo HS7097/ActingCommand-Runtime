@@ -127,6 +127,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         Some("runtime_proxy")
     );
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }

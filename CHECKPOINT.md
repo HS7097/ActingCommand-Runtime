@@ -1,5 +1,85 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b Task 3 Runtime host control-plane integration
+
+### Current status
+
+- Runtime host now routes input through the resident `ExecutionKernel`; the superseded per-lease
+  backend worker was removed.
+- Added typed queue, poll, and cancel IPC operations and client methods. Queues remain bounded,
+  per-instance, priority ordered, connection bound, and explicit on cancellation, expiry, denial,
+  and disconnect.
+- High-priority requests transfer immediately at an idle safe boundary or wait through an active
+  destructive input until its outcome is durable. New destructive work yields when preemption is
+  already pending.
+- Transfer intent and `lease.transferred` are appended before scheduler authority changes. A
+  post-durability commit mismatch poisons Runtime, and old tokens are fenced after commit.
+- Explicit release, expiry, and disconnect promote eligible queued holders. Backend failure and
+  Runtime shutdown cancel queued work instead of granting authority to an unusable session.
+- Input sessions open lazily and remain resident across lease release and disposable client exit;
+  Runtime shutdown owns their final close.
+- Per-instance admission guards now serialize idle transfer with renew and input-start boundaries,
+  closing the prepared-transfer race without blocking queue arrival during an active input.
+- The C3a client-side capture compatibility path remains unchanged and is the active Task 4 scope.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actingctl/tests/c4_process.rs`
+- `apps/actinglab/tests/c4_runtime_process.rs`
+- `apps/actinglab/tests/runtime_input_proxy.rs`
+- `crates/actingcommand-contract/src/event/codes.rs`
+- `crates/actingcommand-contract/src/runtime.rs`
+- `crates/actingcommand-contract/src/runtime/tests.rs`
+- `crates/runtime-client/src/client.rs`
+- `crates/runtime-client/src/tests.rs`
+- `crates/runtime-host/Cargo.toml`
+- `crates/runtime-host/src/backend.rs` (removed)
+- `crates/runtime-host/src/error.rs`
+- `crates/runtime-host/src/host.rs`
+- `crates/runtime-host/src/lib.rs`
+- `crates/runtime-host/src/provider.rs`
+- `crates/runtime-host/src/tests.rs`
+- `crates/scheduler/src/lib.rs`
+- `crates/scheduler/src/tests.rs`
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo clean` after the local `target` cache exhausted the system drive during validation.
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test --workspace -j 2`
+- `cargo test -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-execution-kernel -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actingctl -p actingcommand-actingd -p actingcommand-actinglab-architecture`
+- `cargo test -p actingcommand-actinglab --test c4_runtime_process --test runtime_input_proxy`
+- `cargo clippy -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-execution-kernel -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actingctl -p actingcommand-actingd -p actingcommand-actinglab --all-targets -- -D warnings`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Full workspace tests passed after the final idle-safe-boundary preemption change.
+- Contract passed 38 unit tests and 11 compile-fail doctests; scheduler passed 22 unit tests.
+- Execution kernel passed 7 unit tests; Runtime host passed 28 unit tests; Runtime client passed 15
+  unit tests and 2 process tests.
+- Actingctl, actingd, ActingLab Runtime proxy/process tests, protocol goldens, and all existing
+  workspace suites passed.
+- Architecture passed 14 unit tests and 19 workspace guards.
+- Focused all-target Clippy passed with warnings denied; formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push C3b Task 3 and record the completed unit in Issue #36.
+2. Implement Task 4 daemon-owned capture, explicit actingd capture registration, client dependency
+   removal, and final process/dependency hard gates.
+
 ## 2026-07-11 Issue 35 C3b Task 2 daemon-owned execution backend shell
 
 ### Current status

@@ -74,10 +74,11 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
         "safe_reset_completed"
     );
     assert!(reset_json["data"]["events"].is_array());
+    assert_eq!(support::backend_events(root.path()), ["open", "reset"]);
+    runtime.assert_alive();
+    runtime.stop_clean();
     assert_eq!(
         support::backend_events(root.path()),
         ["open", "reset", "close"]
     );
-    runtime.assert_alive();
-    runtime.stop_clean();
 }

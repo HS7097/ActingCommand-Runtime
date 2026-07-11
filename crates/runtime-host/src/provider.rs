@@ -2,9 +2,14 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode};
-use actingcommand_device::{DeviceResult, InputBackend, TouchBackendConfig, create_touch_backend};
+use actingcommand_device::{
+    CaptureBackend, DeviceError, DeviceResult, InputBackend, TouchBackendConfig,
+    create_touch_backend,
+};
+use actingcommand_execution_kernel::{ExecutionBackendProvider, ResolvedExecutionInstance};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 pub struct ResolvedInputInstance {
     instance_id: InstanceId,
@@ -43,6 +48,36 @@ pub trait InputBackendProvider: Send + Sync + 'static {
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance>;
 
     fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
+}
+
+/// C3b Task 3 adapter that moves input ownership into the execution kernel while capture remains
+/// behind the C3a compatibility surface. Task 4 replaces this with the complete device registry.
+pub(crate) struct InputOnlyExecutionProvider {
+    input: Arc<dyn InputBackendProvider>,
+}
+
+impl InputOnlyExecutionProvider {
+    pub(crate) fn new(input: Arc<dyn InputBackendProvider>) -> Self {
+        Self { input }
+    }
+}
+
+impl ExecutionBackendProvider for InputOnlyExecutionProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+        self.input.resolve(instance_alias).map(|resolved| {
+            ResolvedExecutionInstance::new(resolved.instance_id(), resolved.audit_endpoint())
+        })
+    }
+
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        self.input.open(instance_alias)
+    }
+
+    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        Err(DeviceError::fatal(
+            "daemon capture backend is not configured before C3b Task 4",
+        ))
+    }
 }
 
 pub struct TouchBackendRegistration {

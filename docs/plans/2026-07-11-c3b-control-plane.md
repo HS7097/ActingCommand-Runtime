@@ -95,7 +95,7 @@ Status: complete.
 
 ### Task 3: Runtime host control-plane integration
 
-Status: active.
+Status: complete.
 
 - Integrate queue/poll/cancel and safe-yield transfer into Runtime host.
 - Record every queue, preemption, transfer, cancellation, expiry, release, and denial in the global
@@ -107,7 +107,7 @@ Status: active.
 
 ### Task 4: Capture hard gate, client, and process acceptance
 
-Status: pending.
+Status: active.
 
 - Execute read-only capture inside the daemon and remove the transitional client capability path.
 - Update actingd typed configuration and backend registry for explicit capture selection.

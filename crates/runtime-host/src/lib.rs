@@ -7,7 +7,6 @@
 
 #![forbid(unsafe_code)]
 
-mod backend;
 mod error;
 mod events;
 mod host;

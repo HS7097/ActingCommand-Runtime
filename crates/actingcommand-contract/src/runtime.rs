@@ -428,6 +428,17 @@ pub enum RuntimeOperation {
         instance_alias: String,
         holder_id: HolderId,
     },
+    QueueLease {
+        instance_alias: String,
+        holder_id: HolderId,
+        policy: LeaseQueuePolicy,
+    },
+    PollQueuedLease {
+        queued_request_id: RequestId,
+    },
+    CancelQueuedLease {
+        queued_request_id: RequestId,
+    },
     RenewLease {
         token: LeaseToken,
     },
@@ -466,6 +477,18 @@ impl RuntimeOperation {
         }
     }
 
+    pub fn queue_lease(
+        instance_alias: impl Into<String>,
+        holder_id: IssuedHolderId,
+        policy: LeaseQueuePolicy,
+    ) -> Self {
+        Self::QueueLease {
+            instance_alias: instance_alias.into(),
+            holder_id: *holder_id.transport(),
+            policy,
+        }
+    }
+
     pub fn safe_reset(instance_alias: impl Into<String>, holder_id: IssuedHolderId) -> Self {
         Self::SafeReset {
             instance_alias: instance_alias.into(),
@@ -475,11 +498,22 @@ impl RuntimeOperation {
 
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
-            Self::Health | Self::QueryEvents { .. } => Ok(()),
+            Self::Health
+            | Self::PollQueuedLease { .. }
+            | Self::CancelQueuedLease { .. }
+            | Self::QueryEvents { .. } => Ok(()),
             Self::AcquireLease { instance_alias, .. }
             | Self::AdmitReadonly { instance_alias }
             | Self::BeginReadonlyObservation { instance_alias }
             | Self::SafeReset { instance_alias, .. } => validate_instance_alias(instance_alias),
+            Self::QueueLease {
+                instance_alias,
+                policy,
+                ..
+            } => {
+                validate_instance_alias(instance_alias)?;
+                policy.validate()
+            }
             Self::FinishReadonlyObservation {
                 capability,
                 outcome,
@@ -498,6 +532,7 @@ impl RuntimeOperation {
     pub fn instance_alias(&self) -> Option<&str> {
         match self {
             Self::AcquireLease { instance_alias, .. }
+            | Self::QueueLease { instance_alias, .. }
             | Self::AdmitReadonly { instance_alias }
             | Self::BeginReadonlyObservation { instance_alias }
             | Self::SafeReset { instance_alias, .. } => Some(instance_alias),
@@ -520,6 +555,11 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
+            Self::QueueLease { .. } => "RuntimeOperation::QueueLease(<redacted>)",
+            Self::PollQueuedLease { .. } => "RuntimeOperation::PollQueuedLease(<opaque-request>)",
+            Self::CancelQueuedLease { .. } => {
+                "RuntimeOperation::CancelQueuedLease(<opaque-request>)"
+            }
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::AdmitReadonly { .. } => "RuntimeOperation::AdmitReadonly(<redacted>)",
@@ -909,6 +949,7 @@ impl RuntimeReceipt {
             RuntimeReceiptState::Admitted
                 | RuntimeReceiptState::Queued
                 | RuntimeReceiptState::Completed
+                | RuntimeReceiptState::Cancelled
         );
         if success_state != (self.result.is_some() && self.error.is_none()) {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));

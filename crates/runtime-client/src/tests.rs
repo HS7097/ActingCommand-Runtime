@@ -3,8 +3,8 @@
 use super::*;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    ProjectionProfile, RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    LeasePriority, LeaseQueuePolicy, ProjectionProfile, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceErrorSeverity, DeviceResult, Frame,
@@ -249,8 +249,61 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     client.release_lease(&token).expect("release");
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
+    host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn typed_client_queues_polls_and_cancels_connection_bound_leases() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, Arc::clone(&state), 1_000);
+    let first = client(&root);
+    let second = client(&root);
+    let first_token = first.acquire_lease("ak.cn").expect("first lease");
+    let queued = second
+        .queue_lease(
+            "ak.cn",
+            LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
+        )
+        .expect("queue lease");
+    let LeaseAdmission::Queued(status) = queued else {
+        panic!("expected queued admission");
+    };
+    assert!(matches!(
+        second
+            .poll_queued_lease(status.request_id())
+            .expect("poll pending"),
+        LeaseAdmission::Queued(_)
+    ));
+    first.release_lease(&first_token).expect("release first");
+    let LeaseAdmission::Granted(second_token) = second
+        .poll_queued_lease(status.request_id())
+        .expect("poll granted")
+    else {
+        panic!("expected transferred lease");
+    };
+    second.release_lease(&second_token).expect("release second");
+
+    let third = first.acquire_lease("ak.cn").expect("third lease");
+    let queued = second
+        .queue_lease(
+            "ak.cn",
+            LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
+        )
+        .expect("queue lease");
+    let LeaseAdmission::Queued(status) = queued else {
+        panic!("expected queued admission");
+    };
+    second
+        .cancel_queued_lease(status.request_id())
+        .expect("cancel queue");
+    first.release_lease(&third).expect("release third");
+    assert_eq!(state.opens.load(Ordering::Acquire), 0);
+    drop(first);
+    drop(second);
     host.close().expect("close host");
 }
 
@@ -376,13 +429,14 @@ fn safe_reset_uses_one_runtime_request_and_returns_ledger_projection() {
     ));
     assert_eq!(state.opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     assert_eq!(
         output.events().last().map(|event| event.event_type),
         Some(EventType::LeaseReleased)
     );
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -426,13 +480,14 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     proxy.tap(30, 40).expect("input after renewals");
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
 }
 
 #[test]
-fn dropping_runtime_input_proxy_releases_authority_and_closes_backend() {
+fn dropping_runtime_input_proxy_releases_authority_but_keeps_the_daemon_session() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
@@ -445,13 +500,13 @@ fn dropping_runtime_input_proxy_releases_authority_and_closes_backend() {
     .expect("runtime input proxy");
 
     drop(proxy);
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     let replacement = client.acquire_lease("ak.cn").expect("replacement lease");
     client
         .release_lease(&replacement)
         .expect("replacement release");
-    assert_eq!(state.opens.load(Ordering::Acquire), 2);
-    assert_eq!(state.closes.load(Ordering::Acquire), 2);
+    assert_eq!(state.opens.load(Ordering::Acquire), 0);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
 }

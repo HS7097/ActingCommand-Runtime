@@ -72,10 +72,11 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
         "safe_reset_completed"
     );
     assert!(reset_json["events"].is_array());
+    assert_eq!(support::backend_events(root.path()), ["open", "reset"]);
+    runtime.assert_alive();
+    runtime.stop_clean();
     assert_eq!(
         support::backend_events(root.path()),
         ["open", "reset", "close"]
     );
-    runtime.assert_alive();
-    runtime.stop_clean();
 }

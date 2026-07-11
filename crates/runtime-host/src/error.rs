@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection};
-use actingcommand_device::DeviceError;
+use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_scheduler::SchedulerError;
 use std::error::Error;
 use std::fmt;
@@ -74,33 +74,19 @@ impl RuntimeHostError {
         Self::with_projection(error.code(), operation, error.projection())
     }
 
-    pub(crate) fn backend_open(error: &DeviceError) -> Self {
+    pub(crate) fn execution(operation: &'static str, error: &ExecutionKernelError) -> Self {
+        let runtime_code = match error.code() {
+            "input_backend_open_failed" => RuntimeErrorCode::BackendOpenFailed,
+            "input_backend_operation_failed" => RuntimeErrorCode::BackendOperationFailed,
+            "capture_backend_open_failed" | "capture_backend_operation_failed" => {
+                RuntimeErrorCode::CaptureFailed
+            }
+            _ => RuntimeErrorCode::RuntimeFatal,
+        };
         Self::with_projection(
-            "backend_open_failed",
-            "open_input_backend",
-            RuntimeErrorProjection::new(
-                RuntimeErrorCode::BackendOpenFailed,
-                !error.is_fallback_eligible(),
-            ),
-        )
-    }
-
-    pub(crate) fn backend_operation(error: &DeviceError) -> Self {
-        Self::with_projection(
-            "backend_operation_failed",
-            "execute_input_backend",
-            RuntimeErrorProjection::new(
-                RuntimeErrorCode::BackendOperationFailed,
-                !error.is_fallback_eligible(),
-            ),
-        )
-    }
-
-    pub(crate) fn backend_close() -> Self {
-        Self::fatal(
-            "backend_close_failed",
-            "close_input_backend",
-            RuntimeErrorCode::RuntimeFatal,
+            error.code(),
+            operation,
+            RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
         )
     }
 }

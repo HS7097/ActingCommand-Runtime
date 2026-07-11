@@ -5,10 +5,10 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::time::unix_ms_now;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    IssuedCorrelationId, LeaseToken, ProjectionProfile, RUNTIME_INFO_FILE, ReadonlyFrame,
-    ReadonlyObservation, ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict,
-    RuntimeErrorCode, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult,
+    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    ProjectionProfile, RUNTIME_INFO_FILE, ReadonlyFrame, ReadonlyObservation,
+    ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict, RuntimeErrorCode,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{DeviceError, DeviceResult, InputBackend};
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
@@ -28,6 +28,8 @@ struct FakeState {
     input_count: AtomicUsize,
     close_count: AtomicUsize,
     fail_input: AtomicBool,
+    block_input: AtomicBool,
+    input_started: AtomicBool,
 }
 
 struct FakeBackend {
@@ -37,6 +39,10 @@ struct FakeBackend {
 
 impl FakeBackend {
     fn input(&self) -> DeviceResult<()> {
+        self.state.input_started.store(true, Ordering::Release);
+        while self.state.block_input.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(5));
+        }
         if self.state.fail_input.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected backend failure"));
         }
@@ -221,6 +227,24 @@ impl TestClient {
         };
         (request, token.clone())
     }
+
+    fn queue(
+        &mut self,
+        alias: &str,
+        priority: LeasePriority,
+        timeout_ms: u64,
+    ) -> (RuntimeRequest, LeaseQueueStatus) {
+        let request = self.request(RuntimeOperation::queue_lease(
+            alias,
+            self.ids.mint_holder_id().expect("holder id"),
+            LeaseQueuePolicy::new(priority, timeout_ms).expect("queue policy"),
+        ));
+        let receipt = self.send(&request);
+        let RuntimeResult::LeaseQueued { status } = receipt.result().expect("queue result") else {
+            panic!("expected queued lease");
+        };
+        (request, status.clone())
+    }
 }
 
 fn instance_id() -> InstanceId {
@@ -374,10 +398,376 @@ fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
         .count();
     assert_eq!(grants, 1);
     assert_eq!(busy, 1);
-    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
-    wait_until(Duration::from_secs(2), || {
-        state.close_count.load(Ordering::Acquire) == 1
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    host.close().expect("close host");
+}
+
+#[test]
+fn queued_release_transfers_only_after_the_durable_transfer_fact() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let (_, old_token) = first.acquire("ak.cn");
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    assert!(!status.preempt_requested());
+
+    let release = first.request(RuntimeOperation::ReleaseLease {
+        token: old_token.clone(),
     });
+    assert_eq!(first.send(&release).state(), RuntimeReceiptState::Completed);
+    let poll = second.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let granted = second.send(&poll);
+    let RuntimeResult::LeaseGranted { token: new_token } =
+        granted.result().expect("transferred lease")
+    else {
+        panic!("expected transferred lease, got {:?}", granted.result());
+    };
+    assert_ne!(new_token.lease_id(), old_token.lease_id());
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    assert_eq!(
+        event_types_for_correlation(&mut first, release.correlation_id()),
+        vec![
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseReleased,
+        ]
+    );
+    assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
+    let release = second.request(RuntimeOperation::ReleaseLease {
+        token: new_token.clone(),
+    });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    drop(first);
+    drop(second);
+    host.close().expect("close host");
+}
+
+#[test]
+fn high_priority_queue_transfers_immediately_at_an_idle_safe_boundary() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let (_, old_token) = first.acquire("ak.cn");
+    let holder = second.ids.mint_holder_id().expect("holder id");
+    let queued_request = second.request(RuntimeOperation::queue_lease(
+        "ak.cn",
+        holder,
+        LeaseQueuePolicy::new(LeasePriority::High, 2_000).expect("queue policy"),
+    ));
+
+    let granted = second.send(&queued_request);
+    let RuntimeResult::LeaseGranted { token: new_token } =
+        granted.result().expect("idle preemption result")
+    else {
+        panic!("expected immediate idle transfer");
+    };
+    assert_eq!(granted.state(), RuntimeReceiptState::Admitted);
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerPreempted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let release = second.request(RuntimeOperation::ReleaseLease {
+        token: new_token.clone(),
+    });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    drop(first);
+    drop(second);
+    host.close().expect("close host");
+}
+
+#[test]
+fn high_priority_preemption_waits_for_the_durable_input_outcome() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.block_input.store(true, Ordering::Release);
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let (_, old_token) = first.acquire("ak.cn");
+    let input_token = old_token.clone();
+    let input_thread = thread::spawn(move || {
+        let input = first.request(RuntimeOperation::Input {
+            token: input_token,
+            action: InputAction::Reset,
+        });
+        let receipt = first.send(&input);
+        (first, receipt)
+    });
+    wait_until(Duration::from_secs(2), || {
+        state.input_started.load(Ordering::Acquire)
+    });
+
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::High, 2_000);
+    assert!(status.preempt_requested());
+    let poll = second.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    assert!(matches!(
+        second.send(&poll).result(),
+        Some(RuntimeResult::LeasePending { .. })
+    ));
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerPreempted,
+        ]
+    );
+
+    state.block_input.store(false, Ordering::Release);
+    let (mut first, input_receipt) = input_thread.join().expect("input thread");
+    assert_eq!(input_receipt.state(), RuntimeReceiptState::Completed);
+    let poll = second.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let granted = second.send(&poll);
+    let RuntimeResult::LeaseGranted { token: new_token } =
+        granted.result().expect("preempted lease")
+    else {
+        panic!("expected preempted lease");
+    };
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerPreempted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    let release = second.request(RuntimeOperation::ReleaseLease {
+        token: new_token.clone(),
+    });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(first);
+    drop(second);
+    host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let mut intruder = TestClient::connect(&host);
+    let (_, token) = first.acquire("ak.cn");
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+
+    let poll = intruder.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let denied = intruder.send(&poll);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("poll denial").code,
+        RuntimeErrorCode::QueueConnectionMismatch
+    );
+    let cancel = second.request(RuntimeOperation::CancelQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let cancelled = second.send(&cancel);
+    assert_eq!(cancelled.state(), RuntimeReceiptState::Cancelled);
+    assert!(matches!(
+        cancelled.result(),
+        Some(RuntimeResult::LeaseQueueCancelled { request_id, .. })
+            if *request_id == status.request_id()
+    ));
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerDenied,
+        ]
+    );
+    let release = first.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(first.send(&release).state(), RuntimeReceiptState::Completed);
+    drop(first);
+    drop(second);
+    drop(intruder);
+    host.close().expect("close host");
+}
+
+#[test]
+fn disconnect_promotes_another_connections_queue_without_opening_a_backend() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let _ = first.acquire("ak.cn");
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    drop(first);
+
+    let started = Instant::now();
+    let new_token = loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "transfer timed out"
+        );
+        let poll = second.request(RuntimeOperation::PollQueuedLease {
+            queued_request_id: status.request_id(),
+        });
+        let receipt = second.send(&poll);
+        match receipt.result() {
+            Some(RuntimeResult::LeaseGranted { token }) => break token.clone(),
+            Some(RuntimeResult::LeasePending { .. }) => thread::sleep(Duration::from_millis(10)),
+            other => panic!("unexpected disconnect transfer result: {other:?}"),
+        }
+    };
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    let release = second.request(RuntimeOperation::ReleaseLease { token: new_token });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    drop(second);
+    host.close().expect("close host");
+}
+
+#[test]
+fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let provider = Arc::new(FakeProvider::one(
+        "ak.cn",
+        instance_id(),
+        Arc::clone(&state),
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_scheduler(SchedulerConfig {
+            maximum_client_heartbeat_interval_ms: 20,
+            takeover_cooldown_ms: 40,
+            lease_ttl_ms: 200,
+            ..SchedulerConfig::default()
+        }),
+        provider,
+    )
+    .expect("runtime host");
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let (_, expired_token) = first.acquire("ak.cn");
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 1_000);
+
+    let started = Instant::now();
+    let new_token = loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "expiry transfer timed out"
+        );
+        let poll = second.request(RuntimeOperation::PollQueuedLease {
+            queued_request_id: status.request_id(),
+        });
+        let receipt = second.send(&poll);
+        match receipt.result() {
+            Some(RuntimeResult::LeaseGranted { token }) => break token.clone(),
+            Some(RuntimeResult::LeasePending { .. }) => thread::sleep(Duration::from_millis(10)),
+            other => panic!("unexpected expiry transfer result: {other:?}"),
+        }
+    };
+    assert_input_denied(&mut first, expired_token, RuntimeErrorCode::LeaseMismatch);
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    let release = second.request(RuntimeOperation::ReleaseLease { token: new_token });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(first);
+    drop(second);
+    host.close().expect("close host");
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn queued_timeout_is_a_visible_terminal_denial() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    let (_, token) = first.acquire("ak.cn");
+    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 50);
+    thread::sleep(Duration::from_millis(100));
+
+    let poll = second.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let expired = second.send(&poll);
+    assert_eq!(expired.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        expired.error_projection().expect("queue expiry").code,
+        RuntimeErrorCode::QueueExpired
+    );
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerDenied,
+        ]
+    );
+    let release = first.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(first.send(&release).state(), RuntimeReceiptState::Completed);
+    drop(first);
+    drop(second);
     host.close().expect("close host");
 }
 
@@ -419,9 +809,12 @@ fn different_instances_acquire_and_execute_independently() {
     for state in [&ak_state, &ba_state] {
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     }
     host.close().expect("close host");
+    for state in [&ak_state, &ba_state] {
+        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    }
 }
 
 #[test]
@@ -712,7 +1105,7 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     ));
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     assert_eq!(
         event_types_for_correlation(&mut client, correlation_id),
         vec![
@@ -733,6 +1126,7 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     );
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -757,12 +1151,13 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     assert_eq!(replayed, first);
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     assert_eq!(
         event_types_for_request(&host, &ids, connection, request.request_id()).len(),
         13
     );
     host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -955,7 +1350,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     );
     let acquire_receipt = acquire_receipt.expect("acquire receipt");
     assert_eq!(client.send(&acquire_request), acquire_receipt);
-    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let RuntimeResult::LeaseGranted { token } = acquire_receipt.result().expect("lease result")
     else {
         panic!("expected lease grant");
@@ -1073,9 +1468,10 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let receipt = client.send(&release);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     assert_eq!(client.send(&release), receipt);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -1195,7 +1591,7 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
 
     assert_eq!(repeated, first);
     assert!(first.terminal().is_some());
-    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 
     let query = RuntimeRequest::new(
         ids.mint_request_id().expect("query request id"),
@@ -1298,8 +1694,8 @@ fn renew_and_release_idempotency_survive_connection_cache_loss() {
             EventType::LeaseReleased,
         ]
     );
-    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
-    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     host.close().expect("close host");
 }
 
@@ -1386,16 +1782,14 @@ fn complete_owner_journal_corruption_is_fatal() {
 }
 
 #[test]
-fn connection_drop_revokes_lease_and_closes_backend() {
+fn connection_drop_revokes_lease_without_opening_the_lazy_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let _ = client.acquire("ak.cn");
     drop(client);
-    wait_until(Duration::from_secs(2), || {
-        state.close_count.load(Ordering::Acquire) == 1
-    });
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 
     let mut replacement = TestClient::connect(&host);
     let (_, token) = replacement.acquire("ak.cn");
@@ -1406,6 +1800,7 @@ fn connection_drop_revokes_lease_and_closes_backend() {
     );
     drop(replacement);
     host.close().expect("close host");
+    assert_eq!(state.close_count.load(Ordering::Acquire), 0);
 }
 
 #[test]
@@ -1507,7 +1902,7 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
 }
 
 #[test]
-fn expired_lease_is_closed_before_a_new_grant() {
+fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let provider = Arc::new(FakeProvider::one(
@@ -1527,9 +1922,8 @@ fn expired_lease_is_closed_before_a_new_grant() {
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
     let _ = first.acquire("ak.cn");
-    wait_until(Duration::from_secs(2), || {
-        state.close_count.load(Ordering::Acquire) == 1
-    });
+    thread::sleep(Duration::from_millis(1_100));
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let mut second = TestClient::connect(&host);
     let (_, token) = second.acquire("ak.cn");
     let release = second.request(RuntimeOperation::ReleaseLease { token });

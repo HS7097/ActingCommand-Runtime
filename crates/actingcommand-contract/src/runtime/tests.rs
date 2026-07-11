@@ -348,6 +348,42 @@ fn queued_receipt_is_successful_but_distinct_from_granted_authority() {
 }
 
 #[test]
+fn c3b_queue_operations_and_cancelled_receipt_are_strict_typed_contracts() {
+    let ids = issuer();
+    let queued_request_id = *ids.mint_request_id().expect("queued request").transport();
+    let operations = [
+        RuntimeOperation::queue_lease(
+            "ak.cn",
+            ids.mint_holder_id().expect("holder"),
+            LeaseQueuePolicy::new(LeasePriority::High, 1_000).expect("policy"),
+        ),
+        RuntimeOperation::PollQueuedLease { queued_request_id },
+        RuntimeOperation::CancelQueuedLease { queued_request_id },
+    ];
+    for operation in operations {
+        operation.validate().expect("operation");
+        let encoded = serde_json::to_string(&operation).expect("operation JSON");
+        let decoded: RuntimeOperation = serde_json::from_str(&encoded).expect("operation decode");
+        assert_eq!(decoded, operation);
+    }
+
+    let request = request(RuntimeOperation::CancelQueuedLease { queued_request_id });
+    let instance_id = *ids.mint_instance_id().expect("instance").transport();
+    let receipt = RuntimeReceipt::success(
+        &request,
+        RuntimeReceiptState::Cancelled,
+        None,
+        RuntimeResult::LeaseQueueCancelled {
+            request_id: queued_request_id,
+            instance_id,
+        },
+    )
+    .expect("cancelled receipt");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Cancelled);
+    receipt.validate().expect("cancelled receipt validation");
+}
+
+#[test]
 fn runtime_info_accepts_only_live_loopback_shape() {
     let epoch = *issuer().mint_owner_epoch().expect("epoch").transport();
     let info = RuntimeInfo::new(1, "127.0.0.1", 48761, epoch, 1).expect("runtime info");

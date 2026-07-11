@@ -366,6 +366,37 @@ pub struct QueuedLease {
     preempt_requested: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveLease {
+    token: LeaseToken,
+    connection_id: ConnectionId,
+    priority: LeasePriority,
+    destructive_step_active: bool,
+    preempt_requested: bool,
+}
+
+impl ActiveLease {
+    pub const fn token(&self) -> &LeaseToken {
+        &self.token
+    }
+
+    pub const fn connection_id(&self) -> ConnectionId {
+        self.connection_id
+    }
+
+    pub const fn priority(&self) -> LeasePriority {
+        self.priority
+    }
+
+    pub const fn destructive_step_active(&self) -> bool {
+        self.destructive_step_active
+    }
+
+    pub const fn preempt_requested(&self) -> bool {
+        self.preempt_requested
+    }
+}
+
 impl QueuedLease {
     pub const fn request_id(&self) -> RequestId {
         self.request_id
@@ -514,6 +545,10 @@ impl PreparedLeaseTransfer {
 
     pub const fn reason(&self) -> LeaseTransferReason {
         self.reason
+    }
+
+    pub const fn priority(&self) -> LeasePriority {
+        self.queued.priority
     }
 
     pub const fn release_request_id(&self) -> Option<RequestId> {
@@ -928,6 +963,64 @@ impl SeedScheduler {
         Ok(removed)
     }
 
+    pub fn queued_instance_ids_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> Vec<InstanceId> {
+        self.instances
+            .iter()
+            .filter_map(|(instance_id, state)| {
+                state
+                    .queue
+                    .iter()
+                    .any(|entry| entry.connection_id == connection_id)
+                    .then_some(*instance_id)
+            })
+            .collect()
+    }
+
+    pub fn remove_queued_for_connection_on_instance(
+        &mut self,
+        instance_id: InstanceId,
+        connection_id: ConnectionId,
+    ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
+        let Some(state) = self.instances.get_mut(&instance_id) else {
+            return Ok(Vec::new());
+        };
+        let mut removed = Vec::new();
+        let mut position = 0;
+        while position < state.queue.len() {
+            if state.queue[position].connection_id == connection_id {
+                removed.push(CancelledQueuedLease {
+                    queued: queued_at_position(state, instance_id, position)?,
+                });
+                state.queue.remove(position);
+            } else {
+                position += 1;
+            }
+        }
+        refresh_preempt_requested(state);
+        Ok(removed)
+    }
+
+    pub fn remove_queued_for_instance(
+        &mut self,
+        instance_id: InstanceId,
+    ) -> SchedulerResult<Vec<CancelledQueuedLease>> {
+        let Some(state) = self.instances.get_mut(&instance_id) else {
+            return Ok(Vec::new());
+        };
+        let mut removed = Vec::with_capacity(state.queue.len());
+        while !state.queue.is_empty() {
+            removed.push(CancelledQueuedLease {
+                queued: queued_at_position(state, instance_id, 0)?,
+            });
+            state.queue.remove(0);
+        }
+        refresh_preempt_requested(state);
+        Ok(removed)
+    }
+
     pub fn begin_destructive_step(
         &mut self,
         token: &LeaseToken,
@@ -942,6 +1035,9 @@ impl SeedScheduler {
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
         if lease.destructive_step_active {
             return Err(SchedulerError::DestructiveStateMismatch);
+        }
+        if lease.preempt_requested {
+            return Err(SchedulerError::TransferNotSafe);
         }
         lease.destructive_step_active = true;
         Ok(())
@@ -1258,6 +1354,20 @@ impl SeedScheduler {
             .collect()
     }
 
+    pub fn connection_for_token(&self, token: &LeaseToken) -> SchedulerResult<ConnectionId> {
+        self.validate_epoch(token)?;
+        let instance_id = self.locate_token_instance(token)?;
+        let state = self
+            .instances
+            .get(&instance_id)
+            .ok_or(SchedulerError::LeaseMissing)?;
+        let lease = state.lease.as_ref().ok_or(SchedulerError::LeaseMissing)?;
+        if lease.token != *token {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        Ok(lease.connection_id)
+    }
+
     pub fn expire_token(
         &mut self,
         submitted_token: &LeaseToken,
@@ -1345,6 +1455,19 @@ impl SeedScheduler {
             .collect()
     }
 
+    pub fn active_lease(&self, instance_id: InstanceId) -> Option<ActiveLease> {
+        self.instances
+            .get(&instance_id)
+            .and_then(|state| state.lease.as_ref())
+            .map(|lease| ActiveLease {
+                token: lease.token.clone(),
+                connection_id: lease.connection_id,
+                priority: lease.priority,
+                destructive_step_active: lease.destructive_step_active,
+                preempt_requested: lease.preempt_requested,
+            })
+    }
+
     pub fn active_instance_ids(&self) -> Vec<InstanceId> {
         self.instances
             .iter()
@@ -1425,7 +1548,7 @@ impl SeedScheduler {
         Ok(None)
     }
 
-    fn take_expired_for_instance(
+    pub fn take_expired_for_instance(
         &mut self,
         instance_id: InstanceId,
         now_monotonic_ms: u64,
