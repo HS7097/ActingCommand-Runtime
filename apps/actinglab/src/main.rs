@@ -48,7 +48,6 @@ mod env_detection;
 mod frame_store;
 mod lab2_cli;
 mod lab_run;
-mod legacy_control_capture;
 mod maa_task_graph;
 mod package_build;
 mod package_cli;
@@ -23743,7 +23742,6 @@ fn device_config_for_instance(
         ..Default::default()
     };
     Ok(DeviceRuntimeConfig {
-        instance_alias: instance_id,
         adb,
         target,
         adb_source: resolved_adb.source,
@@ -23755,7 +23753,6 @@ fn device_config_for_instance(
 
 #[derive(Debug)]
 struct DeviceRuntimeConfig {
-    instance_alias: String,
     adb: AdbConfig,
     target: DeviceTarget,
     adb_source: AdbPathSource,

@@ -38,12 +38,24 @@ pub(super) fn open_runtime_capture(
         EventSource::Lab,
     ))
     .map_err(|error| LabError::device(error.to_string()))?;
-    Ok(Box::new(RuntimeObservationCaptureBackend {
+    let mut backend = RuntimeObservationCaptureBackend {
         client,
         endpoint,
         requested: request.config.requested,
         observation: request.observation,
-    }))
+        pending_frame: None,
+    };
+    // The Lab port requires truthful backend diagnostics at open time, so acquire the first
+    // Runtime-owned observation once and return that same frame on the first capture call.
+    let started = Instant::now();
+    let frame = backend
+        .capture_runtime_frame()
+        .map_err(|error| LabError::device(error.to_string()))?;
+    backend
+        .publish_report(frame.backend_name, started.elapsed().as_millis())
+        .map_err(|error| LabError::device(error.to_string()))?;
+    backend.pending_frame = Some(frame);
+    Ok(Box::new(backend))
 }
 
 struct RuntimeObservationCaptureBackend {
@@ -51,11 +63,23 @@ struct RuntimeObservationCaptureBackend {
     endpoint: RuntimeCaptureEndpoint,
     requested: CaptureBackendChoice,
     observation: Option<CaptureBackendObservation>,
+    pending_frame: Option<Frame>,
 }
 
 impl CaptureBackend for RuntimeObservationCaptureBackend {
     fn capture(&mut self) -> DeviceResult<Frame> {
+        if let Some(frame) = self.pending_frame.take() {
+            return Ok(frame);
+        }
         let started = Instant::now();
+        let frame = self.capture_runtime_frame()?;
+        self.publish_report(frame.backend_name, started.elapsed().as_millis())?;
+        Ok(frame)
+    }
+}
+
+impl RuntimeObservationCaptureBackend {
+    fn capture_runtime_frame(&self) -> DeviceResult<Frame> {
         let output = self
             .client
             .observe_readonly(&self.endpoint.instance_alias)
@@ -77,12 +101,9 @@ impl CaptureBackend for RuntimeObservationCaptureBackend {
                 "Runtime observation dimensions do not match the verified artifact",
             ));
         }
-        self.publish_report(backend_name, started.elapsed().as_millis())?;
         Ok(frame)
     }
-}
 
-impl RuntimeObservationCaptureBackend {
     fn publish_report(&self, used: CaptureBackendName, elapsed_ms: u128) -> DeviceResult<()> {
         let Some(observation) = &self.observation else {
             return Ok(());
@@ -217,6 +238,7 @@ mod tests {
         let mut backend = open_runtime_capture(
             endpoint,
             CaptureBackendRequest {
+                instance_alias: None,
                 config: CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default()),
                 observation: Some(report.clone()),
             },

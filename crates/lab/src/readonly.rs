@@ -143,6 +143,7 @@ pub(crate) fn recognition_scene<P: LabPorts>(
     }
     load_scene(
         lab,
+        None,
         input.scene_path.as_deref(),
         input.capture_config.as_ref(),
         input.require_fresh,

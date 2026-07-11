@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::{IdentifierIssuer, InstanceId};
+use actingcommand_device::{
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+};
+use actingcommand_runtime_host::{
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -10,6 +17,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -457,6 +465,7 @@ struct Fixture {
     resource_root: PathBuf,
     package_repo: PathBuf,
     state_root: PathBuf,
+    runtime_root: PathBuf,
     run_root: PathBuf,
     red_scene: PathBuf,
     blue_scene: PathBuf,
@@ -466,6 +475,7 @@ struct Fixture {
     bad_hash_package: PathBuf,
     lab_package: PathBuf,
     fake_adb: PathBuf,
+    _runtime_host: Option<RuntimeHost>,
 }
 
 impl Fixture {
@@ -475,6 +485,7 @@ impl Fixture {
         let resource_root = root.join("resources");
         let package_repo = root.join("package-repo");
         let state_root = root.join("state");
+        let runtime_root = state_root.join("runtime");
         let run_root = root.join("runs");
         let red_scene = root.join("red.png");
         let blue_scene = root.join("blue.png");
@@ -496,12 +507,25 @@ impl Fixture {
         write_safe_packages(&safe_package, &bad_hash_package);
         write_lab_package(&lab_package, &encode_png(2, 2, [255, 0, 0]));
         let fake_adb = write_fake_adb(root, &lab_scene, case);
+        let runtime_host = (case == "lab_run_success").then(|| {
+            let instance_id = *IdentifierIssuer::new()
+                .expect("identifier issuer")
+                .mint_instance_id()
+                .expect("instance id")
+                .transport();
+            RuntimeHost::start(
+                RuntimeHostConfig::new(&runtime_root, b"actinglab-golden-runtime"),
+                Arc::new(GoldenRuntimeProvider { instance_id }),
+            )
+            .expect("golden Runtime host")
+        });
 
         Self {
             temp,
             resource_root,
             package_repo,
             state_root,
+            runtime_root,
             run_root,
             red_scene,
             blue_scene,
@@ -511,6 +535,7 @@ impl Fixture {
             bad_hash_package,
             lab_package,
             fake_adb,
+            _runtime_host: runtime_host,
         }
     }
 
@@ -561,6 +586,7 @@ impl Fixture {
                 self.state_root.join("session"),
             )
             .env("ACTINGCOMMAND_ADB_PATH", &self.fake_adb)
+            .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &self.runtime_root)
             .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
             .env_remove("ACTINGLAB_TRUSTED_REMOTE_TOKEN")
             .env_remove("ACTINGLAB_TRUSTED_REMOTE_CLIENT_CERT")
@@ -769,6 +795,44 @@ impl Fixture {
             os("--scene"),
             self.red_scene.clone().into_os_string(),
         ]
+    }
+}
+
+struct GoldenRuntimeProvider {
+    instance_id: InstanceId,
+}
+
+struct GoldenCapture;
+
+impl CaptureBackend for GoldenCapture {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        Frame::from_pixels(
+            2,
+            2,
+            vec![255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+    }
+}
+
+impl ExecutionBackendProvider for GoldenRuntimeProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+        (instance_alias == "fixture:5555")
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-golden>"))
+    }
+
+    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        Err(DeviceError::fatal(
+            "recognize-only golden run must not open input",
+        ))
+    }
+
+    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        if instance_alias != "fixture:5555" {
+            return Err(DeviceError::fatal("unexpected golden instance"));
+        }
+        Ok(Box::new(GoldenCapture))
     }
 }
 

@@ -129,14 +129,11 @@ pub(super) fn build_readonly_lab_for_capture(
     build_app_lab(UserConfig::default(), None, authority)
 }
 
-pub(super) fn build_control_lab(
-    config: UserConfig,
-    device: Option<&super::DeviceRuntimeConfig>,
-) -> CliOutcome<Lab<AppLabPorts>> {
+pub(super) fn build_control_lab(config: UserConfig) -> CliOutcome<Lab<AppLabPorts>> {
     build_app_lab(
         config,
-        device.map(InputFactoryMetadata::from_device).transpose()?,
-        AppCaptureAuthority::LegacyControl,
+        None,
+        AppCaptureAuthority::RuntimeByInstance(runtime_state_root()?),
     )
 }
 
@@ -416,10 +413,6 @@ impl InputFactoryMetadata {
             runtime_state_root: runtime_state_root()?,
         })
     }
-
-    fn from_device(device: &super::DeviceRuntimeConfig) -> CliOutcome<Self> {
-        Self::new(device.instance_alias.clone())
-    }
 }
 
 pub(super) struct AppSemanticInputExecutor {
@@ -458,11 +451,15 @@ pub(super) struct AppInputFactory {
 
 impl InputBackendFactory for AppInputFactory {
     fn open(&self, request: InputBackendRequest) -> Result<Box<dyn InputBackend>, LabError> {
-        // Runtime owns the real touch configuration; this field remains only for the Lab port contract.
-        let _legacy_touch_config = request.config;
-        let metadata = self
-            .input_metadata
-            .clone()
+        let InputBackendRequest {
+            instance_alias,
+            config: _runtime_owned_touch_config,
+            observation,
+        } = request;
+        let metadata = instance_alias
+            .map(InputFactoryMetadata::new)
+            .transpose()?
+            .or_else(|| self.input_metadata.clone())
             .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             &metadata.runtime_state_root,
@@ -475,10 +472,7 @@ impl InputBackendFactory for AppInputFactory {
             &metadata.instance_alias,
         )
         .map_err(|error| LabError::device(error.to_string()))?;
-        let backend = ObservedInputBackend {
-            proxy,
-            observation: request.observation,
-        };
+        let backend = ObservedInputBackend { proxy, observation };
         backend.publish_report()?;
         Ok(Box::new(backend))
     }
@@ -600,7 +594,7 @@ fn combine_device_results(
 enum AppCaptureAuthority {
     Disabled,
     Runtime(super::runtime_capture_backend::RuntimeCaptureEndpoint),
-    LegacyControl,
+    RuntimeByInstance(PathBuf),
 }
 
 pub(super) struct AppCaptureFactory {
@@ -616,8 +610,15 @@ impl CaptureBackendFactory for AppCaptureFactory {
             AppCaptureAuthority::Runtime(endpoint) => {
                 super::runtime_capture_backend::open_runtime_capture(endpoint.clone(), request)
             }
-            AppCaptureAuthority::LegacyControl => {
-                super::legacy_control_capture::open_legacy_control_capture(request)
+            AppCaptureAuthority::RuntimeByInstance(state_root) => {
+                let instance_alias = request.instance_alias.clone().ok_or_else(|| {
+                    LabError::device("Runtime capture request is missing instance alias")
+                })?;
+                let endpoint = super::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+                    instance_alias,
+                    state_root.clone(),
+                );
+                super::runtime_capture_backend::open_runtime_capture(endpoint, request)
             }
         }
     }

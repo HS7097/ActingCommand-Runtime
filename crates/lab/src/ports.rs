@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub struct InputBackendRequest {
+    pub instance_alias: Option<String>,
     pub config: TouchBackendConfig,
     pub observation: Option<InputBackendObservation>,
 }
@@ -108,6 +109,7 @@ impl SemanticInputExecutor for DisabledSemanticInput {
 }
 
 pub struct CaptureBackendRequest {
+    pub instance_alias: Option<String>,
     pub config: CaptureBackendConfig,
     pub observation: Option<CaptureBackendObservation>,
 }

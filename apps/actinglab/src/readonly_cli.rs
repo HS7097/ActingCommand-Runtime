@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, device_config,
-    finish_semantic_result_with_ledger, parse_optional_duration_ms, read_user_config,
-    recognition_resources, record_env_needs_detection, record_env_resolved, resolve_instance_id,
-    semantic_ledger_context, should_route_readonly_via_session_daemon,
-    submit_readonly_session_request, target_argument,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
+    parse_optional_duration_ms, read_user_config, recognition_resources,
+    record_env_needs_detection, record_env_resolved, resolve_instance_id, semantic_ledger_context,
+    should_route_readonly_via_session_daemon, submit_readonly_session_request, target_argument,
 };
 use actingcommand_lab::{
     CurrentPageRequest, DetectPageOutput, DetectPageRequest, DetectPageResponse,
@@ -90,25 +89,13 @@ struct PreparedReadonlyInput {
     capture_instance_alias: Option<String>,
 }
 
-#[derive(Clone, Copy)]
-enum CapturePreparation {
-    Runtime,
-    LegacyControl,
-}
-
 fn prepare_recognition_input(
     global: &GlobalOptions,
     flags: &FlagArgs,
     require_pages: bool,
 ) -> CliOutcome<PreparedReadonlyInput> {
     let config = read_user_config()?;
-    prepare_recognition_input_with_config(
-        global,
-        flags,
-        require_pages,
-        &config,
-        CapturePreparation::Runtime,
-    )
+    prepare_recognition_input_with_config(global, flags, require_pages, &config)
 }
 
 pub(super) fn recognition_input_with_config(
@@ -117,14 +104,7 @@ pub(super) fn recognition_input_with_config(
     require_pages: bool,
     config: &super::UserConfig,
 ) -> CliOutcome<ReadonlyRecognitionInput> {
-    Ok(prepare_recognition_input_with_config(
-        global,
-        flags,
-        require_pages,
-        config,
-        CapturePreparation::LegacyControl,
-    )?
-    .input)
+    Ok(prepare_recognition_input_with_config(global, flags, require_pages, config)?.input)
 }
 
 fn prepare_recognition_input_with_config(
@@ -132,25 +112,15 @@ fn prepare_recognition_input_with_config(
     flags: &FlagArgs,
     require_pages: bool,
     config: &super::UserConfig,
-    preparation: CapturePreparation,
 ) -> CliOutcome<PreparedReadonlyInput> {
     let resources = recognition_resources(global, config, flags, require_pages)?;
     let (capture_config, capture_instance_alias) = if !flags.bool("--capture") {
         (None, None)
     } else {
-        match preparation {
-            CapturePreparation::Runtime => (
-                Some(super::env_detection::runtime_capture_port_config()),
-                Some(resolve_instance_id(global, config)?),
-            ),
-            CapturePreparation::LegacyControl => {
-                let device = device_config(global, config)?;
-                (
-                    Some(device.capture_backend_config()),
-                    Some(device.instance_alias),
-                )
-            }
-        }
+        (
+            Some(super::env_detection::runtime_capture_port_config()),
+            Some(resolve_instance_id(global, config)?),
+        )
     };
     let fresh_delay = if capture_config.is_some() {
         parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?

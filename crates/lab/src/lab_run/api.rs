@@ -246,6 +246,7 @@ fn execute_lab_run<P: LabPorts>(
         .unwrap_or_default();
     let capture_observation = CaptureBackendObservation::default();
     let mut capture = ports.capture_factory().open(CaptureBackendRequest {
+        instance_alias: Some(selected_id.clone()),
         config: device
             .capture_config()
             .clone()
@@ -379,6 +380,7 @@ fn execute_lab_run<P: LabPorts>(
                     &mut input,
                     OperationExecutionRequest {
                         device: DeviceInputRequest {
+                            instance_alias: &selected_id,
                             factory: ports.input_factory(),
                             config: device.touch_config(),
                         },

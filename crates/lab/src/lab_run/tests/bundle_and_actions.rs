@@ -290,8 +290,10 @@
         );
         let mut backend = None;
 
-        ensure_touch_backend(&mut backend, &factory, &config).expect("first input backend");
-        ensure_touch_backend(&mut backend, &factory, &config).expect("cached input backend");
+        ensure_touch_backend(&mut backend, "ak.cn", &factory, &config)
+            .expect("first input backend");
+        ensure_touch_backend(&mut backend, "ak.cn", &factory, &config)
+            .expect("cached input backend");
 
         assert!(backend.is_some());
         assert_eq!(opens.load(Ordering::SeqCst), 1);

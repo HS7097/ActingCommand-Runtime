@@ -157,6 +157,7 @@ impl<P: LabPorts> Lab<P> {
 
         let scene = load_scene(
             self,
+            Some(&request.scope.instance),
             request.scene_path.as_deref(),
             request.capture_config.as_ref(),
             request.require_fresh,
@@ -332,6 +333,7 @@ impl<P: LabPorts> Lab<P> {
 
 pub(crate) fn load_scene<P: LabPorts>(
     lab: &mut Lab<P>,
+    instance_alias: Option<&str>,
     scene_path: Option<&Path>,
     capture_config: Option<&CaptureBackendConfig>,
     require_fresh: bool,
@@ -348,12 +350,13 @@ pub(crate) fn load_scene<P: LabPorts>(
         .cloned()
         .ok_or_else(|| LabError::usage(missing_message))?;
     let frame = if require_fresh {
-        capture_fresh_frame(lab, config, fresh_delay)?
+        capture_fresh_frame(lab, instance_alias, config, fresh_delay)?
     } else {
         let mut backend = lab
             .ports()
             .capture_factory()
             .open(crate::CaptureBackendRequest {
+                instance_alias: instance_alias.map(str::to_string),
                 config,
                 observation: None,
             })?;
@@ -366,6 +369,7 @@ pub(crate) fn load_scene<P: LabPorts>(
 
 fn capture_fresh_frame<P: LabPorts>(
     lab: &mut Lab<P>,
+    instance_alias: Option<&str>,
     config: CaptureBackendConfig,
     delay: Duration,
 ) -> EnvResult<Frame> {
@@ -373,6 +377,7 @@ fn capture_fresh_frame<P: LabPorts>(
         .ports()
         .capture_factory()
         .open(crate::CaptureBackendRequest {
+            instance_alias: instance_alias.map(str::to_string),
             config,
             observation: None,
         })?;
@@ -768,6 +773,7 @@ fn run_detection_steps<P: LabPorts>(
                 .ports()
                 .input_factory()
                 .open(crate::InputBackendRequest {
+                    instance_alias: Some(request.scope.instance.clone()),
                     config,
                     observation: Some(observation.clone()),
                 })?;

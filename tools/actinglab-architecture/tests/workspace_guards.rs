@@ -891,6 +891,57 @@ fn c5_online_readonly_capture_is_runtime_owned() {
 }
 
 #[test]
+fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
+    let root = workspace_root();
+    let app_environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))
+        .expect("read ActingLab environment adapter");
+    let app_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
+        .expect("read ActingLab run adapter");
+    let app_readonly = fs::read_to_string(root.join("apps/actinglab/src/readonly_cli.rs"))
+        .expect("read ActingLab read-only adapter");
+    let lab_run = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
+        .expect("read Lab run ingress");
+    let lab_execute = fs::read_to_string(root.join("crates/lab/src/lab_run/execute.rs"))
+        .expect("read Lab run execution adapter");
+
+    assert!(
+        !root
+            .join("apps/actinglab/src/legacy_control_capture.rs")
+            .exists()
+    );
+    for (path, source) in [
+        ("apps/actinglab/src/env_detection.rs", &app_environment),
+        ("apps/actinglab/src/lab_run.rs", &app_run),
+        ("apps/actinglab/src/readonly_cli.rs", &app_readonly),
+    ] {
+        for forbidden in ["LegacyControl", "legacy_control_capture"] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} regained legacy production authority via {forbidden}"
+            );
+        }
+    }
+    for forbidden in ["create_capture_backend", "create_touch_backend"] {
+        assert!(
+            !app_environment.contains(forbidden),
+            "ActingLab Runtime port constructs a device backend via {forbidden}"
+        );
+    }
+    for required in [
+        "AppCaptureAuthority::RuntimeByInstance",
+        "RuntimeInputBackend::connect",
+        "request.instance_alias",
+    ] {
+        assert!(
+            app_environment.contains(required),
+            "ActingLab Runtime port lost {required}"
+        );
+    }
+    assert!(lab_run.contains("instance_alias: Some(selected_id.clone())"));
+    assert!(lab_execute.contains("instance_alias: Some(instance_alias.to_string())"));
+}
+
+#[test]
 fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
     let root = workspace_root();
     let metadata: serde_json::Value =

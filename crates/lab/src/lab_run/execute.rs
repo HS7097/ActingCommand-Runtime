@@ -777,6 +777,7 @@ fn target_is_error_signal(game: &str, target_id: &str, error_pages: &[String]) -
 
 #[derive(Clone, Copy)]
 struct DeviceInputRequest<'a> {
+    instance_alias: &'a str,
     factory: &'a dyn InputBackendFactory,
     config: &'a TouchBackendConfig,
 }
@@ -1090,7 +1091,12 @@ fn execute_operation_with_retries<L: LedgerSink>(
         let action =
             operation.input_action(&control.resolution, ctx.run_seed, action_target.as_ref())?;
         let action_id = ctx.id_issuer.issue(IdKind::Action).value;
-        let backend = ensure_touch_backend(input, device.factory, device.config)?;
+        let backend = ensure_touch_backend(
+            input,
+            device.instance_alias,
+            device.factory,
+            device.config,
+        )?;
         match &action {
             LabInputAction::Tap(point) => {
                 let action_started = Instant::now();
@@ -1296,11 +1302,13 @@ fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {
 
 fn ensure_touch_backend<'a>(
     backend: &'a mut Option<Box<dyn InputBackend>>,
+    instance_alias: &str,
     factory: &dyn InputBackendFactory,
     config: &TouchBackendConfig,
 ) -> CliOutcome<&'a mut Box<dyn InputBackend>> {
     if backend.is_none() {
         let created = factory.open(InputBackendRequest {
+            instance_alias: Some(instance_alias.to_string()),
             config: config.clone(),
             observation: None,
         })?;

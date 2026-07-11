@@ -25,7 +25,7 @@ const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(3);
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let (request, config) = lab_run_request(global, &flags)?;
-    let mut lab = super::env_detection::build_control_lab(config, None)?;
+    let mut lab = super::env_detection::build_control_lab(config)?;
     serialize_response(lab.lab_run(request)?)
 }
 
