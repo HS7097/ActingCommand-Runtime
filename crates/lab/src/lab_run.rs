@@ -6,10 +6,10 @@ use crate::{
     LabResult as CliOutcome, LabRunLedgerResponse, LabRunRequest, LabRunResolution, LabRunResponse,
     LabUnsupportedTargetResponse, LabValidateControlResponse, LabValidateRequest,
     LabValidateResourcesResponse, LabValidateResponse, LedgerSink,
-    frame_store::{
-        FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
-        FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
-    },
+};
+use actingcommand_artifact_store::{
+    ArtifactStoreError, FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
+    FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
@@ -63,6 +63,14 @@ const ROI_TEMPLATE_SCORE_EPSILON: f32 = 0.01;
 const ROI_TEMPLATE_POSITION_EPSILON: i32 = 1;
 const ROI_COLOR_DISTANCE_EPSILON: f32 = 2.0;
 const ROI_COLOR_MEAN_EPSILON: u8 = 2;
+
+fn map_artifact_error(error: ArtifactStoreError) -> CliError {
+    match error.code() {
+        "frame_store_usage" => CliError::usage(error.detail()),
+        "frame_store_device" => CliError::device(error.detail()),
+        _ => CliError::package_invalid(error.detail()),
+    }
+}
 
 include!("lab_run/api.rs");
 include!("lab_run/execute.rs");

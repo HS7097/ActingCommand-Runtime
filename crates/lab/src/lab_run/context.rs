@@ -74,7 +74,8 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         let frame_store = FrameStore::new(
             run_dir.join("frame-store-temp"),
             FrameStoreConfig::default().with_memory_source(process.memory_source),
-        )?;
+        )
+        .map_err(map_artifact_error)?;
         Ok(Self {
             clock,
             process,
@@ -349,7 +350,9 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     }
 
     fn set_frame_store_config(&mut self, config: FrameStoreConfig) -> CliOutcome<()> {
-        self.frame_store.set_config(config)
+        self.frame_store
+            .set_config(config)
+            .map_err(map_artifact_error)
     }
 
     fn event(&mut self, event: &str, data: Value) -> CliOutcome<()> {
@@ -422,14 +425,17 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             .iter()
             .find(|evaluation| evaluation.matched)
             .map(|evaluation| evaluation.page_id.clone());
-        let mut store_outcome = self.frame_store.add_frame(FrameStoreFrameInput {
-            frame_index: self.frame_index,
-            file_name,
-            label: label.to_string(),
-            recognition_state: RecognitionState::from_matched_page(matched_page.clone()),
-            pinned_reason: None,
-            frame,
-        })?;
+        let mut store_outcome = self
+            .frame_store
+            .add_frame(FrameStoreFrameInput {
+                frame_index: self.frame_index,
+                file_name,
+                label: label.to_string(),
+                recognition_state: RecognitionState::from_matched_page(matched_page.clone()),
+                pinned_reason: None,
+                frame,
+            })
+            .map_err(map_artifact_error)?;
         if let Some(checkpoint) = store_outcome.checkpoint.as_mut() {
             self.fill_pause_checkpoint(checkpoint, matched_page.as_deref());
         }
@@ -655,7 +661,9 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             final_event,
             json!({"ok": ok, "failure_reason": failure_reason}),
         )?;
-        self.frame_store.materialize(&self.screenshots_dir)?;
+        self.frame_store
+            .materialize(&self.screenshots_dir)
+            .map_err(map_artifact_error)?;
         self.screenshots = self.frame_store.screenshots();
         self.event(
             "frame_store_materialized",

@@ -13,7 +13,6 @@ mod drive;
 mod drive_api;
 mod env_api;
 mod env_detection;
-mod frame_store;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
@@ -33,7 +32,6 @@ pub use drive::*;
 pub use drive_api::*;
 pub use env_api::*;
 pub use env_detection::*;
-pub use frame_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use lab_run::target_evaluations_stable_for_wait;
 pub use lab_run_api::*;
 pub use ledger_port::*;
@@ -45,6 +43,7 @@ pub use projection::*;
 pub use readonly_api::*;
 pub use state::*;
 
+pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use actingcommand_contract::{LabError, LabResult};
 pub use actingcommand_execution_kernel::{
     DetectKind, RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph,

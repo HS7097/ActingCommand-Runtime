@@ -709,6 +709,32 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
 }
 
 #[test]
+fn c5_lab_consumes_artifact_frame_store_without_an_ownership_wrapper() {
+    let root = workspace_root();
+    assert!(
+        !root.join("crates/lab/src/frame_store.rs").exists(),
+        "Lab frame-store ownership wrapper returned"
+    );
+
+    let facade =
+        fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade source");
+    let run =
+        fs::read_to_string(root.join("crates/lab/src/lab_run.rs")).expect("read Lab run source");
+
+    assert!(facade.contains("pub use actingcommand_artifact_store"));
+    assert!(run.contains("use actingcommand_artifact_store"));
+    for forbidden in [
+        "mod frame_store;",
+        "frame_store::{",
+        "pub(crate) struct FrameStore",
+    ] {
+        assert!(
+            !facade.contains(forbidden) && !run.contains(forbidden),
+            "Lab regained frame-store ownership via {forbidden}"
+        );
+    }
+}
+#[test]
 fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
     let root = workspace_root();
     let metadata: serde_json::Value =
