@@ -91,14 +91,15 @@ Status: complete.
 
 ### Task 2: Extract resource-tooling
 
-Status: active.
+Status: complete.
 
 Progress:
 
 - Subtask 2a complete: the developer-only crate boundary now owns package API DTOs, package
   validation, resource conversion, and MAA compilation; Lab exposes compatibility wrappers only.
-- Subtask 2b active: move package build and replace live Lab environment resolution inside the
-  compiler with a typed resolved-environment snapshot.
+- Subtask 2b complete: resource-tooling owns package build behind a two-phase prepare/build API;
+  Lab resolves required environment facts once and supplies an immutable typed snapshot, so the
+  compiler cannot inspect Lab, device, config, scheduler, or Runtime state.
 
 - Add `crates/resource-tooling` as a workspace crate.
 - Mechanically move package API/build/validate, resource conversion, and MAA compilation behavior and

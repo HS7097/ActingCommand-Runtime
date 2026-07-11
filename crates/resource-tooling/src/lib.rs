@@ -8,12 +8,18 @@
 #![allow(clippy::result_large_err)]
 
 mod api;
+mod environment;
 mod maa_task_graph;
+mod package_build;
 mod package_validate;
 mod resource_convert;
 
 pub use api::*;
+pub use environment::AuthoringEnvironmentSnapshot;
 pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
+pub use package_build::{
+    PackageBuildCatalog, PreparedPackageBuildTask, prepare_package_build_task,
+};
 pub use package_validate::validate_package;
 pub use resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,

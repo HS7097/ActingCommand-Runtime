@@ -1,5 +1,76 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 2b package-build boundary
+
+### Current status
+
+- Completed C5 Task 2 by moving package-build implementation and its focused tests from Lab into
+  the Lab-owned developer-only `actingcommand-resource-tooling` crate.
+- Added a two-phase package API: resource-tooling prepares deterministic inputs and declares the
+  required environment keys; Lab resolves those keys through its existing environment workflow and
+  supplies an immutable `AuthoringEnvironmentSnapshot` for the build.
+- Resource-tooling no longer imports `Lab<P>`, `LabPorts`, environment-resolution requests, or the
+  device crate. Capture-backend package validation uses a closed local value validator rather than
+  acquiring device authority.
+- Lab retains only a 111-line compatibility/orchestration adapter for package build and catalog
+  calls. Existing ActingLab callers and all 30 protocol envelopes remain unchanged.
+- Snapshot validation fails visibly for duplicate, unsafe, missing, or malformed environment facts;
+  package-level tests prove a missing snapshot fails and a resolved snapshot is applied.
+- Issue #35 remains open and approved; the latest amendment and every relied-on comment are authored
+  by `HS7097`.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `crates/resource-tooling/src/environment.rs`
+- `crates/resource-tooling/src/lib.rs`
+- `crates/resource-tooling/src/package_build.rs`
+- `crates/lab/src/package_build.rs`
+- `crates/lab/src/resource_convert.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch --prune --tags origin` and `git rev-list --left-right --count HEAD...origin/issue-35-runtime-ledger-v3`
+- `cargo check -p actingcommand-resource-tooling -p actingcommand-lab`
+- `cargo test -p actingcommand-resource-tooling --no-run`
+- `cargo test -p actingcommand-resource-tooling`
+- `cargo test -p actingcommand-lab`
+- `cargo test -p actingcommand-actinglab --test golden_protocol`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo clippy -p actingcommand-resource-tooling -p actingcommand-lab -p actingcommand-actinglab --all-targets --all-features -- -D warnings`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`
+- `cargo fmt --all`
+- `git diff --check`
+- `gh api repos/HS7097/ActingCommand-Runtime/issues/35 ...`
+
+### Test results
+
+- Resource-tooling passed 77 unit tests, including the typed environment snapshot and package-build
+  boundary cases.
+- Lab passed 110 unit tests, 2 Lab-run API tests, and 1 package API test.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Architecture passed 15 unit tests and 20 all-feature workspace guards.
+- Focused and full-workspace all-target/all-feature Clippy passed with warnings denied.
+- Full `cargo test --workspace` passed.
+- The first focused resource-tooling run exposed two stale expected error-code strings in the newly
+  moved snapshot tests; the assertions were corrected to the contract's `validation_failed` code,
+  and the focused plus full suites then passed.
+
+### Current blocker
+
+- No blocker for C5 Task 2.
+- C5 remains active; task-loop decision ownership has not yet moved into execution-kernel.
+
+### Next step
+
+1. Commit and push C5 Task 2b and record the commit and verification evidence in Issue #36.
+2. Start C5 Task 3 by inventorying task-loop public decisions and reverse dependencies before
+   moving pure planning behavior into execution-kernel.
+
 ## 2026-07-11 Issue 35 C5 Task 2a resource-tooling boundary
 
 ### Current status

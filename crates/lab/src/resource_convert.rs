@@ -2,10 +2,6 @@
 
 use crate::{Lab, LabPorts, LabResult, ResourceConvertRequest, ResourceConvertResponse};
 
-pub(crate) use actingcommand_resource_tooling::{
-    Bundle, ConvertOutputs, OperationConverter, canonical_game, resolve_resource_root,
-};
-
 impl<P: LabPorts> Lab<P> {
     pub fn resource_convert(
         &mut self,
