@@ -5,14 +5,15 @@ use super::{
     EvidenceCompleteness, RecognitionVerdict, RecoveryReason, RetentionClass, SanitizationError,
     Sensitivity, TaskOutcome,
 };
+use crate::{HolderId, LeaseId, LeasePriority, RequestId};
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
-pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v2";
-pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v2";
+pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
+pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
@@ -253,6 +254,43 @@ pub struct DiagnosticOutcomePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SchedulerQueuePayload {
+    action: EventAction,
+    priority: LeasePriority,
+    position: u32,
+    deadline_monotonic_ms: u64,
+    preempt_requested: bool,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulerPreemptionPayload {
+    action: EventAction,
+    from_holder_id: HolderId,
+    from_lease_id: LeaseId,
+    queued_request_id: RequestId,
+    queued_priority: LeasePriority,
+    deferred_by_destructive_step: bool,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseTransferPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    from_holder_id: HolderId,
+    from_lease_id: LeaseId,
+    to_holder_id: HolderId,
+    to_lease_id: LeaseId,
+    queued_request_id: RequestId,
+    priority: LeasePriority,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationResultPayload {
     action: EventAction,
     effect_disposition: EffectDisposition,
@@ -350,6 +388,9 @@ common_detail_accessors!(ObservationPayload);
 common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
+common_detail_accessors!(SchedulerQueuePayload);
+common_detail_accessors!(SchedulerPreemptionPayload);
+common_detail_accessors!(LeaseTransferPayload);
 common_detail_accessors!(ObservationResultPayload);
 common_detail_accessors!(CapturePressurePayload);
 common_detail_accessors!(CaptureDedupWindowPayload);
@@ -376,6 +417,76 @@ impl DiagnosticOutcomePayload {
 
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
+    }
+}
+
+impl SchedulerQueuePayload {
+    pub const fn priority(&self) -> LeasePriority {
+        self.priority
+    }
+
+    pub const fn position(&self) -> u32 {
+        self.position
+    }
+
+    pub const fn deadline_monotonic_ms(&self) -> u64 {
+        self.deadline_monotonic_ms
+    }
+
+    pub const fn preempt_requested(&self) -> bool {
+        self.preempt_requested
+    }
+}
+
+impl SchedulerPreemptionPayload {
+    pub const fn from_holder_id(&self) -> HolderId {
+        self.from_holder_id
+    }
+
+    pub const fn from_lease_id(&self) -> LeaseId {
+        self.from_lease_id
+    }
+
+    pub const fn queued_request_id(&self) -> RequestId {
+        self.queued_request_id
+    }
+
+    pub const fn queued_priority(&self) -> LeasePriority {
+        self.queued_priority
+    }
+
+    pub const fn deferred_by_destructive_step(&self) -> bool {
+        self.deferred_by_destructive_step
+    }
+}
+
+impl LeaseTransferPayload {
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn from_holder_id(&self) -> HolderId {
+        self.from_holder_id
+    }
+
+    pub const fn from_lease_id(&self) -> LeaseId {
+        self.from_lease_id
+    }
+
+    pub const fn to_holder_id(&self) -> HolderId {
+        self.to_holder_id
+    }
+
+    pub const fn to_lease_id(&self) -> LeaseId {
+        self.to_lease_id
+    }
+
+    pub const fn queued_request_id(&self) -> RequestId {
+        self.queued_request_id
+    }
+
+    pub const fn priority(&self) -> LeasePriority {
+        self.priority
     }
 }
 
@@ -590,6 +701,26 @@ macro_rules! observation_detail {
 observation_detail!(CapturePressurePayload);
 observation_detail!(CaptureDedupWindowPayload);
 observation_detail!(CapturePolicyPayload);
+observation_detail!(SchedulerQueuePayload);
+observation_detail!(SchedulerPreemptionPayload);
+
+impl PayloadDetail for LeaseTransferPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
 
 impl PayloadDetail for ArtifactExportPayload {
     fn action(&self) -> EventAction {
@@ -684,6 +815,37 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    audit: AuditInput,
+}
+
+struct SchedulerQueueDraft {
+    action: EventAction,
+    priority: LeasePriority,
+    position: u32,
+    deadline_monotonic_ms: u64,
+    preempt_requested: bool,
+    audit: AuditInput,
+}
+
+struct SchedulerPreemptionDraft {
+    action: EventAction,
+    from_holder_id: HolderId,
+    from_lease_id: LeaseId,
+    queued_request_id: RequestId,
+    queued_priority: LeasePriority,
+    deferred_by_destructive_step: bool,
+    audit: AuditInput,
+}
+
+struct LeaseTransferDraft {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    from_holder_id: HolderId,
+    from_lease_id: LeaseId,
+    to_holder_id: HolderId,
+    to_lease_id: LeaseId,
+    queued_request_id: RequestId,
+    priority: LeasePriority,
     audit: AuditInput,
 }
 
@@ -826,6 +988,70 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl SchedulerQueueDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<SchedulerQueuePayload, SanitizationError> {
+        if self.position == 0 || self.deadline_monotonic_ms == 0 {
+            return Err(SanitizationError::new(
+                "invalid_scheduler_queue",
+                "queue_position_or_deadline",
+            ));
+        }
+        Ok(SchedulerQueuePayload {
+            action: self.action,
+            priority: self.priority,
+            position: self.position,
+            deadline_monotonic_ms: self.deadline_monotonic_ms,
+            preempt_requested: self.preempt_requested,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl SchedulerPreemptionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<SchedulerPreemptionPayload, SanitizationError> {
+        Ok(SchedulerPreemptionPayload {
+            action: self.action,
+            from_holder_id: self.from_holder_id,
+            from_lease_id: self.from_lease_id,
+            queued_request_id: self.queued_request_id,
+            queued_priority: self.queued_priority,
+            deferred_by_destructive_step: self.deferred_by_destructive_step,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl LeaseTransferDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<LeaseTransferPayload, SanitizationError> {
+        if self.from_lease_id == self.to_lease_id {
+            return Err(SanitizationError::new(
+                "invalid_lease_transfer",
+                "lease_identity",
+            ));
+        }
+        Ok(LeaseTransferPayload {
+            action: self.action,
+            effect_disposition: self.effect_disposition,
+            from_holder_id: self.from_holder_id,
+            from_lease_id: self.from_lease_id,
+            to_holder_id: self.to_holder_id,
+            to_lease_id: self.to_lease_id,
+            queued_request_id: self.queued_request_id,
+            priority: self.priority,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1045,9 +1271,9 @@ impl CommandPayloadDraft {
 
 enum SchedulerDraftKind {
     Admitted(ObservationDraft),
-    Queued(ObservationDraft),
+    Queued(SchedulerQueueDraft),
     Denied(DiagnosticDraft),
-    Preempted(DiagnosticDraft),
+    Preempted(SchedulerPreemptionDraft),
 }
 
 pub struct SchedulerPayloadDraft(SchedulerDraftKind);
@@ -1059,10 +1285,22 @@ impl SchedulerPayloadDraft {
         )))
     }
 
-    pub fn queued(action: EventAction, audit: AuditInput) -> Self {
-        Self(SchedulerDraftKind::Queued(ObservationDraft::new(
-            action, audit,
-        )))
+    pub fn queued(
+        action: EventAction,
+        priority: LeasePriority,
+        position: u32,
+        deadline_monotonic_ms: u64,
+        preempt_requested: bool,
+        audit: AuditInput,
+    ) -> Self {
+        Self(SchedulerDraftKind::Queued(SchedulerQueueDraft {
+            action,
+            priority,
+            position,
+            deadline_monotonic_ms,
+            preempt_requested,
+            audit,
+        }))
     }
 
     pub fn denied(action: EventAction, diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
@@ -1075,21 +1313,29 @@ impl SchedulerPayloadDraft {
 
     pub fn preempted(
         action: EventAction,
-        diagnostic_code: DiagnosticCode,
+        from_holder_id: HolderId,
+        from_lease_id: LeaseId,
+        queued_request_id: RequestId,
+        queued_priority: LeasePriority,
+        deferred_by_destructive_step: bool,
         audit: AuditInput,
     ) -> Self {
-        Self(SchedulerDraftKind::Preempted(DiagnosticDraft::new(
+        Self(SchedulerDraftKind::Preempted(SchedulerPreemptionDraft {
             action,
-            diagnostic_code,
+            from_holder_id,
+            from_lease_id,
+            queued_request_id,
+            queued_priority,
+            deferred_by_destructive_step,
             audit,
-        )))
+        }))
     }
 }
 
 enum LeaseDraftKind {
     Requested(ObservationDraft),
     Granted(OutcomeDraft),
-    Transferred(OutcomeDraft),
+    Transferred(LeaseTransferDraft),
     Renewed(OutcomeDraft),
     Released(OutcomeDraft),
     Expired(OutcomeDraft),
@@ -1112,10 +1358,29 @@ impl LeasePayloadDraft {
         )))
     }
 
-    pub fn transferred(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
-        Self(LeaseDraftKind::Transferred(OutcomeDraft::new(
-            action, effect, audit,
-        )))
+    #[allow(clippy::too_many_arguments)]
+    pub fn transferred(
+        action: EventAction,
+        effect_disposition: EffectDisposition,
+        from_holder_id: HolderId,
+        from_lease_id: LeaseId,
+        to_holder_id: HolderId,
+        to_lease_id: LeaseId,
+        queued_request_id: RequestId,
+        priority: LeasePriority,
+        audit: AuditInput,
+    ) -> Self {
+        Self(LeaseDraftKind::Transferred(LeaseTransferDraft {
+            action,
+            effect_disposition,
+            from_holder_id,
+            from_lease_id,
+            to_holder_id,
+            to_lease_id,
+            queued_request_id,
+            priority,
+            audit,
+        }))
     }
 
     pub fn renewed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
@@ -1620,9 +1885,9 @@ pub enum RuntimePayload {
 )]
 pub enum SchedulerPayload {
     Admitted(ObservationPayload),
-    Queued(ObservationPayload),
+    Queued(SchedulerQueuePayload),
     Denied(DiagnosticPayload),
-    Preempted(DiagnosticPayload),
+    Preempted(SchedulerPreemptionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1635,7 +1900,7 @@ pub enum SchedulerPayload {
 pub enum LeasePayload {
     Requested(ObservationPayload),
     Granted(OutcomePayload),
-    Transferred(OutcomePayload),
+    Transferred(LeaseTransferPayload),
     Renewed(OutcomePayload),
     Released(OutcomePayload),
     Expired(OutcomePayload),

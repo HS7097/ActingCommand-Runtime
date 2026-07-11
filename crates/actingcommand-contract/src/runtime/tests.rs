@@ -235,6 +235,58 @@ fn lease_token_binds_all_fencing_fields_and_rejects_zero_expiry() {
 }
 
 #[test]
+fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
+    let policy = LeaseQueuePolicy::new(LeasePriority::High, 1_000).expect("queue policy");
+    assert_eq!(policy.priority(), LeasePriority::High);
+    assert_eq!(policy.timeout_ms(), 1_000);
+    assert_eq!(
+        LeaseQueuePolicy::new(LeasePriority::Normal, 0)
+            .expect_err("zero timeout")
+            .code(),
+        "invalid_lease_queue_timeout"
+    );
+    assert_eq!(
+        LeaseQueuePolicy::new(LeasePriority::Normal, MAX_LEASE_QUEUE_TIMEOUT_MS + 1)
+            .expect_err("unbounded timeout")
+            .code(),
+        "invalid_lease_queue_timeout"
+    );
+
+    let ids = issuer();
+    let status = LeaseQueueStatus::new(
+        *ids.mint_request_id().expect("request").transport(),
+        *ids.mint_instance_id().expect("instance").transport(),
+        LeasePriority::High,
+        1,
+        500,
+        true,
+    )
+    .expect("queue status");
+    let encoded = serde_json::to_string(&status).expect("status JSON");
+    let decoded: LeaseQueueStatus = serde_json::from_str(&encoded).expect("strict status");
+    assert_eq!(decoded, status);
+    assert!(decoded.preempt_requested());
+
+    let mut unknown = serde_json::to_value(&status).expect("status value");
+    unknown["smuggled"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<LeaseQueueStatus>(unknown).is_err());
+    assert_eq!(
+        LeaseQueueStatus::new(
+            status.request_id(),
+            status.instance_id(),
+            LeasePriority::Normal,
+            0,
+            500,
+            false,
+        )
+        .expect_err("zero queue position")
+        .code(),
+        "invalid_lease_queue_status"
+    );
+    assert!(serde_json::from_str::<LeasePriority>("\"urgent\"").is_err());
+}
+
+#[test]
 fn receipt_requires_exactly_one_typed_outcome() {
     let request = request(RuntimeOperation::Health);
     let epoch = *issuer().mint_owner_epoch().expect("epoch").transport();
@@ -255,6 +307,43 @@ fn receipt_requires_exactly_one_typed_outcome() {
     assert_eq!(
         invalid.validate().expect_err("outcome mismatch").code(),
         "invalid_receipt_outcome"
+    );
+}
+
+#[test]
+fn queued_receipt_is_successful_but_distinct_from_granted_authority() {
+    let request = request(RuntimeOperation::Health);
+    let ids = issuer();
+    let status = LeaseQueueStatus::new(
+        request.request_id(),
+        *ids.mint_instance_id().expect("instance").transport(),
+        LeasePriority::Normal,
+        1,
+        100,
+        false,
+    )
+    .expect("queue status");
+    let receipt = RuntimeReceipt::success(
+        &request,
+        RuntimeReceiptState::Queued,
+        None,
+        RuntimeResult::LeaseQueued {
+            status: status.clone(),
+        },
+    )
+    .expect("queued receipt");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Queued);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::LeaseQueued { status: actual }) if actual == &status
+    ));
+
+    let mut invalid = serde_json::to_value(&receipt).expect("receipt value");
+    invalid["result"]["status"]["position"] = serde_json::json!(0);
+    let invalid: RuntimeReceipt = serde_json::from_value(invalid).expect("wire receipt");
+    assert_eq!(
+        invalid.validate().expect_err("invalid queue status").code(),
+        "invalid_lease_queue_status"
     );
 }
 

@@ -100,18 +100,45 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let action = EventAction::RuntimeAction;
     let diagnostic = DiagnosticCode::RuntimeDiagnostic;
     let effect = EffectDisposition::Performed;
+    let ids = identifier_issuer();
+    let from_holder = *ids.mint_holder_id().expect("from holder").transport();
+    let to_holder = *ids.mint_holder_id().expect("to holder").transport();
+    let from_lease = *ids.mint_lease_id().expect("from lease").transport();
+    let to_lease = *ids.mint_lease_id().expect("to lease").transport();
+    let queued_request = *ids.mint_request_id().expect("queued request").transport();
 
     vec![
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
         SchedulerPayloadDraft::admitted(action, input()).into(),
-        SchedulerPayloadDraft::queued(action, input()).into(),
+        SchedulerPayloadDraft::queued(action, crate::LeasePriority::High, 1, 100, true, input())
+            .into(),
         SchedulerPayloadDraft::denied(action, diagnostic, input()).into(),
-        SchedulerPayloadDraft::preempted(action, diagnostic, input()).into(),
+        SchedulerPayloadDraft::preempted(
+            action,
+            from_holder,
+            from_lease,
+            queued_request,
+            crate::LeasePriority::High,
+            true,
+            input(),
+        )
+        .into(),
         LeasePayloadDraft::requested(action, input()).into(),
         LeasePayloadDraft::granted(action, effect, input()).into(),
-        LeasePayloadDraft::transferred(action, effect, input()).into(),
+        LeasePayloadDraft::transferred(
+            action,
+            effect,
+            from_holder,
+            from_lease,
+            to_holder,
+            to_lease,
+            queued_request,
+            crate::LeasePriority::High,
+            input(),
+        )
+        .into(),
         LeasePayloadDraft::released(action, effect, input()).into(),
         LeasePayloadDraft::expired(action, effect, input()).into(),
         LeasePayloadDraft::transition_intent(action, input()).into(),
@@ -739,4 +766,121 @@ fn c2_payloads_reject_invalid_numeric_and_unknown_closed_values() {
     let error =
         serde_json::from_value::<EventPayload>(value).expect_err("unknown pressure state rejected");
     assert!(!error.to_string().contains("tier4_impossible"));
+}
+
+#[test]
+fn c3b_queue_preemption_and_transfer_facts_are_typed_and_strict() {
+    let ids = identifier_issuer();
+    let from_holder = *ids.mint_holder_id().expect("from holder").transport();
+    let to_holder = *ids.mint_holder_id().expect("to holder").transport();
+    let from_lease = *ids.mint_lease_id().expect("from lease").transport();
+    let to_lease = *ids.mint_lease_id().expect("to lease").transport();
+    let queued_request = *ids.mint_request_id().expect("queued request").transport();
+
+    let queued = sanitize(
+        SchedulerPayloadDraft::queued(
+            EventAction::ScheduleAdmit,
+            crate::LeasePriority::High,
+            2,
+            500,
+            true,
+            AuditInput::new(),
+        )
+        .into(),
+        10_001,
+    );
+    let queued_value = serde_json::to_value(queued.payload()).expect("queued payload");
+    assert_eq!(queued_value["payload"]["kind"], "queued");
+    assert_eq!(queued_value["payload"]["data"]["priority"], "high");
+    assert_eq!(queued_value["payload"]["data"]["position"], 2);
+    assert_eq!(queued_value["payload"]["data"]["preempt_requested"], true);
+
+    let preempted = sanitize(
+        SchedulerPayloadDraft::preempted(
+            EventAction::ScheduleAdmit,
+            from_holder,
+            from_lease,
+            queued_request,
+            crate::LeasePriority::High,
+            true,
+            AuditInput::new(),
+        )
+        .into(),
+        10_002,
+    );
+    let preempted_value = serde_json::to_value(preempted.payload()).expect("preempt payload");
+    assert_eq!(preempted_value["payload"]["kind"], "preempted");
+    assert_eq!(
+        preempted_value["payload"]["data"]["deferred_by_destructive_step"],
+        true
+    );
+
+    let transferred = sanitize(
+        LeasePayloadDraft::transferred(
+            EventAction::LeaseAcquire,
+            EffectDisposition::Performed,
+            from_holder,
+            from_lease,
+            to_holder,
+            to_lease,
+            queued_request,
+            crate::LeasePriority::High,
+            AuditInput::new(),
+        )
+        .into(),
+        10_003,
+    );
+    let transferred_value = serde_json::to_value(transferred.payload()).expect("transfer payload");
+    assert_eq!(transferred_value["payload"]["kind"], "transferred");
+    assert_eq!(
+        transferred_value["payload"]["data"]["from_lease_id"],
+        serde_json::to_value(from_lease).expect("from lease JSON")
+    );
+    assert_eq!(
+        transferred_value["payload"]["data"]["to_lease_id"],
+        serde_json::to_value(to_lease).expect("to lease JSON")
+    );
+
+    let invalid_queue = SchedulerPayloadDraft::queued(
+        EventAction::ScheduleAdmit,
+        crate::LeasePriority::Normal,
+        0,
+        500,
+        false,
+        AuditInput::new(),
+    );
+    let error = EventDraft::new(
+        ids.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Info,
+        origin(),
+        links(&ids),
+        invalid_queue.into(),
+    )
+    .sanitize(&SpyFingerprinter::new())
+    .expect_err("zero queue position");
+    assert_eq!(error.code(), "invalid_scheduler_queue");
+
+    let invalid_transfer = LeasePayloadDraft::transferred(
+        EventAction::LeaseAcquire,
+        EffectDisposition::Performed,
+        from_holder,
+        from_lease,
+        to_holder,
+        from_lease,
+        queued_request,
+        crate::LeasePriority::High,
+        AuditInput::new(),
+    );
+    let error = EventDraft::new(
+        ids.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Info,
+        origin(),
+        links(&ids),
+        invalid_transfer.into(),
+    )
+    .sanitize(&SpyFingerprinter::new())
+    .expect_err("same lease transfer");
+    assert_eq!(error.code(), "invalid_lease_transfer");
 }

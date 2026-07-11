@@ -9,8 +9,8 @@ use actingcommand_contract::{
     EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventSource,
     EventType, IdentifierIssuer, InputPayloadDraft, IssuedActionId, IssuedCorrelationId,
     IssuedEventId, IssuedInstanceId, IssuedLeaseId, IssuedRequestId, IssuedRunId, IssuedTaskId,
-    LeasePayloadDraft, OriginModule, SanitizationError, SanitizedEventDraft, SecretField,
-    SecretFingerprinter, Sha256Fingerprint, TaskPayloadDraft,
+    LeasePayloadDraft, LeasePriority, OriginModule, SanitizationError, SanitizedEventDraft,
+    SecretField, SecretFingerprinter, Sha256Fingerprint, TaskPayloadDraft,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -218,7 +218,18 @@ fn lease_success(
             LeasePayloadDraft::granted(EventAction::CriticalTest, effect, AuditInput::new())
         }
         LeaseTransitionTarget::Transferred => {
-            LeasePayloadDraft::transferred(EventAction::CriticalTest, effect, AuditInput::new())
+            let ids = identifiers();
+            LeasePayloadDraft::transferred(
+                EventAction::CriticalTest,
+                effect,
+                *ids.mint_holder_id().expect("from holder").transport(),
+                *ids.mint_lease_id().expect("from lease").transport(),
+                *ids.mint_holder_id().expect("to holder").transport(),
+                *ids.mint_lease_id().expect("to lease").transport(),
+                *ids.mint_request_id().expect("queued request").transport(),
+                LeasePriority::High,
+                AuditInput::new(),
+            )
         }
         LeaseTransitionTarget::Renewed => {
             LeasePayloadDraft::renewed(EventAction::CriticalTest, effect, AuditInput::new())

@@ -190,6 +190,7 @@ fn host(root: &TempDir, state: Arc<FakeState>, lease_ttl_ms: u64) -> RuntimeHost
                 maximum_client_heartbeat_interval_ms: 20,
                 takeover_cooldown_ms: 40,
                 lease_ttl_ms,
+                ..SchedulerConfig::default()
             }),
         Arc::new(FakeProvider {
             instance_id: instance_id(),

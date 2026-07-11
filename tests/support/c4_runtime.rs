@@ -242,6 +242,7 @@ pub fn run_child_if_requested() -> bool {
                 maximum_client_heartbeat_interval_ms: 100,
                 takeover_cooldown_ms: 200,
                 lease_ttl_ms: 10_000,
+                ..SchedulerConfig::default()
             }),
         Arc::new(FileProvider {
             instance_id,

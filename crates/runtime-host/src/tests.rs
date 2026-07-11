@@ -294,6 +294,7 @@ fn config(root: &TempDir) -> RuntimeHostConfig {
             maximum_client_heartbeat_interval_ms: 20,
             takeover_cooldown_ms: 40,
             lease_ttl_ms: 5_000,
+            ..SchedulerConfig::default()
         })
 }
 
@@ -1519,6 +1520,7 @@ fn expired_lease_is_closed_before_a_new_grant() {
             maximum_client_heartbeat_interval_ms: 100,
             takeover_cooldown_ms: 200,
             lease_ttl_ms: 1_000,
+            ..SchedulerConfig::default()
         }),
         provider,
     )

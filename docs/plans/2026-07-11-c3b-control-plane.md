@@ -73,7 +73,7 @@ moving game/domain behavior into the scheduler.
 
 ### Task 1: C3b contract and scheduler core
 
-Status: active.
+Status: complete.
 
 - Add closed queue priority/policy, queued admission, poll/cancel, and receipt types.
 - Add typed scheduler queue/preemption and lease-transfer facts with strict serde coverage.
@@ -85,7 +85,7 @@ Status: active.
 
 ### Task 2: Daemon-owned execution backend shell
 
-Status: pending.
+Status: active.
 
 - Add `crates/execution-kernel` and its daemon-only provider/session interfaces.
 - Move backend worker/session ownership out of Runtime client reach.

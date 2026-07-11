@@ -31,11 +31,31 @@ fn connection(value: u64) -> ConnectionId {
     ConnectionId::new(value).expect("connection")
 }
 
+fn queued_request(
+    request_id: RequestId,
+    instance_id: InstanceId,
+    holder_id: HolderId,
+    connection_id: ConnectionId,
+    priority: LeasePriority,
+    timeout_ms: u64,
+) -> QueueLeaseRequest {
+    QueueLeaseRequest::new(
+        request_id,
+        instance_id,
+        holder_id,
+        connection_id,
+        priority,
+        timeout_ms,
+    )
+}
+
 fn config() -> SchedulerConfig {
     SchedulerConfig {
         maximum_client_heartbeat_interval_ms: 100,
         takeover_cooldown_ms: 150,
         lease_ttl_ms: 1_000,
+        maximum_queue_timeout_ms: 500,
+        max_queue_depth_per_instance: 2,
     }
 }
 
@@ -45,6 +65,8 @@ fn defaults_freeze_c3a_heartbeat_cooldown_and_ttl() {
     assert_eq!(config.maximum_client_heartbeat_interval_ms, 5_000);
     assert_eq!(config.takeover_cooldown_ms, 6_000);
     assert_eq!(config.lease_ttl_ms, 120_000);
+    assert_eq!(config.maximum_queue_timeout_ms, 60_000);
+    assert_eq!(config.max_queue_depth_per_instance, 64);
 }
 
 #[test]
@@ -53,11 +75,30 @@ fn invalid_cooldown_relation_is_fatal() {
         maximum_client_heartbeat_interval_ms: 100,
         takeover_cooldown_ms: 100,
         lease_ttl_ms: 1_000,
+        maximum_queue_timeout_ms: 500,
+        max_queue_depth_per_instance: 2,
     }
     .validate()
     .expect_err("equal cooldown must fail");
     assert!(error.is_fatal());
     assert_eq!(error.code(), "invalid_scheduler_config");
+}
+
+#[test]
+fn queue_limits_are_bounded_at_configuration_time() {
+    let mut invalid_timeout = config();
+    invalid_timeout.maximum_queue_timeout_ms = MAX_LEASE_QUEUE_TIMEOUT_MS + 1;
+    assert_eq!(
+        invalid_timeout.validate().expect_err("queue timeout bound"),
+        SchedulerError::InvalidConfig
+    );
+
+    let mut invalid_depth = config();
+    invalid_depth.max_queue_depth_per_instance = MAX_QUEUE_DEPTH_PER_INSTANCE + 1;
+    assert_eq!(
+        invalid_depth.validate().expect_err("queue depth bound"),
+        SchedulerError::InvalidConfig
+    );
 }
 
 #[test]
@@ -470,17 +511,593 @@ fn prepared_lease_does_not_mutate_state_before_commit() {
 }
 
 #[test]
-fn scheduler_surface_contains_no_queue_priority_or_preemption_state() {
-    let source = include_str!("lib.rs");
-    for forbidden in [
-        "QueuedRequest",
-        "RequestPriority",
-        "preempt",
-        "queue_deadline",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "forbidden C3b term: {forbidden}"
-        );
+fn queue_is_bounded_priority_ordered_and_idempotent() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("holder");
+
+    let normal_request = request(&issuer);
+    let normal_holder = holder(&issuer).1;
+    let normal = scheduler
+        .request_queued(
+            queued_request(
+                normal_request,
+                instance_id,
+                normal_holder,
+                connection(2),
+                LeasePriority::Normal,
+                400,
+            ),
+            2,
+        )
+        .expect("normal queued")
+        .into_decision();
+    let QueueAdmissionDecision::Queued(normal) = normal else {
+        panic!("expected queued normal request");
+    };
+    assert_eq!(normal.position(), 1);
+    assert!(!normal.preempt_requested());
+
+    let high_request = request(&issuer);
+    let high_holder = holder(&issuer).1;
+    let high = scheduler
+        .request_queued(
+            queued_request(
+                high_request,
+                instance_id,
+                high_holder,
+                connection(3),
+                LeasePriority::High,
+                400,
+            ),
+            3,
+        )
+        .expect("high queued")
+        .into_decision();
+    let QueueAdmissionDecision::Queued(high) = high else {
+        panic!("expected queued high request");
+    };
+    assert_eq!(high.position(), 1);
+    assert!(high.preempt_requested());
+    let QueuePoll::Pending(normal_after_reorder) = scheduler
+        .poll_queued(normal_request, connection(2), 4)
+        .expect("normal pending")
+    else {
+        panic!("normal request must remain queued");
+    };
+    assert_eq!(normal_after_reorder.position(), 2);
+
+    let replay = scheduler
+        .request_queued(
+            queued_request(
+                high_request,
+                instance_id,
+                high_holder,
+                connection(3),
+                LeasePriority::High,
+                400,
+            ),
+            5,
+        )
+        .expect("idempotent queue replay")
+        .into_decision();
+    let QueueAdmissionDecision::Queued(replay) = replay else {
+        panic!("expected replayed queue status");
+    };
+    assert_eq!(replay, high);
+    assert_eq!(
+        scheduler
+            .request_queued(
+                queued_request(
+                    request(&issuer),
+                    instance_id,
+                    holder(&issuer).1,
+                    connection(4),
+                    LeasePriority::Normal,
+                    400,
+                ),
+                6,
+            )
+            .expect_err("queue capacity"),
+        SchedulerError::QueueFull
+    );
+    assert_eq!(
+        scheduler
+            .request_queued(
+                queued_request(
+                    high_request,
+                    instance_id,
+                    high_holder,
+                    connection(9),
+                    LeasePriority::High,
+                    400,
+                ),
+                7,
+            )
+            .expect_err("cross-connection replay"),
+        SchedulerError::QueueConnectionMismatch
+    );
+}
+
+#[test]
+fn zero_stagger_queued_admission_has_one_grant_and_one_queue() {
+    let issuer = ids();
+    let scheduler = Arc::new(Mutex::new(
+        SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler"),
+    ));
+    let instance_id = instance(&issuer);
+    let barrier = Arc::new(Barrier::new(3));
+    let mut workers = Vec::new();
+    for index in 1..=2 {
+        let scheduler = Arc::clone(&scheduler);
+        let barrier = Arc::clone(&barrier);
+        let local = ids();
+        workers.push(thread::spawn(move || {
+            barrier.wait();
+            let mut scheduler = scheduler.lock().expect("scheduler lock");
+            let decision = scheduler
+                .request_queued(
+                    queued_request(
+                        request(&local),
+                        instance_id,
+                        holder(&local).1,
+                        connection(index),
+                        LeasePriority::Normal,
+                        400,
+                    ),
+                    1,
+                )
+                .expect("queued admission")
+                .into_decision();
+            match decision {
+                QueueAdmissionDecision::Lease(prepared) => {
+                    scheduler.commit_acquire(prepared, 1).expect("grant");
+                    "granted"
+                }
+                QueueAdmissionDecision::Queued(_) => "queued",
+            }
+        }));
     }
+    barrier.wait();
+    let outcomes = workers
+        .into_iter()
+        .map(|worker| worker.join().expect("worker"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "granted")
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == "queued")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn queues_and_transfers_are_partitioned_by_instance() {
+    let issuer = ids();
+    let first_instance = instance(&issuer);
+    let second_instance = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let first = scheduler
+        .acquire(
+            request(&issuer),
+            first_instance,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("first holder");
+    let second = scheduler
+        .acquire(
+            request(&issuer),
+            second_instance,
+            holder(&issuer).1,
+            connection(2),
+            1,
+        )
+        .expect("second holder");
+    let first_queued = request(&issuer);
+    let second_queued = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                first_queued,
+                first_instance,
+                holder(&issuer).1,
+                connection(3),
+                LeasePriority::High,
+                400,
+            ),
+            2,
+        )
+        .expect("first queue");
+    scheduler
+        .request_queued(
+            queued_request(
+                second_queued,
+                second_instance,
+                holder(&issuer).1,
+                connection(4),
+                LeasePriority::Normal,
+                400,
+            ),
+            2,
+        )
+        .expect("second queue");
+
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer(
+            &first,
+            connection(1),
+            LeaseTransferReason::Preempted,
+            None,
+            3,
+        )
+        .expect("first preempt")
+    else {
+        panic!("first instance must preempt");
+    };
+    scheduler
+        .commit_transfer(prepared, 3)
+        .expect("first transfer");
+    scheduler
+        .validate_write(&second, connection(2), 3)
+        .expect("second instance remains active");
+    assert!(matches!(
+        scheduler
+            .poll_queued(second_queued, connection(4), 3)
+            .expect("second queue remains"),
+        QueuePoll::Pending(_)
+    ));
+    assert!(matches!(
+        scheduler
+            .poll_queued(first_queued, connection(3), 3)
+            .expect("first promoted"),
+        QueuePoll::Granted(_)
+    ));
+}
+
+#[test]
+fn destructive_step_defers_preemption_until_prepared_transfer_is_committed() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let current = scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("current lease");
+    let queued_id = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                queued_id,
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::High,
+                400,
+            ),
+            2,
+        )
+        .expect("preempt queue");
+
+    scheduler
+        .begin_destructive_step(&current, connection(1), 3)
+        .expect("begin destructive");
+    assert!(matches!(
+        scheduler
+            .prepare_transfer(
+                &current,
+                connection(1),
+                LeaseTransferReason::Preempted,
+                None,
+                4,
+            )
+            .expect("deferred transfer"),
+        TransferPreparation::Deferred
+    ));
+    scheduler
+        .finish_destructive_step(&current, connection(1))
+        .expect("finish destructive");
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer(
+            &current,
+            connection(1),
+            LeaseTransferReason::Preempted,
+            None,
+            5,
+        )
+        .expect("prepare transfer")
+    else {
+        panic!("expected prepared transfer");
+    };
+    let next = prepared.to_token().clone();
+    scheduler
+        .validate_write(&current, connection(1), 5)
+        .expect("old authority remains before commit");
+    assert!(matches!(
+        scheduler
+            .poll_queued(queued_id, connection(2), 5)
+            .expect("still queued before commit"),
+        QueuePoll::Pending(_)
+    ));
+    assert_eq!(
+        scheduler
+            .commit_transfer(prepared, 5)
+            .expect("commit transfer"),
+        next
+    );
+    assert_eq!(
+        scheduler
+            .validate_write(&current, connection(1), 6)
+            .expect_err("old token fenced"),
+        SchedulerError::LeaseMismatch
+    );
+    assert_eq!(
+        scheduler
+            .poll_queued(queued_id, connection(2), 6)
+            .expect("new grant visible"),
+        QueuePoll::Granted(next.clone())
+    );
+    scheduler
+        .validate_write(&next, connection(2), 6)
+        .expect("new token active");
+}
+
+#[test]
+fn equal_priority_waits_but_explicit_release_can_transfer() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let current = scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("current lease");
+    let queued_id = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                queued_id,
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::Normal,
+                400,
+            ),
+            2,
+        )
+        .expect("queued");
+    assert_eq!(
+        scheduler
+            .prepare_transfer(
+                &current,
+                connection(1),
+                LeaseTransferReason::Preempted,
+                Some(request(&issuer)),
+                3,
+            )
+            .expect_err("preempt cannot carry release identity"),
+        SchedulerError::QueueRequestMismatch
+    );
+    assert!(matches!(
+        scheduler
+            .prepare_transfer(
+                &current,
+                connection(1),
+                LeaseTransferReason::Preempted,
+                None,
+                3,
+            )
+            .expect("no equal preempt"),
+        TransferPreparation::NoCandidate
+    ));
+    let release_request = request(&issuer);
+    let TransferPreparation::Ready(prepared) = scheduler
+        .prepare_transfer(
+            &current,
+            connection(1),
+            LeaseTransferReason::ExplicitRelease,
+            Some(release_request),
+            3,
+        )
+        .expect("release transfer")
+    else {
+        panic!("release must promote queue");
+    };
+    let next = scheduler.commit_transfer(prepared, 3).expect("commit");
+    assert_eq!(
+        scheduler
+            .replayed_release(release_request, &current, connection(1))
+            .expect("release replay")
+            .expect("release recorded")
+            .reason,
+        LeaseReleaseReason::Explicit
+    );
+    assert_eq!(
+        scheduler
+            .poll_queued(queued_id, connection(2), 4)
+            .expect("promoted"),
+        QueuePoll::Granted(next)
+    );
+}
+
+#[test]
+fn expiry_cancellation_and_disconnect_are_visible_and_connection_bound() {
+    let issuer = ids();
+    let instance_id = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    scheduler
+        .acquire(
+            request(&issuer),
+            instance_id,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("holder");
+    let expires = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                expires,
+                instance_id,
+                holder(&issuer).1,
+                connection(2),
+                LeasePriority::Normal,
+                10,
+            ),
+            2,
+        )
+        .expect("expiring queue");
+    assert_eq!(
+        scheduler
+            .poll_queued(expires, connection(2), 12)
+            .expect_err("expired queue"),
+        SchedulerError::QueueExpired
+    );
+
+    let cancelled = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                cancelled,
+                instance_id,
+                holder(&issuer).1,
+                connection(3),
+                LeasePriority::Normal,
+                100,
+            ),
+            20,
+        )
+        .expect("cancel queue");
+    assert_eq!(
+        scheduler
+            .cancel_queued(cancelled, connection(4))
+            .expect_err("cross-connection cancel"),
+        SchedulerError::QueueConnectionMismatch
+    );
+    assert_eq!(
+        scheduler
+            .cancel_queued(cancelled, connection(3))
+            .expect("cancelled")
+            .queued()
+            .request_id(),
+        cancelled
+    );
+
+    let disconnected = request(&issuer);
+    scheduler
+        .request_queued(
+            queued_request(
+                disconnected,
+                instance_id,
+                holder(&issuer).1,
+                connection(5),
+                LeasePriority::Normal,
+                100,
+            ),
+            30,
+        )
+        .expect("disconnect queue");
+    let removed = scheduler
+        .remove_queued_for_connection(connection(5))
+        .expect("disconnect cleanup");
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].queued().request_id(), disconnected);
+    assert_eq!(
+        scheduler
+            .poll_queued(disconnected, connection(5), 31)
+            .expect_err("removed queue"),
+        SchedulerError::QueueMissing
+    );
+}
+
+#[test]
+fn queue_timeout_and_request_identity_mismatches_fail_loudly() {
+    let issuer = ids();
+    let first_instance = instance(&issuer);
+    let second_instance = instance(&issuer);
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    scheduler
+        .acquire(
+            request(&issuer),
+            first_instance,
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("holder");
+    let queued_id = request(&issuer);
+    let queued_holder = holder(&issuer).1;
+    assert_eq!(
+        scheduler
+            .request_queued(
+                queued_request(
+                    queued_id,
+                    first_instance,
+                    queued_holder,
+                    connection(2),
+                    LeasePriority::Normal,
+                    501,
+                ),
+                2,
+            )
+            .expect_err("timeout above configured maximum"),
+        SchedulerError::QueueTimeoutInvalid
+    );
+    scheduler
+        .request_queued(
+            queued_request(
+                queued_id,
+                first_instance,
+                queued_holder,
+                connection(2),
+                LeasePriority::Normal,
+                100,
+            ),
+            2,
+        )
+        .expect("queue");
+    assert_eq!(
+        scheduler
+            .request_queued(
+                queued_request(
+                    queued_id,
+                    second_instance,
+                    queued_holder,
+                    connection(2),
+                    LeasePriority::Normal,
+                    100,
+                ),
+                3,
+            )
+            .expect_err("request cannot move instances"),
+        SchedulerError::QueueRequestMismatch
+    );
 }

@@ -32,6 +32,7 @@ pub const MAX_INSTANCE_ALIAS_BYTES: usize = 256;
 pub const MAX_INPUT_TEXT_BYTES: usize = 4096;
 pub const MAX_INPUT_KEY_BYTES: usize = 64;
 pub const MAX_INPUT_DURATION_MS: u64 = 60_000;
+pub const MAX_LEASE_QUEUE_TIMEOUT_MS: u64 = 3_600_000;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -200,6 +201,110 @@ impl LeaseToken {
 
     pub const fn expires_at_monotonic_ms(&self) -> u64 {
         self.expires_at_monotonic_ms
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeasePriority {
+    Normal,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseQueuePolicy {
+    priority: LeasePriority,
+    timeout_ms: u64,
+}
+
+impl LeaseQueuePolicy {
+    pub fn new(priority: LeasePriority, timeout_ms: u64) -> RuntimeContractResult<Self> {
+        let policy = Self {
+            priority,
+            timeout_ms,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.timeout_ms == 0 || self.timeout_ms > MAX_LEASE_QUEUE_TIMEOUT_MS {
+            return Err(RuntimeContractError::new("invalid_lease_queue_timeout"));
+        }
+        Ok(())
+    }
+
+    pub const fn priority(self) -> LeasePriority {
+        self.priority
+    }
+
+    pub const fn timeout_ms(self) -> u64 {
+        self.timeout_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseQueueStatus {
+    request_id: RequestId,
+    instance_id: InstanceId,
+    priority: LeasePriority,
+    position: u32,
+    deadline_monotonic_ms: u64,
+    preempt_requested: bool,
+}
+
+impl LeaseQueueStatus {
+    pub fn new(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        priority: LeasePriority,
+        position: u32,
+        deadline_monotonic_ms: u64,
+        preempt_requested: bool,
+    ) -> RuntimeContractResult<Self> {
+        let status = Self {
+            request_id,
+            instance_id,
+            priority,
+            position,
+            deadline_monotonic_ms,
+            preempt_requested,
+        };
+        status.validate()?;
+        Ok(status)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.position == 0 || self.deadline_monotonic_ms == 0 {
+            return Err(RuntimeContractError::new("invalid_lease_queue_status"));
+        }
+        Ok(())
+    }
+
+    pub const fn request_id(&self) -> RequestId {
+        self.request_id
+    }
+
+    pub const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    pub const fn priority(&self) -> LeasePriority {
+        self.priority
+    }
+
+    pub const fn position(&self) -> u32 {
+        self.position
+    }
+
+    pub const fn deadline_monotonic_ms(&self) -> u64 {
+        self.deadline_monotonic_ms
+    }
+
+    pub const fn preempt_requested(&self) -> bool {
+        self.preempt_requested
     }
 }
 
@@ -550,6 +655,7 @@ impl ValidatedRuntimeRequest<'_> {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeReceiptState {
     Admitted,
+    Queued,
     Denied,
     Completed,
     Failed,
@@ -578,6 +684,11 @@ pub enum RuntimeErrorCode {
     LeaseMissing,
     StaleOwnerEpoch,
     LeaseMismatch,
+    QueueFull,
+    QueueExpired,
+    QueueMissing,
+    QueueConnectionMismatch,
+    TransferNotSafe,
     InstanceMismatch,
     HolderMismatch,
     ConnectionMismatch,
@@ -705,6 +816,16 @@ pub enum RuntimeResult {
         instance_id: InstanceId,
         lease_id: LeaseId,
     },
+    LeaseQueued {
+        status: LeaseQueueStatus,
+    },
+    LeasePending {
+        status: LeaseQueueStatus,
+    },
+    LeaseQueueCancelled {
+        request_id: RequestId,
+        instance_id: InstanceId,
+    },
     ReadOnlyAdmitted {
         capability: ReadOnlyCaptureCapability,
     },
@@ -785,7 +906,9 @@ impl RuntimeReceipt {
         }
         let success_state = matches!(
             self.state,
-            RuntimeReceiptState::Admitted | RuntimeReceiptState::Completed
+            RuntimeReceiptState::Admitted
+                | RuntimeReceiptState::Queued
+                | RuntimeReceiptState::Completed
         );
         if success_state != (self.result.is_some() && self.error.is_none()) {
             return Err(RuntimeContractError::new("invalid_receipt_outcome"));
@@ -802,6 +925,9 @@ impl RuntimeReceipt {
             token.validate()?;
         }
         match &self.result {
+            Some(
+                RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
+            ) => status.validate()?,
             Some(
                 RuntimeResult::ReadOnlyAdmitted { capability }
                 | RuntimeResult::ReadonlyObservationBegun { capability },

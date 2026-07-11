@@ -253,6 +253,7 @@ fn c3a_runtime_host_child_process() {
                 maximum_client_heartbeat_interval_ms: 100,
                 takeover_cooldown_ms: 1_000,
                 lease_ttl_ms: 10_000,
+                ..SchedulerConfig::default()
             }),
         Arc::new(FileProvider {
             instance_id,

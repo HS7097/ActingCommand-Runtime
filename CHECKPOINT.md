@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b Task 1 contract and scheduler core
+
+### Current status
+
+- Added closed `LeasePriority`, bounded `LeaseQueuePolicy`, and strict `LeaseQueueStatus` Runtime
+  DTOs plus queued/pending/cancelled receipt results and queue-specific error projections.
+- Scheduler and lease payload schemas now carry typed queue position/deadline/priority,
+  preemption source/defer state, and complete from/to lease transfer identities.
+- Grew the accepted C3a scheduler in place with bounded per-instance priority queues, FIFO ordering
+  within priority, queue replay checks, deadline expiry, cancellation, disconnect cleanup,
+  destructive-section state, prepared transfer, and committed stale-token fencing.
+- Higher priority requests preempt only after a safe boundary. Equal/lower priority requests wait;
+  explicit release may promote the queue.
+- Prepared transfer leaves the old authority valid and the queued request pending until commit;
+  after commit the old token is rejected and only the original queued connection can observe/use
+  the new token.
+- Added bounds for queue timeout and depth and rejected inconsistent transfer trigger/request
+  combinations.
+- Existing C3a host/client behavior remains green; live queue operations are intentionally wired in
+  C3b Task 3 rather than exposed by a partial Runtime path.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `crates/actingcommand-contract/src/runtime.rs`
+- `crates/actingcommand-contract/src/runtime/tests.rs`
+- `crates/ledger/src/critical/tests.rs`
+- `crates/scheduler/src/lib.rs`
+- `crates/scheduler/src/tests.rs`
+- `crates/runtime-host/src/tests.rs`
+- `crates/runtime-client/src/tests.rs`
+- `crates/runtime-client/tests/c3a_process.rs`
+- `tests/support/c4_runtime.rs`
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-ledger`
+- `cargo clippy -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-ledger --all-targets -- -D warnings`
+- `cargo test --workspace --no-run`
+- `cargo test --workspace`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Contract suite passed: 37 unit tests and 11 compile-fail doctests.
+- Scheduler suite passed: 21 unit tests and doctests.
+- Ledger suite passed: 108 unit tests, 7 process tests, and 2 compile-fail doctests.
+- Full workspace tests passed, including protocol goldens, Runtime process tests, architecture and
+  dependency guards, C2 sealed evidence tests, and all doctests.
+- Focused all-target Clippy passed with warnings denied; formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push C3b Task 1 and record the unit in Issue #36.
+2. Implement Task 2 `crates/execution-kernel` with daemon-owned lazy input/capture sessions and
+   fatal close/panic/provider failure handling.
+
 ## 2026-07-11 Issue 35 C3b resident control-plane plan freeze
 
 ### Current status
