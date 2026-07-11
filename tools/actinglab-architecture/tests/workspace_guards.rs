@@ -372,6 +372,58 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 }
 
 #[test]
+fn c5_recovery_state_machine_is_execution_owned() {
+    let root = workspace_root();
+    let recovery = fs::read_to_string(root.join("crates/execution-kernel/src/recovery.rs"))
+        .expect("read execution recovery source");
+    let lab_facade =
+        fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade source");
+    let compatibility = fs::read_to_string(root.join("apps/actinglab/src/recovery_exec.rs"))
+        .expect("read ActingLab recovery compatibility source");
+
+    for required in [
+        "pub struct RecoveryGraph",
+        "pub trait RecoveryRuntime",
+        "pub fn execute_recovery_graph",
+    ] {
+        assert!(
+            recovery.contains(required),
+            "execution-kernel lost recovery owner {required}"
+        );
+    }
+    for forbidden in [
+        "actingcommand_lab",
+        "actingcommand_runtime_client",
+        "actingcommand_device::",
+        "std::fs",
+    ] {
+        assert!(
+            !recovery.contains(forbidden),
+            "execution recovery core reached effect owner via {forbidden}"
+        );
+    }
+    assert!(
+        lab_facade.contains("pub use actingcommand_execution_kernel"),
+        "Lab facade no longer re-exports execution-owned recovery primitives"
+    );
+    assert!(
+        compatibility.contains("pub use actingcommand_lab"),
+        "ActingLab recovery compatibility no longer delegates through the Lab facade"
+    );
+    for forbidden in [
+        "pub struct RecoveryGraph",
+        "pub trait RecoveryRuntime",
+        "pub fn execute_recovery_graph",
+        "fn validate_graph",
+    ] {
+        assert!(
+            !compatibility.contains(forbidden),
+            "ActingLab regained recovery state-machine ownership via {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");

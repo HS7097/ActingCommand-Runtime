@@ -46,6 +46,11 @@ pub use readonly_api::*;
 pub use state::*;
 
 pub use actingcommand_contract::{LabError, LabResult};
+pub use actingcommand_execution_kernel::{
+    DetectKind, RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph,
+    RecoveryNode, RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus,
+    execute_recovery_graph,
+};
 
 pub struct Lab<P: LabPorts> {
     ports: P,

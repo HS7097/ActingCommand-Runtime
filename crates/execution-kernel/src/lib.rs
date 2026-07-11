@@ -15,6 +15,7 @@ mod kernel;
 mod planning;
 mod provider;
 mod readonly;
+mod recovery;
 mod session;
 
 pub use bundle::*;
@@ -25,6 +26,7 @@ pub use kernel::*;
 pub use planning::*;
 pub use provider::*;
 pub use readonly::*;
+pub use recovery::*;
 pub use session::*;
 
 #[cfg(test)]
