@@ -155,7 +155,7 @@ Implemented result:
 
 ## Task 6: C3a adversarial and process acceptance
 
-Status: next.
+Status: complete.
 
 - Prove zero-stagger same-instance requests produce one grant and one busy denial.
 - Prove different instances acquire and execute independently.
@@ -169,7 +169,26 @@ Status: next.
   release is one correlated sequence.
 - Prove the read-only capture capability has no input interface or writable recovery path.
 
+Implemented result:
+
+- Host-level zero-stagger clients produce exactly one grant and one machine-readable busy
+  denial, while different instances both acquire, execute, and release independently.
+- Scheduler and DeviceProxy tests cover every fencing field before backend use. The ordinary
+  host path executes every current input action through the daemon-owned backend.
+- A sealed child process is hard-killed with an active lease, restarted against the same owner
+  journal, and verified to issue a new epoch. Every old-token input variant is rejected as stale
+  without opening a backend; takeover cooldown denies acquisition until its reported delay has
+  elapsed, after which a new lease executes normally.
+- Dropping a raw IPC client and dropping `RuntimeInputProxy` both close the backend and revoke
+  authority without stopping the resident Runtime.
+- Acquire, input, and release requests sharing one typed correlation ID project as one ordered
+  ten-event sequence from request/admission through durable intent/outcome and release.
+- The read-only capability architecture guard remains green and exposes only construction plus
+  its opaque instance identity.
+
 ## Task 7: Closeout
+
+Status: next.
 
 - Run focused contract/scheduler/host/client/process tests.
 - Run full workspace tests, non-Lab workspace tests, all-features dependency guards, Clippy,

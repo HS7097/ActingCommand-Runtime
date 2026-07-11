@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 6 adversarial and process acceptance
+
+### Current status
+
+- Added host-level zero-stagger acceptance proving exactly one same-instance grant and one
+  `lease_busy` denial while both clients remain connected through the decision.
+- Added independent-instance acceptance proving two instances can acquire, execute through
+  separate daemon-owned backends, and release without cross-instance busy rejection.
+- Expanded DeviceProxy fencing coverage for stale epoch, wrong lease, wrong instance, wrong
+  holder, and wrong connection, with zero backend actions. Scheduler coverage retains explicit
+  expiry and takeover-cooldown validation before write.
+- Added a sealed process test that hard-kills Runtime with an active lease, restarts from the same
+  owner journal, observes a new epoch, rejects every old-token input variant without backend use,
+  enforces takeover cooldown, and grants a fresh lease only after the reported delay.
+- Added explicit `RuntimeInputProxy` drop acceptance in addition to the existing raw-client
+  disconnect test; both close the backend and revoke authority while Runtime remains alive.
+- Added one-correlation ledger acceptance for the ordered acquire, input, and release sequence.
+- Kept the existing read-only capability architecture guard as the writable-recovery proof.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/runtime-client/src/tests.rs`
+- `crates/runtime-client/tests/c3a_process.rs`
+- `crates/runtime-host/src/tests.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-runtime-host -- --nocapture`
+- `cargo test -p actingcommand-runtime-client --test c3a_process -- --nocapture`
+- `cargo test -p actingcommand-scheduler -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo clippy -p actingcommand-runtime-host -p actingcommand-runtime-client --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Runtime host tests passed: 12; scheduler tests passed: 14.
+- Runtime client unit tests passed: 6; hard-kill process tests passed: 2.
+- Architecture library and workspace guards passed: 14 + 17.
+- Full workspace tests passed, including all ActingLab tests and unchanged protocol goldens.
+- Focused all-target Clippy and full workspace Clippy passed with warnings denied.
+- Initial combined runs exposed pre-existing test-only timing budgets that were too narrow under
+  parallel Windows load (`80 ms` lease, `40 ms` long-input base timeout, and `200/60 ms` host
+  leases). The budgets were widened while preserving every test's semantic boundary; subsequent
+  focused, combined, and full-workspace runs passed.
+
+### Current blocker
+
+- None for C3a Task 6.
+
+### Next step
+
+1. Commit and push Task 6 with this planning/checkpoint evidence and record it in Issue #36.
+2. Run Task 7 whole-C3a closeout, fresh review, rollback checkpoint tagging, and final Issue #36
+   evidence without merging into `main`.
+
 ## 2026-07-11 Issue 35 C3a Task 5 Runtime-owned production input
 
 ### Current status

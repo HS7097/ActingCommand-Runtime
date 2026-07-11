@@ -181,16 +181,16 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
 fn runtime_input_proxy_renews_before_short_lease_expiry() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, Arc::clone(&state), 80);
+    let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
     let mut proxy = RuntimeInputProxy::connect_with_heartbeat(
         client.clone(),
         "ak.cn",
-        Duration::from_millis(10),
+        Duration::from_millis(50),
     )
     .expect("runtime input proxy");
 
-    thread::sleep(Duration::from_millis(220));
+    thread::sleep(Duration::from_millis(1_300));
     proxy.tap(30, 40).expect("input after renewals");
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
@@ -200,11 +200,36 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
 }
 
 #[test]
-fn long_input_extends_only_its_response_wait() {
+fn dropping_runtime_input_proxy_releases_authority_and_closes_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
-    let client = client_with_timeout(&root, Duration::from_millis(40));
+    let client = client(&root);
+    let proxy = RuntimeInputProxy::connect_with_heartbeat(
+        client.clone(),
+        "ak.cn",
+        Duration::from_millis(20),
+    )
+    .expect("runtime input proxy");
+
+    drop(proxy);
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    let replacement = client.acquire_lease("ak.cn").expect("replacement lease");
+    client
+        .release_lease(&replacement)
+        .expect("replacement release");
+    assert_eq!(state.opens.load(Ordering::Acquire), 2);
+    assert_eq!(state.closes.load(Ordering::Acquire), 2);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn long_input_extends_only_its_response_wait() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, Arc::clone(&state), 5_000);
+    let client = client_with_timeout(&root, Duration::from_millis(1_000));
     let token = client.acquire_lease("ak.cn").expect("lease");
 
     client
@@ -213,7 +238,7 @@ fn long_input_extends_only_its_response_wait() {
             InputAction::LongTap {
                 x: 10,
                 y: 20,
-                duration_ms: 80,
+                duration_ms: 1_500,
             },
         )
         .expect("long input");

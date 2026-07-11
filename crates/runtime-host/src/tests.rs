@@ -5,8 +5,8 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::time::unix_ms_now;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    LeaseToken, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    IssuedCorrelationId, LeaseToken, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{DeviceError, DeviceResult, InputBackend};
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::TcpStream;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -95,8 +95,17 @@ struct FakeProvider {
 
 impl FakeProvider {
     fn one(alias: &str, instance_id: InstanceId, state: Arc<FakeState>) -> Self {
+        Self::from_entries([(alias.to_string(), instance_id, state)])
+    }
+
+    fn from_entries(
+        entries: impl IntoIterator<Item = (String, InstanceId, Arc<FakeState>)>,
+    ) -> Self {
         Self {
-            entries: BTreeMap::from([(alias.to_string(), FakeEntry { instance_id, state })]),
+            entries: entries
+                .into_iter()
+                .map(|(alias, instance_id, state)| (alias, FakeEntry { instance_id, state }))
+                .collect(),
         }
     }
 }
@@ -147,9 +156,18 @@ impl TestClient {
     }
 
     fn request(&self, operation: RuntimeOperation) -> RuntimeRequest {
+        let correlation_id = self.ids.mint_correlation_id().expect("correlation id");
+        self.request_with_correlation(correlation_id, operation)
+    }
+
+    fn request_with_correlation(
+        &self,
+        correlation_id: IssuedCorrelationId,
+        operation: RuntimeOperation,
+    ) -> RuntimeRequest {
         RuntimeRequest::new(
             self.ids.mint_request_id().expect("request id"),
-            self.ids.mint_correlation_id().expect("correlation id"),
+            correlation_id,
             None,
             EventActor::Cli,
             EventSource::Cli,
@@ -217,7 +235,7 @@ fn config(root: &TempDir) -> RuntimeHostConfig {
         .with_scheduler(SchedulerConfig {
             maximum_client_heartbeat_interval_ms: 20,
             takeover_cooldown_ms: 40,
-            lease_ttl_ms: 200,
+            lease_ttl_ms: 5_000,
         })
 }
 
@@ -235,6 +253,116 @@ fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
         assert!(started.elapsed() < timeout, "condition timed out");
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn assert_input_denied(client: &mut TestClient, token: LeaseToken, expected: RuntimeErrorCode) {
+    let request = client.request(RuntimeOperation::Input {
+        token,
+        action: InputAction::Tap { x: 10, y: 20 },
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(receipt.error_projection().expect("denial").code, expected);
+}
+
+fn concurrent_acquire(
+    mut client: TestClient,
+    alias: &'static str,
+    start: Arc<Barrier>,
+    completed: Arc<Barrier>,
+) -> thread::JoinHandle<RuntimeReceipt> {
+    thread::spawn(move || {
+        let request = client.request(RuntimeOperation::acquire_lease(
+            alias,
+            client.ids.mint_holder_id().expect("holder id"),
+        ));
+        start.wait();
+        let receipt = client.send(&request);
+        completed.wait();
+        receipt
+    })
+}
+
+#[test]
+fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let first = TestClient::connect(&host);
+    let second = TestClient::connect(&host);
+    let start = Arc::new(Barrier::new(3));
+    let completed = Arc::new(Barrier::new(3));
+    let first = concurrent_acquire(first, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
+    let second = concurrent_acquire(second, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
+
+    start.wait();
+    completed.wait();
+    let receipts = [
+        first.join().expect("first client"),
+        second.join().expect("second client"),
+    ];
+    let grants = receipts
+        .iter()
+        .filter(|receipt| matches!(receipt.result(), Some(RuntimeResult::LeaseGranted { .. })))
+        .count();
+    let busy = receipts
+        .iter()
+        .filter(|receipt| {
+            receipt
+                .error_projection()
+                .is_some_and(|error| error.code == RuntimeErrorCode::LeaseBusy)
+        })
+        .count();
+    assert_eq!(grants, 1);
+    assert_eq!(busy, 1);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    wait_until(Duration::from_secs(2), || {
+        state.close_count.load(Ordering::Acquire) == 1
+    });
+    host.close().expect("close host");
+}
+
+#[test]
+fn different_instances_acquire_and_execute_independently() {
+    let root = TempDir::new().expect("tempdir");
+    let ak_state = Arc::new(FakeState::default());
+    let ba_state = Arc::new(FakeState::default());
+    let provider = FakeProvider::from_entries([
+        ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
+        ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
+    ]);
+    let host = RuntimeHost::start(config(&root), Arc::new(provider)).expect("runtime host");
+    let first = TestClient::connect(&host);
+    let second = TestClient::connect(&host);
+    let start = Arc::new(Barrier::new(3));
+    let run = |mut client: TestClient, alias: &'static str, start: Arc<Barrier>| {
+        thread::spawn(move || {
+            start.wait();
+            let (_, token) = client.acquire(alias);
+            let input = client.request(RuntimeOperation::Input {
+                token: token.clone(),
+                action: InputAction::Reset,
+            });
+            assert_eq!(client.send(&input).state(), RuntimeReceiptState::Completed);
+            let release = client.request(RuntimeOperation::ReleaseLease { token });
+            assert_eq!(
+                client.send(&release).state(),
+                RuntimeReceiptState::Completed
+            );
+        })
+    };
+    let first = run(first, "ak.cn", Arc::clone(&start));
+    let second = run(second, "ba.jp", Arc::clone(&start));
+
+    start.wait();
+    first.join().expect("first instance client");
+    second.join().expect("second instance client");
+    for state in [&ak_state, &ba_state] {
+        assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    }
+    host.close().expect("close host");
 }
 
 #[test]
@@ -381,6 +509,96 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     assert_eq!(client.send(&release), receipt);
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn one_correlation_queries_the_complete_lease_input_release_sequence() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut client = TestClient::connect(&host);
+    let correlation_id = client.ids.mint_correlation_id().expect("correlation id");
+    let correlation_transport = *correlation_id.transport();
+    let acquire = client.request_with_correlation(
+        correlation_id,
+        RuntimeOperation::acquire_lease("ak.cn", client.ids.mint_holder_id().expect("holder id")),
+    );
+    let acquire_id = acquire.request_id();
+    let receipt = client.send(&acquire);
+    let RuntimeResult::LeaseGranted { token } = receipt.result().expect("lease result") else {
+        panic!("expected lease grant");
+    };
+    let token = token.clone();
+
+    let input = client.request_with_correlation(
+        correlation_id,
+        RuntimeOperation::Input {
+            token: token.clone(),
+            action: InputAction::Tap { x: 10, y: 20 },
+        },
+    );
+    let input_id = input.request_id();
+    assert_eq!(client.send(&input).state(), RuntimeReceiptState::Completed);
+
+    let release =
+        client.request_with_correlation(correlation_id, RuntimeOperation::ReleaseLease { token });
+    let release_id = release.request_id();
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+
+    let query = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery {
+            correlation_id: Some(correlation_transport),
+            ..EventQuery::default()
+        },
+        profile: ProjectionProfile::Forensic,
+    });
+    let receipt = client.send(&query);
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected event projection");
+    };
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseGranted,
+            EventType::SchedulerAdmitted,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseReleased,
+        ]
+    );
+    assert!(
+        events[..4]
+            .iter()
+            .all(|event| event.links.request_id() == Some(&acquire_id))
+    );
+    assert!(
+        events[4..7]
+            .iter()
+            .all(|event| event.links.request_id() == Some(&input_id))
+    );
+    assert!(
+        events[7..]
+            .iter()
+            .all(|event| event.links.request_id() == Some(&release_id))
+    );
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
     drop(client);
     host.close().expect("close host");
 }
@@ -563,6 +781,51 @@ fn every_fencing_field_is_checked_before_backend_use() {
     let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let (_, token) = client.acquire("ak.cn");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let stale_epoch = LeaseToken::new(
+        *ids.mint_owner_epoch().expect("owner epoch").transport(),
+        token.lease_id(),
+        token.instance_id(),
+        token.holder_id(),
+        token.expires_at_monotonic_ms(),
+    )
+    .expect("stale epoch token");
+    assert_input_denied(&mut client, stale_epoch, RuntimeErrorCode::StaleOwnerEpoch);
+
+    let wrong_lease = LeaseToken::new(
+        token.owner_epoch(),
+        *ids.mint_lease_id().expect("lease id").transport(),
+        token.instance_id(),
+        token.holder_id(),
+        token.expires_at_monotonic_ms(),
+    )
+    .expect("wrong lease token");
+    assert_input_denied(&mut client, wrong_lease, RuntimeErrorCode::LeaseMismatch);
+
+    let wrong_instance = LeaseToken::new(
+        token.owner_epoch(),
+        token.lease_id(),
+        *ids.mint_instance_id().expect("instance id").transport(),
+        token.holder_id(),
+        token.expires_at_monotonic_ms(),
+    )
+    .expect("wrong instance token");
+    assert_input_denied(
+        &mut client,
+        wrong_instance,
+        RuntimeErrorCode::InstanceMismatch,
+    );
+
+    let wrong_holder = LeaseToken::new(
+        token.owner_epoch(),
+        token.lease_id(),
+        token.instance_id(),
+        *ids.mint_holder_id().expect("holder id").transport(),
+        token.expires_at_monotonic_ms(),
+    )
+    .expect("wrong holder token");
+    assert_input_denied(&mut client, wrong_holder, RuntimeErrorCode::HolderMismatch);
+
     let mut intruder = TestClient::connect(&host);
     let cross_connection = intruder.request(RuntimeOperation::Input {
         token: token.clone(),
@@ -575,25 +838,6 @@ fn every_fencing_field_is_checked_before_backend_use() {
         RuntimeErrorCode::ConnectionMismatch
     );
     drop(intruder);
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let forged = LeaseToken::new(
-        token.owner_epoch(),
-        token.lease_id(),
-        token.instance_id(),
-        *ids.mint_holder_id().expect("holder id").transport(),
-        token.expires_at_monotonic_ms(),
-    )
-    .expect("forged token");
-    let input = client.request(RuntimeOperation::Input {
-        token: forged,
-        action: InputAction::Tap { x: 10, y: 20 },
-    });
-    let receipt = client.send(&input);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
-    assert_eq!(
-        receipt.error_projection().expect("denial").code,
-        RuntimeErrorCode::HolderMismatch
-    );
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
 
     let release = client.request(RuntimeOperation::ReleaseLease { token });
@@ -639,9 +883,9 @@ fn expired_lease_is_closed_before_a_new_grant() {
     ));
     let host = RuntimeHost::start(
         config(&root).with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 10,
-            takeover_cooldown_ms: 20,
-            lease_ttl_ms: 60,
+            maximum_client_heartbeat_interval_ms: 100,
+            takeover_cooldown_ms: 200,
+            lease_ttl_ms: 1_000,
         }),
         provider,
     )
