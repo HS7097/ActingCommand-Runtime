@@ -559,6 +559,10 @@ fn c5_environment_state_is_pure_and_execution_owned() {
         .unwrap_or_else(|error| panic!("read {}: {error}", lab_source_path.display()));
     assert!(lab_source.contains("EnvironmentStateEngine"));
     assert!(!lab_source.contains("pub struct EnvDetectionResult"));
+    assert!(!lab_source.contains("struct EnvDetectionCatalog"));
+    assert!(!lab_source.contains("struct EnvDetector"));
+    assert!(!lab_source.contains("fn normalize_flat_env_catalog("));
+    assert!(!lab_source.contains("fn validate_detection_key("));
     assert!(!lab_source.contains("fn validate_resolved_value("));
     assert!(!lab_source.contains("fn resolve_env_markers_in_value_inner("));
 }

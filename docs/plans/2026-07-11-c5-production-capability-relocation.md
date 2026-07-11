@@ -148,9 +148,14 @@ Status: active.
   collection, single-key resolution, and recursive JSON marker replacement. Environment result
   DTOs moved with that owner. Lab maps typed errors into its existing protocol and retains only
   catalog/resource I/O, local instance identity, locking, atomic persistence, and effect adapters.
-- Subtask 4b2 next: move catalog normalization/validation and candidate-score selection/result
-  construction behind execution-owned inputs while keeping template loading and recognition
-  observations as explicit adapters.
+- Subtask 4b2a complete: the execution kernel now owns structured/flat catalog parsing and
+  normalization, detector/key/step/candidate data models, schema and threshold validation, safe
+  candidate checks, ROI decoding, detector selection, game/server canonicalization, scope checks,
+  and device-free step plans. Lab retains only catalog file reads and maps step plans to its
+  temporary touch adapter.
+- Subtask 4b2b next: move candidate-score selection and `EnvDetectionResult` construction behind
+  typed observation inputs while keeping template loading and recognition scoring as explicit
+  adapters.
 - Subtask 4c pending: replace production Lab capture construction with a daemon-owned observation
   request without weakening sealed/offline scene adapters.
 

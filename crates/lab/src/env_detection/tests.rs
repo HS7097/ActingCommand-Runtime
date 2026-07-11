@@ -697,7 +697,7 @@ fn result(
         server_id: context.server_id.clone(),
         detector_id: detector.id.clone(),
         detector_version: detector.version().to_string(),
-        resource_pack_id: detector.resource_pack_id(context),
+        resource_pack_id: detector.resource_pack_id(&context.game_id, &context.server_id),
         resource_pack_hash: resource_hash.to_string(),
         generated_at_unix_ms: now,
         detections: BTreeMap::from([(

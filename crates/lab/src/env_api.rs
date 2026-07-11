@@ -7,6 +7,8 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use actingcommand_execution_kernel::EnvDetectionStepPlan;
+
 #[derive(Debug, Clone)]
 pub struct EnvScopeRequest {
     pub resource_root: PathBuf,
@@ -80,25 +82,6 @@ pub struct EnvDetectionStepReport {
     pub step: EnvDetectionStepPlan,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<EnvTouchResult>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub enum EnvDetectionStepPlan {
-    #[serde(rename = "tap")]
-    Tap { x: i32, y: i32 },
-    #[serde(rename = "long_tap")]
-    LongTap { x: i32, y: i32, duration_ms: u64 },
-    #[serde(rename = "swipe")]
-    Swipe {
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        duration_ms: u64,
-    },
-    #[serde(rename = "wait")]
-    Wait { duration_ms: u64 },
 }
 
 #[derive(Debug, Clone, Serialize)]
