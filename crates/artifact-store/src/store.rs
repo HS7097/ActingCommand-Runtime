@@ -73,13 +73,13 @@ impl<'a> ArtifactWriteRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub struct StoredArtifact {
-    reference: ArtifactReference,
+    pub(crate) issued: StoreIssuedArtifact,
     path: PathBuf,
 }
 
 impl StoredArtifact {
     pub const fn reference(&self) -> &ArtifactReference {
-        &self.reference
+        self.issued.reference()
     }
 
     pub fn path(&self) -> &Path {
@@ -202,18 +202,43 @@ impl ArtifactStore {
             ));
         }
 
-        self.append_event(
+        if let Err(error) = self.append_event(
             sink,
             &request.context,
             EventSeverity::Info,
             ArtifactPayloadDraft::verified(AuditInput::new()),
             issued.clone(),
-        )?;
+        ) {
+            return Err(cleanup_published(&final_path, error));
+        }
 
         Ok(StoredArtifact {
-            reference: issued.reference().clone(),
+            issued,
             path: final_path,
         })
+    }
+
+    pub fn read_verified(&self, reference: &ArtifactReference) -> ArtifactStoreResult<Vec<u8>> {
+        reference.validate().map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_reference_invalid",
+                "read_artifact",
+                error.to_string(),
+            )
+        })?;
+        let path = safe_object_path(&self.root, reference.object_key())?;
+        verify_file(&path, reference)?;
+        fs::read(path).map_err(|error| {
+            ArtifactStoreError::fatal("artifact_read_failed", "read_artifact", error.to_string())
+        })
+    }
+
+    pub(crate) fn rollback_stored(
+        &self,
+        stored: &StoredArtifact,
+        error: ArtifactStoreError,
+    ) -> ArtifactStoreError {
+        cleanup_published(stored.path(), error)
     }
 
     fn write_and_verify(
@@ -440,7 +465,7 @@ fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResul
     Ok(())
 }
 
-fn canonical_sha256(bytes: &[u8]) -> String {
+pub(crate) fn canonical_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut value = String::with_capacity(71);
     value.push_str("sha256:");
@@ -580,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn required_verified_event_failure_never_returns_success() {
+    fn required_verified_event_failure_removes_published_file_and_returns_error() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ArtifactStore::open(temp.path()).expect("store");
         let mut sink = RecordingSink {
@@ -593,7 +618,7 @@ mod tests {
 
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(sink.event_types, [EventType::ArtifactCreated]);
-        assert_eq!(all_files(temp.path()).len(), 1);
+        assert!(all_files(temp.path()).is_empty());
     }
 
     #[test]

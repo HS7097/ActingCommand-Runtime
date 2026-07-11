@@ -69,10 +69,18 @@ pub struct PinnedFrameEvidence {
 }
 
 #[derive(Debug, Clone)]
+pub struct PersistedFrameEvidence {
+    pub frame_index: usize,
+    pub pinned_reason: Option<PinnedFrameReason>,
+    pub artifact: ArtifactReference,
+}
+
+#[derive(Debug, Clone)]
 pub struct CapturePipelineSummary {
     pub counts: CapturePipelineCounts,
     pub evidence_completeness: EvidenceCompleteness,
     pub pinned: Vec<PinnedFrameEvidence>,
+    pub frames: Vec<PersistedFrameEvidence>,
 }
 
 #[derive(Debug)]
@@ -252,6 +260,15 @@ impl CapturePipeline {
             counts: self.counts,
             evidence_completeness: self.evidence_completeness(),
             pinned,
+            frames: self
+                .persisted
+                .iter()
+                .map(|(frame_index, artifact)| PersistedFrameEvidence {
+                    frame_index: *frame_index,
+                    pinned_reason: self.pinned.get(frame_index).copied(),
+                    artifact: artifact.clone(),
+                })
+                .collect(),
         }
     }
 

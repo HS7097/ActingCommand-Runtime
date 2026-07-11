@@ -101,7 +101,12 @@ completeness are independently verifiable.
 - The manifest contains run/correlation identity, package name/hash/verification, ledger sequence
   bounds, independent task outcome and evidence completeness, terminal receipt, artifact count
   and SHA-256 values, four-way screenshot counts, pinned reason distribution and missing list,
-  projection profile, retention class, normalized absolute output path, and final ZIP SHA-256.
+  projection profile, retention class, and normalized absolute output path. The typed receipt
+  contains the final ZIP SHA-256.
+- A ZIP cannot truthfully contain its own final SHA-256 without a cryptographic self-reference.
+  The archived manifest therefore contains a canonical hash of every declared entry digest, while
+  the typed export receipt and attached `EvidenceArchive` reference carry the real final ZIP
+  SHA-256 and byte count. Verification requires both layers and never substitutes a placeholder.
 - Build the archive at a temporary path, finish and sync it, calculate and verify its real hash,
   then atomically publish it.
 - Append `artifact.export_completed` only after durable publication and hashing. Structure,
@@ -143,7 +148,7 @@ Status: complete.
 
 ### Task 4: Evidence exporter
 
-Status: active.
+Status: complete.
 
 - Add typed export request, manifest, screenshot counters, pinned accounting, and export receipt.
 - Implement success/failure/cancelled task-outcome exports.
@@ -152,6 +157,8 @@ Status: active.
   corrupted source artifact, output collision, and injected archive failure.
 
 ### Task 5: Sealed/global-ledger acceptance
+
+Status: active.
 
 - Run a sealed record/replay-style fixture through frame pipeline, artifact store, real global
   ledger ingress, and evidence exporter.

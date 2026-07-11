@@ -13,7 +13,7 @@ const MAX_COLLISION_SUFFIX: u16 = 9_999;
 
 #[derive(Debug)]
 pub struct ScreenshotNameAllocator {
-    directory: PathBuf,
+    directory: Option<PathBuf>,
     reserved: BTreeSet<String>,
 }
 
@@ -28,9 +28,16 @@ impl ScreenshotNameAllocator {
             )
         })?;
         Ok(Self {
-            directory,
+            directory: Some(directory),
             reserved: BTreeSet::new(),
         })
+    }
+
+    pub fn in_memory() -> Self {
+        Self {
+            directory: None,
+            reserved: BTreeSet::new(),
+        }
     }
 
     pub fn allocate(&mut self, timestamp_unix_ms: u64) -> ArtifactStoreResult<String> {
@@ -41,7 +48,12 @@ impl ScreenshotNameAllocator {
             } else {
                 format!("{base}-{suffix:02}.png")
             };
-            if self.reserved.contains(&candidate) || self.directory.join(&candidate).exists() {
+            if self.reserved.contains(&candidate)
+                || self
+                    .directory
+                    .as_ref()
+                    .is_some_and(|directory| directory.join(&candidate).exists())
+            {
                 continue;
             }
             self.reserved.insert(candidate.clone());

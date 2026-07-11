@@ -1,5 +1,78 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 Task 4 evidence exporter
+
+### Current status
+
+- Added a production-owned typed evidence exporter to `actingcommand-artifact-store`.
+- Exports deterministic evidence structure with result, projected events, diagnostics, summary,
+  manifest, and all persisted screenshots.
+- Manifest records run/correlation identity, package hash/verification, real ledger bounds,
+  terminal receipt, independent task outcome/evidence completeness, four-way screenshot counts,
+  pinned reason distribution/missing list, projection/retention policy, normalized creation path,
+  every entry SHA-256, and a canonical content-list hash.
+- The final ZIP's real SHA-256 and byte count are stored in the typed export receipt and attached
+  `EvidenceArchive` artifact reference. They are intentionally not embedded as a false
+  self-referential value inside the ZIP.
+- Export writes and syncs a same-directory temporary ZIP, reopens it, rehashes every declared
+  entry, publishes without overwrite, reopens the published output, stores the final archive as a
+  verified artifact, and only then emits `artifact.export_completed`.
+- Any source corruption, output collision, directory/write/sync/publish failure, manifest/event
+  inconsistency, or required event append failure is fatal. Failure paths emit
+  `artifact.export_failed` when the sink remains available and remove output/archive publication.
+- Success, failure, and cancelled task outcomes remain independent from complete/partial/failed
+  evidence state.
+- Strengthened artifact-store cleanup so failed required `artifact.verified` append removes the
+  published object instead of leaving an unreceipted artifact.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `crates/artifact-store/src/exporter.rs`
+- `crates/artifact-store/src/lib.rs`
+- `crates/artifact-store/src/naming.rs`
+- `crates/artifact-store/src/pipeline.rs`
+- `crates/artifact-store/src/store.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo check -p actingcommand-artifact-store`
+- `cargo test -p actingcommand-artifact-store`
+- `cargo clippy -p actingcommand-artifact-store -- -D warnings`
+- `cargo check -p actingcommand-lab -p actingcommand-actinglab`
+- `cargo test -p actingcommand-contract -p actingcommand-actinglab-architecture`
+- `cargo test -p actingcommand-lab`
+- `cargo test -p actingcommand-actinglab`
+- `cargo clippy -p actingcommand-artifact-store -p actingcommand-lab -p actingcommand-actinglab -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- Artifact-store/exporter tests passed: 48 unit tests plus doctests.
+- Export tests cover success/failure/cancelled outcomes, same-millisecond names, ordinary pressure
+  loss as `partial`, missing pinned evidence as `failed`, corrupted source artifacts, output
+  collision, output-directory failure, required completed-event failure rollback, and independent
+  rehashing of every declared entry.
+- Contract tests passed: 34 unit tests and 11 compile-fail doctests.
+- Architecture tests passed: 14 unit tests and 18 workspace guards.
+- Lab tests passed: 184 unit tests plus API/doctest targets.
+- ActingLab tests passed: 518 unit tests, all protocol goldens, and all integration suites.
+- Focused Clippy passed with warnings denied.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this completed evidence-exporter unit.
+2. Implement C2 Task 5 sealed acceptance through real GlobalLedger append, query, and forensic
+   projection, then independently verify archive/manifest/event/artifact correlation.
+
 ## 2026-07-11 Issue 35 C2 Task 3 frame pipeline extraction
 
 ### Current status

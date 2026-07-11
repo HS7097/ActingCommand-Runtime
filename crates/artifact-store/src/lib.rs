@@ -9,12 +9,14 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod exporter;
 mod frame_store;
 mod naming;
 mod pipeline;
 mod store;
 
 pub use error::*;
+pub use exporter::*;
 pub use frame_store::*;
 pub use naming::*;
 pub use pipeline::*;
