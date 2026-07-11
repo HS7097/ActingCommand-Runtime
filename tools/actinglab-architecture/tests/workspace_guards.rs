@@ -533,6 +533,37 @@ fn c5_readonly_recognition_is_pure_and_execution_owned() {
 }
 
 #[test]
+fn c5_environment_state_is_pure_and_execution_owned() {
+    let root = workspace_root();
+    let source_path = root.join("crates/execution-kernel/src/environment.rs");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+    for forbidden in [
+        "actingcommand_lab",
+        "CaptureBackend",
+        "InputBackend",
+        "RuntimeClient",
+        "std::fs",
+        "create_capture_backend",
+        "create_touch_backend",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "{} contains forbidden environment ownership token {forbidden}",
+            source_path.display()
+        );
+    }
+
+    let lab_source_path = root.join("crates/lab/src/env_detection.rs");
+    let lab_source = fs::read_to_string(&lab_source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", lab_source_path.display()));
+    assert!(lab_source.contains("EnvironmentStateEngine"));
+    assert!(!lab_source.contains("pub struct EnvDetectionResult"));
+    assert!(!lab_source.contains("fn validate_resolved_value("));
+    assert!(!lab_source.contains("fn resolve_env_markers_in_value_inner("));
+}
+
+#[test]
 fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
     let root = workspace_root();
     let metadata: serde_json::Value =

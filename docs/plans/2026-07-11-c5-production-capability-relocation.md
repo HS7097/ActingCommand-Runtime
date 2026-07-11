@@ -143,9 +143,14 @@ Status: active.
 - Architecture guards allow Lab to consume execution-kernel only as a removable client while
   keeping all production packages Lab-free. The read-only module rejects filesystem, capture
   factory, input factory, Runtime client, and Lab ownership tokens.
-- Subtask 4b next: move environment result validation, freshness, marker resolution, and pure
-  detector decisions behind typed execution-owned state/decision APIs while leaving persistence
-  and effect adapters outside the core.
+- Subtask 4b1 complete: `EnvironmentStateEngine` now owns typed result-schema/scope/detector/hash
+  freshness checks, confidence/expiry/allowed-value validation, safe value checks, marker-key
+  collection, single-key resolution, and recursive JSON marker replacement. Environment result
+  DTOs moved with that owner. Lab maps typed errors into its existing protocol and retains only
+  catalog/resource I/O, local instance identity, locking, atomic persistence, and effect adapters.
+- Subtask 4b2 next: move catalog normalization/validation and candidate-score selection/result
+  construction behind execution-owned inputs while keeping template loading and recognition
+  observations as explicit adapters.
 - Subtask 4c pending: replace production Lab capture construction with a daemon-owned observation
   request without weakening sealed/offline scene adapters.
 

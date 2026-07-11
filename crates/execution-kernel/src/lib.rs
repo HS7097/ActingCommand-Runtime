@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod environment;
 mod error;
 mod kernel;
 mod planning;
@@ -14,6 +15,7 @@ mod provider;
 mod readonly;
 mod session;
 
+pub use environment::*;
 pub use error::*;
 pub use kernel::*;
 pub use planning::*;

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, Lab, LabPorts};
-use actingcommand_contract::{EnvDetected, EnvResolved, LabError, LabResult, NeedsDetection};
+use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
 use actingcommand_device::{
     CaptureBackendChoice, CaptureBackendConfig, Frame, InputBackend, PixelFormat,
     combine_operation_and_close,
+};
+use actingcommand_execution_kernel::{
+    ENV_RESULT_SCHEMA_VERSION, EnvironmentDetectorState, EnvironmentKeyState,
+    EnvironmentStateEngine, EnvironmentStateError, EnvironmentStateScope,
+    collect_environment_pointer_keys, validate_environment_value_safety,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
@@ -22,13 +27,14 @@ const ENV_DETECTION_DIR: &str = "env-detection";
 const ENV_DETECTION_CATALOG: &str = "detections.json";
 const ENV_DETECTION_RESULT: &str = "result.json";
 const ENV_DETECTION_SALT: &str = ".local_salt";
-const ENV_RESULT_SCHEMA_VERSION: &str = "env-detect-result.v1";
 const ENV_INSTANCE_ID_PREFIX: &str = "envinst_";
 const ENV_INSTANCE_ID_HASH_LEN: usize = 24;
 const ENV_DETECTION_MAX_STEP_DURATION_MS: u64 = 60_000;
 static ENV_JSON_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 type EnvResult<T> = LabResult<T>;
+
+pub use actingcommand_execution_kernel::{EnvDetectedValue, EnvDetectionResult};
 
 fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -848,61 +854,6 @@ struct EnvRect {
     height: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvDetectionResult {
-    pub schema_version: String,
-    pub instance_id: String,
-    pub game_id: String,
-    pub server_id: String,
-    pub detector_id: String,
-    pub detector_version: String,
-    pub resource_pack_id: String,
-    pub resource_pack_hash: String,
-    pub generated_at_unix_ms: u64,
-    pub detections: BTreeMap<String, EnvDetectedValue>,
-}
-
-impl EnvDetectionResult {
-    pub fn detected_facts(&self) -> Vec<EnvDetected> {
-        self.detections
-            .iter()
-            .map(|(key, value)| EnvDetected {
-                key: key.clone(),
-                value: value.value.clone(),
-                confidence: value.confidence,
-                source: value.source.clone(),
-                detector_id: value.detector_id.clone(),
-                detected_at_unix_ms: value.detected_at_unix_ms,
-            })
-            .collect()
-    }
-
-    fn resolved_facts(&self) -> Vec<EnvResolved> {
-        self.detections
-            .iter()
-            .map(|(key, value)| EnvResolved {
-                key: key.clone(),
-                value: value.value.clone(),
-                confidence: value.confidence,
-                source: value.source.clone(),
-                detector_id: value.detector_id.clone(),
-                source_result: format!("{}@{}", self.detector_id, self.generated_at_unix_ms),
-            })
-            .collect()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvDetectedValue {
-    pub value: String,
-    pub confidence: f32,
-    pub source: String,
-    pub detected_at_unix_ms: u64,
-    pub detector_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at_unix_ms: Option<u64>,
-}
-
 pub type ResolvedEnvValue = EnvResolved;
 
 fn load_env_catalog(env_dir: &Path) -> EnvResult<EnvDetectionCatalog> {
@@ -933,8 +884,8 @@ impl<P: LabPorts> Lab<P> {
         let mut json_value = serde_json::to_value(&*value).map_err(|error| {
             LabError::usage(format!("failed to serialize env marker input: {error}"))
         })?;
-        let mut keys = BTreeSet::new();
-        collect_env_pointer_keys(&json_value, &mut keys)?;
+        let keys =
+            collect_environment_pointer_keys(&json_value).map_err(environment_state_error)?;
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -984,49 +935,9 @@ fn resolve_env_markers_value(
     let result = load_env_result(&result_path)?;
     let resource_hash = detector_resource_hash(detector, &context.resource_root)?;
     ensure_result_fresh(&result, detector, &context, &resource_hash, now_ms)?;
-    let mut resolved = BTreeMap::<String, ResolvedEnvValue>::new();
-    resolve_env_markers_in_value_inner(value, detector, &result, now_ms, &mut resolved)?;
-    Ok(resolved.into_values().collect())
-}
-
-fn collect_env_pointer_keys(value: &Value, keys: &mut BTreeSet<String>) -> EnvResult<()> {
-    match value {
-        Value::String(text) => {
-            collect_env_pointer_keys_from_str(text, keys)?;
-        }
-        Value::Array(values) => {
-            for value in values {
-                collect_env_pointer_keys(value, keys)?;
-            }
-        }
-        Value::Object(object) => {
-            for value in object.values() {
-                collect_env_pointer_keys(value, keys)?;
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-    Ok(())
-}
-
-fn collect_env_pointer_keys_from_str(text: &str, keys: &mut BTreeSet<String>) -> EnvResult<()> {
-    let mut offset = 0usize;
-    while let Some(start_rel) = text[offset..].find("{env:") {
-        let key_start = offset + start_rel + "{env:".len();
-        let end_rel = text[key_start..].find('}').ok_or_else(|| {
-            LabError::usage(format!(
-                "malformed env pointer in '{text}': missing closing '}}'"
-            ))
-        })?;
-        let end = key_start + end_rel;
-        let key = &text[key_start..end];
-        if key.trim().is_empty() {
-            return Err(LabError::usage("env pointer key must not be empty"));
-        }
-        keys.insert(key.to_string());
-        offset = end + 1;
-    }
-    Ok(())
+    environment_state_engine(detector, &context)
+        .resolve_value(value, &result, now_ms)
+        .map_err(environment_state_error)
 }
 
 fn select_detector_for_env_keys<'a>(
@@ -1071,36 +982,6 @@ fn ensure_detector_has_env_keys(detector: &EnvDetector, keys: &BTreeSet<String>)
 fn detector_declares_env_keys(detector: &EnvDetector, keys: &BTreeSet<String>) -> bool {
     keys.iter()
         .all(|key| detector.keys.iter().any(|item| &item.key == key))
-}
-
-fn resolve_env_markers_in_value_inner(
-    value: &mut Value,
-    detector: &EnvDetector,
-    result: &EnvDetectionResult,
-    now_ms: u64,
-    resolved: &mut BTreeMap<String, ResolvedEnvValue>,
-) -> EnvResult<()> {
-    match value {
-        Value::String(text) => {
-            let (replacement, keys) = resolve_env_markers(text, detector, result, now_ms)?;
-            *text = replacement;
-            for key in keys {
-                resolved.entry(key.key.clone()).or_insert(key);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                resolve_env_markers_in_value_inner(value, detector, result, now_ms, resolved)?;
-            }
-        }
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                resolve_env_markers_in_value_inner(value, detector, result, now_ms, resolved)?;
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-    Ok(())
 }
 
 fn parse_env_catalog_value(value: Value) -> Result<EnvDetectionCatalog, String> {
@@ -1747,49 +1628,9 @@ fn ensure_result_fresh(
     resource_hash: &str,
     now_ms: u64,
 ) -> EnvResult<()> {
-    if result.schema_version != ENV_RESULT_SCHEMA_VERSION {
-        return Err(LabError::usage(format!(
-            "env detection result schema '{}' is stale; expected '{}'",
-            result.schema_version, ENV_RESULT_SCHEMA_VERSION
-        )));
-    }
-    if result.instance_id != context.instance_id {
-        return Err(LabError::usage(
-            "env detection result belongs to a different instance_id",
-        ));
-    }
-    if result.game_id != context.game_id || result.server_id != context.server_id {
-        return Err(LabError::usage(format!(
-            "env detection result scope is stale: result {}.{} command {}.{}",
-            result.game_id, result.server_id, context.game_id, context.server_id
-        )));
-    }
-    if result.detector_id != detector.id || result.detector_version != detector.version() {
-        return Err(LabError::usage(format!(
-            "env detection result detector is stale: result {}@{} command {}@{}",
-            result.detector_id,
-            result.detector_version,
-            detector.id,
-            detector.version()
-        )));
-    }
-    if result.resource_pack_id != detector.resource_pack_id(context)
-        || result.resource_pack_hash != resource_hash
-    {
-        return Err(LabError::usage(
-            "env detection result is stale because detector resource hash changed",
-        ));
-    }
-    for key in &detector.keys {
-        let value = result.detections.get(&key.key).ok_or_else(|| {
-            LabError::usage(format!(
-                "env detection result is missing key '{}'; run detect first",
-                key.key
-            ))
-        })?;
-        validate_resolved_value(&key.key, value, key, now_ms)?;
-    }
-    Ok(())
+    environment_state_engine(detector, context)
+        .validate_result(result, resource_hash, now_ms)
+        .map_err(environment_state_error)
 }
 
 fn resolve_env_markers(
@@ -1798,27 +1639,9 @@ fn resolve_env_markers(
     result: &EnvDetectionResult,
     now_ms: u64,
 ) -> EnvResult<(String, Vec<ResolvedEnvValue>)> {
-    let mut resolved = String::new();
-    let mut keys = Vec::new();
-    let mut offset = 0usize;
-    while let Some(start_rel) = input[offset..].find("{env:") {
-        let start = offset + start_rel;
-        resolved.push_str(&input[offset..start]);
-        let key_start = start + "{env:".len();
-        let end_rel = input[key_start..].find('}').ok_or_else(|| {
-            LabError::usage(format!(
-                "malformed env pointer in '{input}': missing closing '}}'"
-            ))
-        })?;
-        let end = key_start + end_rel;
-        let key = &input[key_start..end];
-        let value = resolve_single_env_key(key, detector, result, now_ms)?;
-        resolved.push_str(&value.value);
-        keys.push(value);
-        offset = end + 1;
-    }
-    resolved.push_str(&input[offset..]);
-    Ok((resolved, keys))
+    environment_state_engine_for_result(detector, result)
+        .resolve_markers(input, result, now_ms)
+        .map_err(environment_state_error)
 }
 
 fn resolve_single_env_key(
@@ -1827,64 +1650,55 @@ fn resolve_single_env_key(
     result: &EnvDetectionResult,
     now_ms: u64,
 ) -> EnvResult<ResolvedEnvValue> {
-    let key_config = detector
-        .keys
-        .iter()
-        .find(|item| item.key == key)
-        .ok_or_else(|| {
-            LabError::usage(format!(
-                "env key '{key}' is not declared by detector '{}'",
-                detector.id
-            ))
-        })?;
-    let value = result.detections.get(key).ok_or_else(|| {
-        LabError::usage(format!(
-            "env detection result is missing key '{key}'; run detect first"
-        ))
-    })?;
-    validate_resolved_value(key, value, key_config, now_ms)?;
-    Ok(ResolvedEnvValue {
-        key: key.to_string(),
-        value: value.value.clone(),
-        confidence: value.confidence,
-        source: value.source.clone(),
-        detector_id: result.detector_id.clone(),
-        source_result: format!("{}@{}", result.detector_id, result.generated_at_unix_ms),
-    })
+    environment_state_engine_for_result(detector, result)
+        .resolve_key(key, result, now_ms)
+        .map_err(environment_state_error)
 }
 
-fn validate_resolved_value(
-    key: &str,
-    value: &EnvDetectedValue,
-    key_config: &EnvDetectionKey,
-    now_ms: u64,
-) -> EnvResult<()> {
-    validate_env_value_safety(&value.value, key)?;
-    if !key_config
-        .allowed_values
-        .iter()
-        .any(|allowed| allowed == &value.value)
-    {
-        return Err(LabError::usage(format!(
-            "env key '{key}' value '{}' is not in allowed_values",
-            value.value
-        )));
+fn environment_state_engine(
+    detector: &EnvDetector,
+    context: &EnvCommandContext,
+) -> EnvironmentStateEngine {
+    EnvironmentStateEngine::new(
+        EnvironmentStateScope {
+            instance_id: context.instance_id.clone(),
+            game_id: context.game_id.clone(),
+            server_id: context.server_id.clone(),
+            resource_pack_id: detector.resource_pack_id(context),
+        },
+        environment_detector_state(detector),
+    )
+}
+
+fn environment_state_engine_for_result(
+    detector: &EnvDetector,
+    result: &EnvDetectionResult,
+) -> EnvironmentStateEngine {
+    EnvironmentStateEngine::new(
+        EnvironmentStateScope {
+            instance_id: result.instance_id.clone(),
+            game_id: result.game_id.clone(),
+            server_id: result.server_id.clone(),
+            resource_pack_id: result.resource_pack_id.clone(),
+        },
+        environment_detector_state(detector),
+    )
+}
+
+fn environment_detector_state(detector: &EnvDetector) -> EnvironmentDetectorState {
+    EnvironmentDetectorState {
+        id: detector.id.clone(),
+        version: detector.version().to_string(),
+        keys: detector
+            .keys
+            .iter()
+            .map(|key| EnvironmentKeyState {
+                key: key.key.clone(),
+                stale_threshold: key.stale_threshold(),
+                allowed_values: key.allowed_values.clone(),
+            })
+            .collect(),
     }
-    if value.confidence < key_config.stale_threshold() {
-        return Err(LabError::usage(format!(
-            "env key '{key}' is stale: confidence {:.6} below threshold {:.6}",
-            value.confidence,
-            key_config.stale_threshold()
-        )));
-    }
-    if let Some(expires_at) = value.expires_at_unix_ms
-        && now_ms > expires_at
-    {
-        return Err(LabError::usage(format!(
-            "env key '{key}' expired at {expires_at}; run detect first"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_env_value(candidate: &EnvDetectionCandidate, key: &EnvDetectionKey) -> EnvResult<()> {
@@ -1903,19 +1717,11 @@ fn validate_env_value(candidate: &EnvDetectionCandidate, key: &EnvDetectionKey) 
 }
 
 fn validate_env_value_safety(value: &str, key: &str) -> EnvResult<()> {
-    if value.is_empty()
-        || value == "."
-        || value.contains('/')
-        || value.contains('\\')
-        || value.contains(':')
-        || value.contains("..")
-        || Path::new(value).is_absolute()
-    {
-        return Err(LabError::usage(format!(
-            "env key '{key}' has unsafe value '{value}'"
-        )));
-    }
-    Ok(())
+    validate_environment_value_safety(value, key).map_err(environment_state_error)
+}
+
+fn environment_state_error(error: EnvironmentStateError) -> LabError {
+    LabError::usage(error.message())
 }
 
 fn env_result_path(env_dir: &Path, instance_id: &str) -> PathBuf {

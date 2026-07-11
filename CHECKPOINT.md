@@ -1,5 +1,74 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 4b1 environment-state ownership
+
+### Current status
+
+- Continued from Task 4a commit `45327ade19b8e2f30fe5ea3b1584d1cd90784b6f`.
+- Added execution-owned `EnvironmentStateEngine` with typed error kinds for schema, instance,
+  scope, detector, resource-hash, missing-key, confidence, expiry, unsafe-value, unallowed-value,
+  malformed-pointer, and undeclared-key failures.
+- Moved `EnvDetectionResult` and `EnvDetectedValue` into execution-kernel with their typed ledger
+  fact projections.
+- Moved result freshness checks, resolved-value validation, safe path-segment validation,
+  environment pointer collection, string marker resolution, and recursive JSON marker replacement
+  out of Lab.
+- Kept Lab protocol behavior stable through narrow adapters from validated catalog/context data into
+  the execution-owned model and from typed environment errors into existing `LabError` messages.
+- Kept catalog file loading, template hashing, local instance salt/identity, result locking, atomic
+  persistence, scene/capture preparation, and touch steps outside the pure state engine.
+- Added architecture coverage proving the environment state core cannot reach Lab, device/input,
+  Runtime client, filesystem, or backend-construction authority.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `crates/execution-kernel/src/environment.rs`
+- `crates/execution-kernel/src/lib.rs`
+- `crates/lab/src/env_detection.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-execution-kernel environment --no-fail-fast`
+- `cargo test -p actingcommand-lab env_detection --no-fail-fast`
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`
+- `cargo clippy -p actingcommand-execution-kernel -p actingcommand-lab --all-targets -- -D warnings`
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json state,updatedAt,author,labels,comments`
+
+### Test results
+
+- Execution-kernel environment-state suite passed 5 tests; the full crate now has 54 tests.
+- All 20 established Lab environment-detection tests passed through the compatibility adapters.
+- Architecture passed all 23 workspace guards, including the new pure environment-state boundary.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Full `cargo test --workspace` passed.
+- Full all-target/all-feature Clippy passed with warnings denied; formatting and whitespace checks
+  passed.
+- Issue #35 remains open, approved, and unchanged; every instruction/comment is authored by
+  repository owner `HS7097`.
+
+### Current blocker
+
+- No blocker for C5 Task 4b1.
+- Catalog normalization/validation, candidate observation decisions, and result construction remain
+  temporarily in Lab until Task 4b2.
+- Production capture construction remains in Lab until Task 4c.
+
+### Next step
+
+1. Commit and push Task 4b1 and record its evidence in Issue #36.
+2. Implement Task 4b2 with typed catalog and candidate-observation inputs while preserving resource
+   hashes, thresholds, matching semantics, and all established environment tests.
+
 ## 2026-07-11 Issue 35 C5 Task 4a read-only recognition ownership
 
 ### Current status
