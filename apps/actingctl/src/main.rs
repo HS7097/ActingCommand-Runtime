@@ -5,21 +5,13 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_contract::{EventActor, EventSource};
-use actingcommand_device::{
-    AdbConfig, CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, DeviceTarget, Frame,
-    ScreencapBackend, resolve_adb_path,
-};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeFlowOutput};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
-
-const MAX_SEALED_FRAME_BYTES: u64 = 64 * 1024 * 1024;
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -49,12 +41,9 @@ fn run(arguments: Vec<OsString>) -> Result<RuntimeFlowOutput, ActingctlError> {
         Command::Reset => client
             .safe_reset(&invocation.instance)
             .map_err(ActingctlError::runtime),
-        Command::Observe(mode) => {
-            let mut capture = mode.open()?;
-            client
-                .observe_readonly(&invocation.instance, capture.as_mut())
-                .map_err(ActingctlError::runtime)
-        }
+        Command::Observe => client
+            .observe_readonly(&invocation.instance)
+            .map_err(ActingctlError::runtime),
     }
 }
 
@@ -72,50 +61,8 @@ struct Invocation {
 }
 
 enum Command {
-    Observe(ObserveMode),
+    Observe,
     Reset,
-}
-
-enum ObserveMode {
-    Adb {
-        adb: Option<String>,
-        serial: String,
-        connect: bool,
-    },
-    SealedFrame(PathBuf),
-}
-
-impl ObserveMode {
-    fn open(self) -> Result<Box<dyn CaptureBackend>, ActingctlError> {
-        match self {
-            Self::Adb {
-                adb,
-                serial,
-                connect,
-            } => {
-                let resolved = resolve_adb_path(adb.as_deref()).map_err(ActingctlError::device)?;
-                if let Some(warning) = resolved.warning {
-                    eprintln!("WARNING actingctl: {warning}");
-                }
-                Ok(Box::new(ScreencapBackend::new(
-                    AdbConfig {
-                        adb_path: resolved.path,
-                        command_timeout: Duration::from_secs(12),
-                    },
-                    DeviceTarget {
-                        serial: Some(serial),
-                        host: "127.0.0.1".to_string(),
-                        port: 16384,
-                        connect,
-                    },
-                )))
-            }
-            Self::SealedFrame(path) => Ok(Box::new(SealedFrameCapture {
-                path,
-                consumed: false,
-            })),
-        }
-    }
 }
 
 impl Invocation {
@@ -125,11 +72,6 @@ impl Invocation {
         };
         let mut state_root = None;
         let mut instance = None;
-        let mut adb = None;
-        let mut serial = None;
-        let mut sealed_frame = None;
-        let mut no_connect = false;
-        let mut sealed_test = false;
         let mut index = 1;
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
@@ -140,13 +82,6 @@ impl Invocation {
                 "--instance" => {
                     instance = Some(require_text(&arguments, &mut index)?);
                 }
-                "--adb" => adb = Some(require_text(&arguments, &mut index)?),
-                "--serial" => serial = Some(require_text(&arguments, &mut index)?),
-                "--sealed-frame" => {
-                    sealed_frame = Some(PathBuf::from(require_value(&arguments, &mut index)?));
-                }
-                "--no-connect" => no_connect = true,
-                "--sealed-test" => sealed_test = true,
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -156,25 +91,8 @@ impl Invocation {
             .filter(|value: &String| !value.trim().is_empty())
             .ok_or(ActingctlError::Usage)?;
         let command = match command {
-            "reset"
-                if adb.is_none() && serial.is_none() && sealed_frame.is_none() && !sealed_test =>
-            {
-                Command::Reset
-            }
-            "observe" => {
-                let mode = match (sealed_frame, sealed_test, serial) {
-                    (Some(path), true, None) if adb.is_none() && !no_connect => {
-                        ObserveMode::SealedFrame(path)
-                    }
-                    (None, false, Some(serial)) => ObserveMode::Adb {
-                        adb,
-                        serial,
-                        connect: !no_connect,
-                    },
-                    _ => return Err(ActingctlError::Usage),
-                };
-                Command::Observe(mode)
-            }
+            "reset" => Command::Reset,
+            "observe" => Command::Observe,
             _ => return Err(ActingctlError::Usage),
         };
         Ok(Self {
@@ -182,29 +100,6 @@ impl Invocation {
             instance,
             command,
         })
-    }
-}
-
-struct SealedFrameCapture {
-    path: PathBuf,
-    consumed: bool,
-}
-
-impl CaptureBackend for SealedFrameCapture {
-    fn capture(&mut self) -> DeviceResult<Frame> {
-        if self.consumed {
-            return Err(DeviceError::fatal("sealed frame was already consumed"));
-        }
-        self.consumed = true;
-        let metadata = fs::metadata(&self.path).map_err(|error| {
-            DeviceError::fatal(format!("sealed frame metadata failed: {error}"))
-        })?;
-        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_SEALED_FRAME_BYTES {
-            return Err(DeviceError::fatal("sealed frame size is invalid"));
-        }
-        let png = fs::read(&self.path)
-            .map_err(|error| DeviceError::fatal(format!("sealed frame read failed: {error}")))?;
-        Frame::from_png(png, CaptureBackendName::AdbScreencap)
     }
 }
 
@@ -223,7 +118,6 @@ fn require_text(arguments: &[OsString], index: &mut usize) -> Result<String, Act
 enum ActingctlError {
     Usage,
     Runtime(actingcommand_runtime_client::RuntimeClientError),
-    Device(DeviceError),
     Output,
 }
 
@@ -231,20 +125,14 @@ impl ActingctlError {
     fn runtime(error: actingcommand_runtime_client::RuntimeClientError) -> Self {
         Self::Runtime(error)
     }
-
-    fn device(error: DeviceError) -> Self {
-        Self::Device(error)
-    }
 }
 
 impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage => formatter.write_str(
-                "usage: actingctl <observe|reset> --state-root <path> --instance <id> [observe: --serial <serial> [--adb <path>] [--no-connect] | --sealed-test --sealed-frame <png>]",
-            ),
+            Self::Usage => formatter
+                .write_str("usage: actingctl <observe|reset> --state-root <path> --instance <id>"),
             Self::Runtime(error) => error.fmt(formatter),
-            Self::Device(error) => error.fmt(formatter),
             Self::Output => formatter.write_str("failed to write JSON output"),
         }
     }
@@ -255,30 +143,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sealed_observation_requires_explicit_test_marker() {
-        let args = |marked| {
-            let mut args = vec![
-                "observe",
-                "--state-root",
-                "state",
-                "--instance",
-                "ak.cn",
-                "--sealed-frame",
-                "frame.png",
-            ];
-            if marked {
-                args.push("--sealed-test");
-            }
-            args.into_iter().map(OsString::from).collect()
-        };
-        assert!(Invocation::parse(args(false)).is_err());
-        assert!(Invocation::parse(args(true)).is_ok());
+    fn observe_uses_only_runtime_identity() {
+        let args = ["observe", "--state-root", "state", "--instance", "ak.cn"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        assert!(Invocation::parse(args).is_ok());
     }
 
     #[test]
-    fn reset_rejects_capture_configuration() {
+    fn client_commands_reject_capture_configuration() {
         let args = [
-            "reset",
+            "observe",
             "--state-root",
             "state",
             "--instance",

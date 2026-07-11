@@ -4,10 +4,10 @@ use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, InputAction, InstanceId, OwnerEpoch,
     RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo,
 };
-use actingcommand_device::{DeviceError, DeviceResult, InputBackend};
+use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
-    InputBackendProvider, ResolvedInputInstance, RuntimeHost, RuntimeHostConfig,
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use actingcommand_scheduler::SchedulerConfig;
 use std::env;
@@ -91,13 +91,13 @@ struct FileProvider {
     events_path: PathBuf,
 }
 
-impl InputBackendProvider for FileProvider {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance> {
+impl ExecutionBackendProvider for FileProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
-            .then(|| ResolvedInputInstance::new(self.instance_id, "<sealed-process-test>"))
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-process-test>"))
     }
 
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
         if instance_alias != "ak.cn" {
             return Err(DeviceError::fatal("sealed process-test instance mismatch"));
         }
@@ -107,6 +107,12 @@ impl InputBackendProvider for FileProvider {
         };
         backend.record("open")?;
         Ok(Box::new(backend))
+    }
+
+    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        Err(DeviceError::fatal(
+            "sealed process test does not configure capture",
+        ))
     }
 }
 

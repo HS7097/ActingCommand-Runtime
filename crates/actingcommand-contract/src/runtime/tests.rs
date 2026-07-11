@@ -424,7 +424,7 @@ fn readonly_capability_is_issuer_owned_and_binds_observation_context() {
             .is_some_and(|id| id.starts_with("recognition_"))
     );
 
-    let request = request(RuntimeOperation::BeginReadonlyObservation {
+    let request = request(RuntimeOperation::ObserveReadonly {
         instance_alias: "ak.cn".to_string(),
     });
     let links = issued.event_links(&request.validate().expect("validated request"));
@@ -505,22 +505,9 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
 #[test]
 fn c4_operations_round_trip_without_generic_payloads() {
     let ids = issuer();
-    let owner_epoch = *ids.mint_owner_epoch().expect("epoch").transport();
-    let instance_id = *ids.mint_instance_id().expect("instance").transport();
-    let issued = ids
-        .issue_readonly_capture_capability(owner_epoch, instance_id)
-        .expect("capability");
-    let observation =
-        ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded).expect("observation");
     let operations = [
-        RuntimeOperation::BeginReadonlyObservation {
+        RuntimeOperation::ObserveReadonly {
             instance_alias: "ak.cn".to_string(),
-        },
-        RuntimeOperation::FinishReadonlyObservation {
-            capability: *issued.transport(),
-            outcome: ReadonlyObservationOutcome::Completed {
-                observation: observation.clone(),
-            },
         },
         RuntimeOperation::SafeReset {
             instance_alias: "ak.cn".to_string(),
@@ -534,7 +521,15 @@ fn c4_operations_round_trip_without_generic_payloads() {
         let decoded = serde_json::from_str::<RuntimeRequest>(&encoded).expect("request round trip");
         decoded.validate().expect("valid C4 request");
         assert!(!encoded.contains("serde_json::Value"));
+        assert!(!encoded.contains("capability"));
     }
+
+    assert!(
+        serde_json::from_str::<RuntimeOperation>(
+            r#"{"operation":"begin_readonly_observation","instance_alias":"ak.cn"}"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -15,7 +15,7 @@ use actingcommand_lab::{
     UserConfig,
 };
 use actingcommand_ledger::{LabLedger, LastResortError, LedgerRecord, write_last_resort_error};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -361,8 +361,11 @@ impl InputBackendFactory for AppInputFactory {
             actingcommand_contract::EventSource::Lab,
         ))
         .map_err(|error| LabError::device(error.to_string()))?;
-        let proxy = RuntimeInputProxy::connect(client, &metadata.instance_alias)
-            .map_err(|error| LabError::device(error.to_string()))?;
+        let proxy = super::runtime_input_backend::RuntimeInputBackend::connect(
+            client,
+            &metadata.instance_alias,
+        )
+        .map_err(|error| LabError::device(error.to_string()))?;
         let backend = ObservedInputBackend {
             proxy,
             observation: request.observation,
@@ -373,7 +376,7 @@ impl InputBackendFactory for AppInputFactory {
 }
 
 struct ObservedInputBackend {
-    proxy: RuntimeInputProxy,
+    proxy: super::runtime_input_backend::RuntimeInputBackend,
     observation: Option<InputBackendObservation>,
 }
 

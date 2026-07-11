@@ -1,5 +1,89 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b Task 4 daemon-owned capture hard gate
+
+### Current status
+
+- Replaced the C3a admit/begin/finish read-only capability exchange with one typed
+  `ObserveReadonly` request. Capture and frame validation now execute inside Runtime host through
+  the resident `ExecutionKernel`; clients receive only typed observation metadata and ledger
+  projection.
+- Runtime host records one correlated request/admission/capture/recognition lifecycle. Capture open,
+  operation, malformed-frame, and session-terminal failures remain visible, return no fake result,
+  and never trigger reconnect, retry, or backend fallback.
+- Actingd now registers explicit input and capture backend choices per instance and rejects automatic
+  selection or mismatched resolved device identities.
+- Runtime-client no longer has production dependencies on device or recognition. Its heartbeat
+  proxy now carries only typed lease/input operations; the legacy Lab `InputBackend` compatibility
+  adapter lives at the Lab boundary.
+- Actingctl and the ActingLab Runtime slice no longer accept capture backend configuration or create
+  capture backends. Their observe path uses only Runtime identity and typed IPC.
+- Process fixtures prove daemon-owned capture remains resident across disposable clients, closes on
+  Runtime shutdown, and shares the same Runtime projection path as safe reset.
+- Architecture guards reject production client device/recognition dependencies, input/capture
+  constructors, device types, and the retired client capability operations.
+- Issue #35 was re-read after implementation. Its state remains open and approved, and every
+  authoritative comment is still authored by `HS7097`.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actingctl/Cargo.toml`
+- `apps/actingctl/src/main.rs`
+- `apps/actingctl/tests/c4_process.rs`
+- `apps/actingd/src/config.rs`
+- `apps/actingd/tests/process.rs`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/runtime_input_backend.rs`
+- `apps/actinglab/src/runtime_slice_cli.rs`
+- `apps/actinglab/tests/c4_runtime_process.rs`
+- `apps/actinglab/tests/runtime_input_proxy.rs`
+- `crates/actingcommand-contract/src/runtime.rs`
+- `crates/actingcommand-contract/src/runtime/tests.rs`
+- `crates/runtime-client/Cargo.toml`
+- `crates/runtime-client/src/client.rs`
+- `crates/runtime-client/src/error.rs`
+- `crates/runtime-client/src/input.rs`
+- `crates/runtime-client/src/tests.rs`
+- `crates/runtime-client/tests/c3a_process.rs`
+- `crates/runtime-host/src/host.rs`
+- `crates/runtime-host/src/provider.rs`
+- `crates/runtime-host/src/tests.rs`
+- `tests/support/c4_runtime.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `git fetch origin --prune`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test -p actingcommand-contract -p actingcommand-execution-kernel -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actingctl -p actingcommand-actingd -p actingcommand-actinglab-architecture`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo test -p actingcommand-actinglab --test c4_runtime_process --test runtime_input_proxy`
+- `CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0 cargo clippy -p actingcommand-contract -p actingcommand-execution-kernel -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actingctl -p actingcommand-actingd -p actingcommand-actinglab -p actingcommand-actinglab-architecture --all-targets -- -D warnings`
+- `cargo fmt --all`
+- `git diff --check`
+
+### Test results
+
+- Focused Task 4 suites passed: contract 38 unit tests plus 11 compile-fail doctests, execution
+  kernel 7, Runtime host 25, Runtime client 15 plus 2 process tests, actingctl 2 unit plus 2 process,
+  actingd 5 unit plus 2 process, and architecture 14 unit plus 19 workspace guards.
+- ActingLab Runtime process/proxy acceptance passed 3 tests.
+- Focused all-target Clippy passed with warnings denied; formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push C3b Task 4 and record the completed unit in Issue #36.
+2. Run Task 5 full closeout gates, freeze the stable C3b checkpoint, and update Issue #36.
+
 ## 2026-07-11 Issue 35 C3b Task 3 Runtime host control-plane integration
 
 ### Current status

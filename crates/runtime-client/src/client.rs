@@ -5,12 +5,9 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
     IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, ReadOnlyCaptureCapability, ReadonlyFrame,
-    ReadonlyObservation, ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict,
-    RequestId, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeInfo, RuntimeOperation,
+    RuntimeReceipt, RuntimeRequest, RuntimeResult,
 };
-use actingcommand_device::CaptureBackend;
-use actingcommand_recognition::Scene;
 use serde::Serialize;
 use std::fmt;
 use std::fs;
@@ -302,112 +299,13 @@ impl RuntimeClient {
         }
     }
 
-    pub fn admit_readonly(
-        &self,
-        instance_alias: &str,
-    ) -> RuntimeClientResult<ReadOnlyCaptureCapability> {
-        match self.execute(
-            "admit_readonly",
-            RuntimeOperation::AdmitReadonly {
-                instance_alias: instance_alias.to_string(),
-            },
-        )? {
-            RuntimeResult::ReadOnlyAdmitted { capability } => Ok(capability),
-            _ => Err(self.unexpected_result("admit_readonly")),
-        }
-    }
-
-    pub fn observe_readonly(
-        &self,
-        instance_alias: &str,
-        capture: &mut dyn CaptureBackend,
-    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+    pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
         let correlation = self.issue_correlation("observe_readonly")?;
         let correlation_id = *correlation.transport();
-        let begin = self.execute_receipt_with_correlation(
-            "begin_readonly_observation",
-            RuntimeOperation::BeginReadonlyObservation {
-                instance_alias: instance_alias.to_string(),
-            },
-            correlation,
-            None,
-        )?;
-        let capability = match begin.result() {
-            Some(RuntimeResult::ReadonlyObservationBegun { capability }) => *capability,
-            _ => return Err(self.unexpected_result("begin_readonly_observation")),
-        };
-        let frame = match capture.capture() {
-            Ok(frame) => frame,
-            Err(_) => {
-                return self.report_observation_failure(
-                    capability,
-                    correlation,
-                    ReadonlyObservationOutcome::Failed {
-                        stage: ReadonlyObservationStage::Capture,
-                        captured_frame: None,
-                    },
-                    "capture_readonly_observation",
-                );
-            }
-        };
-        let captured_frame = match ReadonlyFrame::new(frame.width, frame.height) {
-            Ok(frame) => frame,
-            Err(_) => {
-                return self.report_observation_failure(
-                    capability,
-                    correlation,
-                    ReadonlyObservationOutcome::Failed {
-                        stage: ReadonlyObservationStage::Capture,
-                        captured_frame: None,
-                    },
-                    "capture_readonly_observation",
-                );
-            }
-        };
-        let png = match frame.png_for_artifact() {
-            Ok(png) => png,
-            Err(_) => {
-                return self.report_observation_failure(
-                    capability,
-                    correlation,
-                    ReadonlyObservationOutcome::Failed {
-                        stage: ReadonlyObservationStage::Recognition,
-                        captured_frame: Some(captured_frame),
-                    },
-                    "recognize_readonly_observation",
-                );
-            }
-        };
-        let scene = match Scene::from_png(&png) {
-            Ok(scene) if scene.width() == frame.width && scene.height() == frame.height => scene,
-            Ok(_) | Err(_) => {
-                return self.report_observation_failure(
-                    capability,
-                    correlation,
-                    ReadonlyObservationOutcome::Failed {
-                        stage: ReadonlyObservationStage::Recognition,
-                        captured_frame: Some(captured_frame),
-                    },
-                    "recognize_readonly_observation",
-                );
-            }
-        };
-        let observation = ReadonlyObservation::new(
-            scene.width(),
-            scene.height(),
-            RecognitionVerdict::FrameDecoded,
-        )
-        .map_err(|_| {
-            RuntimeClientError::fatal(
-                "readonly_observation_invalid",
-                "recognize_readonly_observation",
-            )
-        })?;
         let receipt = self.execute_receipt_with_correlation(
-            "finish_readonly_observation",
-            RuntimeOperation::FinishReadonlyObservation {
-                capability,
-                outcome: ReadonlyObservationOutcome::Completed { observation },
+            "observe_readonly",
+            RuntimeOperation::ObserveReadonly {
+                instance_alias: instance_alias.to_string(),
             },
             correlation,
             None,
@@ -416,7 +314,7 @@ impl RuntimeClient {
             receipt.result(),
             Some(RuntimeResult::ReadonlyObservationCompleted { .. })
         ) {
-            return Err(self.unexpected_result("finish_readonly_observation"));
+            return Err(self.unexpected_result("observe_readonly"));
         }
         self.flow_output(receipt, correlation_id)
     }
@@ -642,60 +540,6 @@ impl RuntimeClient {
                 )
             })?;
         Ok(RuntimeFlowOutput { receipt, events })
-    }
-
-    fn report_observation_failure(
-        &self,
-        capability: ReadOnlyCaptureCapability,
-        correlation: IssuedCorrelationId,
-        outcome: ReadonlyObservationOutcome,
-        operation: &'static str,
-    ) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let (local_code, expected_runtime_code) = match &outcome {
-            ReadonlyObservationOutcome::Failed {
-                stage: ReadonlyObservationStage::Capture,
-                ..
-            } => (
-                "capture_failed_and_runtime_report_failed",
-                actingcommand_contract::RuntimeErrorCode::CaptureFailed,
-            ),
-            ReadonlyObservationOutcome::Failed {
-                stage: ReadonlyObservationStage::Recognition,
-                ..
-            } => (
-                "recognition_failed_and_runtime_report_failed",
-                actingcommand_contract::RuntimeErrorCode::RecognitionFailed,
-            ),
-            ReadonlyObservationOutcome::Completed { .. } => {
-                return Err(RuntimeClientError::fatal(
-                    "observation_failure_report_invalid",
-                    operation,
-                ));
-            }
-        };
-        match self.execute_receipt_with_correlation(
-            operation,
-            RuntimeOperation::FinishReadonlyObservation {
-                capability,
-                outcome,
-            },
-            correlation,
-            None,
-        ) {
-            Err(error)
-                if error
-                    .projection()
-                    .is_some_and(|projection| projection.code == expected_runtime_code) =>
-            {
-                Err(error)
-            }
-            Err(error) => Err(RuntimeClientError::combined(local_code, operation, error)),
-            Ok(_) => Err(RuntimeClientError::combined(
-                local_code,
-                operation,
-                self.unexpected_result(operation),
-            )),
-        }
     }
 
     fn unexpected_result(&self, operation: &'static str) -> RuntimeClientError {

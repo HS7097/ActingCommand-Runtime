@@ -25,7 +25,7 @@ use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, Sce
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -56,8 +56,8 @@ pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
 mod resource_convert;
+mod runtime_input_backend;
 mod runtime_slice_cli;
-
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
@@ -5842,7 +5842,7 @@ impl DirectTouchCommand {
 fn open_cli_runtime_input_proxy(
     global: &GlobalOptions,
     config: &UserConfig,
-) -> CliOutcome<(RuntimeInputProxy, String)> {
+) -> CliOutcome<(runtime_input_backend::RuntimeInputBackend, String)> {
     let instance_alias = resolve_instance_id(global, config)?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         runtime_state_root()?,
@@ -5850,7 +5850,7 @@ fn open_cli_runtime_input_proxy(
         EventSource::Cli,
     ))
     .map_err(|error| CliError::device(error.to_string()))?;
-    let proxy = RuntimeInputProxy::connect(client, &instance_alias)
+    let proxy = runtime_input_backend::RuntimeInputBackend::connect(client, &instance_alias)
         .map_err(|error| CliError::device(error.to_string()))?;
     Ok((proxy, instance_alias))
 }

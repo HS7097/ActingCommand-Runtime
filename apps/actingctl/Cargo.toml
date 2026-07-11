@@ -14,11 +14,11 @@ path = "src/main.rs"
 
 [dependencies]
 actingcommand-contract = { workspace = true }
-actingcommand-device = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+actingcommand-device = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"

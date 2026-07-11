@@ -256,7 +256,6 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
- "actingcommand-recognition",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde",

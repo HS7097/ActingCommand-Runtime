@@ -4,20 +4,16 @@ use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::time::unix_ms_now;
-use crate::{
-    FatalState, InputBackendProvider, InputOnlyExecutionProvider, RuntimeHostError,
-    RuntimeHostResult,
-};
+use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    AuditInput, CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, CorrelationId,
-    DiagnosticCode, EffectDisposition, EventAction, EventActor, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
-    InputPayloadDraft, InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft,
-    LeaseQueuePolicy, LeaseToken, OriginModule, RUNTIME_INFO_FILE, ReadOnlyCaptureCapability,
-    ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionId, RecognitionPayloadDraft,
-    RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    AuditInput, CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode,
+    EffectDisposition, EventAction, EventActor, EventLinksDraft, EventPayload, EventQuery,
+    EventSeverity, EventSource, EventType, InputAction, InputPayload, InputPayloadDraft,
+    InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
+    LeaseToken, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
+    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel};
 use actingcommand_ledger::critical::{
@@ -139,7 +135,7 @@ pub struct RuntimeHost {
 impl RuntimeHost {
     pub fn start(
         config: RuntimeHostConfig,
-        provider: Arc<dyn InputBackendProvider>,
+        provider: Arc<dyn ExecutionBackendProvider>,
     ) -> RuntimeHostResult<Self> {
         config.validate()?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
@@ -204,20 +200,16 @@ impl RuntimeHost {
         let info_path = config.state_root.join(RUNTIME_INFO_FILE);
         publish_runtime_info(&info_path, &info)?;
         let fatal = FatalState::default();
-        let execution_provider: Arc<dyn ExecutionBackendProvider> =
-            Arc::new(InputOnlyExecutionProvider::new(Arc::clone(&provider)));
         let shared = Arc::new(HostShared {
             owner_epoch,
             scheduler: Mutex::new(scheduler),
             owner: Mutex::new(owner),
             ledger,
             events,
-            provider,
-            execution: ExecutionKernel::new(execution_provider),
+            execution: ExecutionKernel::new(provider),
             registered_instances: Mutex::new(BTreeMap::new()),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
-            pending_observations: Mutex::new(BTreeMap::new()),
             admission_guards: Mutex::new(BTreeMap::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Instant::now(),
@@ -302,23 +294,6 @@ impl RuntimeHost {
             .process_request(request, connection_id)
     }
 
-    #[cfg(test)]
-    pub(crate) fn pending_observation_count_for_test(&self) -> RuntimeHostResult<usize> {
-        self.shared
-            .as_ref()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "runtime_host_closed",
-                    "read_pending_observations",
-                    RuntimeErrorCode::RuntimeUnavailable,
-                )
-            })
-            .and_then(|shared| {
-                lock(&shared.pending_observations, "read_pending_observations")
-                    .map(|observations| observations.len())
-            })
-    }
-
     pub fn close(mut self) -> RuntimeHostResult<()> {
         self.shutdown()
     }
@@ -370,13 +345,6 @@ impl Drop for RuntimeHost {
             panic!("{error}");
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct PendingObservation {
-    capability: IssuedReadOnlyCaptureCapability,
-    connection_id: ConnectionId,
-    correlation_id: CorrelationId,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -434,12 +402,10 @@ struct HostShared {
     ledger: GlobalLedger,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
-    provider: Arc<dyn InputBackendProvider>,
     execution: ExecutionKernel,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
-    pending_observations: Mutex<BTreeMap<RecognitionId, PendingObservation>>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     next_connection_id: AtomicU64,
     clock: Instant,
@@ -561,22 +527,9 @@ impl HostShared {
             RuntimeOperation::ReleaseLease { token } => {
                 self.release_lease(validated, request.request_id(), token, connection_id)
             }
-            RuntimeOperation::AdmitReadonly { instance_alias } => {
-                self.admit_readonly(validated, instance_alias)
+            RuntimeOperation::ObserveReadonly { instance_alias } => {
+                self.observe_readonly(request, validated, instance_alias)
             }
-            RuntimeOperation::BeginReadonlyObservation { instance_alias } => {
-                self.begin_readonly_observation(request, validated, instance_alias, connection_id)
-            }
-            RuntimeOperation::FinishReadonlyObservation {
-                capability,
-                outcome,
-            } => self.finish_readonly_observation(
-                request,
-                validated,
-                capability,
-                outcome,
-                connection_id,
-            ),
             RuntimeOperation::SafeReset {
                 instance_alias,
                 holder_id,
@@ -1734,29 +1687,11 @@ impl HostShared {
         })
     }
 
-    fn admit_readonly(
-        &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        instance_alias: &str,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let resolved = self.resolve_instance(instance_alias)?;
-        let event = self.append_scheduler_admitted(request, &resolved, None)?;
-        let capability = self.issue_readonly_capability(resolved.instance_id())?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Admitted,
-            terminal: Some(terminal(&event)),
-            result: RuntimeResult::ReadOnlyAdmitted {
-                capability: *capability.transport(),
-            },
-        })
-    }
-
-    fn begin_readonly_observation(
+    fn observe_readonly(
         &self,
         original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         instance_alias: &str,
-        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
         self.append_request_lifecycle(
@@ -1776,7 +1711,7 @@ impl HostShared {
             links.clone(),
             CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
         )?;
-        let terminal_event = self.append_event(
+        self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Recognition,
@@ -1784,30 +1719,112 @@ impl HostShared {
             links,
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let pending = PendingObservation {
-            capability,
-            connection_id,
-            correlation_id: original.correlation_id(),
+        let frame = match self.execution.capture(instance_alias) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Device,
+                    OriginModule::Capture,
+                    EventActor::Runtime,
+                    capability.event_links(request),
+                    CapturePayloadDraft::failed(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                let event = self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Recognition,
+                    EventActor::Runtime,
+                    capability.event_links(request),
+                    RecognitionPayloadDraft::failed(
+                        EventAction::RecognitionObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                return Err(RequestFailure::request(
+                    RuntimeHostError::execution("execute_capture_backend", &error),
+                    RuntimeReceiptState::Failed,
+                    Some(terminal(&event)),
+                ));
+            }
         };
-        let mut observations = lock(&self.pending_observations, "register_readonly_observation")?;
-        if observations
-            .insert(capability.transport().recognition_id(), pending)
-            .is_some()
-        {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::fatal(
-                    "readonly_capability_collision",
-                    "register_readonly_observation",
-                    RuntimeErrorCode::RuntimeFatal,
+        if frame.encode_png_fast().is_err() {
+            self.append_event(
+                EventSeverity::Error,
+                EventSource::Device,
+                OriginModule::Capture,
+                EventActor::Runtime,
+                capability.event_links(request),
+                CapturePayloadDraft::failed(
+                    EventAction::CaptureObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::Indeterminate,
+                    AuditInput::new(),
                 ),
+            )?;
+            let event = self.append_event(
+                EventSeverity::Error,
+                EventSource::Runtime,
+                OriginModule::Recognition,
+                EventActor::Runtime,
+                capability.event_links(request),
+                RecognitionPayloadDraft::failed(
+                    EventAction::RecognitionObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                ),
+            )?;
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "capture_frame_invalid",
+                    "observe_readonly",
+                    RuntimeErrorCode::CaptureFailed,
+                ),
+                RuntimeReceiptState::Failed,
+                Some(terminal(&event)),
             ));
         }
+        let observation =
+            ReadonlyObservation::new(frame.width, frame.height, RecognitionVerdict::FrameDecoded)
+                .map_err(|_| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "readonly_observation_invalid",
+                    "observe_readonly",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        self.append_capture_completed(
+            capability.event_links(request),
+            observation.width(),
+            observation.height(),
+        )?;
+        let event = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Recognition,
+            EventActor::Runtime,
+            capability.event_links(request),
+            RecognitionPayloadDraft::completed(
+                EventAction::RecognitionObserve,
+                EffectDisposition::Performed,
+                observation.width(),
+                observation.height(),
+                observation.verdict(),
+                AuditInput::new(),
+            ),
+        )?;
         Ok(OperationSuccess {
-            state: RuntimeReceiptState::Admitted,
-            terminal: Some(terminal(&terminal_event)),
-            result: RuntimeResult::ReadonlyObservationBegun {
-                capability: *capability.transport(),
-            },
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&event)),
+            result: RuntimeResult::ReadonlyObservationCompleted { observation },
         })
     }
 
@@ -1893,132 +1910,6 @@ impl HostShared {
         }
     }
 
-    fn finish_readonly_observation(
-        &self,
-        original: &RuntimeRequest,
-        request: &ValidatedRuntimeRequest<'_>,
-        capability: &ReadOnlyCaptureCapability,
-        outcome: &ReadonlyObservationOutcome,
-        connection_id: ConnectionId,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        self.validate_c4_client_source(original)?;
-        let pending =
-            self.take_pending_observation(capability, original.correlation_id(), connection_id)?;
-        self.append_request_lifecycle(
-            original,
-            request,
-            capability.instance_id(),
-            EventAction::RuntimeReadonlyObserve,
-        )?;
-        let links = pending.capability.event_links(request);
-        match outcome {
-            ReadonlyObservationOutcome::Completed { observation } => {
-                self.append_capture_completed(
-                    links.clone(),
-                    observation.width(),
-                    observation.height(),
-                )?;
-                let event = self.append_event(
-                    EventSeverity::Info,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links,
-                    RecognitionPayloadDraft::completed(
-                        EventAction::RecognitionObserve,
-                        EffectDisposition::Performed,
-                        observation.width(),
-                        observation.height(),
-                        observation.verdict(),
-                        AuditInput::new(),
-                    ),
-                )?;
-                Ok(OperationSuccess {
-                    state: RuntimeReceiptState::Completed,
-                    terminal: Some(terminal(&event)),
-                    result: RuntimeResult::ReadonlyObservationCompleted {
-                        observation: observation.clone(),
-                    },
-                })
-            }
-            ReadonlyObservationOutcome::Failed {
-                stage: ReadonlyObservationStage::Capture,
-                captured_frame: None,
-            } => {
-                self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Device,
-                    OriginModule::Capture,
-                    EventActor::Runtime,
-                    links.clone(),
-                    CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links,
-                    RecognitionPayloadDraft::failed(
-                        EventAction::RecognitionObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "capture_failed",
-                        "finish_readonly_observation",
-                        RuntimeErrorCode::CaptureFailed,
-                    ),
-                    RuntimeReceiptState::Failed,
-                    Some(terminal(&event)),
-                ))
-            }
-            ReadonlyObservationOutcome::Failed {
-                stage: ReadonlyObservationStage::Recognition,
-                captured_frame: Some(frame),
-            } => {
-                self.append_capture_completed(links.clone(), frame.width(), frame.height())?;
-                let event = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Recognition,
-                    EventActor::Runtime,
-                    links,
-                    RecognitionPayloadDraft::failed(
-                        EventAction::RecognitionObserve,
-                        DiagnosticCode::RecognitionFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                )?;
-                Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "recognition_failed",
-                        "finish_readonly_observation",
-                        RuntimeErrorCode::RecognitionFailed,
-                    ),
-                    RuntimeReceiptState::Failed,
-                    Some(terminal(&event)),
-                ))
-            }
-            ReadonlyObservationOutcome::Failed { .. } => Err(
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "validated_observation_outcome_invalid",
-                    "finish_readonly_observation",
-                    RuntimeErrorCode::RuntimeFatal,
-                )),
-            ),
-        }
-    }
-
     fn safe_reset(
         &self,
         original: &RuntimeRequest,
@@ -2095,48 +1986,6 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     "readonly_capability_issue_failed",
                     "issue_readonly_capability",
-                    RuntimeErrorCode::RuntimeFatal,
-                ))
-            })
-    }
-
-    fn take_pending_observation(
-        &self,
-        capability: &ReadOnlyCaptureCapability,
-        correlation_id: CorrelationId,
-        connection_id: ConnectionId,
-    ) -> Result<PendingObservation, RequestFailure> {
-        let mut observations = lock(&self.pending_observations, "validate_readonly_observation")?;
-        let Some(pending) = observations.get(&capability.recognition_id()).copied() else {
-            return Err(readonly_capability_denied(
-                "readonly_capability_unknown",
-                RuntimeErrorCode::ReadonlyCapabilityInvalid,
-            ));
-        };
-        if pending.capability.transport() != capability {
-            return Err(readonly_capability_denied(
-                "readonly_capability_mismatch",
-                RuntimeErrorCode::ReadonlyCapabilityInvalid,
-            ));
-        }
-        if pending.connection_id != connection_id {
-            return Err(readonly_capability_denied(
-                "readonly_capability_connection_mismatch",
-                RuntimeErrorCode::ConnectionMismatch,
-            ));
-        }
-        if pending.correlation_id != correlation_id {
-            return Err(readonly_capability_denied(
-                "readonly_capability_correlation_mismatch",
-                RuntimeErrorCode::ReadonlyCapabilityInvalid,
-            ));
-        }
-        observations
-            .remove(&capability.recognition_id())
-            .ok_or_else(|| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "readonly_capability_remove_failed",
-                    "finish_readonly_observation",
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })
@@ -2948,11 +2797,6 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
-        lock(
-            &self.pending_observations,
-            "cleanup_connection_observations",
-        )?
-        .retain(|_, pending| pending.connection_id != connection_id);
         let queued_instances = lock(&self.scheduler, "list_connection_queues")?
             .queued_instance_ids_for_connection(connection_id);
         for instance_id in queued_instances {
@@ -3031,16 +2875,23 @@ impl HostShared {
     }
 
     fn resolve_instance(&self, instance_alias: &str) -> Result<RegisteredInstance, RequestFailure> {
-        let resolved = self.provider.resolve(instance_alias).ok_or_else(|| {
-            RequestFailure::request(
-                RuntimeHostError::request(
-                    "instance_unknown",
+        let resolved = self.execution.resolve(instance_alias).map_err(|error| {
+            if error.code() == "execution_instance_unknown" {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        "instance_unknown",
+                        "resolve_runtime_instance",
+                        RuntimeErrorCode::InstanceUnknown,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            } else {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
                     "resolve_runtime_instance",
-                    RuntimeErrorCode::InstanceUnknown,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            )
+                    &error,
+                ))
+            }
         })?;
         let registration = RegisteredInstance {
             instance_alias: instance_alias.to_string(),
@@ -3751,17 +3602,6 @@ fn runtime_error_receipt(
     error: RuntimeErrorProjection,
 ) -> RuntimeHostResult<RuntimeReceipt> {
     RuntimeReceipt::error(request, state, terminal, error).map_err(|_| receipt_error())
-}
-
-fn readonly_capability_denied(
-    code: &'static str,
-    runtime_code: RuntimeErrorCode,
-) -> RequestFailure {
-    RequestFailure::request(
-        RuntimeHostError::request(code, "finish_readonly_observation", runtime_code),
-        RuntimeReceiptState::Denied,
-        None,
-    )
 }
 
 fn safe_reset_replay_denied(code: &'static str) -> RequestFailure {

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{RuntimeClient, RuntimeClientError};
+use crate::{RuntimeClient, RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{InputAction, LeaseToken};
-use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult, InputBackend};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,7 +16,9 @@ struct ProxyState {
     heartbeat_failure: Option<RuntimeClientError>,
 }
 
-/// `InputBackend` adapter that keeps device authority inside the resident Runtime.
+/// Connection-scoped write lease that sends typed input commands to the resident Runtime.
+///
+/// This proxy owns no device backend. Device-specific adapters belong outside runtime-client.
 pub struct RuntimeInputProxy {
     client: RuntimeClient,
     state: Arc<Mutex<ProxyState>>,
@@ -27,7 +28,7 @@ pub struct RuntimeInputProxy {
 }
 
 impl RuntimeInputProxy {
-    pub fn connect(client: RuntimeClient, instance_alias: &str) -> DeviceResult<Self> {
+    pub fn connect(client: RuntimeClient, instance_alias: &str) -> RuntimeClientResult<Self> {
         Self::connect_with_heartbeat(client, instance_alias, DEFAULT_RUNTIME_HEARTBEAT_INTERVAL)
     }
 
@@ -35,13 +36,14 @@ impl RuntimeInputProxy {
         client: RuntimeClient,
         instance_alias: &str,
         heartbeat_interval: Duration,
-    ) -> DeviceResult<Self> {
+    ) -> RuntimeClientResult<Self> {
         if heartbeat_interval.is_zero() || heartbeat_interval > MAX_RUNTIME_HEARTBEAT_INTERVAL {
-            return Err(DeviceError::fatal(
-                "RuntimeInputProxy heartbeat interval must be within 1..=5000 ms",
+            return Err(RuntimeClientError::fatal(
+                "runtime_input_proxy_heartbeat_interval_invalid",
+                "connect_runtime_input_proxy",
             ));
         }
-        let token = client.acquire_lease(instance_alias).map_err(device_error)?;
+        let token = client.acquire_lease(instance_alias)?;
         let state = Arc::new(Mutex::new(ProxyState {
             token,
             heartbeat_failure: None,
@@ -69,12 +71,13 @@ impl RuntimeInputProxy {
         let heartbeat = match heartbeat {
             Ok(heartbeat) => heartbeat,
             Err(_) => {
-                let release = client.release_lease(&lock_proxy(&state)?.token);
-                return Err(match release {
-                    Ok(()) => DeviceError::fatal("RuntimeInputProxy heartbeat thread failed"),
-                    Err(error) => DeviceError::fatal(format!(
-                        "RuntimeInputProxy heartbeat thread failed; lease release also failed: {error}"
-                    )),
+                let spawn_error = RuntimeClientError::fatal(
+                    "runtime_input_proxy_heartbeat_spawn_failed",
+                    "start_runtime_heartbeat",
+                );
+                return Err(match client.release_lease(&lock_proxy(&state)?.token) {
+                    Ok(()) => spawn_error,
+                    Err(release_error) => spawn_error.with_related(release_error),
                 });
             }
         };
@@ -87,99 +90,71 @@ impl RuntimeInputProxy {
         })
     }
 
-    fn execute(&mut self, action: InputAction) -> DeviceResult<()> {
+    pub fn input(&mut self, action: InputAction) -> RuntimeClientResult<()> {
         if self.closed {
-            return Err(DeviceError::fatal("RuntimeInputProxy is closed"));
+            return Err(RuntimeClientError::fatal(
+                "runtime_input_proxy_closed",
+                "proxy_input",
+            ));
         }
         let heartbeat_finished = self.heartbeat.as_ref().is_none_or(JoinHandle::is_finished);
         let state = lock_proxy(&self.state)?;
         if let Some(error) = &state.heartbeat_failure {
-            return Err(device_error(error.clone()));
+            return Err(error.clone());
         }
         if heartbeat_finished {
-            return Err(DeviceError::fatal(
-                "RuntimeInputProxy heartbeat stopped unexpectedly",
+            return Err(RuntimeClientError::fatal(
+                "runtime_input_proxy_heartbeat_stopped",
+                "proxy_input",
             ));
         }
-        self.client
-            .input(&state.token, action)
-            .map_err(device_error)
+        self.client.input(&state.token, action)
     }
 
-    fn shutdown(&mut self) -> DeviceResult<()> {
+    pub fn close(&mut self) -> RuntimeClientResult<()> {
+        self.shutdown()
+    }
+
+    fn shutdown(&mut self) -> RuntimeClientResult<()> {
         if self.closed {
             return Ok(());
         }
         self.closed = true;
-        let stop_failed = self.stop.take().is_some_and(|stop| stop.send(()).is_err());
-        let heartbeat_panicked = self
+        let mut failure = None;
+        if self.stop.take().is_some_and(|stop| stop.send(()).is_err()) {
+            merge_failure(
+                &mut failure,
+                RuntimeClientError::fatal(
+                    "runtime_input_proxy_heartbeat_stop_failed",
+                    "close_runtime_input_proxy",
+                ),
+            );
+        }
+        if self
             .heartbeat
             .take()
-            .is_some_and(|heartbeat| heartbeat.join().is_err());
-        let state = lock_proxy(&self.state);
-        let mut errors = Vec::new();
-        match state {
+            .is_some_and(|heartbeat| heartbeat.join().is_err())
+        {
+            merge_failure(
+                &mut failure,
+                RuntimeClientError::fatal(
+                    "runtime_input_proxy_heartbeat_join_failed",
+                    "close_runtime_input_proxy",
+                ),
+            );
+        }
+        match lock_proxy(&self.state) {
             Ok(state) => {
                 if let Some(error) = &state.heartbeat_failure {
-                    errors.push(error.to_string());
+                    merge_failure(&mut failure, error.clone());
                 }
                 if let Err(error) = self.client.release_lease(&state.token) {
-                    errors.push(error.to_string());
+                    merge_failure(&mut failure, error);
                 }
             }
-            Err(error) => errors.push(error.to_string()),
+            Err(error) => merge_failure(&mut failure, error),
         }
-        if stop_failed && errors.is_empty() {
-            errors.push("RuntimeInputProxy heartbeat stop channel failed".to_string());
-        }
-        if heartbeat_panicked {
-            errors.push("RuntimeInputProxy heartbeat thread panicked".to_string());
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(DeviceError::fatal(errors.join("; ")))
-        }
-    }
-}
-
-impl InputBackend for RuntimeInputProxy {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.execute(InputAction::Tap { x, y })
-    }
-
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.execute(InputAction::LongTap { x, y, duration_ms })
-    }
-
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.execute(InputAction::Swipe {
-            x1,
-            y1,
-            x2,
-            y2,
-            duration_ms,
-        })
-    }
-
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
-        self.execute(InputAction::Key {
-            key: key.to_string(),
-        })
-    }
-
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
-        self.execute(InputAction::Text {
-            text: text.to_string(),
-        })
-    }
-
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.execute(InputAction::Reset)
-    }
-
-    fn close(&mut self) -> DeviceResult<()> {
-        self.shutdown()
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -220,17 +195,18 @@ fn heartbeat_loop(
     }
 }
 
-fn lock_proxy(state: &Mutex<ProxyState>) -> DeviceResult<MutexGuard<'_, ProxyState>> {
-    state
-        .lock()
-        .map_err(|_| DeviceError::fatal("RuntimeInputProxy state is poisoned"))
+fn lock_proxy(state: &Mutex<ProxyState>) -> RuntimeClientResult<MutexGuard<'_, ProxyState>> {
+    state.lock().map_err(|_| {
+        RuntimeClientError::fatal(
+            "runtime_input_proxy_state_poisoned",
+            "access_runtime_input_proxy",
+        )
+    })
 }
 
-pub(crate) fn device_error(error: RuntimeClientError) -> DeviceError {
-    let severity = if error.is_fallback_eligible() {
-        DeviceErrorSeverity::Transient
-    } else {
-        DeviceErrorSeverity::Fatal
-    };
-    DeviceError::with_severity(severity, error.to_string())
+fn merge_failure(failure: &mut Option<RuntimeClientError>, error: RuntimeClientError) {
+    *failure = Some(match failure.take() {
+        Some(primary) => primary.with_related(error),
+        None => error,
+    });
 }

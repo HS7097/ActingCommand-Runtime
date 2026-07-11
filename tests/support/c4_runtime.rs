@@ -2,10 +2,10 @@
 
 use actingcommand_contract::{IdentifierIssuer, InstanceId, RUNTIME_INFO_FILE, RuntimeInfo};
 use actingcommand_device::{
-    CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_runtime_host::{
-    InputBackendProvider, ResolvedInputInstance, RuntimeHost, RuntimeHostConfig,
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use actingcommand_scheduler::SchedulerConfig;
 use std::env;
@@ -30,16 +30,31 @@ struct FileBackend {
 
 impl FileBackend {
     fn record(&self, event: &str) -> DeviceResult<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.events_path)
-            .map_err(|error| DeviceError::fatal(format!("open sealed backend journal: {error}")))?;
-        writeln!(file, "{event}").map_err(|error| {
-            DeviceError::fatal(format!("write sealed backend journal: {error}"))
-        })?;
-        file.sync_data()
-            .map_err(|error| DeviceError::fatal(format!("sync sealed backend journal: {error}")))
+        record_event(&self.events_path, event)
+    }
+}
+
+struct FileCaptureBackend {
+    frame_path: PathBuf,
+    events_path: PathBuf,
+    closed: bool,
+}
+
+impl CaptureBackend for FileCaptureBackend {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        record_event(&self.events_path, "capture")?;
+        let png = fs::read(&self.frame_path)
+            .map_err(|error| DeviceError::fatal(format!("read sealed frame: {error}")))?;
+        Frame::from_png(png, CaptureBackendName::AdbScreencap)
+    }
+}
+
+impl Drop for FileCaptureBackend {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.closed = true;
+            record_event(&self.events_path, "capture_close").expect("record sealed capture close");
+        }
     }
 }
 
@@ -87,15 +102,16 @@ impl InputBackend for FileBackend {
 struct FileProvider {
     instance_id: InstanceId,
     events_path: PathBuf,
+    frame_path: PathBuf,
 }
 
-impl InputBackendProvider for FileProvider {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance> {
+impl ExecutionBackendProvider for FileProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
-            .then(|| ResolvedInputInstance::new(self.instance_id, "<sealed-c4-process>"))
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-c4-process>"))
     }
 
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
         if instance_alias != "ak.cn" {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));
         }
@@ -106,6 +122,30 @@ impl InputBackendProvider for FileProvider {
         backend.record("open")?;
         Ok(Box::new(backend))
     }
+
+    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        if instance_alias != "ak.cn" {
+            return Err(DeviceError::fatal("sealed C4 instance mismatch"));
+        }
+        record_event(&self.events_path, "capture_open")?;
+        Ok(Box::new(FileCaptureBackend {
+            frame_path: self.frame_path.clone(),
+            events_path: self.events_path.clone(),
+            closed: false,
+        }))
+    }
+}
+
+fn record_event(path: &Path, event: &str) -> DeviceResult<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| DeviceError::fatal(format!("open sealed backend journal: {error}")))?;
+    writeln!(file, "{event}")
+        .map_err(|error| DeviceError::fatal(format!("write sealed backend journal: {error}")))?;
+    file.sync_data()
+        .map_err(|error| DeviceError::fatal(format!("sync sealed backend journal: {error}")))
 }
 
 pub struct RuntimeChild {
@@ -247,6 +287,7 @@ pub fn run_child_if_requested() -> bool {
         Arc::new(FileProvider {
             instance_id,
             events_path: root.join(BACKEND_EVENTS_FILE),
+            frame_path: root.join("sealed.png"),
         }),
     )
     .expect("start child Runtime host");

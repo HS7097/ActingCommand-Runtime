@@ -7,11 +7,10 @@ use actingcommand_contract::{
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
-    CaptureBackend, CaptureBackendName, DeviceError, DeviceErrorSeverity, DeviceResult, Frame,
-    InputBackend, PixelFormat,
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_runtime_host::{
-    InputBackendProvider, ResolvedInputInstance, RuntimeHost, RuntimeHostConfig,
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use actingcommand_scheduler::SchedulerConfig;
 use std::sync::Arc;
@@ -26,6 +25,11 @@ struct FakeState {
     inputs: AtomicUsize,
     closes: AtomicUsize,
     fail_input: AtomicBool,
+    capture_opens: AtomicUsize,
+    captures: AtomicUsize,
+    capture_closes: AtomicUsize,
+    fail_capture: AtomicBool,
+    invalid_capture: AtomicBool,
 }
 
 struct FakeBackend {
@@ -91,62 +95,26 @@ struct FakeProvider {
 }
 
 struct FakeCapture {
-    fail: bool,
-    captures: usize,
-}
-
-struct ClosingCapture {
-    host: Option<RuntimeHost>,
-}
-
-struct InvalidPngCapture;
-
-impl CaptureBackend for InvalidPngCapture {
-    fn capture(&mut self) -> DeviceResult<Frame> {
-        let mut frame = Frame::from_pixels(
-            2,
-            1,
-            vec![255, 0, 0, 0, 255, 0],
-            PixelFormat::Rgb8,
-            CaptureBackendName::AdbScreencap,
-        )?;
-        frame.original_png = Some(b"not a PNG".to_vec());
-        Ok(frame)
-    }
-}
-
-impl CaptureBackend for ClosingCapture {
-    fn capture(&mut self) -> DeviceResult<Frame> {
-        self.host
-            .take()
-            .expect("runtime host")
-            .close()
-            .expect("close runtime host");
-        Err(DeviceError::fatal("injected capture failure"))
-    }
-}
-
-impl FakeCapture {
-    fn success() -> Self {
-        Self {
-            fail: false,
-            captures: 0,
-        }
-    }
-
-    fn failure() -> Self {
-        Self {
-            fail: true,
-            captures: 0,
-        }
-    }
+    state: Arc<FakeState>,
+    closed: bool,
 }
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
-        self.captures += 1;
-        if self.fail {
+        self.state.captures.fetch_add(1, Ordering::AcqRel);
+        if self.state.fail_capture.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected capture failure"));
+        }
+        if self.state.invalid_capture.load(Ordering::Acquire) {
+            return Ok(Frame {
+                width: 2,
+                height: 1,
+                pixels: Vec::new(),
+                pixel_format: PixelFormat::Rgb8,
+                original_png: None,
+                captured_at: std::time::SystemTime::now(),
+                backend_name: CaptureBackendName::AdbScreencap,
+            });
         }
         Frame::from_pixels(
             2,
@@ -158,16 +126,34 @@ impl CaptureBackend for FakeCapture {
     }
 }
 
-impl InputBackendProvider for FakeProvider {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance> {
+impl Drop for FakeCapture {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.closed = true;
+            self.state.capture_closes.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+impl ExecutionBackendProvider for FakeProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
-            .then(|| ResolvedInputInstance::new(self.instance_id, "127.0.0.1:16384"))
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
     }
 
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
         assert_eq!(instance_alias, "ak.cn");
         self.state.opens.fetch_add(1, Ordering::AcqRel);
         Ok(Box::new(FakeBackend {
+            state: Arc::clone(&self.state),
+            closed: false,
+        }))
+    }
+
+    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        assert_eq!(instance_alias, "ak.cn");
+        self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
+        Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
             closed: false,
         }))
@@ -227,9 +213,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
         client.health().expect("health"),
         host.runtime_info().owner_epoch()
     );
-    let capability = client.admit_readonly("ak.cn").expect("readonly admission");
     let token = client.acquire_lease("ak.cn").expect("lease");
-    assert_eq!(capability.instance_id(), token.instance_id());
     client
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("input");
@@ -313,13 +297,13 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
-    let mut capture = FakeCapture::success();
 
     let output = client
-        .observe_readonly("ak.cn", &mut capture)
+        .observe_readonly("ak.cn")
         .expect("readonly observation");
 
-    assert_eq!(capture.captures, 1);
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
     assert!(matches!(
         output.receipt().result(),
         Some(RuntimeResult::ReadonlyObservationCompleted { observation })
@@ -340,9 +324,6 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]
@@ -351,21 +332,24 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
     assert_eq!(state.inputs.load(Ordering::Acquire), 0);
     drop(client);
     host.close().expect("close host");
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
 }
 
 #[test]
 fn capture_failure_is_reported_to_runtime_and_never_returns_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, state, 1_000);
+    state.fail_capture.store(true, Ordering::Release);
+    let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
-    let mut capture = FakeCapture::failure();
 
     let error = client
-        .observe_readonly("ak.cn", &mut capture)
+        .observe_readonly("ak.cn")
         .expect_err("capture failure must remain visible");
 
-    assert_eq!(capture.captures, 1);
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
     assert_eq!(
         error.projection().expect("runtime projection").code,
         RuntimeErrorCode::CaptureFailed
@@ -377,38 +361,47 @@ fn capture_failure_is_reported_to_runtime_and_never_returns_fake_success() {
 }
 
 #[test]
-fn capture_and_failure_reporting_errors_are_combined_and_fatal() {
+fn capture_failure_latches_the_daemon_session_without_retry_or_fallback() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, state, 1_000);
+    state.fail_capture.store(true, Ordering::Release);
+    let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
-    let mut capture = ClosingCapture { host: Some(host) };
+    client
+        .observe_readonly("ak.cn")
+        .expect_err("first capture must fail");
+    state.fail_capture.store(false, Ordering::Release);
 
-    let error = client
-        .observe_readonly("ak.cn", &mut capture)
-        .expect_err("both failures must remain visible");
+    let second = client
+        .observe_readonly("ak.cn")
+        .expect_err("latched session must not reopen");
 
-    assert_eq!(error.code(), "capture_failed_and_runtime_report_failed");
-    assert!(error.is_fatal());
-    assert!(error.to_string().contains("related failure"));
+    assert!(second.is_fatal());
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]
-fn recognition_failure_is_reported_without_returning_observation_success() {
+fn malformed_daemon_frame_is_rejected_without_observation_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host(&root, state, 1_000);
+    state.invalid_capture.store(true, Ordering::Release);
+    let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
-    let mut capture = InvalidPngCapture;
 
     let error = client
-        .observe_readonly("ak.cn", &mut capture)
-        .expect_err("recognition failure must remain visible");
+        .observe_readonly("ak.cn")
+        .expect_err("invalid frame must remain visible");
 
     assert_eq!(
         error.projection().expect("runtime projection").code,
-        RuntimeErrorCode::RecognitionFailed
+        RuntimeErrorCode::CaptureFailed
     );
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");
@@ -477,7 +470,9 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     .expect("runtime input proxy");
 
     thread::sleep(Duration::from_millis(1_300));
-    proxy.tap(30, 40).expect("input after renewals");
+    proxy
+        .input(InputAction::Tap { x: 30, y: 40 })
+        .expect("input after renewals");
     proxy.close().expect("close proxy");
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
     assert_eq!(state.closes.load(Ordering::Acquire), 0);
@@ -577,10 +572,6 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
             RuntimeErrorProjection::new(code, false),
         );
         assert!(error.is_fallback_eligible());
-        assert_eq!(
-            crate::input::device_error(error).severity(),
-            DeviceErrorSeverity::Transient
-        );
     }
 
     for code in [
@@ -607,9 +598,7 @@ fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
             RuntimeErrorProjection::new(code, false),
         );
         assert!(!error.is_fallback_eligible());
-        let device_error = crate::input::device_error(error);
-        assert_eq!(device_error.severity(), DeviceErrorSeverity::Fatal);
-        assert!(device_error.message().contains(&format!("{code:?}")));
+        assert!(error.to_string().contains(&format!("{code:?}")));
     }
 }
 

@@ -27,9 +27,6 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
             root.path().to_str().expect("state root"),
             "--instance",
             "ak.cn",
-            "--sealed-test",
-            "--sealed-frame",
-            frame.to_str().expect("sealed frame"),
         ])
         .output()
         .expect("run actingctl observe");
@@ -48,7 +45,10 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
             .iter()
             .any(|event| event["event_type"] == "recognition.completed")
     }));
-    assert!(support::backend_events(root.path()).is_empty());
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture"]
+    );
     runtime.assert_alive();
 
     let reset = Command::new(env!("CARGO_BIN_EXE_actingctl"))
@@ -72,11 +72,21 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
         "safe_reset_completed"
     );
     assert!(reset_json["events"].is_array());
-    assert_eq!(support::backend_events(root.path()), ["open", "reset"]);
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture", "open", "reset"]
+    );
     runtime.assert_alive();
     runtime.stop_clean();
     assert_eq!(
         support::backend_events(root.path()),
-        ["open", "reset", "close"]
+        [
+            "capture_open",
+            "capture",
+            "open",
+            "reset",
+            "capture_close",
+            "close"
+        ]
     );
 }

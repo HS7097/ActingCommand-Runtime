@@ -73,20 +73,6 @@ impl RuntimeClientError {
         }
     }
 
-    pub(crate) fn combined(
-        code: &'static str,
-        operation: &'static str,
-        related: RuntimeClientError,
-    ) -> Self {
-        Self {
-            code,
-            operation,
-            projection: None,
-            related: Some(Box::new(related)),
-            committed_receipt: None,
-        }
-    }
-
     pub(crate) fn after_commit(
         code: &'static str,
         operation: &'static str,
@@ -100,6 +86,14 @@ impl RuntimeClientError {
             related: Some(Box::new(related)),
             committed_receipt: Some(Box::new(receipt)),
         }
+    }
+
+    pub(crate) fn with_related(mut self, related: RuntimeClientError) -> Self {
+        match self.related.take() {
+            Some(existing) => self.related = Some(Box::new(existing.with_related(related))),
+            None => self.related = Some(Box::new(related)),
+        }
+        self
     }
 }
 

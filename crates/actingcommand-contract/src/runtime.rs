@@ -445,15 +445,8 @@ pub enum RuntimeOperation {
     ReleaseLease {
         token: LeaseToken,
     },
-    AdmitReadonly {
+    ObserveReadonly {
         instance_alias: String,
-    },
-    BeginReadonlyObservation {
-        instance_alias: String,
-    },
-    FinishReadonlyObservation {
-        capability: ReadOnlyCaptureCapability,
-        outcome: ReadonlyObservationOutcome,
     },
     SafeReset {
         instance_alias: String,
@@ -503,8 +496,7 @@ impl RuntimeOperation {
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
             Self::AcquireLease { instance_alias, .. }
-            | Self::AdmitReadonly { instance_alias }
-            | Self::BeginReadonlyObservation { instance_alias }
+            | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. } => validate_instance_alias(instance_alias),
             Self::QueueLease {
                 instance_alias,
@@ -513,13 +505,6 @@ impl RuntimeOperation {
             } => {
                 validate_instance_alias(instance_alias)?;
                 policy.validate()
-            }
-            Self::FinishReadonlyObservation {
-                capability,
-                outcome,
-            } => {
-                capability.validate()?;
-                outcome.validate()
             }
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::Input { token, action } => {
@@ -533,8 +518,7 @@ impl RuntimeOperation {
         match self {
             Self::AcquireLease { instance_alias, .. }
             | Self::QueueLease { instance_alias, .. }
-            | Self::AdmitReadonly { instance_alias }
-            | Self::BeginReadonlyObservation { instance_alias }
+            | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. } => Some(instance_alias),
             _ => None,
         }
@@ -562,13 +546,7 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
-            Self::AdmitReadonly { .. } => "RuntimeOperation::AdmitReadonly(<redacted>)",
-            Self::BeginReadonlyObservation { .. } => {
-                "RuntimeOperation::BeginReadonlyObservation(<redacted>)"
-            }
-            Self::FinishReadonlyObservation { .. } => {
-                "RuntimeOperation::FinishReadonlyObservation(<opaque-capability>)"
-            }
+            Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
@@ -786,10 +764,6 @@ pub struct ReadOnlyCaptureCapability {
 }
 
 impl ReadOnlyCaptureCapability {
-    const fn validate(&self) -> RuntimeContractResult<()> {
-        Ok(())
-    }
-
     pub const fn instance_id(&self) -> InstanceId {
         self.instance_id
     }
@@ -865,12 +839,6 @@ pub enum RuntimeResult {
     LeaseQueueCancelled {
         request_id: RequestId,
         instance_id: InstanceId,
-    },
-    ReadOnlyAdmitted {
-        capability: ReadOnlyCaptureCapability,
-    },
-    ReadonlyObservationBegun {
-        capability: ReadOnlyCaptureCapability,
     },
     ReadonlyObservationCompleted {
         observation: ReadonlyObservation,
@@ -969,10 +937,6 @@ impl RuntimeReceipt {
             Some(
                 RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
             ) => status.validate()?,
-            Some(
-                RuntimeResult::ReadOnlyAdmitted { capability }
-                | RuntimeResult::ReadonlyObservationBegun { capability },
-            ) => capability.validate()?,
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
                 observation.validate()?
             }

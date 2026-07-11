@@ -3,118 +3,74 @@
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode};
 use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, InputBackend, TouchBackendConfig,
+    CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError, DeviceResult,
+    InputBackend, TouchBackendChoice, TouchBackendConfig, create_capture_backend,
     create_touch_backend,
 };
-use actingcommand_execution_kernel::{ExecutionBackendProvider, ResolvedExecutionInstance};
+pub use actingcommand_execution_kernel::{ExecutionBackendProvider, ResolvedExecutionInstance};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
 
-pub struct ResolvedInputInstance {
-    instance_id: InstanceId,
-    audit_endpoint: String,
-}
-
-impl ResolvedInputInstance {
-    pub fn new(instance_id: InstanceId, audit_endpoint: impl Into<String>) -> Self {
-        Self {
-            instance_id,
-            audit_endpoint: audit_endpoint.into(),
-        }
-    }
-
-    pub const fn instance_id(&self) -> InstanceId {
-        self.instance_id
-    }
-
-    pub(crate) fn audit_endpoint(&self) -> &str {
-        &self.audit_endpoint
-    }
-}
-
-impl fmt::Debug for ResolvedInputInstance {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResolvedInputInstance")
-            .field("instance_id", &self.instance_id)
-            .field("audit_endpoint", &"<redacted>")
-            .finish()
-    }
-}
-
-/// Immutable daemon-side adapter boundary for resolving and opening production input backends.
-pub trait InputBackendProvider: Send + Sync + 'static {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance>;
-
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
-}
-
-/// C3b Task 3 adapter that moves input ownership into the execution kernel while capture remains
-/// behind the C3a compatibility surface. Task 4 replaces this with the complete device registry.
-pub(crate) struct InputOnlyExecutionProvider {
-    input: Arc<dyn InputBackendProvider>,
-}
-
-impl InputOnlyExecutionProvider {
-    pub(crate) fn new(input: Arc<dyn InputBackendProvider>) -> Self {
-        Self { input }
-    }
-}
-
-impl ExecutionBackendProvider for InputOnlyExecutionProvider {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        self.input.resolve(instance_alias).map(|resolved| {
-            ResolvedExecutionInstance::new(resolved.instance_id(), resolved.audit_endpoint())
-        })
-    }
-
-    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        self.input.open(instance_alias)
-    }
-
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        Err(DeviceError::fatal(
-            "daemon capture backend is not configured before C3b Task 4",
-        ))
-    }
-}
-
-pub struct TouchBackendRegistration {
+pub struct ExecutionBackendRegistration {
     instance_alias: String,
     instance_id: InstanceId,
-    config: TouchBackendConfig,
+    input: TouchBackendConfig,
+    capture: CaptureBackendConfig,
 }
 
-impl TouchBackendRegistration {
+impl ExecutionBackendRegistration {
     pub fn new(
         instance_alias: impl Into<String>,
         instance_id: InstanceId,
-        config: TouchBackendConfig,
+        input: TouchBackendConfig,
+        capture: CaptureBackendConfig,
     ) -> RuntimeHostResult<Self> {
         let instance_alias = instance_alias.into();
         validate_alias(&instance_alias)?;
+        if matches!(
+            input.requested,
+            TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
+        ) || matches!(
+            capture.requested,
+            CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
+        ) {
+            return Err(RuntimeHostError::fatal(
+                "execution_backend_selection_not_explicit",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        if input.target.resolved_serial() != capture.target.resolved_serial() {
+            return Err(RuntimeHostError::fatal(
+                "execution_backend_target_mismatch",
+                "build_execution_backend_registry",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         Ok(Self {
             instance_alias,
             instance_id,
-            config,
+            input,
+            capture,
         })
     }
 }
 
 #[derive(Clone)]
-struct TouchBackendEntry {
+struct ExecutionBackendEntry {
     instance_id: InstanceId,
-    config: TouchBackendConfig,
+    audit_endpoint: String,
+    input: TouchBackendConfig,
+    capture: CaptureBackendConfig,
 }
 
-pub struct TouchBackendRegistry {
-    entries: BTreeMap<String, TouchBackendEntry>,
+pub struct ExecutionBackendRegistry {
+    entries: BTreeMap<String, ExecutionBackendEntry>,
 }
 
-impl TouchBackendRegistry {
+impl ExecutionBackendRegistry {
     pub fn new(
-        registrations: impl IntoIterator<Item = TouchBackendRegistration>,
+        registrations: impl IntoIterator<Item = ExecutionBackendRegistration>,
     ) -> RuntimeHostResult<Self> {
         let mut entries = BTreeMap::new();
         let mut instance_ids = BTreeSet::new();
@@ -122,29 +78,32 @@ impl TouchBackendRegistry {
             if entries.contains_key(&registration.instance_alias) {
                 return Err(RuntimeHostError::fatal(
                     "duplicate_instance_alias",
-                    "build_touch_backend_registry",
+                    "build_execution_backend_registry",
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
             if !instance_ids.insert(registration.instance_id) {
                 return Err(RuntimeHostError::fatal(
                     "duplicate_instance_id",
-                    "build_touch_backend_registry",
+                    "build_execution_backend_registry",
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
+            let audit_endpoint = registration.input.target.resolved_serial();
             entries.insert(
                 registration.instance_alias,
-                TouchBackendEntry {
+                ExecutionBackendEntry {
                     instance_id: registration.instance_id,
-                    config: registration.config,
+                    audit_endpoint,
+                    input: registration.input,
+                    capture: registration.capture,
                 },
             );
         }
         if entries.is_empty() {
             return Err(RuntimeHostError::fatal(
-                "empty_input_backend_registry",
-                "build_touch_backend_registry",
+                "empty_execution_backend_registry",
+                "build_execution_backend_registry",
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
@@ -152,30 +111,39 @@ impl TouchBackendRegistry {
     }
 }
 
-impl fmt::Debug for TouchBackendRegistry {
+impl fmt::Debug for ExecutionBackendRegistry {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("TouchBackendRegistry")
+            .debug_struct("ExecutionBackendRegistry")
             .field("instance_count", &self.entries.len())
             .finish()
     }
 }
 
-impl InputBackendProvider for TouchBackendRegistry {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance> {
+impl ExecutionBackendProvider for ExecutionBackendRegistry {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
-        Some(ResolvedInputInstance::new(
+        Some(ResolvedExecutionInstance::new(
             entry.instance_id,
-            entry.config.target.resolved_serial(),
+            &entry.audit_endpoint,
         ))
     }
 
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        let entry = self.entries.get(instance_alias).ok_or_else(|| {
-            actingcommand_device::DeviceError::fatal("input backend instance is not registered")
-        })?;
-        create_touch_backend(entry.config.clone())
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        create_touch_backend(entry.input.clone())
             .map(|backend| Box::new(backend) as Box<dyn InputBackend>)
+    }
+
+    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        create_capture_backend(entry.capture.clone()).map(|selected| selected.backend)
     }
 }
 
@@ -186,7 +154,7 @@ fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
     {
         return Err(RuntimeHostError::fatal(
             "invalid_instance_alias",
-            "build_touch_backend_registry",
+            "build_execution_backend_registry",
             RuntimeErrorCode::RuntimeFatal,
         ));
     }

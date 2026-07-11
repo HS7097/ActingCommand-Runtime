@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
-use actingcommand_device::{DeviceResult, InputBackend};
+use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
-    InputBackendProvider, ResolvedInputInstance, RuntimeHost, RuntimeHostConfig,
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use serde_json::Value;
 use std::fs;
@@ -70,18 +70,22 @@ struct FakeProvider {
     state: Arc<FakeState>,
 }
 
-impl InputBackendProvider for FakeProvider {
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedInputInstance> {
+impl ExecutionBackendProvider for FakeProvider {
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         (instance_alias == "ak.cn")
-            .then(|| ResolvedInputInstance::new(self.instance_id, "<sealed-test>"))
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>"))
     }
 
-    fn open(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+    fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
         assert_eq!(instance_alias, "ak.cn");
         Ok(Box::new(FakeBackend {
             state: Arc::clone(&self.state),
             closed: false,
         }))
+    }
+
+    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        Err(DeviceError::fatal("input proxy test does not use capture"))
     }
 }
 

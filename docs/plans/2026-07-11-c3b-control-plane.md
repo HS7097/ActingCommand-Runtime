@@ -107,7 +107,7 @@ Status: complete.
 
 ### Task 4: Capture hard gate, client, and process acceptance
 
-Status: active.
+Status: complete.
 
 - Execute read-only capture inside the daemon and remove the transitional client capability path.
 - Update actingd typed configuration and backend registry for explicit capture selection.
@@ -120,7 +120,7 @@ Status: active.
 
 ### Task 5: Closeout
 
-Status: pending.
+Status: active.
 
 - Run focused contract, scheduler, execution-kernel, host, client, process, architecture, and
   protocol suites.

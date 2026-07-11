@@ -82,6 +82,7 @@ fn write_config(path: &Path, state_root: &Path) {
             "instance_id": instance_id.transport(),
             "adb_path": "adb",
             "touch_backend": "maatouch",
+            "capture_backend": "adb",
             "push_touch_tool": false
         }]
     });

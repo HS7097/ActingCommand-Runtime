@@ -2,11 +2,11 @@
 
 use actingcommand_contract::InstanceId;
 use actingcommand_device::{
-    AdbConfig, DeviceTarget, MaaTouchConfig, MinitouchConfig, TouchBackendChoice,
-    TouchBackendConfig,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
+    MinitouchConfig, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_runtime_host::{
-    RuntimeHostConfig, TouchBackendRegistration, TouchBackendRegistry,
+    ExecutionBackendRegistration, ExecutionBackendRegistry, RuntimeHostConfig,
 };
 use serde::Deserialize;
 use std::fs;
@@ -44,8 +44,8 @@ struct InstanceConfig {
     port: u16,
     #[serde(default = "enabled")]
     connect: bool,
-    #[serde(default = "default_touch_backend")]
     touch_backend: String,
+    capture_backend: String,
     #[serde(default)]
     command_timeout_ms: Option<u64>,
     #[serde(default)]
@@ -64,7 +64,7 @@ struct InstanceConfig {
 
 pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
-    pub(super) registry: TouchBackendRegistry,
+    pub(super) registry: ExecutionBackendRegistry,
 }
 
 pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
@@ -96,8 +96,8 @@ impl ActingdConfigFile {
             .into_iter()
             .map(InstanceConfig::registration)
             .collect::<Result<Vec<_>, _>>()?;
-        let registry =
-            TouchBackendRegistry::new(registrations).map_err(|_| "input_registry_invalid")?;
+        let registry = ExecutionBackendRegistry::new(registrations)
+            .map_err(|_| "execution_registry_invalid")?;
         Ok(RuntimeAssembly {
             host: RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port)),
@@ -107,7 +107,7 @@ impl ActingdConfigFile {
 }
 
 impl InstanceConfig {
-    fn registration(self) -> Result<TouchBackendRegistration, &'static str> {
+    fn registration(self) -> Result<ExecutionBackendRegistration, &'static str> {
         if self.adb_path.trim().is_empty()
             || self.host.trim().is_empty()
             || self.port == 0
@@ -125,6 +125,14 @@ impl InstanceConfig {
             TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
         ) {
             return Err("touch_backend_must_be_explicit");
+        }
+        let capture_requested = CaptureBackendChoice::parse(&self.capture_backend)
+            .map_err(|_| "capture_backend_invalid")?;
+        if matches!(
+            capture_requested,
+            CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
+        ) {
+            return Err("capture_backend_must_be_explicit");
         }
         let mut adb = AdbConfig {
             adb_path: self.adb_path,
@@ -163,10 +171,12 @@ impl InstanceConfig {
             maatouch.tap_hold = hold;
             minitouch.tap_hold = hold;
         }
+        let capture = CaptureBackendConfig::new(adb.clone(), target.clone())
+            .with_requested(capture_requested);
         let touch = TouchBackendConfig::new(adb, target, maatouch)
             .with_minitouch_config(minitouch)
             .with_requested(requested);
-        TouchBackendRegistration::new(self.alias, self.instance_id, touch)
+        ExecutionBackendRegistration::new(self.alias, self.instance_id, touch, capture)
             .map_err(|_| "instance_registration_invalid")
     }
 }
@@ -189,10 +199,6 @@ const fn default_device_port() -> u16 {
 
 const fn enabled() -> bool {
     true
-}
-
-fn default_touch_backend() -> String {
-    "maatouch".to_string()
 }
 
 #[cfg(test)]
@@ -221,6 +227,7 @@ mod tests {
                 "adb_path": "adb",
                 "port": 16384,
                 "touch_backend": "maatouch",
+                "capture_backend": "adb",
                 "push_touch_tool": false
             }]
         });
@@ -257,13 +264,40 @@ mod tests {
                 "alias": "ak.cn",
                 "instance_id": id.transport(),
                 "adb_path": "adb",
-                "touch_backend": "auto"
+                "touch_backend": "auto",
+                "capture_backend": "adb"
             }]
         });
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         assert_eq!(
             config.assemble().err(),
             Some("touch_backend_must_be_explicit")
+        );
+    }
+
+    #[test]
+    fn automatic_capture_fallback_is_rejected_at_the_process_boundary() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "ak.cn",
+                "instance_id": id.transport(),
+                "adb_path": "adb",
+                "touch_backend": "maatouch",
+                "capture_backend": "auto"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err(),
+            Some("capture_backend_must_be_explicit")
         );
     }
 }

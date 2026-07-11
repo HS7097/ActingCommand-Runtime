@@ -29,9 +29,6 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
             root.path().to_str().expect("state root"),
             "--instance",
             "ak.cn",
-            "--sealed-test",
-            "--sealed-frame",
-            frame.to_str().expect("sealed frame"),
         ])
         .output()
         .expect("run actinglab observe");
@@ -47,7 +44,10 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
         "readonly_observation_completed"
     );
     assert!(observe_json["data"]["events"].is_array());
-    assert!(support::backend_events(root.path()).is_empty());
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture"]
+    );
     runtime.assert_alive();
 
     let reset = Command::new(env!("CARGO_BIN_EXE_actinglab"))
@@ -74,11 +74,21 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
         "safe_reset_completed"
     );
     assert!(reset_json["data"]["events"].is_array());
-    assert_eq!(support::backend_events(root.path()), ["open", "reset"]);
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture", "open", "reset"]
+    );
     runtime.assert_alive();
     runtime.stop_clean();
     assert_eq!(
         support::backend_events(root.path()),
-        ["open", "reset", "close"]
+        [
+            "capture_open",
+            "capture",
+            "open",
+            "reset",
+            "capture_close",
+            "close"
+        ]
     );
 }
