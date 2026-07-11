@@ -103,6 +103,7 @@
         let mut archive = ZipArchive::new(file).expect("archive");
         assert!(archive.by_name("screenshots/frame1.png").is_ok());
         assert!(archive.by_name("logs/evidence.json").is_ok());
+        assert!(archive.by_name("logs/frame_evidence.json").is_ok());
         assert!(archive.by_name("logs/frame_store.json").is_ok());
         assert!(archive.by_name("logs/frame_timeline.jsonl").is_ok());
         let summary: Value =
@@ -113,6 +114,24 @@
                 .pointer("/projection_source/kind")
                 .and_then(Value::as_str),
             Some("runtime_ledger")
+        );
+        assert_eq!(
+            summary
+                .pointer("/frame_evidence/counts/captured")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .pointer("/frame_evidence/counts/persisted")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .pointer("/frame_evidence/evidence_completeness")
+                .and_then(Value::as_str),
+            Some("complete")
         );
         let screenshot_evidence = summary
             .pointer("/screenshots/0/evidence")

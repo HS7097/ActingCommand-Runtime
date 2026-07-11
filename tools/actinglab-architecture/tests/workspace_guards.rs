@@ -739,13 +739,20 @@ fn c5_portable_output_archive_is_owned_by_artifact_store() {
     let root = workspace_root();
     let artifact = fs::read_to_string(root.join("crates/artifact-store/src/portable_archive.rs"))
         .expect("read portable archive source");
+    let artifact_frame_store =
+        fs::read_to_string(root.join("crates/artifact-store/src/frame_store.rs"))
+            .expect("read artifact frame store source");
     let lab_output = fs::read_to_string(root.join("crates/lab/src/lab_run/output.rs"))
         .expect("read Lab run output");
     let lab_context = fs::read_to_string(root.join("crates/lab/src/lab_run/context.rs"))
         .expect("read Lab run context");
 
     assert!(artifact.contains("pub fn write_portable_projection_archive"));
+    assert!(artifact_frame_store.contains("PortableFrameEvidenceProjection"));
+    assert!(artifact_frame_store.contains("pub fn portable_evidence_projection"));
     assert!(lab_context.contains("write_portable_projection_archive"));
+    assert!(lab_context.contains("portable_evidence_projection"));
+    assert!(lab_context.contains("frame_evidence.json"));
     for forbidden in [
         "fn write_output_zip",
         "ZipWriter",

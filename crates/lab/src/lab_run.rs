@@ -9,8 +9,9 @@ use crate::{
 };
 use actingcommand_artifact_store::{
     ArtifactStoreError, FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
-    FrameStoreScreenshot as ScreenshotRecord, PortableProjectionArchive, RecognitionState,
-    Tier3PauseCheckpoint, write_portable_projection_archive,
+    FrameStoreScreenshot as ScreenshotRecord, PortableFrameEvidenceProjection,
+    PortableProjectionArchive, RecognitionState, Tier3PauseCheckpoint,
+    write_portable_projection_archive,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,

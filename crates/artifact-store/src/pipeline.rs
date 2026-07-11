@@ -12,6 +12,7 @@ use actingcommand_contract::{
     EventSeverity, EventSource, EvidenceCompleteness, IdentifierIssuer, OriginModule,
     PinnedFrameReason, RetentionClass,
 };
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -53,7 +54,7 @@ impl CapturePipelineConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct CapturePipelineCounts {
     pub captured: u64,
     pub deduplicated: u64,

@@ -24,6 +24,7 @@ struct LabRunContext<'a, L: LedgerSink> {
     screenshots: Vec<ScreenshotRecord>,
     screenshot_evidence: Vec<Value>,
     frame_store: FrameStore,
+    frame_evidence: Option<PortableFrameEvidenceProjection>,
     recognition: Vec<Value>,
     events: Vec<Value>,
     steps: Vec<Value>,
@@ -100,6 +101,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             screenshots: Vec::new(),
             screenshot_evidence: Vec::new(),
             frame_store,
+            frame_evidence: None,
             recognition: Vec::new(),
             events: Vec::new(),
             steps: Vec::new(),
@@ -665,9 +667,17 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             .materialize(&self.screenshots_dir)
             .map_err(map_artifact_error)?;
         self.screenshots = self.frame_store.screenshots();
+        self.frame_evidence = Some(
+            self.frame_store
+                .portable_evidence_projection()
+                .map_err(map_artifact_error)?,
+        );
         self.event(
             "frame_store_materialized",
-            json!({"screenshot_count": self.screenshots.len()}),
+            json!({
+                "screenshot_count": self.screenshots.len(),
+                "frame_evidence": self.frame_evidence.as_ref()
+            }),
         )?;
         self.index_screenshot_evidence()?;
         for warning in self.frame_store.cleanup_temp() {
@@ -937,6 +947,18 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             &self.logs_dir.join("frame_store.json"),
             &self.frame_store.diagnostics_json(),
         )?;
+        let frame_evidence = self.frame_evidence.as_ref().ok_or_else(|| {
+            CliError::package_invalid("final output is missing portable frame evidence")
+        })?;
+        let frame_evidence = serde_json::to_value(frame_evidence).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to serialize portable frame evidence: {error}"
+            ))
+        })?;
+        write_json(
+            &self.logs_dir.join("frame_evidence.json"),
+            &frame_evidence,
+        )?;
         write_json(&self.logs_dir.join("summary.json"), &projection.summary)?;
         write_json(
             &self.logs_dir.join("diagnostics.json"),
@@ -1190,7 +1212,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             .control
             .as_ref()
             .or_else(|| state.map(|state| &state.control));
-        Ok(json!({
+        let mut summary = json!({
             "schema_version": SUMMARY_SCHEMA,
             "ok": ok,
             "run_id": self.run_id,
@@ -1227,12 +1249,16 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             "screenshot_evidence": self.screenshot_evidence.clone(),
             "screenshots": screenshots,
             "steps": self.steps
-        }))
+        });
+        if let Some(frame_evidence) = &self.frame_evidence {
+            summary["frame_evidence"] = json!(frame_evidence);
+        }
+        Ok(summary)
     }
 
     fn diagnostics_json(&self, failure_reason: Option<&str>, state: Option<&RunState>) -> Value {
         let frame_store = self.frame_store.diagnostics_json();
-        json!({
+        let mut diagnostics = json!({
             "actinglab_cli_version": self.process.app_version,
             "runtime_version": "runtime-embedded-lab1y",
             "runtime_commit": self.process.runtime_commit_source.sample(),
@@ -1295,7 +1321,11 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 "exception": message,
                 "failure_phase": self.phase
             }))
-        })
+        });
+        if let Some(frame_evidence) = &self.frame_evidence {
+            diagnostics["frame_evidence"] = json!(frame_evidence);
+        }
+        diagnostics
     }
 
     fn environment_json(&self, state: Option<&RunState>) -> CliOutcome<Value> {
