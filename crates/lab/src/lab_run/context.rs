@@ -682,12 +682,8 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         self.append_finalizing_record(ok, failure_reason, summary, diagnostics, environment)?;
         let committed = match commit_then_record(|| {
             self.write_logs(ok, failure_reason, state)?;
-            write_output_zip(&self.output_dir, out_path)?;
-            let sha256 = file_sha256(out_path)?;
-            Ok(ArchiveResult {
-                path: out_path.to_path_buf(),
-                sha256,
-            })
+            write_portable_projection_archive(&self.output_dir, out_path)
+                .map_err(map_artifact_error)
         }) {
             Ok(proof) => proof,
             Err(err) => return self.record_terminal_output_failure(out_path, err),

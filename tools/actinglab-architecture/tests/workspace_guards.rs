@@ -735,6 +735,30 @@ fn c5_lab_consumes_artifact_frame_store_without_an_ownership_wrapper() {
     }
 }
 #[test]
+fn c5_portable_output_archive_is_owned_by_artifact_store() {
+    let root = workspace_root();
+    let artifact = fs::read_to_string(root.join("crates/artifact-store/src/portable_archive.rs"))
+        .expect("read portable archive source");
+    let lab_output = fs::read_to_string(root.join("crates/lab/src/lab_run/output.rs"))
+        .expect("read Lab run output");
+    let lab_context = fs::read_to_string(root.join("crates/lab/src/lab_run/context.rs"))
+        .expect("read Lab run context");
+
+    assert!(artifact.contains("pub fn write_portable_projection_archive"));
+    assert!(lab_context.contains("write_portable_projection_archive"));
+    for forbidden in [
+        "fn write_output_zip",
+        "ZipWriter",
+        "add_zip_dir",
+        "path_to_zip_name",
+    ] {
+        assert!(
+            !lab_output.contains(forbidden),
+            "Lab regained portable archive mechanics via {forbidden}"
+        );
+    }
+}
+#[test]
 fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
     let root = workspace_root();
     let metadata: serde_json::Value =

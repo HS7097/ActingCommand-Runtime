@@ -13,6 +13,7 @@ mod exporter;
 mod frame_store;
 mod naming;
 mod pipeline;
+mod portable_archive;
 mod store;
 
 pub use error::*;
@@ -20,4 +21,5 @@ pub use exporter::*;
 pub use frame_store::*;
 pub use naming::*;
 pub use pipeline::*;
+pub use portable_archive::*;
 pub use store::*;

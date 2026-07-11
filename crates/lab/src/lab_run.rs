@@ -9,7 +9,8 @@ use crate::{
 };
 use actingcommand_artifact_store::{
     ArtifactStoreError, FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,
-    FrameStoreScreenshot as ScreenshotRecord, RecognitionState, Tier3PauseCheckpoint,
+    FrameStoreScreenshot as ScreenshotRecord, PortableProjectionArchive, RecognitionState,
+    Tier3PauseCheckpoint, write_portable_projection_archive,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
@@ -43,7 +44,9 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
 use zip::ZipWriter;
+#[cfg(test)]
 use zip::write::FileOptions;
 
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";

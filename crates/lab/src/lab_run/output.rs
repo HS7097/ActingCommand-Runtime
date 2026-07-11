@@ -26,11 +26,7 @@ fn scene_from_frame(frame: &Frame) -> CliOutcome<Scene> {
         .map_err(|err| CliError::device(err.to_string()))
 }
 
-#[derive(Debug)]
-struct ArchiveResult {
-    path: PathBuf,
-    sha256: String,
-}
+type ArchiveResult = PortableProjectionArchive;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalOutputZip {
@@ -144,104 +140,6 @@ fn write_json_lines(path: &Path, values: &[Value]) -> CliOutcome<()> {
         })?;
     }
     Ok(())
-}
-
-fn write_output_zip(output_dir: &Path, out_path: &Path) -> CliOutcome<()> {
-    let result = write_output_zip_inner(output_dir, out_path);
-    if result.is_err() {
-        let _ = fs::remove_file(out_path);
-    }
-    result
-}
-
-fn write_output_zip_inner(output_dir: &Path, out_path: &Path) -> CliOutcome<()> {
-    if let Some(parent) = out_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
-        })?;
-    }
-    let file = File::create(out_path).map_err(|err| {
-        CliError::package_invalid(format!("failed to create {}: {err}", out_path.display()))
-    })?;
-    let mut zip = ZipWriter::new(file);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.add_directory("logs/", options)
-        .map_err(|err| CliError::package_invalid(format!("failed to add logs directory: {err}")))?;
-    zip.add_directory("screenshots/", options).map_err(|err| {
-        CliError::package_invalid(format!("failed to add screenshots directory: {err}"))
-    })?;
-    add_zip_dir(&mut zip, output_dir, &output_dir.join("logs"), options)?;
-    add_zip_dir(
-        &mut zip,
-        output_dir,
-        &output_dir.join("screenshots"),
-        options,
-    )?;
-    let file = zip
-        .finish()
-        .map_err(|err| CliError::package_invalid(format!("failed to finish output zip: {err}")))?;
-    file.sync_all().map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to sync output zip {}: {err}",
-            out_path.display()
-        ))
-    })?;
-    Ok(())
-}
-
-fn add_zip_dir(
-    zip: &mut ZipWriter<File>,
-    root: &Path,
-    dir: &Path,
-    options: FileOptions,
-) -> CliOutcome<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(dir).map_err(|err| {
-        CliError::package_invalid(format!("failed to list {}: {err}", dir.display()))
-    })? {
-        let entry = entry.map_err(|err| {
-            CliError::package_invalid(format!("failed to read directory entry: {err}"))
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            add_zip_dir(zip, root, &path, options)?;
-        } else {
-            let relative = path.strip_prefix(root).map_err(|err| {
-                CliError::package_invalid(format!("failed to relativize {}: {err}", path.display()))
-            })?;
-            let name = path_to_zip_name(relative)?;
-            zip.start_file(name, options).map_err(|err| {
-                CliError::package_invalid(format!("failed to start zip file: {err}"))
-            })?;
-            let bytes = fs::read(&path).map_err(|err| {
-                CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
-            })?;
-            zip.write_all(&bytes).map_err(|err| {
-                CliError::package_invalid(format!("failed to write output zip: {err}"))
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn path_to_zip_name(path: &Path) -> CliOutcome<String> {
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(value) => parts.push(value.to_string_lossy().to_string()),
-            _ => {
-                return Err(CliError::package_invalid(format!(
-                    "invalid output zip path {}",
-                    path.display()
-                )));
-            }
-        }
-    }
-    Ok(parts.join("/"))
 }
 
 fn page_evaluation_json(evaluation: &PageEvaluation) -> Value {
