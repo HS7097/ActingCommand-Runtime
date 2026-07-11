@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 [package]
-name = "actingcommand-lab"
+name = "actingcommand-resource-tooling"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -10,14 +10,8 @@ publish = false
 
 [dependencies]
 actingcommand-contract = { workspace = true }
-actingcommand-artifact-store = { workspace = true }
-actingcommand-device = { workspace = true }
-actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
-actingcommand-page-detector = { workspace = true }
-actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
-actingcommand-resource-tooling = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

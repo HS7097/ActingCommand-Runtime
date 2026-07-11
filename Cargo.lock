@@ -154,6 +154,7 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-resource-tooling",
  "serde",
  "serde_json",
  "sha2",
@@ -241,6 +242,20 @@ dependencies = [
  "actingcommand-recognition",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "actingcommand-resource-tooling"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-pack-containment",
+ "actingcommand-recognition-pack",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

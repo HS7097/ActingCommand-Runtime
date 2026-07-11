@@ -730,6 +730,16 @@ fn all_non_lab_packages_remain_lab_free_with_all_features() {
 #[test]
 fn production_packages_cannot_reach_resource_tooling() {
     let metadata = workspace_metadata();
+    let document: serde_json::Value =
+        serde_json::from_str(&metadata).expect("parse cargo metadata");
+    assert!(
+        document["packages"].as_array().is_some_and(|packages| {
+            packages
+                .iter()
+                .any(|package| package["name"] == "actingcommand-resource-tooling")
+        }),
+        "C5 requires the actingcommand-resource-tooling package"
+    );
     let violations = resource_tooling_removability_violations(
         &metadata,
         &[
@@ -745,6 +755,22 @@ fn production_packages_cannot_reach_resource_tooling() {
         "production-to-resource-tooling dependency violations:\n{}",
         violations.join("\n")
     );
+    for forbidden in [
+        "actingcommand-lab",
+        "actingcommand-runtime-host",
+        "actingcommand-scheduler",
+        "actingcommand-execution-kernel",
+        "actingcommand-device",
+    ] {
+        let path = dependency_path(&metadata, "actingcommand-resource-tooling", forbidden);
+        assert!(
+            path.is_none(),
+            "resource-tooling must not reach {forbidden}: {}",
+            path.as_ref()
+                .map(|path| path.join(" -> "))
+                .unwrap_or_else(|| "no path".to_string())
+        );
+    }
 }
 
 fn cargo_metadata_args() -> [&'static str; 4] {

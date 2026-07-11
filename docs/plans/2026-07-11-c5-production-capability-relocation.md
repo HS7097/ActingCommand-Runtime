@@ -93,6 +93,13 @@ Status: complete.
 
 Status: active.
 
+Progress:
+
+- Subtask 2a complete: the developer-only crate boundary now owns package API DTOs, package
+  validation, resource conversion, and MAA compilation; Lab exposes compatibility wrappers only.
+- Subtask 2b active: move package build and replace live Lab environment resolution inside the
+  compiler with a typed resolved-environment snapshot.
+
 - Add `crates/resource-tooling` as a workspace crate.
 - Mechanically move package API/build/validate, resource conversion, and MAA compilation behavior and
   tests out of `actingcommand-lab`.

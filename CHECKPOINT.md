@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 2a resource-tooling boundary
+
+### Current status
+
+- Added workspace crate `actingcommand-resource-tooling` as a Lab-owned developer-only module with
+  no live Runtime, scheduler, execution-kernel, Lab-state, or device dependency.
+- Mechanically moved package API DTOs, package validation, resource conversion, MAA compilation,
+  and their 66 focused tests from `actingcommand-lab` into resource-tooling.
+- Lab now exposes thin compatibility re-exports/wrappers, preserving existing Rust callers and CLI
+  protocol envelopes.
+- Resource-tooling validates generated packages through shared pack-containment and reuses stable
+  contract error/DTO facts without acquiring production authority.
+- Strengthened the all-feature architecture guard to require resource-tooling and reject any path
+  from it to Lab, Runtime host, scheduler, execution-kernel, or device, as well as any production
+  path into resource-tooling.
+- Issue #35 remains approved with only `HS7097` comments.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/resource-tooling/Cargo.toml`
+- `crates/resource-tooling/src/lib.rs`
+- `crates/resource-tooling/src/api.rs`
+- `crates/resource-tooling/src/maa_task_graph.rs`
+- `crates/resource-tooling/src/package_validate.rs`
+- `crates/resource-tooling/src/resource_convert/mod.rs`
+- `crates/resource-tooling/src/resource_convert/tests.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/package_api.rs`
+- `crates/lab/src/maa_task_graph.rs`
+- `crates/lab/src/package_validate.rs`
+- `crates/lab/src/resource_convert.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-resource-tooling -p actingcommand-lab -p actingcommand-actinglab -p actingcommand-actinglab-architecture --all-targets`
+- `cargo test -p actingcommand-resource-tooling -p actingcommand-lab`
+- `cargo test -p actingcommand-actinglab --test golden_protocol`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo clippy -p actingcommand-resource-tooling -p actingcommand-lab -p actingcommand-actinglab-architecture --all-targets -- -D warnings`
+- `cargo fmt --all`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+
+### Test results
+
+- Resource-tooling passed 66 moved unit tests.
+- Remaining Lab passed 118 unit tests, 2 Lab-run API tests, and 1 package API test.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Architecture passed 15 unit tests and 20 all-feature workspace guards.
+- Focused compilation and Clippy with warnings denied, formatting, and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push Task 2a and record it in Issue #36.
+2. Move package build into resource-tooling and replace its `Lab<P>` dependency with a typed
+   resolved-environment snapshot while retaining Lab workflow orchestration.
+
 ## 2026-07-11 Issue 35 C5 Task 1 ownership inventory and guard
 
 ### Current status

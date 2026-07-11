@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{
-    Lab, LabError as CliError, LabPorts, LabResult as CliOutcome, ResourceConvertRequest,
-    ResourceConvertResponse, maa_task_graph,
-};
+use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
+use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -14,16 +12,7 @@ const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.5";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 
-impl<P: LabPorts> Lab<P> {
-    pub fn resource_convert(
-        &mut self,
-        request: ResourceConvertRequest,
-    ) -> CliOutcome<ResourceConvertResponse> {
-        run_resource_convert(request)
-    }
-}
-
-fn run_resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
+pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
     let resource_root = resolve_resource_root(&request.repo);
     let repo = &resource_root.root;
     let game_override = request.game.as_deref().map(canonical_game).transpose()?;
@@ -98,13 +87,13 @@ fn run_resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedResourceRoot {
-    pub(crate) input: PathBuf,
-    pub(crate) root: PathBuf,
-    pub(crate) layout: &'static str,
+pub struct ResolvedResourceRoot {
+    pub input: PathBuf,
+    pub root: PathBuf,
+    pub layout: &'static str,
 }
 
-pub(crate) fn resolve_resource_root(input: &Path) -> ResolvedResourceRoot {
+pub fn resolve_resource_root(input: &Path) -> ResolvedResourceRoot {
     if looks_like_resource_root(input) {
         return ResolvedResourceRoot {
             input: input.to_path_buf(),
@@ -132,7 +121,7 @@ fn looks_like_resource_root(path: &Path) -> bool {
         && (path.join("recognition").is_dir() || path.join("navigation").is_dir())
 }
 
-pub(crate) fn canonical_game(value: &str) -> CliOutcome<String> {
+pub fn canonical_game(value: &str) -> CliOutcome<String> {
     match value.to_ascii_lowercase().as_str() {
         "ak" | "ark" | "arknights" => Ok("arknights".to_string()),
         "azur" | "azurlane" | "azur_lane" | "al" => Ok("azurlane".to_string()),
@@ -142,33 +131,33 @@ pub(crate) fn canonical_game(value: &str) -> CliOutcome<String> {
 }
 
 #[derive(Debug)]
-pub(super) struct OperationConverter {
-    pub(super) root: PathBuf,
-    pub(super) game: String,
-    pub(super) server: String,
-    pub(super) locale: String,
-    pub(super) coordinate_space: Value,
-    pub(super) defaults: Value,
+pub struct OperationConverter {
+    pub root: PathBuf,
+    pub game: String,
+    pub server: String,
+    pub locale: String,
+    pub coordinate_space: Value,
+    pub defaults: Value,
     resource_ids: HashSet<String>,
-    pub(super) bundles: Vec<Bundle>,
+    pub bundles: Vec<Bundle>,
     existing_navigation: Option<Value>,
     maa_task_overlays: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Bundle {
-    pub(super) task_id: String,
-    pub(super) dir: PathBuf,
-    pub(super) data: Value,
+pub struct Bundle {
+    pub task_id: String,
+    pub dir: PathBuf,
+    pub data: Value,
 }
 
 #[derive(Debug)]
-pub(super) struct ConvertOutputs {
-    pub(super) pack: Value,
-    pub(super) pages: Value,
-    pub(super) navigation: Value,
-    pub(super) index: Value,
-    pub(super) primitives: Value,
+pub struct ConvertOutputs {
+    pub pack: Value,
+    pub pages: Value,
+    pub navigation: Value,
+    pub index: Value,
+    pub primitives: Value,
 }
 
 impl ConvertOutputs {
@@ -202,7 +191,7 @@ impl ConvertOutputs {
 }
 
 impl OperationConverter {
-    pub(super) fn load(
+    pub fn load(
         root: &Path,
         game_override: Option<&str>,
         server_override: Option<&str>,
@@ -314,7 +303,7 @@ impl OperationConverter {
         Ok(Value::Object(out))
     }
 
-    pub(super) fn build_all(&self) -> CliOutcome<ConvertOutputs> {
+    pub fn build_all(&self) -> CliOutcome<ConvertOutputs> {
         let pack = self.build_pack()?;
         validate_pack_targets_exist(&self.root, &pack)?;
         let pages = self.build_pages()?;
@@ -332,7 +321,7 @@ impl OperationConverter {
         })
     }
 
-    pub(super) fn build_selected(&self, task_ids: &[String]) -> CliOutcome<ConvertOutputs> {
+    pub fn build_selected(&self, task_ids: &[String]) -> CliOutcome<ConvertOutputs> {
         let selected = self
             .bundles
             .iter()

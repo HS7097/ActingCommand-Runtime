@@ -553,7 +553,7 @@ fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
 #[test]
 fn resource_convert_accepts_explicit_maa_tasks_mode() {
     let (root, maa_dir) = write_synthetic_maa_convert_fixture();
-    let summary = run_resource_convert(ResourceConvertRequest {
+    let summary = resource_convert(ResourceConvertRequest {
         repo: root.path().to_path_buf(),
         game: None,
         server: None,

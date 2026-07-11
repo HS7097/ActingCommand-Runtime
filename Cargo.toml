@@ -20,6 +20,7 @@ members = [
     "crates/onnx-provider-support",
     "crates/recognition",
     "crates/recognition-pack",
+    "crates/resource-tooling",
     "crates/runtime-core",
     "crates/runtime-client",
     "crates/runtime-host",
@@ -50,6 +51,7 @@ actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
+actingcommand-resource-tooling = { path = "crates/resource-tooling" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }
 actingcommand-runtime-client = { path = "crates/runtime-client" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
