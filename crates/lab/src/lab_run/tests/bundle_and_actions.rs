@@ -13,7 +13,6 @@
             "fixture",
             "fixture",
             resolver.clone(),
-            temp.path().join("locks"),
         );
         let mut lab = test_lab(temp.path());
 
@@ -47,7 +46,6 @@
             "fixture",
             "fixture",
             Arc::new(DeviceResolverCounters::default()),
-            temp.path().join("locks"),
         );
         let mut lab = test_lab(temp.path());
 
@@ -94,7 +92,6 @@
         request.device_resolver = Box::new(TestDeviceResolver {
             selected: test_selected_device("fixture", "fixture"),
             counters: counters.clone(),
-            lease_root: temp.path().join("locks"),
             failure: Some(SelectedConfigFailure::Provenance),
             ledger_starts: Some(ledger_starts),
         });
@@ -109,13 +106,6 @@
                 .lock()
                 .expect("validation ledger starts"),
             vec![0]
-        );
-        assert_eq!(
-            *counters
-                .validation_lease_present
-                .lock()
-                .expect("validation lease state"),
-            vec![false]
         );
         assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
         let file = File::open(&out).expect("failure zip");
@@ -144,7 +134,7 @@
     }
 
     #[test]
-    fn selected_invalid_touch_rejects_recognize_only_before_ledger_and_lease() {
+    fn selected_invalid_touch_rejects_before_ledger_or_runtime_effects() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
         write_minimal_lab_package(&zip);
@@ -157,7 +147,6 @@
         request.device_resolver = Box::new(TestDeviceResolver {
             selected: test_selected_device("fixture", "fixture"),
             counters: counters.clone(),
-            lease_root: temp.path().join("locks"),
             failure: Some(SelectedConfigFailure::Touch),
             ledger_starts: Some(ledger_starts),
         });
@@ -173,13 +162,6 @@
                 .lock()
                 .expect("validation ledger starts"),
             vec![0]
-        );
-        assert_eq!(
-            *counters
-                .validation_lease_present
-                .lock()
-                .expect("validation lease state"),
-            vec![false]
         );
         assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
         assert!(out.is_file());
@@ -200,7 +182,6 @@
         request.device_resolver = Box::new(TestDeviceResolver {
             selected: test_selected_device("fixture", "fixture"),
             counters: counters.clone(),
-            lease_root: temp.path().join("locks"),
             failure: Some(SelectedConfigFailure::Capture),
             ledger_starts: Some(ledger_starts),
         });
@@ -216,13 +197,6 @@
                 .lock()
                 .expect("validation ledger starts"),
             vec![0]
-        );
-        assert_eq!(
-            *counters
-                .validation_lease_present
-                .lock()
-                .expect("validation lease state"),
-            vec![false]
         );
         assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
 
@@ -364,7 +338,6 @@
             "fixture",
             "fixture",
             resolver.clone(),
-            temp.path().join("locks"),
         );
         let mut lab = test_lab(temp.path());
 

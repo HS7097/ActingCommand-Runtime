@@ -232,13 +232,7 @@ fn execute_lab_run<P: LabPorts>(
     ctx.adb_path = Some(device.adb_provenance().to_string());
     ctx.ensure_ledger()?;
 
-    ctx.set_phase("lab_lease_acquired");
-    let _lease_guard = LabLeaseGuard::acquire(&request.process.lease_root, device.serial())?;
-    ctx.event(
-        "lab_lease_acquired",
-        json!({"mode": "trusted_execution", "instance": ctx.instance}),
-    )?;
-    ctx.lease_acquired = true;
+    ctx.set_phase("runtime_effects_bound");
 
     let requested_capture_backend = request
         .capture_backend_override
@@ -324,8 +318,6 @@ fn execute_lab_run<P: LabPorts>(
             "recognize_only_finished",
             json!({"matched_page": first.matched_page, "matched_anchor": state.current_page}),
         )?;
-        ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
-        ctx.lease_released = true;
         return Ok(state);
     }
 
@@ -433,8 +425,6 @@ fn execute_lab_run<P: LabPorts>(
     if let Some(error) = terminal_error {
         return Err(error);
     }
-    ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
-    ctx.lease_released = true;
     Ok(state)
 }
 

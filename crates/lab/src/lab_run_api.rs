@@ -130,7 +130,6 @@ pub trait RuntimeCommitSource: Send + Sync {
 #[derive(Clone)]
 pub struct LabRunProcessContext {
     pub current_dir: Option<PathBuf>,
-    pub lease_root: PathBuf,
     pub os: String,
     pub app_version: String,
     pub runtime_commit_source: Arc<dyn RuntimeCommitSource>,

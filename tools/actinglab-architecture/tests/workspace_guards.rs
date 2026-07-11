@@ -903,6 +903,14 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
         .expect("read Lab run ingress");
     let lab_execute = fs::read_to_string(root.join("crates/lab/src/lab_run/execute.rs"))
         .expect("read Lab run execution adapter");
+    let lab_context = fs::read_to_string(root.join("crates/lab/src/lab_run/context.rs"))
+        .expect("read Lab run context");
+    let lab_output = fs::read_to_string(root.join("crates/lab/src/lab_run/output.rs"))
+        .expect("read Lab run output");
+    let lab_contract = fs::read_to_string(root.join("crates/lab/src/lab_run_api.rs"))
+        .expect("read Lab run contract");
+    let runtime_input = fs::read_to_string(root.join("crates/runtime-client/src/input.rs"))
+        .expect("read Runtime input proxy");
 
     assert!(
         !root
@@ -939,6 +947,34 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     }
     assert!(lab_run.contains("instance_alias: Some(selected_id.clone())"));
     assert!(lab_execute.contains("instance_alias: Some(instance_alias.to_string())"));
+    for (path, source) in [
+        ("crates/lab/src/lab_run/api.rs", &lab_run),
+        ("crates/lab/src/lab_run/context.rs", &lab_context),
+        ("crates/lab/src/lab_run/output.rs", &lab_output),
+        ("crates/lab/src/lab_run_api.rs", &lab_contract),
+    ] {
+        for forbidden in [
+            "LabLeaseGuard",
+            "lease_root",
+            "lab_lease_acquired",
+            "lab_lease_released",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} regained private lease authority via {forbidden}"
+            );
+        }
+    }
+    for required in [
+        "client.acquire_lease",
+        "client.release_lease",
+        "self.client.input",
+    ] {
+        assert!(
+            runtime_input.contains(required),
+            "Runtime input proxy lost scheduler-fenced effect path {required}"
+        );
+    }
 }
 
 #[test]

@@ -111,15 +111,8 @@ impl LabRunDeviceResolver for AppLabRunDeviceResolver {
 }
 
 fn process_context() -> CliOutcome<LabRunProcessContext> {
-    let lease_root = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join("ActingCommand")
-        .join("actinglab")
-        .join("locks");
     Ok(LabRunProcessContext {
         current_dir: env::current_dir().ok(),
-        lease_root,
         os: env::consts::OS.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_commit_source: Arc::new(AppRuntimeCommitSource),

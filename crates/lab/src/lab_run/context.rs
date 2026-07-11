@@ -40,8 +40,6 @@ struct LabRunContext<'a, L: LedgerSink> {
     capture_backend_requested: Option<CaptureBackendChoice>,
     capture_backend_used: Option<CaptureBackendName>,
     capture_backend_attempts: Vec<CaptureBackendAttempt>,
-    lease_acquired: bool,
-    lease_released: bool,
     partial_output: bool,
     current_step_index: Option<usize>,
     current_step_id: Option<String>,
@@ -117,8 +115,6 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             capture_backend_requested: None,
             capture_backend_used: None,
             capture_backend_attempts: Vec::new(),
-            lease_acquired: false,
-            lease_released: false,
             partial_output: false,
             current_step_index: None,
             current_step_id: None,
@@ -357,11 +353,6 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     }
 
     fn event(&mut self, event: &str, data: Value) -> CliOutcome<()> {
-        if event == "lab_lease_acquired" {
-            self.lease_acquired = true;
-        } else if event == "lab_lease_released" {
-            self.lease_released = true;
-        }
         let mut object = serde_json::Map::new();
         object.insert("event".to_string(), json!(event));
         object.insert(
@@ -659,12 +650,6 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         state: Option<&RunState>,
     ) -> CliOutcome<ArchiveResult> {
         self.ensure_ledger()?;
-        if self.lease_acquired && !self.lease_released {
-            self.event(
-                "lab_lease_released",
-                json!({"mode": "trusted_one_shot", "reason": "finish_cleanup"}),
-            )?;
-        }
         let final_event = if ok { "run_finished" } else { "run_failed" };
         self.event(
             final_event,

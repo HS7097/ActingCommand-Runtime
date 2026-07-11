@@ -72,7 +72,6 @@ struct DeviceResolverCounters {
     capture: AtomicUsize,
     touch: AtomicUsize,
     validation_ledger_starts: Mutex<Vec<usize>>,
-    validation_lease_present: Mutex<Vec<bool>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -85,7 +84,6 @@ enum SelectedConfigFailure {
 struct TestDeviceResolver {
     selected: crate::LabRunSelectedDevice,
     counters: Arc<DeviceResolverCounters>,
-    lease_root: PathBuf,
     failure: Option<SelectedConfigFailure>,
     ledger_starts: Option<Arc<AtomicUsize>>,
 }
@@ -157,15 +155,6 @@ impl TestDeviceResolver {
             .lock()
             .expect("validation ledger starts")
             .push(ledger_starts);
-        let lock = self.lease_root.join(format!(
-            "{}.lock",
-            sanitize_path_segment(self.selected.serial())
-        ));
-        self.counters
-            .validation_lease_present
-            .lock()
-            .expect("validation lease state")
-            .push(lock.is_file());
     }
 }
 
@@ -173,12 +162,10 @@ fn test_device_resolver(
     id: &str,
     serial: &str,
     counters: Arc<DeviceResolverCounters>,
-    lease_root: PathBuf,
 ) -> Box<dyn crate::LabRunDeviceResolver> {
     Box::new(TestDeviceResolver {
         selected: test_selected_device(id, serial),
         counters,
-        lease_root,
         failure: None,
         ledger_starts: None,
     })
@@ -205,20 +192,11 @@ fn test_selected_device(id: &str, serial: &str) -> crate::LabRunSelectedDevice {
 
 struct TestCaptureFactory {
     opens: Arc<AtomicUsize>,
-    lease_root: PathBuf,
 }
 
 impl crate::CaptureBackendFactory for TestCaptureFactory {
     fn open(&self, request: crate::CaptureBackendRequest) -> CliOutcome<Box<dyn CaptureBackend>> {
-        let serial = request.config.target.resolved_serial();
-        let lock = self
-            .lease_root
-            .join(format!("{}.lock", sanitize_path_segment(&serial)));
-        if !lock.is_file() {
-            return Err(CliError::device(
-                "capture backend opened before the Lab lease was acquired",
-            ));
-        }
+        assert!(request.instance_alias.is_some());
         self.opens.fetch_add(1, Ordering::SeqCst);
         if let Some(observation) = request.observation {
             observation.record(crate::CaptureBackendReport {
@@ -367,7 +345,6 @@ impl LabRunContext<'static, TestLedgerSink> {
             input_zip,
             crate::LabRunProcessContext {
                 current_dir: None,
-                lease_root: run_root.join("locks"),
                 os: "test".to_string(),
                 app_version: "actinglab-test".to_string(),
                 runtime_commit_source: Arc::new(EmptyRuntimeCommitSource),
@@ -445,7 +422,6 @@ fn test_lab(root: &Path) -> Lab<TestPorts> {
             semantic_input: crate::ports::DisabledSemanticInput,
             capture: TestCaptureFactory {
                 opens: Arc::new(AtomicUsize::new(0)),
-                lease_root: root.join("locks"),
             },
             ledger: TestLedgerSink::new(),
             clock: TestClock,
@@ -472,7 +448,6 @@ fn test_run_request(zip: PathBuf, out: PathBuf, root: &Path) -> LabRunRequest {
             "127.0.0.1:1",
             "127.0.0.1:1",
             Arc::new(DeviceResolverCounters::default()),
-            root.join("locks"),
         ),
         capture_interval_override: None,
         capture_backend_override: None,
@@ -480,7 +455,6 @@ fn test_run_request(zip: PathBuf, out: PathBuf, root: &Path) -> LabRunRequest {
         expected_input_sha256,
         process: crate::LabRunProcessContext {
             current_dir: Some(root.to_path_buf()),
-            lease_root: root.join("locks"),
             os: "test".to_string(),
             app_version: "actinglab-test".to_string(),
             runtime_commit_source: Arc::new(EmptyRuntimeCommitSource),

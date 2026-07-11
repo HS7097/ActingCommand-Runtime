@@ -74,7 +74,6 @@ fn assert_methods_are_public<P: actingcommand_lab::LabPorts>(
 fn lab_run_family_exposes_typed_requests_and_responses() {
     let process = LabRunProcessContext {
         current_dir: Some(PathBuf::from("workspace")),
-        lease_root: PathBuf::from("locks"),
         os: "test".to_string(),
         app_version: "actinglab-test".to_string(),
         runtime_commit_source: Arc::new(CompileCommitSource),

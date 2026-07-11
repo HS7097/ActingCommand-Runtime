@@ -65,51 +65,6 @@ struct LabLogProjection {
     environment: Value,
 }
 
-struct LabLeaseGuard {
-    path: PathBuf,
-    _file: File,
-}
-
-impl LabLeaseGuard {
-    fn acquire(root: &Path, serial: &str) -> CliOutcome<Self> {
-        fs::create_dir_all(root).map_err(|err| {
-            CliError::package_invalid(format!(
-                "failed to create LabLease lock directory {}: {err}",
-                root.display()
-            ))
-        })?;
-        let path = root.join(format!("{}.lock", sanitize_path_segment(serial)));
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)
-            .map_err(|err| {
-                if err.kind() == std::io::ErrorKind::AlreadyExists {
-                    CliError::safety_blocked(
-                        "lab_lease_lock_conflict",
-                        format!(
-                            "LabLease lock already exists for instance {serial}: {}",
-                            path.display()
-                        ),
-                        &["lab_lease"],
-                    )
-                } else {
-                    CliError::package_invalid(format!(
-                        "failed to acquire LabLease lock {}: {err}",
-                        path.display()
-                    ))
-                }
-            })?;
-        Ok(Self { path, _file: file })
-    }
-}
-
-impl Drop for LabLeaseGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct IntervalStats {
     min: u64,
@@ -332,29 +287,6 @@ fn hash_text(text: &str) -> u64 {
     u64::from_be_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
     ])
-}
-
-fn sanitize_path_segment(value: &str) -> String {
-    let mut output = String::new();
-    let mut previous_underscore = false;
-    for ch in value.chars() {
-        let safe = if ch.is_ascii_alphanumeric() { ch } else { '_' };
-        if safe == '_' {
-            if !previous_underscore {
-                output.push(safe);
-            }
-            previous_underscore = true;
-        } else {
-            output.push(safe);
-            previous_underscore = false;
-        }
-    }
-    let output = output.trim_matches('_').to_string();
-    if output.is_empty() {
-        "unknown".to_string()
-    } else {
-        output
-    }
 }
 
 fn now_system_time(clock: &dyn Clock) -> CliOutcome<SystemTime> {
