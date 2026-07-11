@@ -226,11 +226,11 @@ fn lock_proxy(state: &Mutex<ProxyState>) -> DeviceResult<MutexGuard<'_, ProxySta
         .map_err(|_| DeviceError::fatal("RuntimeInputProxy state is poisoned"))
 }
 
-fn device_error(error: RuntimeClientError) -> DeviceError {
-    let severity = if error.is_fatal() {
-        DeviceErrorSeverity::Fatal
-    } else {
+pub(crate) fn device_error(error: RuntimeClientError) -> DeviceError {
+    let severity = if error.is_fallback_eligible() {
         DeviceErrorSeverity::Transient
+    } else {
+        DeviceErrorSeverity::Fatal
     };
     DeviceError::with_severity(severity, error.to_string())
 }

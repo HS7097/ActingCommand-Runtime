@@ -507,8 +507,11 @@ impl HostShared {
             }
         };
         if preparation.is_existing() {
-            let terminal =
-                self.existing_lease_terminal(request_id, preparation.token().lease_id())?;
+            let terminal = self.existing_lease_terminal(
+                request_id,
+                preparation.token().lease_id(),
+                EventType::LeaseGranted,
+            )?;
             return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Admitted,
                 terminal: Some(terminal),
@@ -600,31 +603,32 @@ impl HostShared {
         &self,
         request_id: RequestId,
         lease_id: LeaseId,
+        event_type: EventType,
     ) -> Result<TerminalEvent, RequestFailure> {
         let events = self
             .ledger
             .query(EventQuery {
-                event_type: Some(EventType::LeaseGranted),
+                event_type: Some(event_type),
                 request_id: Some(request_id),
                 lease_id: Some(lease_id),
                 ..EventQuery::default()
             })
             .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("query_lease_grant"))
+                RequestFailure::poison_without_terminal(ledger_error("query_lease_terminal"))
             })?;
         match events.as_slice() {
             [event] => Ok(terminal(event)),
             [] => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "lease_grant_event_missing",
-                    "recover_idempotent_acquire",
+                    "lease_terminal_event_missing",
+                    "recover_idempotent_lease_request",
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             )),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
-                    "lease_grant_event_duplicated",
-                    "recover_idempotent_acquire",
+                    "lease_terminal_event_duplicated",
+                    "recover_idempotent_lease_request",
                     RuntimeErrorCode::RuntimeFatal,
                 ),
             )),
@@ -638,6 +642,35 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let replayed = lock(&self.scheduler, "replay_renew_lease").and_then(|scheduler| {
+            scheduler
+                .replayed_renew(request_id, token, connection_id)
+                .map_err(|error| RuntimeHostError::scheduler("replay_renew_lease", &error))
+        });
+        let replayed = match replayed {
+            Ok(replayed) => replayed,
+            Err(error) => {
+                return Err(self.scheduler_denied_error(
+                    request,
+                    Some(token.instance_id()),
+                    Some(token.lease_id()),
+                    "",
+                    error,
+                )?);
+            }
+        };
+        if let Some(renewed) = replayed {
+            let terminal = self.existing_lease_terminal(
+                request_id,
+                renewed.lease_id(),
+                EventType::LeaseRenewed,
+            )?;
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: Some(terminal),
+                result: RuntimeResult::LeaseRenewed { token: renewed },
+            });
+        }
         let backend = self.validated_backend(request, token, connection_id)?;
         let backend = lock(&backend, "lock_input_backend")?;
         let resolved = ResolvedInputInstanceForEvent::from_backend(&backend);
@@ -720,6 +753,38 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let replayed = lock(&self.scheduler, "replay_release_lease").and_then(|scheduler| {
+            scheduler
+                .replayed_release(request_id, token, connection_id)
+                .map_err(|error| RuntimeHostError::scheduler("replay_release_lease", &error))
+        });
+        let replayed = match replayed {
+            Ok(replayed) => replayed,
+            Err(error) => {
+                return Err(self.scheduler_denied_error(
+                    request,
+                    Some(token.instance_id()),
+                    Some(token.lease_id()),
+                    "",
+                    error,
+                )?);
+            }
+        };
+        if let Some(released) = replayed {
+            let terminal = self.existing_lease_terminal(
+                request_id,
+                released.token.lease_id(),
+                EventType::LeaseReleased,
+            )?;
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: Some(terminal),
+                result: RuntimeResult::LeaseReleased {
+                    instance_id: released.token.instance_id(),
+                    lease_id: released.token.lease_id(),
+                },
+            });
+        }
         let backend = self.validated_backend(request, token, connection_id)?;
         let mut backend = lock(&backend, "lock_input_backend")?;
         self.append_scheduler_admitted_for_token(request, token, &backend.audit_endpoint)?;

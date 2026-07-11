@@ -437,6 +437,9 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeaseToken> {
+        if let Some(renewed) = self.replayed_renew(request_id, submitted_token, connection_id)? {
+            return Ok(renewed);
+        }
         self.validate_epoch(submitted_token)?;
         let instance_id = self.locate_token_instance(submitted_token)?;
         let expires_at = self.expiry_from(now_monotonic_ms)?;
@@ -445,14 +448,6 @@ impl SeedScheduler {
             .get_mut(&instance_id)
             .ok_or(SchedulerError::LeaseMissing)?;
         let lease = state.lease.as_mut().ok_or(SchedulerError::LeaseMissing)?;
-        if let Some(record) = &lease.last_renew
-            && record.request_id == request_id
-        {
-            if record.submitted_token == *submitted_token && lease.connection_id == connection_id {
-                return Ok(record.renewed_token.clone());
-            }
-            return Err(SchedulerError::LeaseMismatch);
-        }
         validate_active_lease(lease, submitted_token, connection_id, now_monotonic_ms)?;
         let renewed = LeaseToken::new(
             self.owner_epoch,
@@ -471,6 +466,37 @@ impl SeedScheduler {
         Ok(renewed)
     }
 
+    /// Recovers the most recent matching renew result without mutating lease state.
+    pub fn replayed_renew(
+        &self,
+        request_id: RequestId,
+        submitted_token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> SchedulerResult<Option<LeaseToken>> {
+        self.validate_epoch(submitted_token)?;
+        let Some(lease) = self
+            .instances
+            .get(&submitted_token.instance_id())
+            .and_then(|state| state.lease.as_ref())
+        else {
+            return Ok(None);
+        };
+        let Some(record) = lease
+            .last_renew
+            .as_ref()
+            .filter(|record| record.request_id == request_id)
+        else {
+            return Ok(None);
+        };
+        if record.submitted_token != *submitted_token {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        if lease.connection_id != connection_id {
+            return Err(SchedulerError::ConnectionMismatch);
+        }
+        Ok(Some(record.renewed_token.clone()))
+    }
+
     pub fn release(
         &mut self,
         request_id: RequestId,
@@ -478,19 +504,10 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<ReleasedLease> {
-        self.validate_epoch(submitted_token)?;
-        if let Some(state) = self.instances.get(&submitted_token.instance_id())
-            && let Some(record) = &state.last_release
-            && record.request_id == request_id
-        {
-            if record.submitted_token != *submitted_token {
-                return Err(SchedulerError::LeaseMismatch);
-            }
-            if record.connection_id == connection_id {
-                return Ok(record.released.clone());
-            }
-            return Err(SchedulerError::ConnectionMismatch);
+        if let Some(released) = self.replayed_release(request_id, submitted_token, connection_id)? {
+            return Ok(released);
         }
+        self.validate_epoch(submitted_token)?;
         let instance_id = self.locate_token_instance(submitted_token)?;
         let state = self
             .instances
@@ -511,6 +528,31 @@ impl SeedScheduler {
         });
         self.lease_locations.remove(&submitted_token.lease_id());
         Ok(released)
+    }
+
+    /// Recovers the most recent matching release result without mutating lease state.
+    pub fn replayed_release(
+        &self,
+        request_id: RequestId,
+        submitted_token: &LeaseToken,
+        connection_id: ConnectionId,
+    ) -> SchedulerResult<Option<ReleasedLease>> {
+        self.validate_epoch(submitted_token)?;
+        let Some(record) = self
+            .instances
+            .get(&submitted_token.instance_id())
+            .and_then(|state| state.last_release.as_ref())
+            .filter(|record| record.request_id == request_id)
+        else {
+            return Ok(None);
+        };
+        if record.submitted_token != *submitted_token {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        if record.connection_id != connection_id {
+            return Err(SchedulerError::ConnectionMismatch);
+        }
+        Ok(Some(record.released.clone()))
     }
 
     pub fn validate_write(

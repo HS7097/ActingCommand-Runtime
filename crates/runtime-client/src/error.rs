@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::RuntimeErrorProjection;
+use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection};
 use std::error::Error;
 use std::fmt;
 
@@ -25,6 +25,19 @@ impl RuntimeClientError {
 
     pub fn is_fatal(&self) -> bool {
         self.projection.as_ref().is_none_or(|value| value.fatal)
+    }
+
+    pub fn is_fallback_eligible(&self) -> bool {
+        self.projection.as_ref().is_some_and(|value| {
+            !value.fatal
+                && matches!(
+                    value.code,
+                    RuntimeErrorCode::LeaseBusy
+                        | RuntimeErrorCode::LeaseCooldown
+                        | RuntimeErrorCode::BackendOpenFailed
+                        | RuntimeErrorCode::BackendOperationFailed
+                )
+        })
     }
 
     pub const fn projection(&self) -> Option<&RuntimeErrorProjection> {
@@ -68,11 +81,18 @@ impl fmt::Debug for RuntimeClientError {
 
 impl fmt::Display for RuntimeClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "runtime client error {} during {}",
-            self.code, self.operation
-        )
+        match &self.projection {
+            Some(projection) => write!(
+                formatter,
+                "runtime client error {} during {} with runtime code {:?}",
+                self.code, self.operation, projection.code
+            ),
+            None => write!(
+                formatter,
+                "runtime client error {} during {}",
+                self.code, self.operation
+            ),
+        }
     }
 }
 

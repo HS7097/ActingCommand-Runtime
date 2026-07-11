@@ -229,6 +229,44 @@ fn instance_id() -> InstanceId {
         .transport()
 }
 
+fn runtime_request(ids: &IdentifierIssuer, operation: RuntimeOperation) -> RuntimeRequest {
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        operation,
+    )
+    .expect("runtime request")
+}
+
+fn event_types_for_request(
+    host: &RuntimeHost,
+    ids: &IdentifierIssuer,
+    connection_id: ConnectionId,
+    request_id: actingcommand_contract::RequestId,
+) -> Vec<EventType> {
+    let query = runtime_request(
+        ids,
+        RuntimeOperation::QueryEvents {
+            query: EventQuery {
+                request_id: Some(request_id),
+                ..EventQuery::default()
+            },
+            profile: ProjectionProfile::Forensic,
+        },
+    );
+    let receipt = host
+        .process_request_for_test(&query, connection_id)
+        .expect("event query");
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected event projection");
+    };
+    events.iter().map(|event| event.event_type).collect()
+}
+
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
         .with_io_timeout(Duration::from_millis(500))
@@ -666,6 +704,75 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
             EventType::LeaseGranted,
         ]
     );
+    host.close().expect("close host");
+}
+
+#[test]
+fn renew_and_release_idempotency_survive_connection_cache_loss() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let connection_id = ConnectionId::new(99).expect("connection id");
+    let acquire = runtime_request(
+        &ids,
+        RuntimeOperation::acquire_lease("ak.cn", ids.mint_holder_id().expect("holder id")),
+    );
+    let receipt = host
+        .process_request_for_test(&acquire, connection_id)
+        .expect("acquire");
+    let RuntimeResult::LeaseGranted { token } = receipt.result().expect("lease result") else {
+        panic!("expected lease grant");
+    };
+
+    let renew = runtime_request(
+        &ids,
+        RuntimeOperation::RenewLease {
+            token: token.clone(),
+        },
+    );
+    let first_renew = host
+        .process_request_for_test(&renew, connection_id)
+        .expect("first renew");
+    let repeated_renew = host
+        .process_request_for_test(&renew, connection_id)
+        .expect("repeated renew");
+    assert_eq!(repeated_renew, first_renew);
+    assert_eq!(
+        event_types_for_request(&host, &ids, connection_id, renew.request_id()),
+        vec![
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseRenewed,
+        ]
+    );
+    let RuntimeResult::LeaseRenewed { token } = first_renew.result().expect("renew result") else {
+        panic!("expected renewed lease");
+    };
+
+    let release = runtime_request(
+        &ids,
+        RuntimeOperation::ReleaseLease {
+            token: token.clone(),
+        },
+    );
+    let first_release = host
+        .process_request_for_test(&release, connection_id)
+        .expect("first release");
+    let repeated_release = host
+        .process_request_for_test(&release, connection_id)
+        .expect("repeated release");
+    assert_eq!(repeated_release, first_release);
+    assert_eq!(
+        event_types_for_request(&host, &ids, connection_id, release.request_id()),
+        vec![
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseReleased,
+        ]
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     host.close().expect("close host");
 }
 

@@ -188,7 +188,7 @@ Implemented result:
 
 ## Task 7: Closeout
 
-Status: next.
+Status: in progress.
 
 - Run focused contract/scheduler/host/client/process tests.
 - Run full workspace tests, non-Lab workspace tests, all-features dependency guards, Clippy,
@@ -197,3 +197,12 @@ Status: next.
 - Update `PLANS.md` and `CHECKPOINT.md`, commit and push each completed implementation unit,
   create a checkpoint tag, and record evidence in Issue #36.
 - Do not merge into `main` or the umbrella repository.
+
+Fresh review corrections:
+
+- Runtime now recovers the scheduler's latest matching renew/release result before DeviceProxy
+  prevalidation and retrieves the original terminal event from the ledger. Idempotency therefore
+  survives loss of the bounded connection cache without duplicate state transitions or events.
+- Runtime-client now separates host fatality from fallback eligibility. Only busy, cooldown, and
+  explicitly transient backend failures remain fallback-eligible; fencing, identity, config, and
+  protocol failures become fatal at the `InputBackend` boundary and retain their Runtime code.

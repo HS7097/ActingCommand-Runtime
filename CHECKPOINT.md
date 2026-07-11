@@ -1,5 +1,69 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 7 fresh-review corrections
+
+### Current status
+
+- Fresh review found and corrected two Important issues before C3a closeout.
+- Repeated renew/release requests could lose end-to-end idempotency after eviction from the
+  bounded connection cache because DeviceProxy prevalidation ran before the scheduler's replay
+  branch. Runtime now recovers the exact scheduler result first and retrieves the single original
+  terminal event from the ledger without reopening a backend or appending duplicate events.
+- Runtime-client previously treated every host-nonfatal denial as fallback-eligible. It now allows
+  transient fallback only for busy, cooldown, and explicitly transient backend failures; stale
+  epochs, fencing mismatches, invalid requests, unknown instances, and protocol/state failures are
+  fatal at the input adapter boundary and retain their Runtime error code in the visible message.
+- Repeated review found no remaining Critical or Important issue in the C3a scope.
+- Implemented, tested, and reviewed directly without subagents.
+
+### Files changed
+
+- `crates/scheduler/src/lib.rs`
+- `crates/scheduler/src/tests.rs`
+- `crates/runtime-host/src/host.rs`
+- `crates/runtime-host/src/tests.rs`
+- `crates/runtime-client/src/error.rs`
+- `crates/runtime-client/src/input.rs`
+- `crates/runtime-client/src/tests.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-scheduler -p actingcommand-runtime-host -- --nocapture`
+- `cargo test -p actingcommand-runtime-client -p actingcommand-scheduler -p actingcommand-runtime-host -- --nocapture`
+- `cargo clippy -p actingcommand-runtime-client -p actingcommand-scheduler -p actingcommand-runtime-host --all-targets -- -D warnings`
+- `cargo test -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-runtime-host -p actingcommand-runtime-client -p actingcommand-actingd -p actingcommand-actinglab-architecture`
+- `cargo test --workspace`
+- `cargo test --workspace --exclude actingcommand-lab --exclude actingcommand-actinglab`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo tree --workspace --all-features -i actingcommand-lab`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Focused closeout suites passed: contract 28, scheduler 14, Runtime host 13, Runtime client 7 +
+  2 process, actingd 4 + 2 process, and architecture 14 + 17.
+- Full workspace tests passed.
+- Full workspace tests excluding `actingcommand-lab` and `actingcommand-actinglab` passed.
+- Focused all-target and full-workspace Clippy passed with warnings denied.
+- The all-features reverse dependency tree contains only
+  `actingcommand-actinglab -> actingcommand-lab`.
+- Formatting, diff checks, writable-client-backend scans, production Lab-dependency scans,
+  reconnect scans, and daemon-capture-backend scans passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the fresh-review corrections and record their commit in Issue #36.
+2. Re-run the final clean-tree gates, complete Task 7 documentation, create the stable C3a
+   checkpoint tag, and leave the branch unmerged.
+
 ## 2026-07-11 Issue 35 C3a Task 6 adversarial and process acceptance
 
 ### Current status

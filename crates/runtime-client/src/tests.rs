@@ -3,9 +3,9 @@
 use super::*;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    ProjectionProfile,
+    ProjectionProfile, RuntimeErrorCode, RuntimeErrorProjection,
 };
-use actingcommand_device::{DeviceResult, InputBackend};
+use actingcommand_device::{DeviceErrorSeverity, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
     InputBackendProvider, ResolvedInputInstance, RuntimeHost, RuntimeHostConfig,
 };
@@ -275,4 +275,50 @@ fn broken_ipc_connection_latches_without_reconnect() {
         .expect_err("terminal failure must be stable");
     assert_eq!(first, second);
     assert!(first.is_fatal());
+}
+
+#[test]
+fn fallback_eligibility_is_narrower_than_runtime_host_fatality() {
+    for code in [
+        RuntimeErrorCode::LeaseBusy,
+        RuntimeErrorCode::LeaseCooldown,
+        RuntimeErrorCode::BackendOpenFailed,
+        RuntimeErrorCode::BackendOperationFailed,
+    ] {
+        let error = RuntimeClientError::rejected(
+            "test_runtime_error",
+            RuntimeErrorProjection::new(code, false),
+        );
+        assert!(error.is_fallback_eligible());
+        assert_eq!(
+            crate::input::device_error(error).severity(),
+            DeviceErrorSeverity::Transient
+        );
+    }
+
+    for code in [
+        RuntimeErrorCode::InvalidRequest,
+        RuntimeErrorCode::RuntimeUnavailable,
+        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::OwnerConflict,
+        RuntimeErrorCode::ProtocolInvalid,
+        RuntimeErrorCode::InstanceUnknown,
+        RuntimeErrorCode::LeaseExpired,
+        RuntimeErrorCode::LeaseMissing,
+        RuntimeErrorCode::StaleOwnerEpoch,
+        RuntimeErrorCode::LeaseMismatch,
+        RuntimeErrorCode::InstanceMismatch,
+        RuntimeErrorCode::HolderMismatch,
+        RuntimeErrorCode::ConnectionMismatch,
+        RuntimeErrorCode::LedgerFailure,
+    ] {
+        let error = RuntimeClientError::rejected(
+            "test_runtime_error",
+            RuntimeErrorProjection::new(code, false),
+        );
+        assert!(!error.is_fallback_eligible());
+        let device_error = crate::input::device_error(error);
+        assert_eq!(device_error.severity(), DeviceErrorSeverity::Fatal);
+        assert!(device_error.message().contains(&format!("{code:?}")));
+    }
 }

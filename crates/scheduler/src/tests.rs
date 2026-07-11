@@ -161,6 +161,12 @@ fn renew_and_release_are_idempotent_by_request_id() {
         .renew(renew_request, &token, connection_id, 20)
         .expect("renew retry");
     assert_eq!(renewed_retry, renewed);
+    assert_eq!(
+        scheduler
+            .replayed_renew(renew_request, &token, connection_id)
+            .expect("recover renew"),
+        Some(renewed.clone())
+    );
 
     let release_request = request(&issuer);
     let released = scheduler
@@ -170,6 +176,12 @@ fn renew_and_release_are_idempotent_by_request_id() {
         .release(release_request, &renewed, connection_id, 40)
         .expect("release retry");
     assert_eq!(released_retry, released);
+    assert_eq!(
+        scheduler
+            .replayed_release(release_request, &renewed, connection_id)
+            .expect("recover release"),
+        Some(released)
+    );
     assert!(scheduler.active_tokens().is_empty());
 }
 
