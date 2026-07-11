@@ -1,5 +1,49 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 production capability relocation plan
+
+### Current status
+
+- C3b is closed at `checkpoint/20260711-c3b-resident-control-plane`; C5 planning is active.
+- Re-verified the approved v3 specification and resource-authoring amendment hashes before planning.
+- Mapped the current ownership hotspots: Lab env/readonly/drive/run, Lab package/convert/MAA,
+  artifact-store frame behavior, task-loop decisions, and ActingLab Session/monitor/stream state.
+- Froze nine C5 implementation tasks with explicit production, developer-tooling, artifact, Runtime,
+  and Lab boundaries plus C6-deferred authoring work.
+- The 30-case A1 protocol matrix, command inventory, existing migration tests, and C3b process gates
+  remain the compatibility baseline.
+- No business code, resource repository, emulator, live device, cooperation-workspace file, or
+  subagent was used.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `Get-FileHash` for the approved v3 specification and resource-authoring amendment.
+- `cargo metadata --format-version 1 --no-deps`
+- `rg --files` and targeted `rg` ownership/API/side-effect scans across Lab, ActingLab,
+  execution-kernel, task-loop, runtime-core, artifact-store, and Runtime modules.
+- Read the C0 ownership/disposition/dependency sections and the complete approved amendment.
+
+### Test results
+
+- Documentation-only planning unit; no source behavior changed.
+- The immediately preceding C3b closeout passed full workspace, non-Lab, all-target/all-feature,
+  Clippy, architecture, protocol, formatting, and whitespace gates.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push the C5 plan and record it in Issue #36.
+2. Implement Task 1 ownership/side-effect inventory and architecture guard scaffolding.
+
 ## 2026-07-11 Issue 35 C3b Task 5 closeout
 
 ### Current status
