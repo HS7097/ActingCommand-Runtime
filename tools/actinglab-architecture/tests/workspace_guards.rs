@@ -468,7 +468,6 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
                     "actingcommand-runtime-host"
                         | "actingcommand-actingd"
                         | "actingcommand-device-test"
-                        | "actingcommand-task-loop"
                 ),
                 "package {name} must not access execution-kernel"
             );
@@ -498,11 +497,17 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
 }
 
 #[test]
-fn c5_task_planning_moves_to_execution_kernel_behind_a_compatibility_shell() {
+fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
     let root = workspace_root();
     let metadata: serde_json::Value =
         serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
     let packages = metadata["packages"].as_array().expect("metadata packages");
+    assert!(
+        packages
+            .iter()
+            .all(|package| package["name"] != "actingcommand-task-loop"),
+        "retired actingcommand-task-loop package returned to the workspace"
+    );
     let dependencies = |package_name: &str| {
         packages
             .iter()
@@ -536,29 +541,6 @@ fn c5_task_planning_moves_to_execution_kernel_behind_a_compatibility_shell() {
         !device_test_dependencies.contains(&"actingcommand-task-loop"),
         "device-test must not retain the legacy task-loop dependency"
     );
-
-    let legacy_dependencies = dependencies("actingcommand-task-loop");
-    assert_eq!(
-        legacy_dependencies,
-        vec!["actingcommand-execution-kernel"],
-        "the temporary task-loop crate must remain a pure compatibility shell"
-    );
-    let legacy_source = fs::read_to_string(root.join("crates/task-loop/src/lib.rs"))
-        .expect("read task-loop compatibility source");
-    assert!(legacy_source.contains("load_task_plan_from_json_str"));
-    for forbidden in [
-        "actingcommand_execution_kernel::*",
-        "ExecutionKernel",
-        "ExecutionBackendProvider",
-        "struct TaskPlan",
-        "struct ProbePlan",
-        "impl DryRunTaskLoop",
-    ] {
-        assert!(
-            !legacy_source.contains(forbidden),
-            "task-loop compatibility shell retained implementation token {forbidden}"
-        );
-    }
 
     let mut planning_sources = Vec::new();
     collect_rust_files(

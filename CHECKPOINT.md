@@ -1,5 +1,67 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 3b task-loop retirement
+
+### Current status
+
+- Removed the unreferenced `actingcommand-task-loop` compatibility crate after Task 3a established
+  API/JSON and full-workspace equivalence with the shell still present.
+- Removed task-loop from workspace members, workspace dependencies, and `Cargo.lock`.
+- Updated the architecture guard to require task-loop package absence, direct device-test use of
+  execution-kernel planning, the expected planning dependencies, and no device/process side-effect
+  tokens inside the planning module.
+- Preserved 44 execution-kernel tests, including all 37 migrated planning tests, and all 55
+  device-test tests with sealed synthetic task-dry-run execution.
+- Protocol goldens and full-workspace gates pass after retirement.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- deleted `crates/task-loop/Cargo.toml`
+- deleted `crates/task-loop/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check --workspace --all-targets`
+- `cargo metadata --format-version 1 --no-deps`
+- source/manifest scans for `actingcommand_task_loop`, `actingcommand-task-loop`, and `crates/task-loop`
+- `cargo test -p actingcommand-execution-kernel -p actingcommand-device-test -p actingcommand-actinglab-architecture`
+- `cargo test -p actingcommand-actinglab --test golden_protocol`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Execution-kernel passed 44 tests; all moved task/probe decisions and pre-existing backend lifecycle
+  tests remain green.
+- Device-test passed 55 tests, including sealed synthetic complete/click task-dry-run paths and
+  fatal coordinate mismatch.
+- Architecture passed 15 unit tests and 21 workspace guards with task-loop absent.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Full-workspace all-target/all-feature Clippy passed with warnings denied.
+- Full `cargo test --workspace` passed after task-loop removal.
+- Cargo metadata and lock scans contain no task-loop package; current source/manifests contain no
+  task-loop imports or dependency declarations.
+
+### Current blocker
+
+- No blocker for C5 Task 3.
+- C5 remains active; environment and read-only recognition still have temporary Lab ownership.
+
+### Next step
+
+1. Commit and push Task 3b and record retirement evidence in Issue #36.
+2. Start C5 Task 4 with an ownership/API inventory for Lab environment and read-only recognition,
+   then migrate one typed, side-effect-bounded family at a time into execution ownership.
+
 ## 2026-07-11 Issue 35 C5 Task 3a execution-planning migration
 
 ### Current status

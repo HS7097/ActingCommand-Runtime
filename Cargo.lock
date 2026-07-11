@@ -309,13 +309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-task-loop"
-version = "0.1.0"
-dependencies = [
- "actingcommand-execution-kernel",
-]
-
-[[package]]
 name = "actingcommand-vision-ffi"
 version = "0.1.0"
 dependencies = [

@@ -25,7 +25,6 @@ members = [
     "crates/runtime-client",
     "crates/runtime-host",
     "crates/scheduler",
-    "crates/task-loop",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
     "providers/ppocr-onnx-json",
@@ -56,7 +55,6 @@ actingcommand-runtime-core = { path = "crates/runtime-core" }
 actingcommand-runtime-client = { path = "crates/runtime-client" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
 actingcommand-scheduler = { path = "crates/scheduler" }
-actingcommand-task-loop = { path = "crates/task-loop" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

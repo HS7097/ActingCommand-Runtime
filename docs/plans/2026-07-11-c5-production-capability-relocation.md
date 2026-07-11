@@ -112,16 +112,16 @@ Progress:
 
 ### Task 3: Absorb task-loop decision behavior
 
-Status: active.
+Status: complete.
 
 Progress:
 
 - Subtask 3a complete: mechanically moved the pure planning implementation and tests into
   execution-kernel, migrate device-test to the new owner, and retain a temporary re-export-only
   task-loop shell for equivalence verification.
-- Subtask 3b active: focused planning/device-test tests, architecture guards, JSON behavior, and the
-  full workspace passed with the compatibility shell; remove the now-unreferenced shell and repeat
-  the retirement gates.
+- Subtask 3b complete: focused planning/device-test tests, protocol goldens, architecture guards,
+  JSON behavior, Clippy, and the full workspace passed before and after removing the unreferenced
+  compatibility crate. Cargo metadata and lock state no longer contain task-loop.
 
 - Move production-worthy `TaskPlan` and `ProbePlan` decision behavior into execution-kernel domain
   modules without adding device side effects to pure planning APIs.
