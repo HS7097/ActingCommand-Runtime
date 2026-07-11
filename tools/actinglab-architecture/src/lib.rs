@@ -1242,6 +1242,26 @@ pub fn lab_removability_violations(
     metadata: &str,
     optional_packages: &[&str],
 ) -> Result<Vec<String>, String> {
+    dependency_boundary_violations(metadata, "actingcommand-lab", optional_packages)
+}
+
+/// Finds direct or transitive dependency paths from production packages to developer-only tooling.
+pub fn resource_tooling_removability_violations(
+    metadata: &str,
+    optional_packages: &[&str],
+) -> Result<Vec<String>, String> {
+    dependency_boundary_violations(
+        metadata,
+        "actingcommand-resource-tooling",
+        optional_packages,
+    )
+}
+
+fn dependency_boundary_violations(
+    metadata: &str,
+    target_package: &str,
+    optional_packages: &[&str],
+) -> Result<Vec<String>, String> {
     let document: serde_json::Value = serde_json::from_str(metadata)
         .map_err(|err| format!("failed to parse cargo metadata: {err}"))?;
     let packages = document
@@ -1257,19 +1277,21 @@ pub fn lab_removability_violations(
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut package_names = HashMap::new();
-    let mut lab_ids = Vec::new();
+    let mut target_ids = Vec::new();
     for package in packages {
         let id = required_field_string(package, "id")?;
         let name = required_field_string(package, "name")?;
-        if name == "actingcommand-lab" {
-            lab_ids.push(id.clone());
+        if name == target_package {
+            target_ids.push(id.clone());
         }
         package_names.insert(id, name);
     }
-    if lab_ids.len() > 1 {
-        return Err("cargo metadata contains multiple actingcommand-lab packages".to_string());
+    if target_ids.len() > 1 {
+        return Err(format!(
+            "cargo metadata contains multiple {target_package} packages"
+        ));
     }
-    let Some(lab_id) = lab_ids.pop() else {
+    let Some(target_id) = target_ids.pop() else {
         return Ok(Vec::new());
     };
 
@@ -1299,7 +1321,7 @@ pub fn lab_removability_violations(
         if optional.contains(root_name.as_str()) {
             continue;
         }
-        let Some(path) = dependency_path(&root, &lab_id, &dependencies) else {
+        let Some(path) = dependency_path(&root, &target_id, &dependencies) else {
             continue;
         };
         let names = path
@@ -1307,7 +1329,7 @@ pub fn lab_removability_violations(
             .map(|id| package_names.get(id).cloned().unwrap_or_else(|| id.clone()))
             .collect::<Vec<_>>();
         violations.push(format!(
-            "production package {root_name} reaches actingcommand-lab: {}",
+            "production package {root_name} reaches {target_package}: {}",
             names.join(" -> ")
         ));
     }
@@ -2433,6 +2455,49 @@ mod tests {
                 "production package runtime-bridge reaches actingcommand-lab: runtime-bridge -> actingcommand-lab",
                 "production package runtime-direct reaches actingcommand-lab: runtime-direct -> actingcommand-lab",
                 "production package runtime-transitive reaches actingcommand-lab: runtime-transitive -> runtime-bridge -> actingcommand-lab"
+            ]
+        );
+    }
+
+    #[test]
+    fn resource_tooling_guard_rejects_direct_and_transitive_production_dependencies() {
+        let metadata = serde_json::json!({
+            "packages": [
+                {"id": "tooling", "name": "actingcommand-resource-tooling"},
+                {"id": "lab", "name": "actingcommand-lab"},
+                {"id": "lab-cli", "name": "actingcommand-actinglab"},
+                {"id": "bridge", "name": "runtime-bridge"},
+                {"id": "transitive", "name": "runtime-transitive"},
+                {"id": "clean", "name": "runtime-clean"}
+            ],
+            "workspace_members": ["tooling", "lab", "lab-cli", "bridge", "transitive", "clean"],
+            "resolve": {
+                "nodes": [
+                    {"id": "tooling", "dependencies": []},
+                    {"id": "lab", "dependencies": ["tooling"]},
+                    {"id": "lab-cli", "dependencies": ["tooling"]},
+                    {"id": "bridge", "dependencies": ["tooling"]},
+                    {"id": "transitive", "dependencies": ["bridge"]},
+                    {"id": "clean", "dependencies": []}
+                ]
+            }
+        });
+
+        let violations = super::resource_tooling_removability_violations(
+            &metadata.to_string(),
+            &[
+                "actingcommand-resource-tooling",
+                "actingcommand-lab",
+                "actingcommand-actinglab",
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            violations,
+            vec![
+                "production package runtime-bridge reaches actingcommand-resource-tooling: runtime-bridge -> actingcommand-resource-tooling",
+                "production package runtime-transitive reaches actingcommand-resource-tooling: runtime-transitive -> runtime-bridge -> actingcommand-resource-tooling"
             ]
         );
     }

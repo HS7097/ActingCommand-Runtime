@@ -79,7 +79,7 @@ Lab while callers migrate, but production packages must not depend directly or t
 
 ### Task 1: Freeze ownership inventory and guards
 
-Status: active.
+Status: complete.
 
 - Record current command/API/module ownership, package dependencies, mutable state, file/network/
   device side effects, and replacement destination.
@@ -91,7 +91,7 @@ Status: active.
 
 ### Task 2: Extract resource-tooling
 
-Status: pending.
+Status: active.
 
 - Add `crates/resource-tooling` as a workspace crate.
 - Mechanically move package API/build/validate, resource conversion, and MAA compilation behavior and

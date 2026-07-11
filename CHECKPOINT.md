@@ -1,5 +1,59 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 1 ownership inventory and guard
+
+### Current status
+
+- Added the frozen C5 ownership/side-effect inventory with current owners, terminal destinations,
+  mutable state, side-effect boundaries, compatibility evidence, and removal rules.
+- Recorded all 15 A1 commands and their 30 success/failure golden envelopes as the client-visible
+  migration denominator.
+- Added a reusable all-feature dependency guard that rejects direct or transitive production paths
+  to future `actingcommand-resource-tooling` while allowing only the declared Lab/developer roots.
+- Added a synthetic counterexample proving the guard catches direct and transitive violations.
+- Existing Lab, package/convert/MAA, protocol, Session closeout, architecture, formatting, and
+  whitespace gates pass unchanged.
+- Issue #35 was re-read after implementation; it remains approved and all comments are authored by
+  `HS7097`.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `docs/architecture/c5-ownership-inventory.md`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo test -p actingcommand-lab`
+- `cargo test -p actingcommand-actinglab --test golden_protocol --test session_closeout`
+- `cargo clippy -p actingcommand-actinglab-architecture --all-targets -- -D warnings`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+
+### Test results
+
+- Architecture passed 15 unit tests and 20 all-feature workspace guards.
+- Lab passed 184 unit tests, 2 Lab-run API tests, and 1 package API test.
+- Protocol goldens passed 3 tests; Session closeout passed 3 process tests.
+- Focused Clippy passed with warnings denied; formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push C5 Task 1 and record it in Issue #36.
+2. Start Task 2 with a resource-tooling crate boundary and mechanical API/test relocation before
+   changing any compiler behavior.
+
 ## 2026-07-11 Issue 35 C5 production capability relocation plan
 
 ### Current status

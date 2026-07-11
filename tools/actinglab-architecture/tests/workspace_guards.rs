@@ -8,7 +8,8 @@ use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
     inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, validate_line_ratchet, workspace_dependency_violations,
+    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
+    workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -722,6 +723,26 @@ fn all_non_lab_packages_remain_lab_free_with_all_features() {
     assert!(
         violations.is_empty(),
         "production-to-Lab dependency violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn production_packages_cannot_reach_resource_tooling() {
+    let metadata = workspace_metadata();
+    let violations = resource_tooling_removability_violations(
+        &metadata,
+        &[
+            "actingcommand-resource-tooling",
+            "actingcommand-lab",
+            "actingcommand-actinglab",
+        ],
+    )
+    .unwrap();
+
+    assert!(
+        violations.is_empty(),
+        "production-to-resource-tooling dependency violations:\n{}",
         violations.join("\n")
     );
 }
