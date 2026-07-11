@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{IdentifierIssuer, InstanceId};
+use actingcommand_contract::{
+    EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InstanceId, ProjectionProfile,
+};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use serde_json::Value;
-use std::fs;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
+use zip::ZipWriter;
+use zip::write::FileOptions;
 
 #[derive(Default)]
 struct FakeState {
@@ -71,19 +79,24 @@ impl InputBackend for FakeBackend {
 struct FakeProvider {
     instance_id: InstanceId,
     state: Arc<FakeState>,
+    frame_size: u32,
 }
 
 struct FakeCapture {
     state: Arc<FakeState>,
+    frame_size: u32,
 }
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         self.state.captures.fetch_add(1, Ordering::AcqRel);
+        let pixels = (0..self.frame_size * self.frame_size)
+            .flat_map(|_| [255, 0, 0])
+            .collect();
         Frame::from_pixels(
-            1,
-            1,
-            vec![255, 0, 0],
+            self.frame_size,
+            self.frame_size,
+            pixels,
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
@@ -108,6 +121,7 @@ impl ExecutionBackendProvider for FakeProvider {
         assert_eq!(instance_alias, "ak.cn");
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
+            frame_size: self.frame_size,
         }))
     }
 }
@@ -131,6 +145,7 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
         Arc::new(FakeProvider {
             instance_id,
             state: Arc::clone(&state),
+            frame_size: 1,
         }),
     )
     .expect("runtime host");
@@ -221,6 +236,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
         Arc::new(FakeProvider {
             instance_id,
             state: Arc::clone(&state),
+            frame_size: 1,
         }),
     )
     .expect("runtime host");
@@ -249,4 +265,279 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     assert_eq!(state.closes.load(Ordering::Acquire), 0);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn production_lab_run_routes_device_effects_through_runtime_only() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let config_path = root.path().join("actinglab.json");
+    let package_path = root.path().join("runtime-owned-lab.zip");
+    let result_path = root.path().join("result.zip");
+    let run_root = root.path().join("runs");
+    let adb_marker = root.path().join("forbidden-adb-invoked");
+    fs::write(&config_path, "{}").expect("write config");
+    write_runtime_owned_lab_package(&package_path);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&package_path).expect("read package"))
+    );
+    let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-run-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .args([
+            "--json",
+            "--instance",
+            "ak.cn",
+            "--run-root",
+            run_root.to_str().expect("run root"),
+            "--game",
+            "ark",
+            "--server",
+            "cn",
+            "lab",
+            "run",
+            "--zip",
+            package_path.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+            "--out",
+            result_path.to_str().expect("result path"),
+        ])
+        .env("ACTINGLAB_CONFIG_PATH", &config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
+        .env("ACTINGCOMMAND_ADB_PATH", &forbidden_adb)
+        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
+        .env_remove("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG")
+        .output()
+        .expect("run actinglab lab run");
+
+    assert!(
+        !output.status.success(),
+        "successor suggestion must be visible"
+    );
+    let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
+    assert_eq!(
+        envelope.pointer("/error/code").and_then(Value::as_str),
+        Some("successor_suggested"),
+        "unexpected Lab run response: {envelope}"
+    );
+    assert_eq!(
+        envelope
+            .pointer("/error/details/suggestion/task_id")
+            .and_then(Value::as_str),
+        Some("return_home")
+    );
+    assert!(result_path.is_file());
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert!(state.captures.load(Ordering::Acquire) >= 2);
+    assert_eq!(state.closes.load(Ordering::Acquire), 0);
+    assert!(
+        !adb_marker.exists(),
+        "ActingLab invoked a local ADB backend"
+    );
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(
+            EventQuery {
+                instance_id: Some(instance_id),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("Runtime events");
+    let event_types = events
+        .iter()
+        .map(|event| event.event_type)
+        .collect::<Vec<_>>();
+    assert_event_order(
+        &event_types,
+        &[
+            EventType::LeaseRequested,
+            EventType::LeaseGranted,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+            EventType::LeaseReleased,
+        ],
+    );
+    assert!(event_types.contains(&EventType::CaptureRequested));
+    assert!(event_types.contains(&EventType::CaptureCompleted));
+
+    drop(client);
+    host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+fn assert_event_order(actual: &[EventType], expected: &[EventType]) {
+    let mut cursor = 0;
+    for expected_type in expected {
+        let offset = actual[cursor..]
+            .iter()
+            .position(|actual_type| actual_type == expected_type)
+            .unwrap_or_else(|| panic!("missing Runtime event {expected_type:?} in {actual:?}"));
+        cursor += offset + 1;
+    }
+}
+
+fn write_runtime_owned_lab_package(path: &Path) {
+    write_zip(
+        path,
+        &[
+            (
+                "control.json",
+                br#"{
+                    "schema_version":"Lab-1y.control.v1",
+                    "package_id":"runtime-owned.recovery",
+                    "execution_mode":"navigable_route",
+                    "game":"arknights",
+                    "server":"cn",
+                    "resolution":{"width":2,"height":2},
+                    "entry_task_id":"task",
+                    "capture_interval_ms":1,
+                    "step_timeout_ms":1,
+                    "max_steps":3
+                }"#,
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+            ),
+            (
+                "resources/operations/task/task.json",
+                br#"{
+                    "schema_version":"0.6",
+                    "task_id":"task",
+                    "game":"arknights",
+                    "server_scope":["cn"],
+                    "coordinate_space":{"width":2,"height":2},
+                    "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
+                    "entry_page":"home",
+                    "target_page":"terminal",
+                    "recovery":{"kind":"return_home","task_id":"return_home"},
+                    "max_task_retries":1,
+                    "on_exhausted":"pause",
+                    "operations":[{
+                        "id":"open_terminal",
+                        "purpose":"force a sealed recovery suggestion",
+                        "from":"home",
+                        "to":"terminal",
+                        "click":{"kind":"point","x":1,"y":1},
+                        "retryable":true,
+                        "effect":"navigation_only",
+                        "unguarded_trusted_coordinate":true
+                    }]
+                }"#,
+            ),
+            (
+                "resources/operations/return_home/task.json",
+                br#"{
+                    "schema_version":"0.6",
+                    "task_id":"return_home",
+                    "game":"arknights",
+                    "server_scope":["cn"],
+                    "coordinate_space":{"width":2,"height":2},
+                    "target_page":"home",
+                    "operations":[{
+                        "id":"return_home_action",
+                        "purpose":"sealed successor fixture",
+                        "from":"any",
+                        "to":"home",
+                        "click":{"kind":"point","x":1,"y":1},
+                        "effect":"navigation_only",
+                        "unguarded_trusted_coordinate":true
+                    }]
+                }"#,
+            ),
+            (
+                "resources/recognition/arknights.cn.pack.json",
+                br#"{
+                    "schema_version":"0.3",
+                    "game":"arknights",
+                    "server":"cn",
+                    "coordinate_space":{"width":2,"height":2},
+                    "defaults":{"color_max_distance":0.0},
+                    "targets":[
+                        {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                        {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                    ]
+                }"#,
+            ),
+            (
+                "resources/recognition/arknights.cn.pages.json",
+                br#"{
+                    "schema_version":"0.3",
+                    "pages":[
+                        {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
+                        {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                    ]
+                }"#,
+            ),
+        ],
+    );
+}
+
+fn write_zip(path: &Path, files: &[(&str, &[u8])]) {
+    let file = File::create(path).expect("zip file");
+    let mut zip = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, contents) in files {
+        zip.start_file(*name, options).expect("zip entry");
+        zip.write_all(contents).expect("zip content");
+    }
+    zip.finish().expect("finish zip");
+}
+
+fn write_forbidden_adb(root: &Path, marker: &Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let path = root.join("forbidden-adb.cmd");
+        fs::write(
+            &path,
+            format!(
+                "@echo off\r\necho invoked>\"{}\"\r\nexit /b 99\r\n",
+                marker.display()
+            ),
+        )
+        .expect("write forbidden adb");
+        path
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("forbidden-adb");
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho invoked > \"{}\"\nexit 99\n",
+                marker.display()
+            ),
+        )
+        .expect("write forbidden adb");
+        let mut permissions = fs::metadata(&path).expect("adb metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("adb permissions");
+        path
+    }
 }
