@@ -3,18 +3,19 @@
 use super::*;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::time::unix_ms_now;
+use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
     IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend, RuntimeErrorCode,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -885,11 +886,18 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
     );
     let completed = client.send(&observe);
     assert_eq!(completed.state(), RuntimeReceiptState::Completed);
-    assert!(matches!(
-        completed.result(),
-        Some(RuntimeResult::ReadonlyObservationCompleted { observation: actual })
-            if actual.width() == 2 && actual.height() == 1
-    ));
+    let observation = match completed.result() {
+        Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => observation,
+        other => panic!("unexpected observation result: {other:?}"),
+    };
+    assert_eq!((observation.width(), observation.height()), (2, 1));
+    assert_eq!(
+        observation.capture_backend(),
+        RuntimeCaptureBackend::AdbScreencap
+    );
+    let artifact = read_projected_verified(root.path(), observation.artifact())
+        .expect("verified observation artifact");
+    assert!(artifact.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert_eq!(
         event_types_for_correlation(&mut client, correlation_id),
         vec![
@@ -899,6 +907,8 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::ArtifactCreated,
+            EventType::ArtifactVerified,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]
@@ -911,6 +921,41 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    fs::write(root.path().join("artifacts"), b"blocks artifact directory")
+        .expect("block artifact directory");
+    let mut client = TestClient::connect(&host);
+    let observe = client.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: "ak.cn".to_string(),
+    });
+
+    let failed = client.send(&observe);
+
+    assert_eq!(failed.state(), RuntimeReceiptState::Failed);
+    assert!(failed.result().is_none());
+    let error = failed.error_projection().expect("fatal artifact error");
+    assert!(error.fatal);
+    assert_eq!(error.code, RuntimeErrorCode::RuntimeFatal);
+    assert_eq!(
+        host.fatal_error()
+            .expect("runtime fatal state")
+            .expect("fatal error")
+            .code(),
+        "artifact_store_failure"
+    );
+    drop(client);
+    assert_eq!(
+        host.close()
+            .expect_err("fatal host closes with failure")
+            .code(),
+        "artifact_store_failure"
+    );
 }
 
 #[test]

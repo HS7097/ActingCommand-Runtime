@@ -292,6 +292,7 @@ version = "0.1.0"
 name = "actingcommand-runtime-host"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-execution-kernel",

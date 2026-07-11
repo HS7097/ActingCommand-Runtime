@@ -449,7 +449,7 @@ impl fmt::Debug for ArtifactReference {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectedArtifactReference {
     pub artifact_id: ArtifactId,
@@ -469,6 +469,74 @@ pub struct ProjectedArtifactReference {
     pub producer: ArtifactProducer,
     pub retention_class: RetentionClass,
     pub redaction_state: ArtifactRedactionState,
+}
+
+impl ProjectedArtifactReference {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        let object_key_valid = self.object_key.as_ref().is_none_or(|object_key| {
+            object_key == &object_key_for(&self.artifact_id, self.kind, &self.sha256)
+        });
+        let valid = self.byte_count > 0
+            && self.created_at_unix_ms > 0
+            && is_sha256(&self.sha256)
+            && self.media_type == self.kind.media_type()
+            && object_key_valid;
+        if valid {
+            Ok(())
+        } else {
+            Err(SanitizationError::new(
+                "invalid_projected_artifact_reference",
+                "artifact",
+            ))
+        }
+    }
+
+    pub fn object_key(&self) -> Option<&str> {
+        self.object_key.as_deref()
+    }
+
+    pub const fn kind(&self) -> ArtifactKind {
+        self.kind
+    }
+
+    pub const fn frame_id(&self) -> Option<&FrameId> {
+        self.frame_id.as_ref()
+    }
+
+    pub const fn media_type(&self) -> ArtifactMediaType {
+        self.media_type
+    }
+
+    pub const fn byte_count(&self) -> u64 {
+        self.byte_count
+    }
+
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    pub const fn redaction_state(&self) -> ArtifactRedactionState {
+        self.redaction_state
+    }
+}
+
+impl fmt::Debug for ProjectedArtifactReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProjectedArtifactReference")
+            .field("artifact_id", &self.artifact_id)
+            .field("kind", &self.kind)
+            .field(
+                "object_key",
+                &self.object_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("media_type", &self.media_type)
+            .field("byte_count", &self.byte_count)
+            .field("sha256", &"<redacted-digest>")
+            .field("retention_class", &self.retention_class)
+            .field("redaction_state", &self.redaction_state)
+            .finish()
+    }
 }
 
 fn object_key_for(artifact_id: &ArtifactId, kind: ArtifactKind, sha256: &str) -> String {

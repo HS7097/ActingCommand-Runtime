@@ -2,9 +2,11 @@
 
 use super::*;
 use crate::{
-    AuditInput, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity,
-    EventType, IdentifierIssuer, LeasePayloadDraft, OriginModule, RuntimePayloadDraft,
-    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, EventDraft, EventLinksDraft,
+    EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer, LeasePayloadDraft,
+    OriginModule, RetentionClass, RuntimePayloadDraft, SanitizationError, SecretField,
+    SecretFingerprinter, Sha256Fingerprint,
 };
 
 struct RejectSecrets;
@@ -440,17 +442,51 @@ fn readonly_capability_is_issuer_owned_and_binds_observation_context() {
 
 #[test]
 fn readonly_observation_is_closed_typed_and_nonzero() {
-    let observation =
-        ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded).expect("observation");
+    let artifact = observation_artifact();
+    let observation = ReadonlyObservation::new(
+        1280,
+        720,
+        RecognitionVerdict::FrameDecoded,
+        RuntimeCaptureBackend::NemuIpc,
+        artifact.clone(),
+    )
+    .expect("observation");
     assert_eq!(observation.width(), 1280);
     assert_eq!(observation.height(), 720);
     assert_eq!(observation.verdict(), RecognitionVerdict::FrameDecoded);
+    assert_eq!(
+        observation.capture_backend(),
+        RuntimeCaptureBackend::NemuIpc
+    );
+    assert_eq!(observation.artifact(), &artifact);
+    assert!(!format!("{observation:?}").contains(artifact.object_key.as_deref().unwrap()));
 
     assert_eq!(
-        ReadonlyObservation::new(0, 720, RecognitionVerdict::FrameDecoded)
-            .expect_err("zero width")
-            .code(),
+        ReadonlyObservation::new(
+            0,
+            720,
+            RecognitionVerdict::FrameDecoded,
+            RuntimeCaptureBackend::NemuIpc,
+            artifact.clone(),
+        )
+        .expect_err("zero width")
+        .code(),
         "invalid_observation_dimensions"
+    );
+
+    let mut missing_object = artifact.clone();
+    missing_object.object_key = None;
+    assert_eq!(
+        ReadonlyObservation::new(
+            1280,
+            720,
+            RecognitionVerdict::FrameDecoded,
+            RuntimeCaptureBackend::NemuIpc,
+            missing_object,
+        )
+        .expect_err("missing artifact object key")
+        .code(),
+        "invalid_observation_artifact"
     );
 
     let mut value = serde_json::to_value(&observation).expect("observation json");
@@ -500,6 +536,27 @@ fn readonly_observation_is_closed_typed_and_nonzero() {
         .code(),
         "invalid_observation_failure_context"
     );
+}
+
+fn observation_artifact() -> ProjectedArtifactReference {
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let frame = identifiers.mint_frame_id().expect("frame");
+    ArtifactStoreIssuer::new()
+        .expect("artifact issuer")
+        .issue(
+            ArtifactKind::CaptureFrame,
+            ArtifactLinksDraft::default().with_frame_id(frame),
+            b"observation-png",
+            1_752_147_200_000,
+            ArtifactIssuePolicy::new(
+                ArtifactProducer::CaptureStore,
+                RetentionClass::DebugFull,
+                ArtifactRedactionState::NotRequired,
+            ),
+        )
+        .expect("artifact")
+        .reference()
+        .project(true)
 }
 
 #[test]

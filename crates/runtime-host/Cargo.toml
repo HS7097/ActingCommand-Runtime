@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+actingcommand-artifact-store = { workspace = true }
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }

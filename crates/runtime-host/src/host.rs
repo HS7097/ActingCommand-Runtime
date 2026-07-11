@@ -5,16 +5,23 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::time::unix_ms_now;
 use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
-use actingcommand_contract::{
-    AuditInput, CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventLinksDraft, EventPayload, EventQuery,
-    EventSeverity, EventSource, EventType, InputAction, InputPayload, InputPayloadDraft,
-    InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
-    LeaseToken, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
-    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+use actingcommand_artifact_store::{
+    ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
+    ArtifactWriteContext, ArtifactWriteRequest,
 };
+use actingcommand_contract::{
+    ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput,
+    CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode,
+    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
+    EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
+    InputPayloadDraft, InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft,
+    LeaseQueuePolicy, LeaseToken, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass, RuntimeCaptureBackend,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft,
+    TerminalEvent, ValidatedRuntimeRequest,
+};
+use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel};
 use actingcommand_ledger::critical::{
     CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
@@ -161,6 +168,8 @@ impl RuntimeHost {
             ledger_owner,
         ))
         .map_err(|_| ledger_error("open_global_ledger"))?;
+        let artifacts = ArtifactStore::open(&config.state_root)
+            .map_err(|_| artifact_store_error("open_artifact_store"))?;
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -205,6 +214,7 @@ impl RuntimeHost {
             scheduler: Mutex::new(scheduler),
             owner: Mutex::new(owner),
             ledger,
+            artifacts,
             events,
             execution: ExecutionKernel::new(provider),
             registered_instances: Mutex::new(BTreeMap::new()),
@@ -400,6 +410,7 @@ struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
     ledger: GlobalLedger,
+    artifacts: ArtifactStore,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
     execution: ExecutionKernel,
@@ -1755,52 +1766,89 @@ impl HostShared {
                 ));
             }
         };
-        if frame.encode_png_fast().is_err() {
-            self.append_event(
-                EventSeverity::Error,
-                EventSource::Device,
-                OriginModule::Capture,
-                EventActor::Runtime,
-                capability.event_links(request),
-                CapturePayloadDraft::failed(
-                    EventAction::CaptureObserve,
-                    DiagnosticCode::CaptureFailed,
-                    EffectDisposition::Indeterminate,
-                    AuditInput::new(),
+        let artifact_png = match frame.png_for_artifact() {
+            Ok(png) => png,
+            Err(_) => {
+                self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Device,
+                    OriginModule::Capture,
+                    EventActor::Runtime,
+                    capability.event_links(request),
+                    CapturePayloadDraft::failed(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::Indeterminate,
+                        AuditInput::new(),
+                    ),
+                )?;
+                let event = self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Recognition,
+                    EventActor::Runtime,
+                    capability.event_links(request),
+                    RecognitionPayloadDraft::failed(
+                        EventAction::RecognitionObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "capture_frame_invalid",
+                        "observe_readonly",
+                        RuntimeErrorCode::CaptureFailed,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    Some(terminal(&event)),
+                ));
+            }
+        };
+        let write_context = ArtifactWriteContext::new(
+            capability.artifact_links(request),
+            capability.event_links(request),
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        let stored = self
+            .artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::CaptureFrame,
+                    &artifact_png,
+                    write_context,
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CaptureStore,
+                        RetentionClass::Adaptive,
+                        ArtifactRedactionState::NotRequired,
+                    ),
                 ),
-            )?;
-            let event = self.append_event(
-                EventSeverity::Error,
-                EventSource::Runtime,
-                OriginModule::Recognition,
-                EventActor::Runtime,
-                capability.event_links(request),
-                RecognitionPayloadDraft::failed(
-                    EventAction::RecognitionObserve,
-                    DiagnosticCode::CaptureFailed,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                ),
-            )?;
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "capture_frame_invalid",
-                    "observe_readonly",
-                    RuntimeErrorCode::CaptureFailed,
-                ),
-                RuntimeReceiptState::Failed,
-                Some(terminal(&event)),
-            ));
-        }
-        let observation =
-            ReadonlyObservation::new(frame.width, frame.height, RecognitionVerdict::FrameDecoded)
-                .map_err(|_| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                    "readonly_observation_invalid",
-                    "observe_readonly",
-                    RuntimeErrorCode::RuntimeFatal,
+                &mut sink,
+            )
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(artifact_store_error(
+                    "persist_readonly_observation",
                 ))
             })?;
+        let observation = ReadonlyObservation::new(
+            frame.width,
+            frame.height,
+            RecognitionVerdict::FrameDecoded,
+            runtime_capture_backend(frame.backend_name),
+            stored.reference().project(true),
+        )
+        .map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "readonly_observation_invalid",
+                "observe_readonly",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
         self.append_capture_completed(
             capability.event_links(request),
             observation.width(),
@@ -3179,6 +3227,40 @@ impl HostShared {
     }
 }
 
+struct RuntimeArtifactEventSink<'a> {
+    ledger: &'a GlobalLedger,
+    events: &'a RuntimeEvents,
+}
+
+impl ArtifactEventSink for RuntimeArtifactEventSink<'_> {
+    fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+        let sanitized = self.events.sanitize(draft).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_event_sanitize_failed",
+                "append_runtime_artifact_event",
+                error.to_string(),
+            )
+        })?;
+        self.ledger.append(sanitized).map(|_| ()).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_event_append_failed",
+                "append_runtime_artifact_event",
+                error.to_string(),
+            )
+        })
+    }
+}
+
+const fn runtime_capture_backend(backend: CaptureBackendName) -> RuntimeCaptureBackend {
+    match backend {
+        CaptureBackendName::AdbScreencap => RuntimeCaptureBackend::AdbScreencap,
+        CaptureBackendName::AdbScreencapEncode => RuntimeCaptureBackend::AdbScreencapEncode,
+        CaptureBackendName::AdbScreencapRawGzip => RuntimeCaptureBackend::AdbScreencapRawGzip,
+        CaptureBackendName::DroidcastRaw => RuntimeCaptureBackend::DroidcastRaw,
+        CaptureBackendName::NemuIpc => RuntimeCaptureBackend::NemuIpc,
+    }
+}
+
 impl RequestFailure {
     fn request(
         error: RuntimeHostError,
@@ -3517,6 +3599,14 @@ fn append_runtime_start_event(
         .append(draft)
         .map(|_| ())
         .map_err(|_| ledger_error("append_runtime_start"))
+}
+
+fn artifact_store_error(operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        "artifact_store_failure",
+        operation,
+        RuntimeErrorCode::RuntimeFatal,
+    )
 }
 
 fn publish_runtime_info(path: &Path, info: &RuntimeInfo) -> RuntimeHostResult<()> {

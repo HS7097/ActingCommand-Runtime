@@ -4,7 +4,8 @@ use crate::{ArtifactStoreError, ArtifactStoreResult};
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactLinksDraft, ArtifactPayloadDraft, ArtifactReference,
     ArtifactStoreIssuer, AuditInput, DiagnosticCode, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule, StoreIssuedArtifact,
+    EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
+    ProjectedArtifactReference, StoreIssuedArtifact,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -324,6 +325,43 @@ impl ArtifactStore {
     }
 }
 
+pub fn read_projected_verified(
+    root: impl AsRef<Path>,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<Vec<u8>> {
+    reference.validate().map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_reference_invalid",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    let object_key = reference.object_key().ok_or_else(|| {
+        ArtifactStoreError::fatal(
+            "artifact_object_key_missing",
+            "read_projected_artifact",
+            "projected artifact reference does not include an object key",
+        )
+    })?;
+    let root = root.as_ref().canonicalize().map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_root_failed",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    let path = safe_object_path(&root, object_key)?;
+    let bytes = fs::read(path).map_err(|error| {
+        ArtifactStoreError::fatal(
+            "artifact_read_failed",
+            "read_projected_artifact",
+            error.to_string(),
+        )
+    })?;
+    verify_projected_bytes(&bytes, reference)?;
+    Ok(bytes)
+}
+
 fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
     let relative = Path::new(object_key);
     if relative.is_absolute()
@@ -465,6 +503,27 @@ fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResul
     Ok(())
 }
 
+fn verify_projected_bytes(
+    bytes: &[u8],
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<()> {
+    let byte_count = u64::try_from(bytes.len()).map_err(|_| {
+        ArtifactStoreError::fatal(
+            "artifact_verify_failed",
+            "verify_projected_artifact",
+            "artifact byte count exceeds u64",
+        )
+    })?;
+    if byte_count != reference.byte_count() || canonical_sha256(bytes) != reference.sha256() {
+        return Err(ArtifactStoreError::fatal(
+            "artifact_hash_mismatch",
+            "verify_projected_artifact",
+            "artifact byte count or SHA-256 does not match projected metadata",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn canonical_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut value = String::with_capacity(71);
@@ -570,6 +629,57 @@ mod tests {
         assert_eq!(
             stored.reference().retention_class(),
             RetentionClass::DebugFull
+        );
+    }
+
+    #[test]
+    fn projected_reference_reads_only_verified_artifact_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let mut sink = RecordingSink::default();
+        let stored = store
+            .put(request(b"trusted projected bytes"), &mut sink)
+            .expect("stored artifact");
+        let projected = stored.reference().project(true);
+
+        assert_eq!(
+            read_projected_verified(temp.path(), &projected).expect("read projected artifact"),
+            b"trusted projected bytes"
+        );
+
+        fs::write(stored.path(), b"tampered projected bytes").expect("tamper artifact");
+        assert_eq!(
+            read_projected_verified(temp.path(), &projected)
+                .expect_err("tampered artifact")
+                .code(),
+            "artifact_hash_mismatch"
+        );
+    }
+
+    #[test]
+    fn projected_reference_without_safe_object_key_is_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let mut sink = RecordingSink::default();
+        let stored = store
+            .put(request(b"trusted projected bytes"), &mut sink)
+            .expect("stored artifact");
+        let mut missing = stored.reference().project(true);
+        missing.object_key = None;
+        assert_eq!(
+            read_projected_verified(temp.path(), &missing)
+                .expect_err("missing object key")
+                .code(),
+            "artifact_object_key_missing"
+        );
+
+        let mut escaped = stored.reference().project(true);
+        escaped.object_key = Some("../escape".to_string());
+        assert_eq!(
+            read_projected_verified(temp.path(), &escaped)
+                .expect_err("escaped object key")
+                .code(),
+            "artifact_reference_invalid"
         );
     }
 

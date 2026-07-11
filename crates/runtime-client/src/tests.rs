@@ -3,8 +3,9 @@
 use super::*;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    LeasePriority, LeaseQueuePolicy, ProjectionProfile, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    LeasePriority, LeaseQueuePolicy, ProjectionProfile, RuntimeCaptureBackend, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -310,6 +311,8 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             if observation.width() == 2
                 && observation.height() == 1
                 && observation.verdict() == actingcommand_contract::RecognitionVerdict::FrameDecoded
+                && observation.capture_backend() == RuntimeCaptureBackend::AdbScreencap
+                && observation.artifact().object_key().is_some()
     ));
     assert_eq!(
         output
@@ -324,6 +327,8 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
+            EventType::ArtifactCreated,
+            EventType::ArtifactVerified,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
         ]

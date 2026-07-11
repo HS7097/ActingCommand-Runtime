@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, current_unix_ms, device_config,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, current_unix_ms,
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
     read_user_config, runtime_state_root, semantic_ledger_context,
 };
-use actingcommand_device::{CaptureBackend, DeviceError, InputBackend, create_capture_backend};
+use actingcommand_device::{
+    AdbConfig, CaptureBackend, CaptureBackendConfig, DeviceError, DeviceTarget, InputBackend,
+    MaaTouchConfig, TouchBackendConfig,
+};
 use actingcommand_lab::{
     CaptureBackendFactory, CaptureBackendRequest, Clock, ConfigSource, EnvDetectRequest,
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
@@ -29,7 +32,12 @@ pub(super) fn run_detect(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     let mut ledger = semantic_ledger_context("detect", global, args);
     let result = (|| -> CliOutcome<Value> {
         let (request, config, input_metadata) = detect_request(global, &flags)?;
-        let mut lab = build_lab(&request.scope, config, input_metadata)?;
+        let mut lab = build_lab(
+            &request.scope,
+            config,
+            input_metadata.clone(),
+            input_metadata,
+        )?;
         let response = lab.detect_env(request)?;
         record_detect_drive(&mut ledger, &response)?;
         serialize_response(response)
@@ -56,7 +64,7 @@ fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     let mut ledger = semantic_ledger_context("env-resolve", global, args);
     let result = (|| -> CliOutcome<Value> {
         let (request, config) = resolve_request(global, &flags)?;
-        let mut lab = build_lab(&request.scope, config, None)?;
+        let mut lab = build_lab(&request.scope, config, None, None)?;
         let response = lab.resolve_env(request)?;
         ledger.record_drive(json!({
             "stage": "env_resolved",
@@ -78,7 +86,7 @@ fn run_env_resolve(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
 fn run_env_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let (request, config) = status_request(global, &flags)?;
-    let mut lab = build_lab(&request.scope, config, None)?;
+    let mut lab = build_lab(&request.scope, config, None, None)?;
     serialize_response(lab.env_status(request)?)
 }
 
@@ -102,7 +110,22 @@ pub(super) fn resolve_env_markers_in_value(
 }
 
 pub(super) fn build_readonly_lab() -> CliOutcome<Lab<AppLabPorts>> {
-    build_app_lab(UserConfig::default(), None)
+    build_app_lab(UserConfig::default(), None, AppCaptureAuthority::Disabled)
+}
+
+pub(super) fn build_readonly_lab_for_capture(
+    instance_alias: Option<&str>,
+) -> CliOutcome<Lab<AppLabPorts>> {
+    let authority = match instance_alias {
+        Some(instance_alias) => AppCaptureAuthority::Runtime(
+            super::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+                instance_alias.to_string(),
+                runtime_state_root()?,
+            ),
+        ),
+        None => AppCaptureAuthority::Disabled,
+    };
+    build_app_lab(UserConfig::default(), None, authority)
 }
 
 pub(super) fn build_control_lab(
@@ -112,17 +135,21 @@ pub(super) fn build_control_lab(
     build_app_lab(
         config,
         device.map(InputFactoryMetadata::from_device).transpose()?,
+        AppCaptureAuthority::LegacyControl,
     )
 }
 
 fn build_app_lab(
     config: UserConfig,
     input_metadata: Option<InputFactoryMetadata>,
+    capture_authority: AppCaptureAuthority,
 ) -> CliOutcome<Lab<AppLabPorts>> {
     Lab::new(
         AppLabPorts {
             input: AppInputFactory { input_metadata },
-            capture: AppCaptureFactory,
+            capture: AppCaptureFactory {
+                authority: capture_authority,
+            },
             ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
@@ -141,22 +168,16 @@ fn detect_request(
     let config = read_user_config()?;
     let scope = command_scope(global, flags, &config, "env detection")?;
     let capture = flags.bool("--capture");
-    let device = capture
-        .then(|| device_config(global, &config))
-        .transpose()?;
-    let input_metadata = device
-        .as_ref()
-        .map(|_| InputFactoryMetadata::new(scope.instance.clone()))
+    let input_metadata = capture
+        .then(|| InputFactoryMetadata::new(scope.instance.clone()))
         .transpose()?;
     Ok((
         EnvDetectRequest {
             scope,
             task: flags.required("--task")?,
             scene_path: flags.optional_path("--scene"),
-            capture_config: device
-                .as_ref()
-                .map(|device| device.capture_backend_config()),
-            touch_config: device.as_ref().map(|device| device.touch_backend_config()),
+            capture_config: capture.then(runtime_capture_port_config),
+            touch_config: capture.then(runtime_touch_port_config),
             require_fresh: flags.bool("--require-fresh"),
             fresh_delay: parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?,
             dry_run: global.dry_run || flags.bool("--dry-run"),
@@ -164,6 +185,18 @@ fn detect_request(
         config,
         input_metadata,
     ))
+}
+
+pub(super) fn runtime_capture_port_config() -> CaptureBackendConfig {
+    CaptureBackendConfig::new(AdbConfig::default(), DeviceTarget::default())
+}
+
+fn runtime_touch_port_config() -> TouchBackendConfig {
+    TouchBackendConfig::new(
+        AdbConfig::default(),
+        DeviceTarget::default(),
+        MaaTouchConfig::default(),
+    )
 }
 
 fn resolve_request(
@@ -234,12 +267,22 @@ fn build_lab(
     scope: &EnvScopeRequest,
     config: UserConfig,
     input_metadata: Option<InputFactoryMetadata>,
+    capture_metadata: Option<InputFactoryMetadata>,
 ) -> CliOutcome<Lab<AppLabPorts>> {
     let state = LabState::open(&scope.state_root)?;
     Lab::new(
         AppLabPorts {
             input: AppInputFactory { input_metadata },
-            capture: AppCaptureFactory,
+            capture: AppCaptureFactory {
+                authority: capture_metadata.map_or(AppCaptureAuthority::Disabled, |metadata| {
+                    AppCaptureAuthority::Runtime(
+                        super::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+                            metadata.instance_alias,
+                            metadata.runtime_state_root,
+                        ),
+                    )
+                }),
+            },
             ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
@@ -488,20 +531,29 @@ fn combine_device_results(
     }
 }
 
-pub(super) struct AppCaptureFactory;
+enum AppCaptureAuthority {
+    Disabled,
+    Runtime(super::runtime_capture_backend::RuntimeCaptureEndpoint),
+    LegacyControl,
+}
+
+pub(super) struct AppCaptureFactory {
+    authority: AppCaptureAuthority,
+}
 
 impl CaptureBackendFactory for AppCaptureFactory {
     fn open(&self, request: CaptureBackendRequest) -> Result<Box<dyn CaptureBackend>, LabError> {
-        let selected = create_capture_backend(request.config)
-            .map_err(|error| LabError::device(error.to_string()))?;
-        if let Some(observation) = request.observation {
-            observation.record(actingcommand_lab::CaptureBackendReport {
-                requested: selected.diagnostics.requested,
-                used: selected.diagnostics.used,
-                attempts: selected.diagnostics.attempts.clone(),
-            })?;
+        match &self.authority {
+            AppCaptureAuthority::Disabled => Err(LabError::device(
+                "Runtime capture metadata was not configured",
+            )),
+            AppCaptureAuthority::Runtime(endpoint) => {
+                super::runtime_capture_backend::open_runtime_capture(endpoint.clone(), request)
+            }
+            AppCaptureAuthority::LegacyControl => {
+                super::legacy_control_capture::open_legacy_control_capture(request)
+            }
         }
-        Ok(selected.backend)
     }
 }
 

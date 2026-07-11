@@ -13,10 +13,11 @@
 //! ```
 
 use crate::{
-    ActionId, CausationId, CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft,
-    EventQuery, EventSource, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer,
-    InstanceId, IssuedCausationId, IssuedCorrelationId, IssuedFrameId, IssuedHolderId,
-    IssuedRecognitionId, IssuedRequestId, LeaseId, OwnerEpoch, ProjectedEvent, ProjectionProfile,
+    ActionId, ArtifactKind, ArtifactMediaType, ArtifactRedactionState, CausationId, CorrelationId,
+    EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery, EventSource, FrameId,
+    HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId,
+    IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId,
+    LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
     RecognitionId, RecognitionVerdict, RequestId,
 };
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ pub const MAX_INPUT_TEXT_BYTES: usize = 4096;
 pub const MAX_INPUT_KEY_BYTES: usize = 64;
 pub const MAX_INPUT_DURATION_MS: u64 = 60_000;
 pub const MAX_LEASE_QUEUE_TIMEOUT_MS: u64 = 3_600_000;
+pub const MAX_READONLY_OBSERVATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -308,12 +310,24 @@ impl LeaseQueueStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCaptureBackend {
+    AdbScreencap,
+    AdbScreencapEncode,
+    AdbScreencapRawGzip,
+    DroidcastRaw,
+    NemuIpc,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadonlyObservation {
     width: u32,
     height: u32,
     verdict: RecognitionVerdict,
+    capture_backend: RuntimeCaptureBackend,
+    artifact: ProjectedArtifactReference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -351,11 +365,15 @@ impl ReadonlyObservation {
         width: u32,
         height: u32,
         verdict: RecognitionVerdict,
+        capture_backend: RuntimeCaptureBackend,
+        artifact: ProjectedArtifactReference,
     ) -> RuntimeContractResult<Self> {
         let observation = Self {
             width,
             height,
             verdict,
+            capture_backend,
+            artifact,
         };
         observation.validate()?;
         Ok(observation)
@@ -364,6 +382,16 @@ impl ReadonlyObservation {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.width == 0 || self.height == 0 {
             return Err(RuntimeContractError::new("invalid_observation_dimensions"));
+        }
+        if self.artifact.validate().is_err()
+            || self.artifact.object_key().is_none()
+            || self.artifact.kind() != ArtifactKind::CaptureFrame
+            || self.artifact.media_type() != ArtifactMediaType::ImagePng
+            || self.artifact.frame_id().is_none()
+            || self.artifact.redaction_state() == ArtifactRedactionState::Pending
+            || self.artifact.byte_count() > MAX_READONLY_OBSERVATION_ARTIFACT_BYTES
+        {
+            return Err(RuntimeContractError::new("invalid_observation_artifact"));
         }
         Ok(())
     }
@@ -378,6 +406,27 @@ impl ReadonlyObservation {
 
     pub const fn verdict(&self) -> RecognitionVerdict {
         self.verdict
+    }
+
+    pub const fn capture_backend(&self) -> RuntimeCaptureBackend {
+        self.capture_backend
+    }
+
+    pub const fn artifact(&self) -> &ProjectedArtifactReference {
+        &self.artifact
+    }
+}
+
+impl fmt::Debug for ReadonlyObservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadonlyObservation")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("verdict", &self.verdict)
+            .field("capture_backend", &self.capture_backend)
+            .field("artifact", &"<redacted-artifact-reference>")
+            .finish()
     }
 }
 
@@ -790,6 +839,17 @@ impl IssuedReadOnlyCaptureCapability {
             .event_links(Some(self.transport.instance_id), None, None)
             .with_frame_id(self.frame_id)
             .with_recognition_id(self.recognition_id)
+    }
+
+    pub fn artifact_links(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+    ) -> crate::ArtifactLinksDraft {
+        crate::ArtifactLinksDraft::default()
+            .with_frame_id(self.frame_id)
+            .with_correlation_id(IssuedCorrelationId::from_verified_transport(
+                request.request.correlation_id,
+            ))
     }
 }
 

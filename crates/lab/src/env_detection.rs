@@ -3,8 +3,7 @@
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, Lab, LabPorts};
 use actingcommand_contract::{EnvResolved, LabError, LabResult, NeedsDetection};
 use actingcommand_device::{
-    CaptureBackendChoice, CaptureBackendConfig, Frame, InputBackend, PixelFormat,
-    combine_operation_and_close,
+    CaptureBackendConfig, Frame, InputBackend, PixelFormat, combine_operation_and_close,
 };
 use actingcommand_execution_kernel::{
     EnvCandidateMatcher, EnvDetectionCandidate, EnvDetectionCatalog, EnvDetectionKey,
@@ -370,55 +369,26 @@ fn capture_fresh_frame<P: LabPorts>(
     config: CaptureBackendConfig,
     delay: Duration,
 ) -> EnvResult<Frame> {
-    let choices = match config.requested {
-        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest => vec![
-            CaptureBackendChoice::NemuIpc,
-            CaptureBackendChoice::DroidcastRaw,
-            CaptureBackendChoice::Adb,
-        ],
-        other => vec![other],
-    };
-    let mut failures = Vec::new();
-    for choice in choices {
-        let mut choice_config = config.clone();
-        choice_config.requested = choice;
-        let mut backend = match lab
-            .ports()
-            .capture_factory()
-            .open(crate::CaptureBackendRequest {
-                config: choice_config,
-                observation: None,
-            }) {
-            Ok(backend) => backend,
-            Err(error) => {
-                failures.push(format!("{} create: {}", choice.as_str(), error.message));
-                continue;
-            }
-        };
-        let first = match backend.capture() {
-            Ok(frame) => frame,
-            Err(error) => {
-                failures.push(format!("{} first_capture: {error}", choice.as_str()));
-                continue;
-            }
-        };
-        lab.ports().clock().sleep(delay);
-        let second = match backend.capture() {
-            Ok(frame) => frame,
-            Err(error) => {
-                failures.push(format!("{} second_capture: {error}", choice.as_str()));
-                continue;
-            }
-        };
-        if frame_digest(&first) != frame_digest(&second) {
-            return Ok(second);
-        }
-        failures.push(format!("{} expected_change_not_observed", choice.as_str()));
+    let mut backend = lab
+        .ports()
+        .capture_factory()
+        .open(crate::CaptureBackendRequest {
+            config,
+            observation: None,
+        })?;
+    let first = backend
+        .capture()
+        .map_err(|error| LabError::device(error.to_string()))?;
+    lab.ports().clock().sleep(delay);
+    let second = backend
+        .capture()
+        .map_err(|error| LabError::device(error.to_string()))?;
+    if frame_digest(&first) != frame_digest(&second) {
+        return Ok(second);
     }
-    Err(LabError::device(format!(
-        "fresh capture required but no backend produced a changing probe frame; attempts={}",
-        serde_json::to_string(&failures).unwrap_or_else(|_| "[]".to_string())
-    )))
+    Err(LabError::device(
+        "fresh capture required but the Runtime observation did not change",
+    ))
 }
 
 fn scene_from_frame(frame: &Frame) -> EnvResult<Scene> {

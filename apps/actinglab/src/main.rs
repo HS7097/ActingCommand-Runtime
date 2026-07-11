@@ -41,14 +41,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use zip::ZipWriter;
-use zip::write::FileOptions;
+use zip::{ZipWriter, write::FileOptions};
 
 mod drive_cli;
 mod env_detection;
 mod frame_store;
 mod lab2_cli;
 mod lab_run;
+mod legacy_control_capture;
 mod maa_task_graph;
 mod package_build;
 mod package_cli;
@@ -56,6 +56,7 @@ pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
 mod resource_convert;
+mod runtime_capture_backend;
 mod runtime_input_backend;
 mod runtime_slice_cli;
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
@@ -109,7 +110,6 @@ const SESSION_REQUEST_VALUE_FLAGS: &[&str] = &[
 ];
 const SESSION_REQUEST_BOOL_FLAGS: &[&str] = &["--via-daemon", "--local", "--no-wait"];
 static JSON_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
 fn main() -> ExitCode {
     let json_default = !io::stdout().is_terminal();
     let result = run_cli(env::args().skip(1), json_default);

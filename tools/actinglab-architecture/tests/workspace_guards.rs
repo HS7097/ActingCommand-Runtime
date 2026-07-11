@@ -572,6 +572,41 @@ fn c5_environment_state_is_pure_and_execution_owned() {
 }
 
 #[test]
+fn c5_online_readonly_capture_is_runtime_owned() {
+    let root = workspace_root();
+    let app_environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))
+        .expect("read ActingLab environment adapter");
+    let app_readonly = fs::read_to_string(root.join("apps/actinglab/src/readonly_cli.rs"))
+        .expect("read ActingLab read-only adapter");
+    let runtime_capture =
+        fs::read_to_string(root.join("apps/actinglab/src/runtime_capture_backend.rs"))
+            .expect("read Runtime capture adapter");
+    let lab_environment = fs::read_to_string(root.join("crates/lab/src/env_detection.rs"))
+        .expect("read Lab environment adapter");
+
+    for (path, source) in [
+        ("apps/actinglab/src/env_detection.rs", &app_environment),
+        ("apps/actinglab/src/readonly_cli.rs", &app_readonly),
+        (
+            "apps/actinglab/src/runtime_capture_backend.rs",
+            &runtime_capture,
+        ),
+    ] {
+        assert!(
+            !source.contains("create_capture_backend"),
+            "{path} must not construct a production capture backend"
+        );
+    }
+    assert!(app_environment.contains("open_runtime_capture"));
+    assert!(app_readonly.contains("build_readonly_lab_for_capture"));
+    assert!(runtime_capture.contains("observe_readonly"));
+    assert!(runtime_capture.contains("read_projected_verified"));
+    assert!(!lab_environment.contains("CaptureBackendChoice::NemuIpc"));
+    assert!(!lab_environment.contains("CaptureBackendChoice::DroidcastRaw"));
+    assert!(!lab_environment.contains("CaptureBackendChoice::Adb"));
+}
+
+#[test]
 fn c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired() {
     let root = workspace_root();
     let metadata: serde_json::Value =
