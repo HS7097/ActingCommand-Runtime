@@ -219,6 +219,56 @@ fn c3b_client_device_authority_stays_behind_runtime() {
 }
 
 #[test]
+fn c5_drive_decisions_are_owned_by_execution_kernel() {
+    let root = workspace_root();
+    let kernel = fs::read_to_string(root.join("crates/execution-kernel/src/drive.rs"))
+        .expect("read execution-kernel drive source");
+    let lab = fs::read_to_string(root.join("crates/lab/src/drive.rs"))
+        .expect("read Lab drive adapter source");
+
+    for required in [
+        "pub struct DriveNavigationGraph",
+        "pub enum DriveSemanticInput",
+        "pub fn find_route",
+        "pub fn validate_route",
+        "pub fn validate_resolved_input",
+    ] {
+        assert!(
+            kernel.contains(required),
+            "execution-kernel lost drive decision owner {required}"
+        );
+    }
+    for forbidden in [
+        "std::fs",
+        "RuntimeClient",
+        "LabPorts",
+        "InputBackend",
+        "TouchBackend",
+    ] {
+        assert!(
+            !kernel.contains(forbidden),
+            "execution-kernel drive decision module reaches effect owner {forbidden}"
+        );
+    }
+    for retired in [
+        "struct NavigationGraph",
+        "enum SemanticInput",
+        "fn parse_navigation_edge",
+        "fn find_navigation_route",
+        "fn rects_intersect",
+    ] {
+        assert!(
+            !lab.contains(retired),
+            "Lab still duplicates migrated drive decision {retired}"
+        );
+    }
+    assert!(
+        lab.contains("DriveNavigationGraph as NavigationGraph"),
+        "Lab adapter no longer consumes execution-kernel drive decisions"
+    );
+}
+
+#[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");

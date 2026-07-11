@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod drive;
 mod environment;
 mod error;
 mod kernel;
@@ -15,6 +16,7 @@ mod provider;
 mod readonly;
 mod session;
 
+pub use drive::*;
 pub use environment::*;
 pub use error::*;
 pub use kernel::*;

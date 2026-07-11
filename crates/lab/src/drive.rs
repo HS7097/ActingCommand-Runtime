@@ -10,13 +10,18 @@ use crate::{
 };
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_device::{TouchBackendConfig, combine_operation_and_close};
+use actingcommand_execution_kernel::{
+    DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
+    DriveNavigationGraph as NavigationGraph, DrivePoint, DriveSemanticInput as SemanticInput,
+    derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect, drive_rect_center,
+    reject_dangerous_semantic_id as reject_kernel_dangerous_semantic_id,
+};
 use actingcommand_ledger::IdKind;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -122,7 +127,13 @@ impl<P: LabPorts> Lab<P> {
             }
         } else {
             let touch_config = required_touch_config(request.touch_config.as_ref())?;
-            let input = SemanticInput::Tap { rect: click, point };
+            let input = SemanticInput::Tap {
+                rect: click,
+                point: DrivePoint {
+                    x: point.x,
+                    y: point.y,
+                },
+            };
             let device = send_semantic_input(self, &touch_config, &input)?;
             ledger.record_drive(json!({
                 "stage": "action",
@@ -212,7 +223,7 @@ impl<P: LabPorts> Lab<P> {
             .with_details(details));
         }
 
-        let target_page = canonical_navigation_page(&graph, &request.to);
+        let target_page = graph.canonical_page(&request.to);
         if start.page == target_page {
             return Ok(crate::NavigateResponse {
                 status: "already_at_target".to_string(),
@@ -228,18 +239,14 @@ impl<P: LabPorts> Lab<P> {
             });
         }
 
-        let route =
-            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
-                LabError::usage(format!(
-                    "no navigation route from '{}' to '{}'",
-                    start.page, target_page
-                ))
-            })?;
-        for edge in &route {
-            if !request.allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-            }
+        let route = graph.find_route(&start.page, &target_page).ok_or_else(|| {
+            LabError::usage(format!(
+                "no navigation route from '{}' to '{}'",
+                start.page, target_page
+            ))
+        })?;
+        if !request.allow_destructive {
+            graph.validate_route(&route).map_err(drive_decision_error)?;
         }
         let action_ids = route
             .iter()
@@ -280,7 +287,7 @@ impl<P: LabPorts> Lab<P> {
             input: &mut request.input,
             evaluator: &evaluator,
             detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
+            graph: &graph,
             touch_config: &touch_config,
             step_timeout,
             poll,
@@ -309,318 +316,10 @@ impl<P: LabPorts> Lab<P> {
     }
 }
 
-#[derive(Debug, Clone)]
-enum SemanticInput {
-    Tap {
-        rect: PackRect,
-        point: crate::PointResponse,
-    },
-    TargetCenter {
-        target_id: String,
-    },
-    Drag {
-        from_rect: PackRect,
-        to_rect: PackRect,
-        from: crate::PointResponse,
-        to: crate::PointResponse,
-        duration_ms: u64,
-    },
-}
-
-#[derive(Debug)]
-struct NavigationGraph {
-    game: Option<String>,
-    edges: Vec<NavigationEdge>,
-    destructive_clicks: Vec<DestructiveClick>,
-    _control_points: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct NavigationEdge {
-    id: String,
-    from_page: String,
-    to_page: String,
-    input: SemanticInput,
-    source: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct DestructiveClick {
-    page: Option<String>,
-    rect: PackRect,
-}
-
 fn load_navigation_graph(path: &std::path::Path) -> LabResult<NavigationGraph> {
     let text = fs::read_to_string(path)
         .map_err(|error| LabError::usage(format!("failed to read {}: {error}", path.display())))?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|error| LabError::usage(format!("failed to parse {}: {error}", path.display())))?;
-    let game = value
-        .get("game")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let edges = value
-        .get("navigation")
-        .and_then(Value::as_array)
-        .ok_or_else(|| LabError::usage("navigation file is missing navigation[]"))?
-        .iter()
-        .map(parse_navigation_edge)
-        .collect::<LabResult<Vec<_>>>()?;
-    let destructive_clicks = value
-        .get("destructive_actions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(parse_destructive_click)
-        .collect::<LabResult<Vec<_>>>()?;
-    let control_points = value
-        .get("control_points")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(parse_control_point)
-        .collect::<LabResult<Vec<_>>>()?;
-    Ok(NavigationGraph {
-        game,
-        edges,
-        destructive_clicks,
-        _control_points: control_points,
-    })
-}
-
-fn parse_control_point(value: &Value) -> LabResult<String> {
-    let name = required_string_field(value, "name")?.to_string();
-    if let Some(click) = value.get("click") {
-        parse_navigation_input(click)?;
-    } else {
-        let rect = parse_control_point_rect(value)?;
-        rect_center(rect)?;
-    }
-    if value.get("note").is_some_and(|note| !note.is_string()) {
-        return Err(LabError::usage("field 'note' must be a string"));
-    }
-    Ok(name)
-}
-
-fn parse_control_point_rect(value: &Value) -> LabResult<PackRect> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_destructive_click(value: &Value) -> LabResult<DestructiveClick> {
-    let click = value
-        .get("click")
-        .ok_or_else(|| LabError::usage("destructive action is missing click"))?;
-    Ok(DestructiveClick {
-        page: value
-            .get("page")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        rect: parse_navigation_tap_rect(click)?,
-    })
-}
-
-fn parse_navigation_edge(value: &Value) -> LabResult<NavigationEdge> {
-    Ok(NavigationEdge {
-        id: required_string_field(value, "id")?.to_string(),
-        from_page: required_string_field(value, "from_page")?.to_string(),
-        to_page: required_string_field(value, "to_page")?.to_string(),
-        input: parse_navigation_input(required_value_field(value, "click")?)?,
-        source: value
-            .get("source")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-fn parse_navigation_input(value: &Value) -> LabResult<SemanticInput> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") | Some("rect") => {
-            let rect = parse_navigation_tap_rect(value)?;
-            Ok(SemanticInput::Tap {
-                rect,
-                point: rect_center(rect)?,
-            })
-        }
-        Some("target") | Some("target_center") => Ok(SemanticInput::TargetCenter {
-            target_id: required_string_field(value, "target_id")?.to_string(),
-        }),
-        Some("drag") => {
-            let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
-            let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
-            let duration_ms = value
-                .get("duration_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(500);
-            Ok(SemanticInput::Drag {
-                from_rect,
-                to_rect,
-                from: rect_center(from_rect)?,
-                to: rect_center(to_rect)?,
-                duration_ms,
-            })
-        }
-        other => Err(LabError::usage(format!(
-            "unsupported navigation click kind: {other:?}"
-        ))),
-    }
-}
-
-fn parse_navigation_tap_rect(value: &Value) -> LabResult<PackRect> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") => parse_navigation_point(value),
-        Some("rect") | None => parse_navigation_rect(value),
-        Some("drag") => Err(LabError::usage(
-            "drag click cannot be used as a tap rectangle",
-        )),
-        other => Err(LabError::usage(format!(
-            "unsupported navigation click kind for tap rect: {other:?}"
-        ))),
-    }
-}
-
-fn parse_navigation_point(value: &Value) -> LabResult<PackRect> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_navigation_rect(value: &Value) -> LabResult<PackRect> {
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: required_i32_value(value, "width")?,
-        height: required_i32_value(value, "height")?,
-    })
-}
-
-fn parse_point_value(value: &Value) -> LabResult<(i32, i32)> {
-    if let Some(point) = value.as_str() {
-        return parse_point_pair(point);
-    }
-    if let Some(items) = value.as_array() {
-        if items.len() != 2 {
-            return Err(LabError::usage("point array must have exactly two items"));
-        }
-        return Ok((
-            parse_i32_json_value(&items[0], "point[0]")?,
-            parse_i32_json_value(&items[1], "point[1]")?,
-        ));
-    }
-    Err(LabError::usage("point must be a string x,y or [x,y] array"))
-}
-
-fn parse_point_pair(value: &str) -> LabResult<(i32, i32)> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return Err(LabError::usage(format!(
-            "point must be formatted as x,y: {value}"
-        )));
-    }
-    let x = parts[0].parse::<i32>().map_err(|error| {
-        LabError::usage(format!("failed to parse point x '{}': {error}", parts[0]))
-    })?;
-    let y = parts[1].parse::<i32>().map_err(|error| {
-        LabError::usage(format!("failed to parse point y '{}': {error}", parts[1]))
-    })?;
-    Ok((x, y))
-}
-
-fn required_value_field<'a>(value: &'a Value, name: &str) -> LabResult<&'a Value> {
-    value
-        .get(name)
-        .ok_or_else(|| LabError::usage(format!("missing field '{name}'")))
-}
-
-fn required_string_field<'a>(value: &'a Value, name: &str) -> LabResult<&'a str> {
-    required_value_field(value, name)?
-        .as_str()
-        .ok_or_else(|| LabError::usage(format!("field '{name}' must be a string")))
-}
-
-fn required_i32_value(value: &Value, name: &str) -> LabResult<i32> {
-    parse_i32_json_value(required_value_field(value, name)?, name)
-}
-
-fn parse_i32_json_value(value: &Value, name: &str) -> LabResult<i32> {
-    if let Some(value) = value.as_i64() {
-        return i32::try_from(value)
-            .map_err(|_| LabError::usage(format!("field '{name}' exceeds i32 range")));
-    }
-    Err(LabError::usage(format!(
-        "field '{name}' must be an integer"
-    )))
-}
-
-fn canonical_navigation_page(graph: &NavigationGraph, page: &str) -> String {
-    if page.contains('/') {
-        return page.to_string();
-    }
-    graph
-        .game
-        .as_ref()
-        .map(|game| format!("{game}/{page}"))
-        .unwrap_or_else(|| page.to_string())
-}
-
-fn find_navigation_route(
-    edges: &[NavigationEdge],
-    from_page: &str,
-    to_page: &str,
-) -> Option<Vec<NavigationEdge>> {
-    let mut queue = VecDeque::from([from_page.to_string()]);
-    let mut previous = BTreeMap::<String, (String, usize)>::new();
-    let mut seen = BTreeSet::from([from_page.to_string()]);
-    while let Some(page) = queue.pop_front() {
-        if page == to_page {
-            break;
-        }
-        for (index, edge) in edges.iter().enumerate() {
-            if edge.from_page != page || seen.contains(&edge.to_page) {
-                continue;
-            }
-            seen.insert(edge.to_page.clone());
-            previous.insert(edge.to_page.clone(), (page.clone(), index));
-            queue.push_back(edge.to_page.clone());
-        }
-    }
-    if from_page != to_page && !previous.contains_key(to_page) {
-        return None;
-    }
-    let mut route = Vec::new();
-    let mut cursor = to_page.to_string();
-    while cursor != from_page {
-        let (previous_page, index) = previous.get(&cursor)?.clone();
-        route.push(edges[index].clone());
-        cursor = previous_page;
-    }
-    route.reverse();
-    Some(route)
+    NavigationGraph::parse_json(&text).map_err(drive_decision_error)
 }
 
 fn navigation_edge_response(
@@ -628,11 +327,11 @@ fn navigation_edge_response(
     action_id: Option<String>,
 ) -> crate::NavigationEdgeResponse {
     crate::NavigationEdgeResponse {
-        id: edge.id.clone(),
-        from_page: edge.from_page.clone(),
-        to_page: edge.to_page.clone(),
-        input: semantic_input_response(&edge.input),
-        source: edge.source.clone(),
+        id: edge.id().to_string(),
+        from_page: edge.from_page().to_string(),
+        to_page: edge.to_page().to_string(),
+        input: semantic_input_response(edge.input()),
+        source: edge.source().map(str::to_string),
         action_id,
     }
 }
@@ -641,7 +340,7 @@ fn semantic_input_response(input: &SemanticInput) -> crate::SemanticInputRespons
     match input {
         SemanticInput::Tap { rect, point } => crate::SemanticInputResponse::Tap {
             rect: rect_response(*rect),
-            point: *point,
+            point: point_response(*point),
         },
         SemanticInput::TargetCenter { target_id } => crate::SemanticInputResponse::TargetCenter {
             target_id: target_id.clone(),
@@ -655,104 +354,21 @@ fn semantic_input_response(input: &SemanticInput) -> crate::SemanticInputRespons
         } => crate::SemanticInputResponse::Drag {
             from_rect: rect_response(*from_rect),
             to_rect: rect_response(*to_rect),
-            from: *from,
-            to: *to,
+            from: point_response(*from),
+            to: point_response(*to),
             duration_ms: *duration_ms,
         },
     }
 }
 
-fn reject_destructive_overlap(
-    edge: &NavigationEdge,
-    destructive: &[DestructiveClick],
-) -> LabResult<()> {
-    reject_destructive_overlap_input(edge, &edge.input, destructive)
-}
-
-fn reject_destructive_overlap_input(
-    edge: &NavigationEdge,
-    input: &SemanticInput,
-    destructive: &[DestructiveClick],
-) -> LabResult<()> {
-    for rect in semantic_input_rects(input) {
-        if destructive.iter().any(|other| {
-            other
-                .page
-                .as_deref()
-                .is_none_or(|page| page == "any" || page == edge.from_page)
-                && rects_intersect(rect, other.rect)
-        }) {
-            return Err(LabError::safety_blocked(
-                "navigation_destructive_overlap",
-                format!(
-                    "navigation edge '{}' overlaps a destructive action region",
-                    edge.id
-                ),
-                &["navigation_only"],
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
-    match input {
-        SemanticInput::Tap { rect, .. } => vec![*rect],
-        SemanticInput::TargetCenter { .. } => Vec::new(),
-        SemanticInput::Drag {
-            from_rect, to_rect, ..
-        } => vec![*from_rect, *to_rect],
-    }
-}
-
-fn rects_intersect(a: PackRect, b: PackRect) -> bool {
-    let ax2 = a.x.saturating_add(a.width);
-    let ay2 = a.y.saturating_add(a.height);
-    let bx2 = b.x.saturating_add(b.width);
-    let by2 = b.y.saturating_add(b.height);
-    a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y
-}
-
 fn reject_dangerous_semantic_id(label: &str, value: &str) -> LabResult<()> {
-    let lower = value.to_ascii_lowercase();
-    let dangerous = [
-        "gacha",
-        "shop",
-        "purchase",
-        "buy",
-        "recruit",
-        "construct",
-        "retire",
-        "delete",
-        "decompose",
-        "enhance",
-        "refill",
-        "paid",
-        "premium",
-        "exercise",
-        "pvp",
-    ];
-    if dangerous.iter().any(|word| lower.contains(word)) {
-        return Err(LabError::safety_blocked(
-            "semantic_action_requires_destructive_opt_in",
-            format!("{label} '{value}' looks destructive and requires --allow-destructive"),
-            &["navigation_only"],
-        ));
-    }
-    Ok(())
+    reject_kernel_dangerous_semantic_id(label, value).map_err(drive_decision_error)
 }
 
 fn rect_center(rect: PackRect) -> LabResult<crate::PointResponse> {
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(LabError::usage(format!(
-            "click rectangle must have positive dimensions: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(crate::PointResponse {
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2,
-    })
+    drive_rect_center(rect)
+        .map(point_response)
+        .map_err(drive_decision_error)
 }
 
 pub fn derive_absolute_coordinate_rect_from_match(
@@ -761,26 +377,25 @@ pub fn derive_absolute_coordinate_rect_from_match(
     expected_rect: PackRect,
     matched_rect: PackRect,
 ) -> LabResult<PackRect> {
-    let dx = matched_rect
-        .x
-        .checked_sub(expected_rect.x)
-        .ok_or_else(|| LabError::package_invalid(format!("{kind} x delta overflow")))?;
-    let dy = matched_rect
-        .y
-        .checked_sub(expected_rect.y)
-        .ok_or_else(|| LabError::package_invalid(format!("{kind} y delta overflow")))?;
-    Ok(PackRect {
-        x: declared
-            .x
-            .checked_add(dx)
-            .ok_or_else(|| LabError::package_invalid(format!("{kind} translated x overflow")))?,
-        y: declared
-            .y
-            .checked_add(dy)
-            .ok_or_else(|| LabError::package_invalid(format!("{kind} translated y overflow")))?,
-        width: declared.width,
-        height: declared.height,
-    })
+    derive_kernel_coordinate_rect(kind, declared, expected_rect, matched_rect)
+        .map_err(drive_decision_error)
+}
+
+fn point_response(point: DrivePoint) -> crate::PointResponse {
+    crate::PointResponse {
+        x: point.x,
+        y: point.y,
+    }
+}
+
+fn drive_decision_error(error: DriveDecisionError) -> LabError {
+    match error.kind() {
+        DriveDecisionErrorKind::InvalidInput => LabError::usage(error.message()),
+        DriveDecisionErrorKind::PackageInvalid => LabError::package_invalid(error.message()),
+        DriveDecisionErrorKind::SafetyBlocked => {
+            LabError::safety_blocked(error.code(), error.message(), error.required_conditions())
+        }
+    }
 }
 
 fn required_touch_config(
@@ -836,7 +451,7 @@ struct NavigationExecutionContext<'a, P: LabPorts> {
     input: &'a mut crate::ReadonlyRecognitionInput,
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
-    destructive_clicks: &'a [DestructiveClick],
+    graph: &'a NavigationGraph,
     touch_config: &'a TouchBackendConfig,
     step_timeout: Duration,
     poll: Duration,
@@ -851,26 +466,32 @@ fn execute_navigation_route<P: LabPorts>(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for (edge, action_id) in route.into_iter().zip(action_ids) {
-        if current_page != edge.from_page {
+        if current_page != edge.from_page() {
             return Err(LabError::safety_blocked(
                 "navigation_page_drift",
                 format!(
                     "navigation expected current page '{}' but last page was '{}'",
-                    edge.from_page, current_page
+                    edge.from_page(),
+                    current_page
                 ),
                 &["page_guard"],
             ));
         }
         let (input, recognition) = resolve_navigation_edge_input(context, &edge)?;
-        reject_destructive_overlap_input(&edge, &input, context.destructive_clicks)?;
+        context
+            .graph
+            .validate_resolved_input(&edge, &input)
+            .map_err(drive_decision_error)?;
         let device = send_semantic_input(context.lab, context.touch_config, &input)?;
-        let arrived = poll_for_page(context, &edge.to_page)?;
+        let arrived = poll_for_page(context, edge.to_page())?;
         if !arrived.matched {
             return Err(LabError::safety_blocked(
                 "navigation_arrival_failed",
                 format!(
                     "navigation edge '{}' did not arrive at '{}'; last page '{}'",
-                    edge.id, edge.to_page, arrived.page
+                    edge.id(),
+                    edge.to_page(),
+                    arrived.page
                 ),
                 &["arrival_page"],
             ));
@@ -895,8 +516,8 @@ fn resolve_navigation_edge_input<P: LabPorts>(
     SemanticInput,
     Option<crate::NavigationTargetRecognitionResponse>,
 )> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), None));
+    let SemanticInput::TargetCenter { target_id } = edge.input() else {
+        return Ok((edge.input().clone(), None));
     };
     let scene = recognition_scene(context.lab, context.input)?;
     let evaluation = context
@@ -909,7 +530,9 @@ fn resolve_navigation_edge_input<P: LabPorts>(
             "navigation_target_not_visible",
             format!(
                 "navigation edge '{}' target '{}' did not pass recognition: {}",
-                edge.id, target_id, evaluation.message
+                edge.id(),
+                target_id,
+                evaluation.message
             ),
             &["visible_target", "navigation"],
         ));
@@ -918,7 +541,7 @@ fn resolve_navigation_edge_input<P: LabPorts>(
     Ok((
         SemanticInput::Tap {
             rect,
-            point: rect_center(rect)?,
+            point: drive_rect_center(rect).map_err(drive_decision_error)?,
         },
         Some(crate::NavigationTargetRecognitionResponse {
             target_id: target_id.clone(),
