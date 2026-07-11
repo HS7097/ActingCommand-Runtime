@@ -41,7 +41,7 @@ pub(super) fn run(subcommand: &str, global: &GlobalOptions, args: &[String]) -> 
         .map_err(|error| CliError::usage(format!("runtime output serialization failed: {error}")))
 }
 
-fn map_runtime_error(error: RuntimeClientError) -> CliError {
+pub(super) fn map_runtime_error(error: RuntimeClientError) -> CliError {
     let unavailable = error.projection().is_none_or(|projection| {
         matches!(
             projection.code,

@@ -1395,6 +1395,10 @@ impl RuntimeInfo {
     pub const fn owner_epoch(&self) -> OwnerEpoch {
         self.owner_epoch
     }
+
+    pub const fn started_at_unix_ms(&self) -> u64 {
+        self.started_at_unix_ms
+    }
 }
 
 fn validate_point(x: i32, y: i32) -> RuntimeContractResult<()> {

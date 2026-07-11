@@ -1144,6 +1144,51 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
 }
 
 #[test]
+fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authority() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let adapter = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
+        .expect("read Runtime session adapter");
+
+    for required in [
+        "runtime_session_adapter::run_status",
+        "runtime_session_adapter::run_monitor_policy",
+    ] {
+        assert!(
+            main.contains(required),
+            "ActingLab client cutover lost {required}"
+        );
+    }
+    for required in [
+        "RuntimeClient::connect",
+        ".status()",
+        ".monitor_status()",
+        ".configure_monitor(",
+        ".clear_monitor(",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "Runtime session adapter lost {required}"
+        );
+    }
+    for forbidden in [
+        "session_info_path",
+        "session_heartbeat_path",
+        "session_monitor_policy_path",
+        "session_monitor_state_path",
+        "write_json_file_atomic",
+        "submit_session_command_request",
+        "TcpListener",
+    ] {
+        assert!(
+            !adapter.contains(forbidden),
+            "Runtime session adapter regained legacy authority via {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     let root = workspace_root();
     let app_environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))

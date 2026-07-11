@@ -512,6 +512,7 @@ fn runtime_info_accepts_only_live_loopback_shape() {
     let epoch = *issuer().mint_owner_epoch().expect("epoch").transport();
     let info = RuntimeInfo::new(1, "127.0.0.1", 48761, epoch, 1).expect("runtime info");
     assert!(info.socket_addr().expect("socket").ip().is_loopback());
+    assert_eq!(info.started_at_unix_ms(), 1);
     assert_eq!(
         RuntimeInfo::new(1, "0.0.0.0", 48761, epoch, 1)
             .expect_err("non-loopback host")

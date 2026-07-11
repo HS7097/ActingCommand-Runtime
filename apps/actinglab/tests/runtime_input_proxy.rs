@@ -131,6 +131,128 @@ impl ExecutionBackendProvider for FakeProvider {
 }
 
 #[test]
+fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_state() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let legacy_session_root = local_app_data.join("ActingCommand/actinglab/session");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-session-adapter-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state,
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+
+    let status = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        ["--json", "session", "status", "--diagnostics"],
+    );
+    assert_eq!(status["data"]["running"], true);
+    assert_eq!(
+        status["data"]["diagnostics"]["liveness"]["authority"],
+        "runtime"
+    );
+    assert_eq!(
+        status["data"]["diagnostics"]["instances"]["instances"][0]["instance_alias"],
+        "ak.cn"
+    );
+
+    let unconfigured = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "monitor-policy",
+            "status",
+        ],
+    );
+    assert_eq!(unconfigured["data"]["configured"], false);
+
+    let configured = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "monitor-policy",
+            "set",
+            "--capture",
+            "--expect",
+            "home",
+            "--interval-ms",
+            "60000",
+        ],
+    );
+    assert_eq!(configured["data"]["status"], "configured");
+    assert_eq!(
+        configured["data"]["policy"]["runtime_policy"]["expected_page"],
+        "home"
+    );
+
+    let cleared = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "monitor-policy",
+            "clear",
+        ],
+    );
+    assert_eq!(cleared["data"]["status"], "cleared");
+    assert_eq!(cleared["data"]["state_preserved"], false);
+    assert!(!legacy_session_root.exists());
+    host.close().expect("close host");
+}
+
+fn run_actinglab_json<const N: usize>(
+    config_path: &Path,
+    runtime_root: &Path,
+    local_app_data: &Path,
+    arguments: [&str; N],
+) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .args(arguments)
+        .env("ACTINGLAB_CONFIG_PATH", config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)
+        .env("LOCALAPPDATA", local_app_data)
+        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
+        .output()
+        .expect("run actinglab");
+    assert!(
+        output.status.success(),
+        "actinglab failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("ActingLab JSON")
+}
+
+#[test]
 fn production_tap_target_uses_runtime_capture_and_fenced_input() {
     let root = TempDir::new().expect("tempdir");
     let runtime_root = root.path().join("runtime");

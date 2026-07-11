@@ -57,6 +57,7 @@ pub mod recovery_exec;
 mod resource_convert;
 mod runtime_capture_backend;
 mod runtime_input_backend;
+mod runtime_session_adapter;
 mod runtime_slice_cli;
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
@@ -14344,11 +14345,7 @@ fn session_journal_payload(
 }
 
 fn run_session_monitor_policy(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    args.first()
-        .ok_or_else(|| CliError::usage("session monitor-policy requires status|set|clear"))?;
-    let flags = FlagArgs::parse(&args[1..])?;
-    let state_dir = session_state_dir_from_flags(&flags)?;
-    run_session_monitor_policy_in_state_dir(global, args, &state_dir, false)
+    runtime_session_adapter::run_monitor_policy(global, args)
 }
 
 fn run_session_monitor_policy_in_state_dir(
@@ -14550,19 +14547,7 @@ fn monitor_policy_monitor_args(raw_args: &[String], flags: &FlagArgs) -> CliOutc
 }
 
 fn run_session_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    if should_route_readonly_via_session_daemon(global, &flags)? {
-        return submit_readonly_session_request(global, &flags, "status", args);
-    }
-    flags.expect_positionals("session status", 0)?;
-    let state_dir = session_state_dir_from_flags(&flags)?;
-    let diagnostics = flags.bool("--diagnostics");
-    let config = if diagnostics {
-        Some(read_user_config()?)
-    } else {
-        None
-    };
-    session_status_payload_with_config(&state_dir, diagnostics, config.as_ref())
+    runtime_session_adapter::run_status(global, args)
 }
 
 #[cfg(test)]
