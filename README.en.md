@@ -433,8 +433,9 @@ graph TD
 
 - contracts `crates/actingcommand-contract` · device layer `crates/device` (MaaTouch / minitouch / adb input fallback · multi-backend capture autotune · device discovery · record-replay)
 - recognition `crates/recognition` (CCOEFF / CCORR + color) · `crates/recognition-pack` · page detection `crates/page-detector`
-- task loop `crates/task-loop` · core `crates/runtime-core` · vision FFI `crates/vision-ffi` (OCR / NN boundary, artifact contract, ABI check, artifact lock)
-- apps `apps/actinglab` (main CLI + Session Layer + packager + frame store) · `apps/device-test` · `apps/vision-provider-check` (vision-provider diagnostic tool)
+- execution kernel `crates/execution-kernel` · scheduler `crates/scheduler` · resident control plane `crates/runtime-host` · thin client `crates/runtime-client`
+- global ledger `crates/ledger` · artifact store `crates/artifact-store` · package containment `crates/pack-containment` · vision FFI `crates/vision-ffi` (OCR / NN boundary, artifact contract, ABI check, artifact lock)
+- apps `apps/actingd` (resident Runtime) · `apps/actingctl` (user CLI) · `apps/actinglab` (optional debug and resource-authoring CLI) · `apps/device-test` · `apps/vision-provider-check` (vision-provider diagnostic tool)
 - recognition providers (FFI external libs) `providers/onnxruntime-json` · `providers/ppocr-onnx-json`
 
 ```powershell

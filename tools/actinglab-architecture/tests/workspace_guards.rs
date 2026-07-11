@@ -1741,6 +1741,25 @@ fn production_packages_cannot_reach_resource_tooling() {
     }
 }
 
+#[test]
+fn c5_disconnected_runtime_core_prototype_is_retired() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+
+    assert!(
+        packages
+            .iter()
+            .all(|package| package["name"] != "actingcommand-runtime-core"),
+        "the disconnected runtime-core prototype must not remain in the workspace"
+    );
+    assert!(
+        !root.join("crates/runtime-core/Cargo.toml").exists(),
+        "the disconnected runtime-core prototype manifest must be removed"
+    );
+}
+
 fn cargo_metadata_args() -> [&'static str; 4] {
     ["metadata", "--format-version", "1", "--all-features"]
 }

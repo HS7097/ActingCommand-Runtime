@@ -286,10 +286,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actingcommand-runtime-core"
-version = "0.1.0"
-
-[[package]]
 name = "actingcommand-runtime-host"
 version = "0.1.0"
 dependencies = [

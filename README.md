@@ -433,8 +433,9 @@ graph TD
 
 - 契约 `crates/actingcommand-contract` · 设备层 `crates/device`(MaaTouch / minitouch / adb 输入回退 · 多后端截图 autotune · 设备发现 · 录制回放)
 - 识别 `crates/recognition`(CCOEFF / CCORR + color)· `crates/recognition-pack` · 页检测 `crates/page-detector`
-- 任务环 `crates/task-loop` · 核心 `crates/runtime-core` · 视觉 FFI `crates/vision-ffi`(OCR / NN 边界、产物契约、ABI 检查、artifact lock)
-- 应用 `apps/actinglab`(主 CLI + 会话抽象层 + 打包器 + 帧存)· `apps/device-test` · `apps/vision-provider-check`(视觉 provider 诊断工具)
+- 执行核 `crates/execution-kernel` · 调度器 `crates/scheduler` · 常驻控制面 `crates/runtime-host` · 薄客户端 `crates/runtime-client`
+- 全局账本 `crates/ledger` · 产物存储 `crates/artifact-store` · 资源包海关 `crates/pack-containment` · 视觉 FFI `crates/vision-ffi`(OCR / NN 边界、产物契约、ABI 检查、artifact lock)
+- 应用 `apps/actingd`(常驻 Runtime)· `apps/actingctl`(用户 CLI)· `apps/actinglab`(可选调试与资源制作 CLI)· `apps/device-test` · `apps/vision-provider-check`(视觉 provider 诊断工具)
 - 识别 provider(FFI 外部库)`providers/onnxruntime-json` · `providers/ppocr-onnx-json`
 
 ```powershell
