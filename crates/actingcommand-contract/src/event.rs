@@ -154,6 +154,8 @@ pub enum EventFamily {
     Lease,
     Task,
     Input,
+    Capture,
+    Recognition,
     Client,
     Ledger,
 }
@@ -220,6 +222,18 @@ pub enum EventType {
     InputCompleted,
     #[serde(rename = "input.failed")]
     InputFailed,
+    #[serde(rename = "capture.requested")]
+    CaptureRequested,
+    #[serde(rename = "capture.completed")]
+    CaptureCompleted,
+    #[serde(rename = "capture.failed")]
+    CaptureFailed,
+    #[serde(rename = "recognition.requested")]
+    RecognitionRequested,
+    #[serde(rename = "recognition.completed")]
+    RecognitionCompleted,
+    #[serde(rename = "recognition.failed")]
+    RecognitionFailed,
     #[serde(rename = "ui.action")]
     UiAction,
     #[serde(rename = "cli.command")]
@@ -260,6 +274,12 @@ impl EventType {
             | Self::TaskTerminalCommitFailed => EventFamily::Task,
             Self::InputIntent | Self::InputCommitted | Self::InputCompleted | Self::InputFailed => {
                 EventFamily::Input
+            }
+            Self::CaptureRequested | Self::CaptureCompleted | Self::CaptureFailed => {
+                EventFamily::Capture
+            }
+            Self::RecognitionRequested | Self::RecognitionCompleted | Self::RecognitionFailed => {
+                EventFamily::Recognition
             }
             Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,
             Self::LedgerRecovered => EventFamily::Ledger,

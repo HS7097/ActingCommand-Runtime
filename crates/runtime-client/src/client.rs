@@ -3,10 +3,15 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction, LeaseToken, OwnerEpoch,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, ReadOnlyCaptureCapability, RuntimeInfo,
+    CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
+    IssuedCorrelationId, LeaseToken, OwnerEpoch, ProjectedEvent, ProjectionProfile,
+    RUNTIME_INFO_FILE, ReadOnlyCaptureCapability, ReadonlyFrame, ReadonlyObservation,
+    ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict, RuntimeInfo,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
 };
+use actingcommand_device::CaptureBackend;
+use actingcommand_recognition::Scene;
+use serde::Serialize;
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -114,6 +119,24 @@ struct RuntimeClientShared {
 #[derive(Clone)]
 pub struct RuntimeClient {
     shared: Arc<RuntimeClientShared>,
+}
+
+/// Host receipt plus its correlation-scoped durable ledger projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeFlowOutput {
+    receipt: RuntimeReceipt,
+    events: Vec<ProjectedEvent>,
+}
+
+impl RuntimeFlowOutput {
+    pub const fn receipt(&self) -> &RuntimeReceipt {
+        &self.receipt
+    }
+
+    pub fn events(&self) -> &[ProjectedEvent] {
+        &self.events
+    }
 }
 
 impl RuntimeClient {
@@ -238,6 +261,135 @@ impl RuntimeClient {
         }
     }
 
+    pub fn observe_readonly(
+        &self,
+        instance_alias: &str,
+        capture: &mut dyn CaptureBackend,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let correlation = self.issue_correlation("observe_readonly")?;
+        let correlation_id = *correlation.transport();
+        let begin = self.execute_receipt_with_correlation(
+            "begin_readonly_observation",
+            RuntimeOperation::BeginReadonlyObservation {
+                instance_alias: instance_alias.to_string(),
+            },
+            correlation,
+            None,
+        )?;
+        let capability = match begin.result() {
+            Some(RuntimeResult::ReadonlyObservationBegun { capability }) => *capability,
+            _ => return Err(self.unexpected_result("begin_readonly_observation")),
+        };
+        let frame = match capture.capture() {
+            Ok(frame) => frame,
+            Err(_) => {
+                return self.report_observation_failure(
+                    capability,
+                    correlation,
+                    ReadonlyObservationOutcome::Failed {
+                        stage: ReadonlyObservationStage::Capture,
+                        captured_frame: None,
+                    },
+                    "capture_readonly_observation",
+                );
+            }
+        };
+        let captured_frame = match ReadonlyFrame::new(frame.width, frame.height) {
+            Ok(frame) => frame,
+            Err(_) => {
+                return self.report_observation_failure(
+                    capability,
+                    correlation,
+                    ReadonlyObservationOutcome::Failed {
+                        stage: ReadonlyObservationStage::Capture,
+                        captured_frame: None,
+                    },
+                    "capture_readonly_observation",
+                );
+            }
+        };
+        let png = match frame.png_for_artifact() {
+            Ok(png) => png,
+            Err(_) => {
+                return self.report_observation_failure(
+                    capability,
+                    correlation,
+                    ReadonlyObservationOutcome::Failed {
+                        stage: ReadonlyObservationStage::Recognition,
+                        captured_frame: Some(captured_frame),
+                    },
+                    "recognize_readonly_observation",
+                );
+            }
+        };
+        let scene = match Scene::from_png(&png) {
+            Ok(scene) if scene.width() == frame.width && scene.height() == frame.height => scene,
+            Ok(_) | Err(_) => {
+                return self.report_observation_failure(
+                    capability,
+                    correlation,
+                    ReadonlyObservationOutcome::Failed {
+                        stage: ReadonlyObservationStage::Recognition,
+                        captured_frame: Some(captured_frame),
+                    },
+                    "recognize_readonly_observation",
+                );
+            }
+        };
+        let observation = ReadonlyObservation::new(
+            scene.width(),
+            scene.height(),
+            RecognitionVerdict::FrameDecoded,
+        )
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                "readonly_observation_invalid",
+                "recognize_readonly_observation",
+            )
+        })?;
+        let receipt = self.execute_receipt_with_correlation(
+            "finish_readonly_observation",
+            RuntimeOperation::FinishReadonlyObservation {
+                capability,
+                outcome: ReadonlyObservationOutcome::Completed { observation },
+            },
+            correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ReadonlyObservationCompleted { .. })
+        ) {
+            return Err(self.unexpected_result("finish_readonly_observation"));
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
+    pub fn safe_reset(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let connection = self.connection("safe_reset")?;
+        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "safe_reset")
+        })?;
+        let holder = connection.ids.mint_holder_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "safe_reset")
+        })?;
+        let correlation_id = *correlation.transport();
+        drop(connection);
+        let receipt = self.execute_receipt_with_correlation(
+            "safe_reset",
+            RuntimeOperation::safe_reset(instance_alias, holder),
+            correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::SafeResetCompleted { .. })
+        ) {
+            return Err(self.unexpected_result("safe_reset"));
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
     pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
         let response_timeout = {
             let connection = self.connection("runtime_input")?;
@@ -284,15 +436,66 @@ impl RuntimeClient {
         operation: RuntimeOperation,
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeResult> {
+        let receipt = self.execute_receipt(operation_name, operation, response_timeout)?;
+        let Some(result) = receipt.result().cloned() else {
+            return Err(self.unexpected_result(operation_name));
+        };
+        Ok(result)
+    }
+
+    fn execute_receipt(
+        &self,
+        operation_name: &'static str,
+        operation: RuntimeOperation,
+        response_timeout: Option<Duration>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         let mut connection = self.connection(operation_name)?;
+        let request = connection.request(operation_name, operation.clone())?;
+        self.exchange_receipt(
+            &mut connection,
+            operation_name,
+            operation,
+            request,
+            response_timeout,
+        )
+    }
+
+    fn execute_receipt_with_correlation(
+        &self,
+        operation_name: &'static str,
+        operation: RuntimeOperation,
+        correlation: IssuedCorrelationId,
+        response_timeout: Option<Duration>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        let mut connection = self.connection(operation_name)?;
+        let request =
+            connection.request_with_correlation(operation_name, operation.clone(), correlation)?;
+        self.exchange_receipt(
+            &mut connection,
+            operation_name,
+            operation,
+            request,
+            response_timeout,
+        )
+    }
+
+    fn exchange_receipt(
+        &self,
+        connection: &mut RuntimeConnection,
+        operation_name: &'static str,
+        operation: RuntimeOperation,
+        request: RuntimeRequest,
+        response_timeout: Option<Duration>,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
         if let Some(error) = &connection.terminal_error {
             return Err(error.clone());
         }
-        let response_timeout = response_timeout.unwrap_or_else(|| match &operation {
-            RuntimeOperation::AcquireLease { .. } => connection.backend_open_timeout,
+        let response_timeout = response_timeout.unwrap_or(match &operation {
+            RuntimeOperation::AcquireLease { .. } | RuntimeOperation::SafeReset { .. } => {
+                connection.backend_open_timeout
+            }
             _ => connection.io_timeout,
         });
-        let request = connection.request(operation_name, operation)?;
         let maximum_frame_bytes = connection.maximum_frame_bytes;
         if connection
             .stream
@@ -342,13 +545,101 @@ impl RuntimeClient {
                 error
             });
         }
-        let Some(result) = receipt.result().cloned() else {
+        if receipt.result().is_none() {
             return Err(connection.latch(RuntimeClientError::fatal(
                 "runtime_result_missing",
                 operation_name,
             )));
+        }
+        Ok(receipt)
+    }
+
+    fn issue_correlation(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeClientResult<IssuedCorrelationId> {
+        self.connection(operation)?
+            .ids
+            .mint_correlation_id()
+            .map_err(|_| RuntimeClientError::fatal("runtime_identifier_issue_failed", operation))
+    }
+
+    fn flow_output(
+        &self,
+        receipt: RuntimeReceipt,
+        correlation_id: CorrelationId,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let events = self
+            .query_events(
+                EventQuery {
+                    correlation_id: Some(correlation_id),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .map_err(|error| {
+                RuntimeClientError::after_commit(
+                    "runtime_projection_failed_after_terminal",
+                    "query_runtime_flow_projection",
+                    receipt.clone(),
+                    error,
+                )
+            })?;
+        Ok(RuntimeFlowOutput { receipt, events })
+    }
+
+    fn report_observation_failure(
+        &self,
+        capability: ReadOnlyCaptureCapability,
+        correlation: IssuedCorrelationId,
+        outcome: ReadonlyObservationOutcome,
+        operation: &'static str,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let (local_code, expected_runtime_code) = match &outcome {
+            ReadonlyObservationOutcome::Failed {
+                stage: ReadonlyObservationStage::Capture,
+                ..
+            } => (
+                "capture_failed_and_runtime_report_failed",
+                actingcommand_contract::RuntimeErrorCode::CaptureFailed,
+            ),
+            ReadonlyObservationOutcome::Failed {
+                stage: ReadonlyObservationStage::Recognition,
+                ..
+            } => (
+                "recognition_failed_and_runtime_report_failed",
+                actingcommand_contract::RuntimeErrorCode::RecognitionFailed,
+            ),
+            ReadonlyObservationOutcome::Completed { .. } => {
+                return Err(RuntimeClientError::fatal(
+                    "observation_failure_report_invalid",
+                    operation,
+                ));
+            }
         };
-        Ok(result)
+        match self.execute_receipt_with_correlation(
+            operation,
+            RuntimeOperation::FinishReadonlyObservation {
+                capability,
+                outcome,
+            },
+            correlation,
+            None,
+        ) {
+            Err(error)
+                if error
+                    .projection()
+                    .is_some_and(|projection| projection.code == expected_runtime_code) =>
+            {
+                Err(error)
+            }
+            Err(error) => Err(RuntimeClientError::combined(local_code, operation, error)),
+            Ok(_) => Err(RuntimeClientError::combined(
+                local_code,
+                operation,
+                self.unexpected_result(operation),
+            )),
+        }
     }
 
     fn unexpected_result(&self, operation: &'static str) -> RuntimeClientError {
@@ -394,13 +685,23 @@ impl RuntimeConnection {
         operation_name: &'static str,
         operation: RuntimeOperation,
     ) -> RuntimeClientResult<RuntimeRequest> {
+        let correlation = self.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
+        })?;
+        self.request_with_correlation(operation_name, operation, correlation)
+    }
+
+    fn request_with_correlation(
+        &self,
+        operation_name: &'static str,
+        operation: RuntimeOperation,
+        correlation: IssuedCorrelationId,
+    ) -> RuntimeClientResult<RuntimeRequest> {
         RuntimeRequest::new(
             self.ids.mint_request_id().map_err(|_| {
                 RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
             })?,
-            self.ids.mint_correlation_id().map_err(|_| {
-                RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
-            })?,
+            correlation,
             None,
             self.actor,
             self.source,

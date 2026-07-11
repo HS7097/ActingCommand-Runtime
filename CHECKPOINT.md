@@ -1,5 +1,96 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C4 minimal vertical slice complete
+
+### Current status
+
+- Completed C4 on `issue-35-runtime-ledger-v3` without merging into `main`.
+- Added typed capture/recognition lifecycle events, Runtime observation/reset operations, and an
+  opaque Runtime-issued read capability bound to owner epoch, instance, frame, recognition,
+  connection, and correlation context.
+- Added connection-scoped capability tracking and cleanup in Runtime host. Forged, stale,
+  wrong-instance, wrong-connection, reused, wrong-source, and mismatched-correlation completion
+  attempts fail before durable success.
+- Added durable safe-reset replay recovery so cache loss or Runtime restart cannot repeat a
+  previously committed input reset.
+- Added shared runtime-client flows for read-only frame observation and scheduler-fenced
+  `input.reset`. A committed terminal receipt is preserved in fatal client errors if the later
+  projection query fails.
+- Added thin `actingctl observe/reset` and ActingLab `runtime observe/reset` adapters using the
+  same `RuntimeFlowOutput` receipt plus correlated-event projection shape.
+- Added real child-process acceptance coverage proving Runtime outlives both disposable clients,
+  sealed observation performs no write, and reset reaches the daemon-owned backend exactly once.
+- Re-read Issue #35 after implementation. It remains open and approved, and all relied-on current
+  instructions and comments are authored by `HS7097`; no newer instruction changes C4.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/codes.rs`
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `crates/actingcommand-contract/src/runtime.rs`
+- `crates/actingcommand-contract/src/runtime/tests.rs`
+- `crates/runtime-host/src/host.rs`
+- `crates/runtime-host/src/tests.rs`
+- `crates/runtime-client/Cargo.toml`
+- `crates/runtime-client/src/client.rs`
+- `crates/runtime-client/src/error.rs`
+- `crates/runtime-client/src/tests.rs`
+- `apps/actingctl/`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/src/runtime_slice_cli.rs`
+- `apps/actinglab/tests/c4_runtime_process.rs`
+- `tests/support/c4_runtime.rs`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `ratchet/actinglab_commands.json`
+- `ratchet/main_rs_lines.txt`
+- `Cargo.toml`
+- `Cargo.lock`
+- `docs/plans/2026-07-11-c4-minimal-vertical-slice.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --exclude actingcommand-actinglab --exclude actingcommand-lab`
+- `cargo check --workspace --all-features`
+- `scripts/actinglab/command-inventory.ps1 -Check`
+- C4 Rust-addition forbidden implementation scan.
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json ...`
+
+### Test results
+
+- Full workspace tests passed, including contract compile-fail tests, Runtime host/client tests,
+  `actingctl` and ActingLab child-process acceptance, and architecture guards.
+- Non-Lab workspace tests passed.
+- Clippy passed with warnings denied.
+- Formatting and all-features workspace checks passed.
+- ActingLab command inventory matches 121 commands across 45 dispatch arms.
+- C4 additions contain no MaaTouch/minitouch construction, ADB input fallback, reconnect,
+  SQLite, or OCR implementation.
+- `git diff --check` passed.
+
+### Current blocker
+
+- None for C4.
+
+### Next step
+
+1. Commit and push this C4 implementation and planning state on
+   `issue-35-runtime-ledger-v3`.
+2. Create and push `checkpoint/20260711-c4-minimal-vertical-slice`.
+3. Record the final commit, tag, and verification evidence in Issue #36.
+4. Start C2 independently or continue the critical path with C3b only when selected; do not
+   merge this branch into `main` without explicit instruction.
+
 ## 2026-07-11 Issue 35 C4 minimal vertical-slice plan freeze
 
 ### Current status

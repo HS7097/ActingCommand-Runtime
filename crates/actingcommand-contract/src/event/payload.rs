@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    DiagnosticCode, EventAction, EventFamily, EventType, RecoveryReason, SanitizationError,
-    Sensitivity,
+    DiagnosticCode, EventAction, EventFamily, EventType, RecognitionVerdict, RecoveryReason,
+    SanitizationError, Sensitivity,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -14,6 +14,8 @@ pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v2";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v2";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
+pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
+pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
@@ -249,6 +251,18 @@ pub struct DiagnosticOutcomePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ObservationResultPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    frame_width: u32,
+    frame_height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recognition_verdict: Option<RecognitionVerdict>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecoveryPayload {
     reason: RecoveryReason,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -282,6 +296,7 @@ common_detail_accessors!(ObservationPayload);
 common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
+common_detail_accessors!(ObservationResultPayload);
 
 impl DiagnosticPayload {
     pub const fn diagnostic_code(&self) -> DiagnosticCode {
@@ -302,6 +317,24 @@ impl DiagnosticOutcomePayload {
 
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
+    }
+}
+
+impl ObservationResultPayload {
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn frame_width(&self) -> u32 {
+        self.frame_width
+    }
+
+    pub const fn frame_height(&self) -> u32 {
+        self.frame_height
+    }
+
+    pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
+        self.recognition_verdict
     }
 }
 
@@ -377,6 +410,24 @@ impl PayloadDetail for DiagnosticOutcomePayload {
     }
 }
 
+impl PayloadDetail for ObservationResultPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl RecoveryPayload {
     pub const fn reason(&self) -> RecoveryReason {
         self.reason
@@ -434,6 +485,15 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    audit: AuditInput,
+}
+
+struct ObservationResultDraft {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    frame_width: u32,
+    frame_height: u32,
+    recognition_verdict: Option<RecognitionVerdict>,
     audit: AuditInput,
 }
 
@@ -525,6 +585,46 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ObservationResultDraft {
+    fn new(
+        action: EventAction,
+        effect_disposition: EffectDisposition,
+        frame_width: u32,
+        frame_height: u32,
+        recognition_verdict: Option<RecognitionVerdict>,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            effect_disposition,
+            frame_width,
+            frame_height,
+            recognition_verdict,
+            audit,
+        }
+    }
+
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ObservationResultPayload, SanitizationError> {
+        if self.frame_width == 0 || self.frame_height == 0 {
+            return Err(SanitizationError::new(
+                "invalid_sanitized_payload",
+                "frame_dimensions",
+            ));
+        }
+        Ok(ObservationResultPayload {
+            action: self.action,
+            effect_disposition: self.effect_disposition,
+            frame_width: self.frame_width,
+            frame_height: self.frame_height,
+            recognition_verdict: self.recognition_verdict,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -834,6 +934,103 @@ impl InputPayloadDraft {
     }
 }
 
+enum CaptureDraftKind {
+    Requested(ObservationDraft),
+    Completed(ObservationResultDraft),
+    Failed(DiagnosticOutcomeDraft),
+}
+
+pub struct CapturePayloadDraft(CaptureDraftKind);
+
+impl CapturePayloadDraft {
+    pub fn requested(action: EventAction, audit: AuditInput) -> Self {
+        Self(CaptureDraftKind::Requested(ObservationDraft::new(
+            action, audit,
+        )))
+    }
+
+    pub fn completed(
+        action: EventAction,
+        effect: EffectDisposition,
+        frame_width: u32,
+        frame_height: u32,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Completed(ObservationResultDraft::new(
+            action,
+            effect,
+            frame_width,
+            frame_height,
+            None,
+            audit,
+        )))
+    }
+
+    pub fn failed(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Failed(DiagnosticOutcomeDraft::new(
+            action,
+            diagnostic_code,
+            effect,
+            audit,
+        )))
+    }
+}
+
+enum RecognitionDraftKind {
+    Requested(ObservationDraft),
+    Completed(ObservationResultDraft),
+    Failed(DiagnosticOutcomeDraft),
+}
+
+pub struct RecognitionPayloadDraft(RecognitionDraftKind);
+
+impl RecognitionPayloadDraft {
+    pub fn requested(action: EventAction, audit: AuditInput) -> Self {
+        Self(RecognitionDraftKind::Requested(ObservationDraft::new(
+            action, audit,
+        )))
+    }
+
+    pub fn completed(
+        action: EventAction,
+        effect: EffectDisposition,
+        frame_width: u32,
+        frame_height: u32,
+        verdict: RecognitionVerdict,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RecognitionDraftKind::Completed(
+            ObservationResultDraft::new(
+                action,
+                effect,
+                frame_width,
+                frame_height,
+                Some(verdict),
+                audit,
+            ),
+        ))
+    }
+
+    pub fn failed(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RecognitionDraftKind::Failed(DiagnosticOutcomeDraft::new(
+            action,
+            diagnostic_code,
+            effect,
+            audit,
+        )))
+    }
+}
+
 enum ClientDraftKind {
     UiAction(ObservationDraft),
     CliCommand(ObservationDraft),
@@ -891,6 +1088,8 @@ pub enum EventPayloadDraft {
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
     Input(InputPayloadDraft),
+    Capture(CapturePayloadDraft),
+    Recognition(RecognitionPayloadDraft),
     Client(ClientPayloadDraft),
     Ledger(LedgerPayloadDraft),
 }
@@ -911,6 +1110,8 @@ payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(InputPayloadDraft, Input);
+payload_draft_from!(CapturePayloadDraft, Capture);
+payload_draft_from!(RecognitionPayloadDraft, Recognition);
 payload_draft_from!(ClientPayloadDraft, Client);
 payload_draft_from!(LedgerPayloadDraft, Ledger);
 
@@ -1011,6 +1212,32 @@ pub enum InputPayload {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+pub enum CapturePayload {
+    Requested(ObservationPayload),
+    Completed(ObservationResultPayload),
+    Failed(DiagnosticOutcomePayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum RecognitionPayload {
+    Requested(ObservationPayload),
+    Completed(ObservationResultPayload),
+    Failed(DiagnosticOutcomePayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ClientPayload {
     UiAction(ObservationPayload),
     CliCommand(ObservationPayload),
@@ -1093,6 +1320,16 @@ family_payload!(InputPayload, {
     Completed => EventType::InputCompleted,
     Failed => EventType::InputFailed,
 });
+family_payload!(CapturePayload, {
+    Requested => EventType::CaptureRequested,
+    Completed => EventType::CaptureCompleted,
+    Failed => EventType::CaptureFailed,
+});
+family_payload!(RecognitionPayload, {
+    Requested => EventType::RecognitionRequested,
+    Completed => EventType::RecognitionCompleted,
+    Failed => EventType::RecognitionFailed,
+});
 family_payload!(ClientPayload, {
     UiAction => EventType::UiAction,
     CliCommand => EventType::CliCommand,
@@ -1116,6 +1353,8 @@ pub enum EventPayload {
     Lease(LeasePayload),
     Task(TaskPayload),
     Input(InputPayload),
+    Capture(CapturePayload),
+    Recognition(RecognitionPayload),
     Client(ClientPayload),
     Ledger(LedgerPayload),
 }
@@ -1228,6 +1467,28 @@ impl EventPayloadDraft {
                     InputPayload::Failed(detail.sanitize(fingerprinter)?)
                 }
             }),
+            Self::Capture(value) => EventPayload::Capture(match value.0 {
+                CaptureDraftKind::Requested(detail) => {
+                    CapturePayload::Requested(detail.sanitize(fingerprinter)?)
+                }
+                CaptureDraftKind::Completed(detail) => {
+                    CapturePayload::Completed(detail.sanitize(fingerprinter)?)
+                }
+                CaptureDraftKind::Failed(detail) => {
+                    CapturePayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Recognition(value) => EventPayload::Recognition(match value.0 {
+                RecognitionDraftKind::Requested(detail) => {
+                    RecognitionPayload::Requested(detail.sanitize(fingerprinter)?)
+                }
+                RecognitionDraftKind::Completed(detail) => {
+                    RecognitionPayload::Completed(detail.sanitize(fingerprinter)?)
+                }
+                RecognitionDraftKind::Failed(detail) => {
+                    RecognitionPayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+            }),
             Self::Client(value) => EventPayload::Client(match value.0 {
                 ClientDraftKind::UiAction(detail) => {
                     ClientPayload::UiAction(detail.sanitize(fingerprinter)?)
@@ -1265,6 +1526,8 @@ impl EventPayload {
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
             Self::Input(_) => INPUT_PAYLOAD_SCHEMA,
+            Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
+            Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
             Self::Client(_) => CLIENT_PAYLOAD_SCHEMA,
             Self::Ledger(_) => LEDGER_PAYLOAD_SCHEMA,
         }
@@ -1290,13 +1553,25 @@ impl EventPayload {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;
-        if let Self::Ledger(LedgerPayload::Recovered(recovery)) = self
-            && recovery.segment_index == Some(0)
-        {
-            return Err(SanitizationError::new(
-                "invalid_sanitized_payload",
-                "segment_index",
-            ));
+        match self {
+            Self::Ledger(LedgerPayload::Recovered(recovery))
+                if recovery.segment_index == Some(0) =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_sanitized_payload",
+                    "segment_index",
+                ));
+            }
+            Self::Capture(CapturePayload::Completed(result))
+            | Self::Recognition(RecognitionPayload::Completed(result))
+                if result.frame_width == 0 || result.frame_height == 0 =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_sanitized_payload",
+                    "frame_dimensions",
+                ));
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1316,6 +1591,10 @@ impl EventPayload {
                 Self::Ledger(LedgerPayload::Recovered(value)) => Some(value.affected_bytes),
                 _ => None,
             },
+            frame_width: observation_result(self).map(ObservationResultPayload::frame_width),
+            frame_height: observation_result(self).map(ObservationResultPayload::frame_height),
+            recognition_verdict: observation_result(self)
+                .and_then(ObservationResultPayload::recognition_verdict),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -1324,6 +1603,8 @@ impl EventPayload {
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
             Self::Input(_) => PublicEventPayload::Input(payload),
+            Self::Capture(_) => PublicEventPayload::Capture(payload),
+            Self::Recognition(_) => PublicEventPayload::Recognition(payload),
             Self::Client(_) => PublicEventPayload::Client(payload),
             Self::Ledger(_) => PublicEventPayload::Ledger(payload),
         }
@@ -1337,9 +1618,19 @@ impl EventPayload {
             Self::Lease(value) => value,
             Self::Task(value) => value,
             Self::Input(value) => value,
+            Self::Capture(value) => value,
+            Self::Recognition(value) => value,
             Self::Client(value) => value,
             Self::Ledger(value) => value,
         }
+    }
+}
+
+fn observation_result(payload: &EventPayload) -> Option<&ObservationResultPayload> {
+    match payload {
+        EventPayload::Capture(CapturePayload::Completed(result))
+        | EventPayload::Recognition(RecognitionPayload::Completed(result)) => Some(result),
+        _ => None,
     }
 }
 
@@ -1354,6 +1645,12 @@ pub struct PublicPayload {
     segment_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     affected_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recognition_verdict: Option<RecognitionVerdict>,
 }
 
 impl PublicPayload {
@@ -1376,6 +1673,18 @@ impl PublicPayload {
     pub const fn affected_bytes(&self) -> Option<u64> {
         self.affected_bytes
     }
+
+    pub const fn frame_width(&self) -> Option<u32> {
+        self.frame_width
+    }
+
+    pub const fn frame_height(&self) -> Option<u32> {
+        self.frame_height
+    }
+
+    pub const fn recognition_verdict(&self) -> Option<RecognitionVerdict> {
+        self.recognition_verdict
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1392,6 +1701,8 @@ pub enum PublicEventPayload {
     Lease(PublicPayload),
     Task(PublicPayload),
     Input(PublicPayload),
+    Capture(PublicPayload),
+    Recognition(PublicPayload),
     Client(PublicPayload),
     Ledger(PublicPayload),
 }

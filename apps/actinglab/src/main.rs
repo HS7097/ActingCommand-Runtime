@@ -56,6 +56,7 @@ pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
 mod resource_convert;
+mod runtime_slice_cli;
 
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
@@ -1127,7 +1128,7 @@ fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
         "config" | "env" | "lab" | "package" | "operation" | "control" | "scheduler"
-        | "resource" | "run" | "report" | "session" | "ledger" => {
+        | "runtime" | "resource" | "run" | "report" | "session" | "ledger" => {
             rest.get(1).map(|_| 2).unwrap_or(1)
         }
         _ => 1,
@@ -1202,6 +1203,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "scheduler" => run_scheduler(sub, &invocation.global),
         [group, sub] if group == "resource" => {
             run_resource(sub, &invocation.global, &invocation.args)
+        }
+        [group, sub] if group == "runtime" => {
+            runtime_slice_cli::run(sub, &invocation.global, &invocation.args)
         }
         [group, sub] if group == "ledger" => run_ledger(sub, &invocation.global, &invocation.args),
         [group, sub] if group == "session" => {

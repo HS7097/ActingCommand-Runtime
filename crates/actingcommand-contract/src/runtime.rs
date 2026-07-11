@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Typed local Runtime IPC contract shared by resident hosts and disposable clients.
+//!
+//! Read-only capture authority can only be issued by `IdentifierIssuer`:
+//!
+//! ```compile_fail
+//! use actingcommand_contract::{InstanceId, OwnerEpoch, ReadOnlyCaptureCapability};
+//!
+//! fn forge(epoch: OwnerEpoch, instance: InstanceId) {
+//!     let _ = ReadOnlyCaptureCapability::new(epoch, instance);
+//! }
+//! ```
 
 use crate::{
     ActionId, CausationId, CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft,
-    EventQuery, EventSource, HolderId, InstanceId, IssuedCausationId, IssuedCorrelationId,
-    IssuedHolderId, IssuedRequestId, LeaseId, OwnerEpoch, ProjectedEvent, ProjectionProfile,
-    RequestId,
+    EventQuery, EventSource, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer,
+    InstanceId, IssuedCausationId, IssuedCorrelationId, IssuedFrameId, IssuedHolderId,
+    IssuedRecognitionId, IssuedRequestId, LeaseId, OwnerEpoch, ProjectedEvent, ProjectionProfile,
+    RecognitionId, RecognitionVerdict, RequestId,
 };
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -192,6 +203,118 @@ impl LeaseToken {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadonlyObservation {
+    width: u32,
+    height: u32,
+    verdict: RecognitionVerdict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadonlyFrame {
+    width: u32,
+    height: u32,
+}
+
+impl ReadonlyFrame {
+    pub fn new(width: u32, height: u32) -> RuntimeContractResult<Self> {
+        let frame = Self { width, height };
+        frame.validate()?;
+        Ok(frame)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.width == 0 || self.height == 0 {
+            return Err(RuntimeContractError::new("invalid_frame_dimensions"));
+        }
+        Ok(())
+    }
+
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+impl ReadonlyObservation {
+    pub fn new(
+        width: u32,
+        height: u32,
+        verdict: RecognitionVerdict,
+    ) -> RuntimeContractResult<Self> {
+        let observation = Self {
+            width,
+            height,
+            verdict,
+        };
+        observation.validate()?;
+        Ok(observation)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.width == 0 || self.height == 0 {
+            return Err(RuntimeContractError::new("invalid_observation_dimensions"));
+        }
+        Ok(())
+    }
+
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub const fn verdict(&self) -> RecognitionVerdict {
+        self.verdict
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadonlyObservationStage {
+    Capture,
+    Recognition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReadonlyObservationOutcome {
+    Completed {
+        observation: ReadonlyObservation,
+    },
+    Failed {
+        stage: ReadonlyObservationStage,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        captured_frame: Option<ReadonlyFrame>,
+    },
+}
+
+impl ReadonlyObservationOutcome {
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        match self {
+            Self::Completed { observation } => observation.validate(),
+            Self::Failed {
+                stage: ReadonlyObservationStage::Capture,
+                captured_frame: None,
+            } => Ok(()),
+            Self::Failed {
+                stage: ReadonlyObservationStage::Recognition,
+                captured_frame: Some(frame),
+            } => frame.validate(),
+            Self::Failed { .. } => Err(RuntimeContractError::new(
+                "invalid_observation_failure_context",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
@@ -208,6 +331,17 @@ pub enum RuntimeOperation {
     },
     AdmitReadonly {
         instance_alias: String,
+    },
+    BeginReadonlyObservation {
+        instance_alias: String,
+    },
+    FinishReadonlyObservation {
+        capability: ReadOnlyCaptureCapability,
+        outcome: ReadonlyObservationOutcome,
+    },
+    SafeReset {
+        instance_alias: String,
+        holder_id: HolderId,
     },
     Input {
         token: LeaseToken,
@@ -227,11 +361,26 @@ impl RuntimeOperation {
         }
     }
 
+    pub fn safe_reset(instance_alias: impl Into<String>, holder_id: IssuedHolderId) -> Self {
+        Self::SafeReset {
+            instance_alias: instance_alias.into(),
+            holder_id: *holder_id.transport(),
+        }
+    }
+
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Health | Self::QueryEvents { .. } => Ok(()),
-            Self::AcquireLease { instance_alias, .. } | Self::AdmitReadonly { instance_alias } => {
-                validate_instance_alias(instance_alias)
+            Self::AcquireLease { instance_alias, .. }
+            | Self::AdmitReadonly { instance_alias }
+            | Self::BeginReadonlyObservation { instance_alias }
+            | Self::SafeReset { instance_alias, .. } => validate_instance_alias(instance_alias),
+            Self::FinishReadonlyObservation {
+                capability,
+                outcome,
+            } => {
+                capability.validate()?;
+                outcome.validate()
             }
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::Input { token, action } => {
@@ -243,9 +392,10 @@ impl RuntimeOperation {
 
     pub fn instance_alias(&self) -> Option<&str> {
         match self {
-            Self::AcquireLease { instance_alias, .. } | Self::AdmitReadonly { instance_alias } => {
-                Some(instance_alias)
-            }
+            Self::AcquireLease { instance_alias, .. }
+            | Self::AdmitReadonly { instance_alias }
+            | Self::BeginReadonlyObservation { instance_alias }
+            | Self::SafeReset { instance_alias, .. } => Some(instance_alias),
             _ => None,
         }
     }
@@ -268,6 +418,13 @@ impl fmt::Debug for RuntimeOperation {
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::AdmitReadonly { .. } => "RuntimeOperation::AdmitReadonly(<redacted>)",
+            Self::BeginReadonlyObservation { .. } => {
+                "RuntimeOperation::BeginReadonlyObservation(<redacted>)"
+            }
+            Self::FinishReadonlyObservation { .. } => {
+                "RuntimeOperation::FinishReadonlyObservation(<opaque-capability>)"
+            }
+            Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
         })
@@ -424,6 +581,9 @@ pub enum RuntimeErrorCode {
     InstanceMismatch,
     HolderMismatch,
     ConnectionMismatch,
+    ReadonlyCapabilityInvalid,
+    CaptureFailed,
+    RecognitionFailed,
     BackendOpenFailed,
     BackendOperationFailed,
     LedgerFailure,
@@ -465,19 +625,67 @@ impl RuntimeErrorProjection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadOnlyCaptureCapability {
+    owner_epoch: OwnerEpoch,
     instance_id: InstanceId,
+    frame_id: FrameId,
+    recognition_id: RecognitionId,
 }
 
 impl ReadOnlyCaptureCapability {
-    pub const fn new(instance_id: InstanceId) -> Self {
-        Self { instance_id }
+    const fn validate(&self) -> RuntimeContractResult<()> {
+        Ok(())
     }
 
     pub const fn instance_id(&self) -> InstanceId {
         self.instance_id
+    }
+
+    pub const fn recognition_id(&self) -> RecognitionId {
+        self.recognition_id
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IssuedReadOnlyCaptureCapability {
+    transport: ReadOnlyCaptureCapability,
+    frame_id: IssuedFrameId,
+    recognition_id: IssuedRecognitionId,
+}
+
+impl IssuedReadOnlyCaptureCapability {
+    pub const fn transport(&self) -> &ReadOnlyCaptureCapability {
+        &self.transport
+    }
+
+    pub fn event_links(&self, request: &ValidatedRuntimeRequest<'_>) -> EventLinksDraft {
+        request
+            .event_links(Some(self.transport.instance_id), None, None)
+            .with_frame_id(self.frame_id)
+            .with_recognition_id(self.recognition_id)
+    }
+}
+
+impl IdentifierIssuer {
+    pub fn issue_readonly_capture_capability(
+        &self,
+        owner_epoch: OwnerEpoch,
+        instance_id: InstanceId,
+    ) -> Result<IssuedReadOnlyCaptureCapability, IdentifierIssuanceError> {
+        let frame_id = self.mint_frame_id()?;
+        let recognition_id = self.mint_recognition_id()?;
+        Ok(IssuedReadOnlyCaptureCapability {
+            transport: ReadOnlyCaptureCapability {
+                owner_epoch,
+                instance_id,
+                frame_id: *frame_id.transport(),
+                recognition_id: *recognition_id.transport(),
+            },
+            frame_id,
+            recognition_id,
+        })
     }
 }
 
@@ -499,6 +707,15 @@ pub enum RuntimeResult {
     },
     ReadOnlyAdmitted {
         capability: ReadOnlyCaptureCapability,
+    },
+    ReadonlyObservationBegun {
+        capability: ReadOnlyCaptureCapability,
+    },
+    ReadonlyObservationCompleted {
+        observation: ReadonlyObservation,
+    },
+    SafeResetCompleted {
+        action_id: ActionId,
     },
     InputCommitted {
         action_id: ActionId,
@@ -583,6 +800,16 @@ impl RuntimeReceipt {
             &self.result
         {
             token.validate()?;
+        }
+        match &self.result {
+            Some(
+                RuntimeResult::ReadOnlyAdmitted { capability }
+                | RuntimeResult::ReadonlyObservationBegun { capability },
+            ) => capability.validate()?,
+            Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
+                observation.validate()?
+            }
+            _ => {}
         }
         Ok(())
     }

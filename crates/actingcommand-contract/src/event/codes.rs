@@ -58,9 +58,12 @@ macro_rules! closed_code {
 
 closed_code!(OriginModule {
     Actingctl => "actingctl",
+    Actinglab => "actinglab",
     Runtime => "runtime",
     Scheduler => "scheduler",
     DeviceProxy => "device-proxy",
+    Capture => "capture",
+    Recognition => "recognition",
     GlobalLedger => "global-ledger",
     ProcessTest => "process-test",
 });
@@ -72,6 +75,7 @@ closed_code!(EventAction {
     RuntimeStatus => "runtime.status",
     RuntimeQuery => "runtime.query",
     RuntimeReadonlyAdmit => "runtime.readonly_admit",
+    RuntimeReadonlyObserve => "runtime.readonly_observe",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",
@@ -84,6 +88,8 @@ closed_code!(EventAction {
     InputKey => "input.key",
     InputText => "input.text",
     InputReset => "input.reset",
+    CaptureObserve => "capture.observe",
+    RecognitionObserve => "recognition.observe",
     CriticalTest => "critical.test",
     LedgerRecovery => "ledger.recovery",
 });
@@ -98,8 +104,14 @@ closed_code!(DiagnosticCode {
     LeaseFencingDenied => "lease.fencing_denied",
     BackendOpenFailed => "backend.open_failed",
     BackendOperationFailed => "backend.operation_failed",
+    CaptureFailed => "capture.failed",
+    RecognitionFailed => "recognition.failed",
     InputFailed => "input.failed",
     CommandRejected => "command.rejected",
+});
+
+closed_code!(RecognitionVerdict {
+    FrameDecoded => "frame_decoded",
 });
 
 closed_code!(RecoveryReason {

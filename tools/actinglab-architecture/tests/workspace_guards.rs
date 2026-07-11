@@ -128,6 +128,7 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 fn c3a_client_input_authority_stays_behind_runtime_proxy() {
     let root = workspace_root();
     let mut files = Vec::new();
+    collect_rust_files(&root.join("apps/actingctl/src"), &mut files);
     collect_rust_files(&root.join("apps/actinglab/src"), &mut files);
     collect_rust_files(&root.join("crates/runtime-client/src"), &mut files);
     let forbidden = [

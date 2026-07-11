@@ -5,8 +5,10 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_f
 use crate::time::unix_ms_now;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    IssuedCorrelationId, LeaseToken, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    IssuedCorrelationId, LeaseToken, ProjectionProfile, RUNTIME_INFO_FILE, ReadonlyFrame,
+    ReadonlyObservation, ReadonlyObservationOutcome, ReadonlyObservationStage, RecognitionVerdict,
+    RuntimeErrorCode, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult,
 };
 use actingcommand_device::{DeviceError, DeviceResult, InputBackend};
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
@@ -267,6 +269,24 @@ fn event_types_for_request(
     events.iter().map(|event| event.event_type).collect()
 }
 
+fn event_types_for_correlation(
+    client: &mut TestClient,
+    correlation_id: actingcommand_contract::CorrelationId,
+) -> Vec<EventType> {
+    let query = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+        profile: ProjectionProfile::Forensic,
+    });
+    let receipt = client.send(&query);
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected event projection");
+    };
+    events.iter().map(|event| event.event_type).collect()
+}
+
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
         .with_io_timeout(Duration::from_millis(500))
@@ -401,6 +421,512 @@ fn different_instances_acquire_and_execute_independently() {
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     }
     host.close().expect("close host");
+}
+
+#[test]
+fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let begin = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::BeginReadonlyObservation {
+            instance_alias: "ak.cn".to_string(),
+        },
+    );
+    let begun = client.send(&begin);
+    assert_eq!(begun.state(), RuntimeReceiptState::Admitted);
+    let RuntimeResult::ReadonlyObservationBegun { capability } =
+        begun.result().expect("begin result")
+    else {
+        panic!("expected observation capability");
+    };
+    let observation =
+        ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded).expect("observation");
+    let finish = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability: *capability,
+            outcome: ReadonlyObservationOutcome::Completed {
+                observation: observation.clone(),
+            },
+        },
+    );
+    let completed = client.send(&finish);
+    assert_eq!(completed.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        completed.result(),
+        Some(RuntimeResult::ReadonlyObservationCompleted { observation: actual })
+            if actual == &observation
+    ));
+    assert_eq!(
+        event_types_for_correlation(&mut client, correlation_id),
+        vec![
+            EventType::CliCommand,
+            EventType::CommandReceived,
+            EventType::CommandValidated,
+            EventType::SchedulerAdmitted,
+            EventType::CaptureRequested,
+            EventType::RecognitionRequested,
+            EventType::CliCommand,
+            EventType::CommandReceived,
+            EventType::CommandValidated,
+            EventType::CaptureCompleted,
+            EventType::RecognitionCompleted,
+        ]
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn readonly_capability_rejects_wrong_connection_correlation_forgery_and_reuse() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut owner = TestClient::connect(&host);
+    let mut intruder = TestClient::connect(&host);
+    let correlation = owner.ids.mint_correlation_id().expect("correlation");
+    let begin = owner.request_with_correlation(
+        correlation,
+        RuntimeOperation::BeginReadonlyObservation {
+            instance_alias: "ak.cn".to_string(),
+        },
+    );
+    let begun = owner.send(&begin);
+    let RuntimeResult::ReadonlyObservationBegun { capability } =
+        begun.result().expect("begin result")
+    else {
+        panic!("expected capability");
+    };
+    let capability = *capability;
+    let outcome = ReadonlyObservationOutcome::Completed {
+        observation: ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded)
+            .expect("observation"),
+    };
+
+    let cross_connection = intruder.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome: outcome.clone(),
+        },
+    );
+    let denied = intruder.send(&cross_connection);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("connection denial").code,
+        RuntimeErrorCode::ConnectionMismatch
+    );
+
+    let wrong_correlation = owner.request(RuntimeOperation::FinishReadonlyObservation {
+        capability,
+        outcome: outcome.clone(),
+    });
+    let denied = owner.send(&wrong_correlation);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("correlation denial").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+
+    let adapter_finish = RuntimeRequest::new(
+        owner.ids.mint_request_id().expect("adapter request"),
+        correlation,
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome: outcome.clone(),
+        },
+    )
+    .expect("adapter finish request");
+    let denied = owner.send(&adapter_finish);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("source denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    let mut forged_value = serde_json::to_value(capability).expect("capability value");
+    forged_value["owner_epoch"] = serde_json::to_value(
+        owner
+            .ids
+            .mint_owner_epoch()
+            .expect("forged epoch")
+            .transport(),
+    )
+    .expect("epoch value");
+    let forged = serde_json::from_value(forged_value).expect("forged capability transport");
+    let forged_request = owner.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability: forged,
+            outcome: outcome.clone(),
+        },
+    );
+    let denied = owner.send(&forged_request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("forged denial").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+
+    let mut wrong_instance_value = serde_json::to_value(capability).expect("capability value");
+    wrong_instance_value["instance_id"] = serde_json::to_value(
+        owner
+            .ids
+            .mint_instance_id()
+            .expect("wrong instance")
+            .transport(),
+    )
+    .expect("instance value");
+    let wrong_instance =
+        serde_json::from_value(wrong_instance_value).expect("wrong-instance capability transport");
+    let wrong_instance_request = owner.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability: wrong_instance,
+            outcome: outcome.clone(),
+        },
+    );
+    let denied = owner.send(&wrong_instance_request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("instance denial").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+
+    let finish = owner.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome: outcome.clone(),
+        },
+    );
+    assert_eq!(owner.send(&finish).state(), RuntimeReceiptState::Completed);
+    let reuse = owner.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome,
+        },
+    );
+    let denied = owner.send(&reuse);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("reuse denial").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+    drop(intruder);
+    drop(owner);
+    host.close().expect("close host");
+}
+
+#[test]
+fn readonly_failures_are_visible_and_terminal_without_fake_success() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut client = TestClient::connect(&host);
+
+    for (outcome, expected_code, expected_events) in [
+        (
+            ReadonlyObservationOutcome::Failed {
+                stage: ReadonlyObservationStage::Capture,
+                captured_frame: None,
+            },
+            RuntimeErrorCode::CaptureFailed,
+            vec![EventType::CaptureFailed, EventType::RecognitionFailed],
+        ),
+        (
+            ReadonlyObservationOutcome::Failed {
+                stage: ReadonlyObservationStage::Recognition,
+                captured_frame: Some(ReadonlyFrame::new(1280, 720).expect("frame")),
+            },
+            RuntimeErrorCode::RecognitionFailed,
+            vec![EventType::CaptureCompleted, EventType::RecognitionFailed],
+        ),
+    ] {
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let begin = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::BeginReadonlyObservation {
+                instance_alias: "ak.cn".to_string(),
+            },
+        );
+        let begun = client.send(&begin);
+        let RuntimeResult::ReadonlyObservationBegun { capability } =
+            begun.result().expect("begin result")
+        else {
+            panic!("expected capability");
+        };
+        let finish = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::FinishReadonlyObservation {
+                capability: *capability,
+                outcome,
+            },
+        );
+        let failed = client.send(&finish);
+        assert_eq!(failed.state(), RuntimeReceiptState::Failed);
+        assert_eq!(
+            failed.error_projection().expect("failure").code,
+            expected_code
+        );
+        assert!(failed.result().is_none());
+        let events = event_types_for_correlation(&mut client, correlation_id);
+        assert_eq!(&events[events.len() - 2..], expected_events.as_slice());
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::safe_reset("ak.cn", client.ids.mint_holder_id().expect("holder")),
+    );
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::SafeResetCompleted { .. })
+    ));
+    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        event_types_for_correlation(&mut client, correlation_id),
+        vec![
+            EventType::CliCommand,
+            EventType::CommandReceived,
+            EventType::CommandValidated,
+            EventType::LeaseRequested,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseGranted,
+            EventType::SchedulerAdmitted,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseReleased,
+        ]
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+    );
+    let connection = ConnectionId::new(77).expect("connection");
+
+    let first = host
+        .process_request_for_test(&request, connection)
+        .expect("first safe reset");
+    let replayed = host
+        .process_request_for_test(&request, connection)
+        .expect("replayed safe reset");
+
+    assert_eq!(replayed, first);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        event_types_for_request(&host, &ids, connection, request.request_id()).len(),
+        13
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let fixed_instance = instance_id();
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+    );
+    let connection = ConnectionId::new(88).expect("connection");
+    let first = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "ak.cn",
+            fixed_instance,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("first Runtime host");
+    let first_receipt = first
+        .process_request_for_test(&request, connection)
+        .expect("first safe reset");
+    first.close().expect("close first host");
+
+    let second = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "ak.cn",
+            fixed_instance,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("second Runtime host");
+    let replayed = second
+        .process_request_for_test(&request, connection)
+        .expect("durable replay");
+
+    assert_eq!(replayed, first_receipt);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    second.close().expect("close second host");
+}
+
+#[test]
+fn disconnect_invalidates_pending_readonly_capability() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let begin = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::BeginReadonlyObservation {
+            instance_alias: "ak.cn".to_string(),
+        },
+    );
+    let begun = client.send(&begin);
+    let RuntimeResult::ReadonlyObservationBegun { capability } =
+        begun.result().expect("begin result")
+    else {
+        panic!("expected capability");
+    };
+    let capability = *capability;
+    assert_eq!(host.pending_observation_count_for_test().expect("count"), 1);
+    drop(client);
+    wait_until(Duration::from_secs(2), || {
+        host.pending_observation_count_for_test()
+            .is_ok_and(|count| count == 0)
+    });
+
+    let mut replacement = TestClient::connect(&host);
+    let finish = replacement.request_with_correlation(
+        correlation,
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome: ReadonlyObservationOutcome::Completed {
+                observation: ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded)
+                    .expect("observation"),
+            },
+        },
+    );
+    let denied = replacement.send(&finish);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("stale denial").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+    drop(replacement);
+    host.close().expect("close host");
+}
+
+#[test]
+fn owner_restart_rejects_stale_readonly_capability() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let fixed_instance = instance_id();
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let correlation = ids.mint_correlation_id().expect("correlation");
+    let begin = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        correlation,
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::BeginReadonlyObservation {
+            instance_alias: "ak.cn".to_string(),
+        },
+    )
+    .expect("begin request");
+    let connection = ConnectionId::new(91).expect("connection");
+    let first = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "ak.cn",
+            fixed_instance,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("first host");
+    let begun = first
+        .process_request_for_test(&begin, connection)
+        .expect("begin observation");
+    let RuntimeResult::ReadonlyObservationBegun { capability } =
+        begun.result().expect("begin result")
+    else {
+        panic!("expected capability");
+    };
+    let capability = *capability;
+    first.close().expect("close first host");
+
+    let second = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one("ak.cn", fixed_instance, state)),
+    )
+    .expect("second host");
+    let finish = RuntimeRequest::new(
+        ids.mint_request_id().expect("finish request"),
+        correlation,
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::FinishReadonlyObservation {
+            capability,
+            outcome: ReadonlyObservationOutcome::Completed {
+                observation: ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded)
+                    .expect("observation"),
+            },
+        },
+    )
+    .expect("finish request");
+    let denied = second
+        .process_request_for_test(&finish, connection)
+        .expect("stale denial");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("stale projection").code,
+        RuntimeErrorCode::ReadonlyCapabilityInvalid
+    );
+    second.close().expect("close second host");
 }
 
 #[test]

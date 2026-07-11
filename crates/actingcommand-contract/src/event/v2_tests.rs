@@ -129,6 +129,33 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         InputPayloadDraft::committed(action, effect, input()).into(),
         InputPayloadDraft::completed(action, input()).into(),
         InputPayloadDraft::failed(action, diagnostic, effect, input()).into(),
+        CapturePayloadDraft::requested(EventAction::CaptureObserve, input()).into(),
+        CapturePayloadDraft::completed(EventAction::CaptureObserve, effect, 1280, 720, input())
+            .into(),
+        CapturePayloadDraft::failed(
+            EventAction::CaptureObserve,
+            DiagnosticCode::CaptureFailed,
+            effect,
+            input(),
+        )
+        .into(),
+        RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, input()).into(),
+        RecognitionPayloadDraft::completed(
+            EventAction::RecognitionObserve,
+            effect,
+            1280,
+            720,
+            RecognitionVerdict::FrameDecoded,
+            input(),
+        )
+        .into(),
+        RecognitionPayloadDraft::failed(
+            EventAction::RecognitionObserve,
+            DiagnosticCode::RecognitionFailed,
+            effect,
+            input(),
+        )
+        .into(),
         ClientPayloadDraft::ui_action(action, input()).into(),
         ClientPayloadDraft::cli_command(action, input()).into(),
         ClientPayloadDraft::lab_request(action, input()).into(),
@@ -172,7 +199,8 @@ fn producer_cannot_select_redaction_policy() {
 
 #[test]
 fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
-    let cases: [(&str, fn(&str) -> AuditInput); 4] = [
+    type AuditBuilder = fn(&str) -> AuditInput;
+    let cases: [(&str, AuditBuilder); 4] = [
         ("account-secret-c1@example.invalid", |value| {
             AuditInput::new().with_account(value)
         }),
@@ -459,7 +487,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 31);
+    assert_eq!(payloads.len(), 37);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -471,6 +499,43 @@ fn event_v2_round_trips_every_c1_payload_variant() {
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
     }
+}
+
+#[test]
+fn capture_and_recognition_public_projection_preserve_typed_observation() {
+    let capture = sanitize(
+        CapturePayloadDraft::completed(
+            EventAction::CaptureObserve,
+            EffectDisposition::Performed,
+            1280,
+            720,
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let recognition = sanitize(
+        RecognitionPayloadDraft::completed(
+            EventAction::RecognitionObserve,
+            EffectDisposition::Performed,
+            1280,
+            720,
+            RecognitionVerdict::FrameDecoded,
+            AuditInput::new(),
+        )
+        .into(),
+        2,
+    );
+
+    for event in [&capture, &recognition] {
+        let projection = event.payload().public_projection();
+        let json = serde_json::to_value(projection).expect("public projection");
+        assert_eq!(json["payload"]["frame_width"], 1280);
+        assert_eq!(json["payload"]["frame_height"], 720);
+    }
+    let projection = recognition.payload().public_projection();
+    let json = serde_json::to_value(projection).expect("recognition projection");
+    assert_eq!(json["payload"]["recognition_verdict"], "frame_decoded");
 }
 
 #[test]

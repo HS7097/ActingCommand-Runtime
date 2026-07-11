@@ -1,6 +1,6 @@
 # C4 Minimal Vertical Slice Implementation Plan
 
-Status: active.
+Status: complete.
 
 ## Authority and baseline
 

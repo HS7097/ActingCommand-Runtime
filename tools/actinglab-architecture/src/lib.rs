@@ -110,7 +110,10 @@ pub fn inspect_readonly_capture_capability(
                         continue;
                     };
                     if is_public(&method.vis)
-                        && !matches!(method.sig.ident.to_string().as_str(), "new" | "instance_id")
+                        && !matches!(
+                            method.sig.ident.to_string().as_str(),
+                            "instance_id" | "recognition_id"
+                        )
                     {
                         violations.push(format!(
                             "{path}: ReadOnlyCaptureCapability exposes unexpected public method {}",

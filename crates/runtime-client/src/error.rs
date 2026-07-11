@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection};
+use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt};
 use std::error::Error;
 use std::fmt;
 
@@ -12,6 +12,8 @@ pub struct RuntimeClientError {
     code: &'static str,
     operation: &'static str,
     projection: Option<RuntimeErrorProjection>,
+    related: Option<Box<RuntimeClientError>>,
+    committed_receipt: Option<Box<RuntimeReceipt>>,
 }
 
 impl RuntimeClientError {
@@ -44,11 +46,17 @@ impl RuntimeClientError {
         self.projection.as_ref()
     }
 
+    pub fn committed_receipt(&self) -> Option<&RuntimeReceipt> {
+        self.committed_receipt.as_deref()
+    }
+
     pub(crate) const fn fatal(code: &'static str, operation: &'static str) -> Self {
         Self {
             code,
             operation,
             projection: None,
+            related: None,
+            committed_receipt: None,
         }
     }
 
@@ -60,6 +68,37 @@ impl RuntimeClientError {
             code: "runtime_request_rejected",
             operation,
             projection: Some(projection),
+            related: None,
+            committed_receipt: None,
+        }
+    }
+
+    pub(crate) fn combined(
+        code: &'static str,
+        operation: &'static str,
+        related: RuntimeClientError,
+    ) -> Self {
+        Self {
+            code,
+            operation,
+            projection: None,
+            related: Some(Box::new(related)),
+            committed_receipt: None,
+        }
+    }
+
+    pub(crate) fn after_commit(
+        code: &'static str,
+        operation: &'static str,
+        receipt: RuntimeReceipt,
+        related: RuntimeClientError,
+    ) -> Self {
+        Self {
+            code,
+            operation,
+            projection: None,
+            related: Some(Box::new(related)),
+            committed_receipt: Some(Box::new(receipt)),
         }
     }
 }
@@ -75,6 +114,8 @@ impl fmt::Debug for RuntimeClientError {
                 "runtime_code",
                 &self.projection.as_ref().map(|value| value.code),
             )
+            .field("related", &self.related)
+            .field("committed_receipt", &self.committed_receipt.is_some())
             .finish()
     }
 }
@@ -87,11 +128,23 @@ impl fmt::Display for RuntimeClientError {
                 "runtime client error {} during {} with runtime code {:?}",
                 self.code, self.operation, projection.code
             ),
-            None => write!(
-                formatter,
-                "runtime client error {} during {}",
-                self.code, self.operation
-            ),
+            None => match (&self.committed_receipt, &self.related) {
+                (Some(_), Some(related)) => write!(
+                    formatter,
+                    "runtime client error {} during {}; terminal receipt was committed before related failure: {}",
+                    self.code, self.operation, related
+                ),
+                (None, Some(related)) => write!(
+                    formatter,
+                    "runtime client error {} during {}; related failure: {}",
+                    self.code, self.operation, related
+                ),
+                _ => write!(
+                    formatter,
+                    "runtime client error {} during {}",
+                    self.code, self.operation
+                ),
+            },
         }
     }
 }

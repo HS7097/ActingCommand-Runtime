@@ -272,12 +272,144 @@ fn runtime_info_accepts_only_live_loopback_shape() {
 }
 
 #[test]
-fn readonly_capability_serializes_only_instance_authority() {
-    let instance_id = *issuer().mint_instance_id().expect("instance").transport();
-    let capability = ReadOnlyCaptureCapability::new(instance_id);
-    let value = serde_json::to_value(&capability).expect("capability json");
-    assert_eq!(value.as_object().expect("object").len(), 1);
+fn readonly_capability_is_issuer_owned_and_binds_observation_context() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let instance_id = *ids.mint_instance_id().expect("instance").transport();
+    let issued = ids
+        .issue_readonly_capture_capability(owner_epoch, instance_id)
+        .expect("read-only capability");
+    let capability = issued.transport();
+    let value = serde_json::to_value(capability).expect("capability json");
+
+    assert_eq!(value.as_object().expect("object").len(), 4);
     assert_eq!(capability.instance_id(), instance_id);
+    assert_eq!(
+        value["owner_epoch"],
+        serde_json::to_value(owner_epoch).expect("owner epoch JSON")
+    );
+    assert!(
+        value["frame_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("frame_"))
+    );
+    assert!(
+        value["recognition_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("recognition_"))
+    );
+
+    let request = request(RuntimeOperation::BeginReadonlyObservation {
+        instance_alias: "ak.cn".to_string(),
+    });
+    let links = issued.event_links(&request.validate().expect("validated request"));
+    assert_eq!(links.instance_id(), Some(&instance_id));
+    assert_eq!(
+        links
+            .frame_id()
+            .map(|value| serde_json::to_value(value).expect("frame JSON")),
+        Some(value["frame_id"].clone())
+    );
+    assert_eq!(links.recognition_id(), Some(&capability.recognition_id()));
+}
+
+#[test]
+fn readonly_observation_is_closed_typed_and_nonzero() {
+    let observation =
+        ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded).expect("observation");
+    assert_eq!(observation.width(), 1280);
+    assert_eq!(observation.height(), 720);
+    assert_eq!(observation.verdict(), RecognitionVerdict::FrameDecoded);
+
+    assert_eq!(
+        ReadonlyObservation::new(0, 720, RecognitionVerdict::FrameDecoded)
+            .expect_err("zero width")
+            .code(),
+        "invalid_observation_dimensions"
+    );
+
+    let mut value = serde_json::to_value(&observation).expect("observation json");
+    value["smuggled"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ReadonlyObservation>(value).is_err());
+    assert!(serde_json::from_str::<RecognitionVerdict>("\"runtime-value\"").is_err());
+
+    let captured = ReadonlyFrame::new(1280, 720).expect("captured frame");
+    assert_eq!(captured.width(), 1280);
+    assert_eq!(captured.height(), 720);
+    assert_eq!(
+        ReadonlyFrame::new(1280, 0)
+            .expect_err("zero frame height")
+            .code(),
+        "invalid_frame_dimensions"
+    );
+
+    ReadonlyObservationOutcome::Failed {
+        stage: ReadonlyObservationStage::Capture,
+        captured_frame: None,
+    }
+    .validate()
+    .expect("capture failure has no frame");
+    ReadonlyObservationOutcome::Failed {
+        stage: ReadonlyObservationStage::Recognition,
+        captured_frame: Some(captured),
+    }
+    .validate()
+    .expect("recognition failure preserves captured frame");
+    assert_eq!(
+        ReadonlyObservationOutcome::Failed {
+            stage: ReadonlyObservationStage::Capture,
+            captured_frame: Some(captured),
+        }
+        .validate()
+        .expect_err("capture failure cannot claim a frame")
+        .code(),
+        "invalid_observation_failure_context"
+    );
+    assert_eq!(
+        ReadonlyObservationOutcome::Failed {
+            stage: ReadonlyObservationStage::Recognition,
+            captured_frame: None,
+        }
+        .validate()
+        .expect_err("recognition failure requires captured frame")
+        .code(),
+        "invalid_observation_failure_context"
+    );
+}
+
+#[test]
+fn c4_operations_round_trip_without_generic_payloads() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let instance_id = *ids.mint_instance_id().expect("instance").transport();
+    let issued = ids
+        .issue_readonly_capture_capability(owner_epoch, instance_id)
+        .expect("capability");
+    let observation =
+        ReadonlyObservation::new(1280, 720, RecognitionVerdict::FrameDecoded).expect("observation");
+    let operations = [
+        RuntimeOperation::BeginReadonlyObservation {
+            instance_alias: "ak.cn".to_string(),
+        },
+        RuntimeOperation::FinishReadonlyObservation {
+            capability: *issued.transport(),
+            outcome: ReadonlyObservationOutcome::Completed {
+                observation: observation.clone(),
+            },
+        },
+        RuntimeOperation::SafeReset {
+            instance_alias: "ak.cn".to_string(),
+            holder_id: *ids.mint_holder_id().expect("holder").transport(),
+        },
+    ];
+
+    for operation in operations {
+        let request = request(operation);
+        let encoded = serde_json::to_string(&request).expect("request JSON");
+        let decoded = serde_json::from_str::<RuntimeRequest>(&encoded).expect("request round trip");
+        decoded.validate().expect("valid C4 request");
+        assert!(!encoded.contains("serde_json::Value"));
+    }
 }
 
 #[test]
