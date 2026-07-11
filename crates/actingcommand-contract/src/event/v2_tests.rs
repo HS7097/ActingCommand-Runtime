@@ -1,4 +1,7 @@
 use super::*;
+use crate::{
+    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryKind,
+};
 use std::sync::Mutex;
 
 struct SpyFingerprinter {
@@ -106,8 +109,19 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let from_lease = *ids.mint_lease_id().expect("from lease").transport();
     let to_lease = *ids.mint_lease_id().expect("to lease").transport();
     let queued_request = *ids.mint_request_id().expect("queued request").transport();
+    let monitor_observation =
+        MonitorObservation::new(MonitorDiagnosis::Healthy, "home", Some("home".to_string()))
+            .expect("monitor observation");
+    let monitor_decision =
+        MonitorDecision::new(MonitorDiagnosis::Healthy, MonitorDisposition::Healthy, None)
+            .expect("monitor decision");
 
     vec![
+        MonitorPayloadDraft::requested(input()).into(),
+        MonitorPayloadDraft::started(input()).into(),
+        MonitorPayloadDraft::completed(effect, monitor_observation, monitor_decision, input())
+            .into(),
+        MonitorPayloadDraft::failed(diagnostic, effect, input()).into(),
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
@@ -223,6 +237,47 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         ClientPayloadDraft::lab_request(action, input()).into(),
         LedgerPayloadDraft::recovered(RecoveryReason::StaleOwner, Some(1), 64, input()).into(),
     ]
+}
+
+#[test]
+fn monitor_outcome_is_typed_and_public_projection_preserves_the_decision() {
+    let observation = MonitorObservation::new(
+        MonitorDiagnosis::UnexpectedPage,
+        "home",
+        Some("campaign".to_string()),
+    )
+    .expect("observation");
+    let decision = MonitorDecision::new(
+        MonitorDiagnosis::UnexpectedPage,
+        MonitorDisposition::RecoveryRequested,
+        Some(MonitorRecoveryKind::ReturnToExpectedPage),
+    )
+    .expect("decision");
+    let sanitized = sanitize(
+        MonitorPayloadDraft::completed(
+            EffectDisposition::Performed,
+            observation,
+            decision,
+            AuditInput::new(),
+        )
+        .into(),
+        9_000,
+    );
+
+    assert_eq!(sanitized.event_type(), EventType::MonitorProbeCompleted);
+    assert_eq!(sanitized.payload().family(), EventFamily::Monitor);
+    let projected =
+        serde_json::to_value(sanitized.payload().public_projection()).expect("monitor projection");
+    assert_eq!(projected["family"], "monitor");
+    assert_eq!(projected["payload"]["monitor_diagnosis"], "unexpected_page");
+    assert_eq!(
+        projected["payload"]["monitor_disposition"],
+        "recovery_requested"
+    );
+    assert_eq!(
+        projected["payload"]["monitor_recovery"],
+        "return_to_expected_page"
+    );
 }
 
 fn sanitize_with(
@@ -549,7 +604,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 46);
+    assert_eq!(payloads.len(), 50);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

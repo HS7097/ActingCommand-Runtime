@@ -698,7 +698,12 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         if source.contains("ArtifactStoreIssuer") {
-            violations.push(normalized);
+            violations.push(normalized.clone());
+        }
+        if source.contains("VerifiedArtifactReference") && !normalized.contains("/crates/ledger/") {
+            violations.push(format!(
+                "{normalized}: verified artifact recovery authority escaped store/ledger boundary"
+            ));
         }
     }
     assert!(
@@ -706,6 +711,13 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
         "artifact issuer escaped contract/store boundary:\n{}",
         violations.join("\n")
     );
+
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let store = fs::read_to_string(root.join("crates/artifact-store/src/store.rs"))
+        .expect("read artifact store");
+    assert!(host.contains("GlobalLedger::open_with_artifact_verifier"));
+    assert!(store.contains("pub fn verify_recovery_reference"));
 }
 
 #[test]
@@ -828,8 +840,15 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(contract.contains("ConfigureMonitor"));
     assert!(contract.contains("MonitorStatus"));
     assert!(registry.contains("struct MonitorRegistry"));
+    assert!(registry.contains("struct DueMonitorProbe"));
+    assert!(registry.contains("complete_probe"));
+    assert!(registry.contains("fail_probe"));
     assert!(registry.contains("MONITOR_FILE_NAME"));
     assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
+    assert!(host.contains("fn monitor_probe_loop"));
+    assert!(host.contains("fn run_monitor_probe"));
+    assert!(host.contains("MonitorPayloadDraft::completed"));
+    assert!(host.contains("persist_monitor_observation"));
     assert!(client.contains("pub fn configure_monitor"));
     assert!(client.contains("pub fn clear_monitor"));
     assert!(!lab.contains("RuntimeMonitorRegistryStatus"));

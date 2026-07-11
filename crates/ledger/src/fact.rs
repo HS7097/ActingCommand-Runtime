@@ -5,8 +5,8 @@
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
-    EventSeverity, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION, RetentionClass, RunId,
-    SanitizedEventDraft, Sensitivity,
+    EventSeverity, EventType, FrameId, GLOBAL_EVENT_SCHEMA_VERSION, ProjectedArtifactReference,
+    RetentionClass, RunId, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -241,6 +241,24 @@ impl StoredArtifactRecord {
             redaction_state: reference.redaction_state(),
         }
     }
+
+    fn projected(&self) -> ProjectedArtifactReference {
+        ProjectedArtifactReference {
+            artifact_id: self.artifact_id,
+            kind: self.kind,
+            run_id: self.run_id,
+            frame_id: self.frame_id,
+            correlation_id: self.correlation_id,
+            object_key: Some(self.object_key.clone()),
+            media_type: self.media_type,
+            byte_count: self.byte_count,
+            sha256: self.sha256.clone(),
+            created_at_unix_ms: self.created_at_unix_ms,
+            producer: self.producer,
+            retention_class: self.retention_class,
+            redaction_state: self.redaction_state,
+        }
+    }
 }
 
 impl StoredEventRecord {
@@ -273,6 +291,36 @@ impl StoredEventRecord {
                 code: "artifact_store_verification_unavailable",
             });
         }
+        self.into_event_with_artifacts(Vec::new())
+    }
+
+    pub(crate) fn into_event_with_artifact_verifier<F>(
+        self,
+        verifier: &mut F,
+    ) -> Result<PersistedEvent, FactValidationError>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + ?Sized,
+    {
+        let mut artifacts = Vec::with_capacity(self.artifacts.len());
+        for stored in &self.artifacts {
+            let projected = stored.projected();
+            let verified = verifier(&projected).ok_or(FactValidationError {
+                code: "artifact_store_verification_failed",
+            })?;
+            if verified.reference().project(true) != projected {
+                return Err(FactValidationError {
+                    code: "artifact_store_verification_mismatch",
+                });
+            }
+            artifacts.push(verified.into_reference());
+        }
+        self.into_event_with_artifacts(artifacts)
+    }
+
+    fn into_event_with_artifacts(
+        self,
+        artifacts: Vec<ArtifactReference>,
+    ) -> Result<PersistedEvent, FactValidationError> {
         let event = PersistedEvent {
             schema_version: self.schema_version,
             event_id: self.event_id,
@@ -285,7 +333,7 @@ impl StoredEventRecord {
             links: self.links,
             payload_schema: self.payload_schema,
             payload: self.payload,
-            artifacts: Vec::new(),
+            artifacts,
         };
         event.validate()?;
         Ok(event)

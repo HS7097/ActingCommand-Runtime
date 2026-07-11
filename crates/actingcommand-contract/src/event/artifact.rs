@@ -263,6 +263,42 @@ impl ArtifactStoreIssuer {
         reference.validate()?;
         Ok(StoreIssuedArtifact { reference })
     }
+
+    pub fn verify_existing(
+        &self,
+        projected: ProjectedArtifactReference,
+        bytes: &[u8],
+    ) -> Result<VerifiedArtifactReference, SanitizationError> {
+        projected.validate()?;
+        let byte_count = u64::try_from(bytes.len())
+            .map_err(|_| SanitizationError::new("invalid_artifact_byte_count", "byte_count"))?;
+        let object_key = projected
+            .object_key
+            .ok_or_else(|| SanitizationError::new("invalid_artifact_reference", "object_key"))?;
+        if byte_count != projected.byte_count || canonical_sha256(bytes) != projected.sha256 {
+            return Err(SanitizationError::new(
+                "artifact_verification_failed",
+                "artifact",
+            ));
+        }
+        let reference = ArtifactReference {
+            artifact_id: projected.artifact_id,
+            kind: projected.kind,
+            run_id: projected.run_id,
+            frame_id: projected.frame_id,
+            correlation_id: projected.correlation_id,
+            object_key,
+            media_type: projected.media_type,
+            byte_count: projected.byte_count,
+            sha256: projected.sha256,
+            created_at_unix_ms: projected.created_at_unix_ms,
+            producer: projected.producer,
+            retention_class: projected.retention_class,
+            redaction_state: projected.redaction_state,
+        };
+        reference.validate()?;
+        Ok(VerifiedArtifactReference { reference })
+    }
 }
 
 #[cfg(test)]
@@ -314,6 +350,28 @@ impl StoreIssuedArtifact {
 impl fmt::Debug for StoreIssuedArtifact {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("StoreIssuedArtifact(<opaque>)")
+    }
+}
+
+/// Non-serializable authority returned only after the artifact-store verifies persisted bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedArtifactReference {
+    reference: ArtifactReference,
+}
+
+impl VerifiedArtifactReference {
+    pub const fn reference(&self) -> &ArtifactReference {
+        &self.reference
+    }
+
+    pub fn into_reference(self) -> ArtifactReference {
+        self.reference
+    }
+}
+
+impl fmt::Debug for VerifiedArtifactReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VerifiedArtifactReference(<opaque>)")
     }
 }
 

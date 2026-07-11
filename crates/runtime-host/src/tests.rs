@@ -6,8 +6,9 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
+    InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload, ProjectionPayload,
     ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend, RuntimeErrorCode,
     RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
     RuntimeResult,
@@ -38,6 +39,8 @@ struct FakeState {
     capture_count: AtomicUsize,
     capture_close_count: AtomicUsize,
     fail_capture: AtomicBool,
+    monitor_observation_count: AtomicUsize,
+    monitor_mode: AtomicUsize,
 }
 
 struct FakeBackend {
@@ -205,6 +208,47 @@ impl ExecutionBackendProvider for FakeProvider {
             state: Arc::clone(&entry.state),
             closed: false,
         }))
+    }
+
+    fn observe_monitor(
+        &self,
+        instance_alias: &str,
+        expected_page: &str,
+        _frame: &Frame,
+    ) -> actingcommand_execution_kernel::ExecutionKernelResult<MonitorObservation> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .expect("resolved fake monitor instance");
+        entry
+            .state
+            .monitor_observation_count
+            .fetch_add(1, Ordering::AcqRel);
+        let observation = match entry.state.monitor_mode.load(Ordering::Acquire) {
+            0 => MonitorObservation::new(
+                MonitorDiagnosis::Healthy,
+                expected_page,
+                Some(expected_page.to_string()),
+            ),
+            1 => MonitorObservation::new(MonitorDiagnosis::Standby, expected_page, None),
+            2 => MonitorObservation::new(
+                MonitorDiagnosis::UnexpectedPage,
+                expected_page,
+                Some("unexpected".to_string()),
+            ),
+            3 => MonitorObservation::new(
+                MonitorDiagnosis::CaptureStaleSuspected,
+                expected_page,
+                None,
+            ),
+            _ => MonitorObservation::new(
+                MonitorDiagnosis::Healthy,
+                "wrong-policy-page",
+                Some("wrong-policy-page".to_string()),
+            ),
+        }
+        .expect("fake monitor observation must be valid");
+        Ok(observation)
     }
 }
 
@@ -379,6 +423,21 @@ fn event_types_for_correlation(
     events.iter().map(|event| event.event_type).collect()
 }
 
+fn projected_events(
+    client: &mut TestClient,
+    query: EventQuery,
+) -> Vec<actingcommand_contract::ProjectedEvent> {
+    let request = client.request(RuntimeOperation::QueryEvents {
+        query,
+        profile: ProjectionProfile::Forensic,
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected event projection");
+    };
+    events.clone()
+}
+
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
         .with_io_timeout(Duration::from_millis(500))
@@ -398,7 +457,7 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
     .expect("runtime host")
 }
 
-fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
+fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
     let started = Instant::now();
     while !predicate() {
         assert!(started.elapsed() < timeout, "condition timed out");
@@ -612,6 +671,19 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
             EventType::CommandValidated,
         ]
     );
+    wait_until(Duration::from_secs(2), || {
+        state.monitor_observation_count.load(Ordering::Acquire) >= 1
+    });
+    wait_until(Duration::from_secs(2), || {
+        let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
+        matches!(
+            status.result(),
+            Some(RuntimeResult::MonitorStatus { status })
+                if status.instances()[0]
+                    .state()
+                    .is_some_and(|state| state.run_count() >= 1)
+        )
+    });
     let journal = root.path().join(MONITOR_FILE_NAME);
     let first_length = fs::metadata(&journal).expect("monitor metadata").len();
 
@@ -647,6 +719,11 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
         panic!("expected reopened monitor status");
     };
     assert_eq!(status.instances()[0].policy(), Some(&policy));
+    assert!(
+        status.instances()[0]
+            .state()
+            .is_some_and(|state| state.run_count() >= 1)
+    );
 
     let clear = client.request(RuntimeOperation::ClearMonitor {
         instance_alias: "ak.cn".to_string(),
@@ -669,6 +746,250 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     );
     drop(client);
     reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(200, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(client);
+
+    wait_until(Duration::from_secs(2), || {
+        state.monitor_observation_count.load(Ordering::Acquire) >= 1
+    });
+    let mut client = TestClient::connect(&host);
+    wait_until(Duration::from_secs(2), || {
+        let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
+        matches!(
+            status.result(),
+            Some(RuntimeResult::MonitorStatus { status })
+                if status.instances()[0].state().is_some_and(|state| {
+                    state.run_count() >= 1
+                        && state.last_decision().is_some_and(|decision| {
+                            decision.disposition() == MonitorDisposition::Healthy
+                        })
+                })
+        )
+    });
+
+    let completed = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::MonitorProbeCompleted),
+            ..EventQuery::default()
+        },
+    );
+    let event = completed.last().expect("monitor completion event");
+    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::Completed(detail))) =
+        &event.payload
+    else {
+        panic!("expected full monitor completion payload");
+    };
+    assert_eq!(detail.observation().diagnosis(), MonitorDiagnosis::Healthy);
+    assert_eq!(detail.decision().disposition(), MonitorDisposition::Healthy);
+    let run_id = *event.links.run_id().expect("monitor run id");
+    let lifecycle = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        lifecycle
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::MonitorProbeRequested,
+            EventType::MonitorProbeStarted,
+            EventType::CaptureRequested,
+            EventType::RecognitionRequested,
+            EventType::ArtifactCreated,
+            EventType::ArtifactVerified,
+            EventType::CaptureCompleted,
+            EventType::RecognitionCompleted,
+            EventType::MonitorProbeCompleted,
+        ]
+    );
+    let artifact = lifecycle
+        .iter()
+        .find(|event| event.event_type == EventType::ArtifactVerified)
+        .and_then(|event| event.artifacts.first())
+        .expect("verified monitor artifact");
+    assert!(
+        read_projected_verified(root.path(), artifact)
+            .expect("monitor artifact bytes")
+            .starts_with(b"\x89PNG\r\n\x1a\n")
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+    thread::sleep(Duration::from_millis(300));
+    let observations = state.monitor_observation_count.load(Ordering::Acquire);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        state.monitor_observation_count.load(Ordering::Acquire),
+        observations
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn monitor_capture_failure_is_persisted_without_fake_success() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.fail_capture.store(true, Ordering::Release);
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
+        matches!(
+            status.result(),
+            Some(RuntimeResult::MonitorStatus { status })
+                if status.instances()[0].state().is_some_and(|state| {
+                    state.run_count() >= 1
+                        && state.last_error() == Some(RuntimeErrorCode::CaptureFailed)
+                        && state.last_decision().is_none()
+                })
+        )
+    });
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+    assert!(
+        !projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorProbeFailed),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorProbeCompleted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_restart_fails_when_monitor_evidence_is_missing() {
+    let root = TempDir::new().expect("tempdir");
+    let instance_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one("ak.cn", instance_id, Arc::clone(&state))),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        state.monitor_observation_count.load(Ordering::Acquire) >= 1
+    });
+    let verified = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    );
+    let object_key = verified
+        .last()
+        .and_then(|event| event.artifacts.first())
+        .and_then(|artifact| artifact.object_key())
+        .expect("monitor artifact object key")
+        .to_string();
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close host");
+    fs::remove_file(root.path().join(object_key)).expect("remove monitor evidence");
+
+    let restarted = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one("ak.cn", instance_id, state)),
+    );
+    let error = match restarted {
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("missing monitor evidence must fail restart");
+        }
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "ledger_failure");
+    assert!(error.is_fatal());
+}
+
+#[test]
+fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.monitor_mode.store(usize::MAX, Ordering::Release);
+    let host = host_with_state(&root, "ak.cn", state);
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(client);
+    wait_until(Duration::from_secs(2), || {
+        host.fatal_error()
+            .expect("runtime health")
+            .is_some_and(|error| error.code() == "monitor_observation_invalid")
+    });
+    assert_eq!(
+        host.close()
+            .expect_err("invalid observation must fail host")
+            .code(),
+        "monitor_observation_invalid"
+    );
 }
 
 #[test]

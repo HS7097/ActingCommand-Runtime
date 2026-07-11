@@ -2,7 +2,11 @@
 
 //! Typed monitor vocabulary shared by Runtime and its disposable clients.
 
-use crate::{MAX_INSTANCE_ALIAS_BYTES, OwnerEpoch, RuntimeErrorCode};
+use crate::{
+    ArtifactLinksDraft, EventLinksDraft, IdentifierIssuanceError, IdentifierIssuer,
+    IssuedCorrelationId, IssuedFrameId, IssuedInstanceId, IssuedRecognitionId, IssuedRunId,
+    IssuedTaskId, MAX_INSTANCE_ALIAS_BYTES, OwnerEpoch, RuntimeErrorCode,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -325,6 +329,39 @@ impl RuntimeMonitorState {
         Ok(())
     }
 
+    pub fn completed(
+        &self,
+        interval_ms: u64,
+        started_at_unix_ms: u64,
+        completed_at_unix_ms: u64,
+        decision: MonitorDecision,
+    ) -> MonitorDecisionResult<Self> {
+        decision.validate()?;
+        self.advance(
+            interval_ms,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            Some(decision),
+            None,
+        )
+    }
+
+    pub fn failed(
+        &self,
+        interval_ms: u64,
+        started_at_unix_ms: u64,
+        completed_at_unix_ms: u64,
+        error: RuntimeErrorCode,
+    ) -> MonitorDecisionResult<Self> {
+        self.advance(
+            interval_ms,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            None,
+            Some(error),
+        )
+    }
+
     pub const fn next_due_unix_ms(&self) -> u64 {
         self.next_due_unix_ms
     }
@@ -347,6 +384,85 @@ impl RuntimeMonitorState {
 
     pub const fn last_error(&self) -> Option<RuntimeErrorCode> {
         self.last_error
+    }
+
+    fn advance(
+        &self,
+        interval_ms: u64,
+        started_at_unix_ms: u64,
+        completed_at_unix_ms: u64,
+        last_decision: Option<MonitorDecision>,
+        last_error: Option<RuntimeErrorCode>,
+    ) -> MonitorDecisionResult<Self> {
+        self.validate()?;
+        if !(MIN_RUNTIME_MONITOR_INTERVAL_MS..=MAX_RUNTIME_MONITOR_INTERVAL_MS)
+            .contains(&interval_ms)
+            || started_at_unix_ms < self.next_due_unix_ms
+            || completed_at_unix_ms < started_at_unix_ms
+        {
+            return Err(MonitorDecisionError::new("invalid_runtime_monitor_state"));
+        }
+        let state = Self {
+            next_due_unix_ms: completed_at_unix_ms
+                .checked_add(interval_ms)
+                .ok_or_else(|| MonitorDecisionError::new("runtime_monitor_time_overflow"))?,
+            run_count: self
+                .run_count
+                .checked_add(1)
+                .ok_or_else(|| MonitorDecisionError::new("runtime_monitor_count_overflow"))?,
+            last_started_at_unix_ms: Some(started_at_unix_ms),
+            last_completed_at_unix_ms: Some(completed_at_unix_ms),
+            last_decision,
+            last_error,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+}
+
+/// Producer capability for one resident monitor probe and its artifact correlations.
+#[derive(Clone, Copy)]
+pub struct IssuedMonitorProbe {
+    instance_id: IssuedInstanceId,
+    correlation_id: IssuedCorrelationId,
+    task_id: IssuedTaskId,
+    run_id: IssuedRunId,
+    frame_id: IssuedFrameId,
+    recognition_id: IssuedRecognitionId,
+}
+
+impl IssuedMonitorProbe {
+    pub fn event_links(&self) -> EventLinksDraft {
+        EventLinksDraft::default()
+            .with_instance_id(self.instance_id)
+            .with_correlation_id(self.correlation_id)
+            .with_task_id(self.task_id)
+            .with_run_id(self.run_id)
+            .with_frame_id(self.frame_id)
+            .with_recognition_id(self.recognition_id)
+    }
+
+    pub fn artifact_links(&self) -> ArtifactLinksDraft {
+        ArtifactLinksDraft::default()
+            .with_run_id(self.run_id)
+            .with_frame_id(self.frame_id)
+            .with_correlation_id(self.correlation_id)
+    }
+}
+
+impl IdentifierIssuer {
+    pub fn issue_monitor_probe(
+        &self,
+        instance_id: crate::InstanceId,
+    ) -> Result<IssuedMonitorProbe, IdentifierIssuanceError> {
+        Ok(IssuedMonitorProbe {
+            instance_id: IssuedInstanceId::from_verified_transport(instance_id),
+            correlation_id: self.mint_correlation_id()?,
+            task_id: self.mint_task_id()?,
+            run_id: self.mint_run_id()?,
+            frame_id: self.mint_frame_id()?,
+            recognition_id: self.mint_recognition_id()?,
+        })
     }
 }
 
@@ -506,6 +622,36 @@ mod tests {
                 .expect_err("zero interval")
                 .code(),
             "invalid_runtime_monitor_interval"
+        );
+    }
+
+    #[test]
+    fn runtime_monitor_state_advances_only_from_due_completed_runs() {
+        let scheduled = RuntimeMonitorState::scheduled(100).expect("scheduled state");
+        let decision =
+            MonitorDecision::new(MonitorDiagnosis::Healthy, MonitorDisposition::Healthy, None)
+                .expect("decision");
+        let completed = scheduled
+            .completed(1_000, 100, 125, decision.clone())
+            .expect("completed state");
+        assert_eq!(completed.next_due_unix_ms(), 1_125);
+        assert_eq!(completed.run_count(), 1);
+        assert_eq!(completed.last_decision(), Some(&decision));
+        assert_eq!(completed.last_error(), None);
+
+        let failed = completed
+            .failed(1_000, 1_125, 1_130, RuntimeErrorCode::CaptureFailed)
+            .expect("failed state");
+        assert_eq!(failed.run_count(), 2);
+        assert_eq!(failed.last_decision(), None);
+        assert_eq!(failed.last_error(), Some(RuntimeErrorCode::CaptureFailed));
+
+        assert_eq!(
+            scheduled
+                .completed(1_000, 99, 100, decision)
+                .expect_err("early run")
+                .code(),
+            "invalid_runtime_monitor_state"
         );
     }
 }

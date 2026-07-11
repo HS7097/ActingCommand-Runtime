@@ -148,6 +148,7 @@ pub enum Sensitivity {
 #[serde(rename_all = "snake_case")]
 pub enum EventFamily {
     Runtime,
+    Monitor,
     Command,
     Scheduler,
     Lease,
@@ -166,6 +167,14 @@ pub enum EventType {
     RuntimeStarted,
     #[serde(rename = "runtime.takeover")]
     RuntimeTakeover,
+    #[serde(rename = "monitor.probe_requested")]
+    MonitorProbeRequested,
+    #[serde(rename = "monitor.probe_started")]
+    MonitorProbeStarted,
+    #[serde(rename = "monitor.probe_completed")]
+    MonitorProbeCompleted,
+    #[serde(rename = "monitor.probe_failed")]
+    MonitorProbeFailed,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -266,6 +275,10 @@ impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
             Self::RuntimeStarted | Self::RuntimeTakeover => EventFamily::Runtime,
+            Self::MonitorProbeRequested
+            | Self::MonitorProbeStarted
+            | Self::MonitorProbeCompleted
+            | Self::MonitorProbeFailed => EventFamily::Monitor,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }

@@ -5,13 +5,17 @@ use super::{
     EvidenceCompleteness, RecognitionVerdict, RecoveryReason, RetentionClass, SanitizationError,
     Sensitivity, TaskOutcome,
 };
-use crate::{HolderId, LeaseId, LeasePriority, RequestId};
+use crate::{
+    HolderId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
+    MonitorObservation, MonitorRecoveryKind, RequestId,
+};
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
+pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
@@ -254,6 +258,16 @@ pub struct DiagnosticOutcomePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MonitorOutcomePayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    observation: MonitorObservation,
+    decision: MonitorDecision,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulerQueuePayload {
     action: EventAction,
     priority: LeasePriority,
@@ -388,6 +402,7 @@ common_detail_accessors!(ObservationPayload);
 common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
+common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -417,6 +432,20 @@ impl DiagnosticOutcomePayload {
 
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
+    }
+}
+
+impl MonitorOutcomePayload {
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+
+    pub const fn observation(&self) -> &MonitorObservation {
+        &self.observation
+    }
+
+    pub const fn decision(&self) -> &MonitorDecision {
+        &self.decision
     }
 }
 
@@ -658,6 +687,24 @@ impl PayloadDetail for DiagnosticOutcomePayload {
     }
 }
 
+impl PayloadDetail for MonitorOutcomePayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for ObservationResultPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -815,6 +862,14 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    audit: AuditInput,
+}
+
+struct MonitorOutcomeDraft {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    observation: MonitorObservation,
+    decision: MonitorDecision,
     audit: AuditInput,
 }
 
@@ -988,6 +1043,33 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl MonitorOutcomeDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<MonitorOutcomePayload, SanitizationError> {
+        self.observation
+            .validate()
+            .map_err(|_| SanitizationError::new("invalid_monitor_outcome", "observation"))?;
+        self.decision
+            .validate()
+            .map_err(|_| SanitizationError::new("invalid_monitor_outcome", "decision"))?;
+        if self.observation.diagnosis() != self.decision.diagnosis() {
+            return Err(SanitizationError::new(
+                "invalid_monitor_outcome",
+                "diagnosis",
+            ));
+        }
+        Ok(MonitorOutcomePayload {
+            action: self.action,
+            effect_disposition: self.effect_disposition,
+            observation: self.observation,
+            decision: self.decision,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1235,6 +1317,59 @@ impl RuntimePayloadDraft {
     pub fn takeover(action: EventAction, audit: AuditInput) -> Self {
         Self(RuntimeDraftKind::Takeover(ObservationDraft::new(
             action, audit,
+        )))
+    }
+}
+
+enum MonitorDraftKind {
+    Requested(ObservationDraft),
+    Started(ObservationDraft),
+    Completed(MonitorOutcomeDraft),
+    Failed(DiagnosticOutcomeDraft),
+}
+
+pub struct MonitorPayloadDraft(MonitorDraftKind);
+
+impl MonitorPayloadDraft {
+    pub fn requested(audit: AuditInput) -> Self {
+        Self(MonitorDraftKind::Requested(ObservationDraft::new(
+            EventAction::MonitorProbe,
+            audit,
+        )))
+    }
+
+    pub fn started(audit: AuditInput) -> Self {
+        Self(MonitorDraftKind::Started(ObservationDraft::new(
+            EventAction::MonitorProbe,
+            audit,
+        )))
+    }
+
+    pub fn completed(
+        effect_disposition: EffectDisposition,
+        observation: MonitorObservation,
+        decision: MonitorDecision,
+        audit: AuditInput,
+    ) -> Self {
+        Self(MonitorDraftKind::Completed(MonitorOutcomeDraft {
+            action: EventAction::MonitorProbe,
+            effect_disposition,
+            observation,
+            decision,
+            audit,
+        }))
+    }
+
+    pub fn failed(
+        diagnostic_code: DiagnosticCode,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(MonitorDraftKind::Failed(DiagnosticOutcomeDraft::new(
+            EventAction::MonitorProbe,
+            diagnostic_code,
+            effect_disposition,
+            audit,
         )))
     }
 }
@@ -1817,6 +1952,7 @@ impl LedgerPayloadDraft {
 
 pub enum EventPayloadDraft {
     Runtime(RuntimePayloadDraft),
+    Monitor(MonitorPayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
     Lease(LeasePayloadDraft),
@@ -1841,6 +1977,7 @@ macro_rules! payload_draft_from {
 
 payload_draft_from!(CommandPayloadDraft, Command);
 payload_draft_from!(RuntimePayloadDraft, Runtime);
+payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
@@ -1874,6 +2011,20 @@ pub enum CommandPayload {
 pub enum RuntimePayload {
     Started(ObservationPayload),
     Takeover(ObservationPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum MonitorPayload {
+    Requested(ObservationPayload),
+    Started(ObservationPayload),
+    Completed(MonitorOutcomePayload),
+    Failed(DiagnosticOutcomePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2042,6 +2193,12 @@ family_payload!(RuntimePayload, {
     Started => EventType::RuntimeStarted,
     Takeover => EventType::RuntimeTakeover,
 });
+family_payload!(MonitorPayload, {
+    Requested => EventType::MonitorProbeRequested,
+    Started => EventType::MonitorProbeStarted,
+    Completed => EventType::MonitorProbeCompleted,
+    Failed => EventType::MonitorProbeFailed,
+});
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
     Queued => EventType::SchedulerQueued,
@@ -2114,6 +2271,7 @@ family_payload!(LedgerPayload, {
 )]
 pub enum EventPayload {
     Runtime(RuntimePayload),
+    Monitor(MonitorPayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
     Lease(LeasePayload),
@@ -2138,6 +2296,20 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::Takeover(detail) => {
                     RuntimePayload::Takeover(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Monitor(value) => EventPayload::Monitor(match value.0 {
+                MonitorDraftKind::Requested(detail) => {
+                    MonitorPayload::Requested(detail.sanitize(fingerprinter)?)
+                }
+                MonitorDraftKind::Started(detail) => {
+                    MonitorPayload::Started(detail.sanitize(fingerprinter)?)
+                }
+                MonitorDraftKind::Completed(detail) => {
+                    MonitorPayload::Completed(detail.sanitize(fingerprinter)?)
+                }
+                MonitorDraftKind::Failed(detail) => {
+                    MonitorPayload::Failed(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Command(value) => EventPayload::Command(match value.0 {
@@ -2317,6 +2489,7 @@ impl EventPayload {
     pub fn schema(&self) -> &'static str {
         match self {
             Self::Runtime(_) => RUNTIME_PAYLOAD_SCHEMA,
+            Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
@@ -2366,6 +2539,16 @@ impl EventPayload {
                 return Err(SanitizationError::new(
                     "invalid_sanitized_payload",
                     "frame_dimensions",
+                ));
+            }
+            Self::Monitor(MonitorPayload::Completed(value))
+                if value.observation.validate().is_err()
+                    || value.decision.validate().is_err()
+                    || value.observation.diagnosis() != value.decision.diagnosis() =>
+            {
+                return Err(SanitizationError::new(
+                    "invalid_monitor_outcome",
+                    "diagnosis",
                 ));
             }
             Self::Capture(CapturePayload::PressureChanged(value))
@@ -2434,9 +2617,13 @@ impl EventPayload {
             task_outcome: artifact_export(self).map(|value| value.0),
             evidence_completeness: artifact_export(self).map(|value| value.1),
             artifact_count: artifact_export(self).map(|value| value.2),
+            monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
+            monitor_disposition: monitor_outcome(self).map(|value| value.decision.disposition()),
+            monitor_recovery: monitor_outcome(self).and_then(|value| value.decision.recovery()),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
+            Self::Monitor(_) => PublicEventPayload::Monitor(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
@@ -2453,6 +2640,7 @@ impl EventPayload {
     fn family_payload(&self) -> &dyn FamilyPayload {
         match self {
             Self::Runtime(value) => value,
+            Self::Monitor(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
             Self::Lease(value) => value,
@@ -2464,6 +2652,13 @@ impl EventPayload {
             Self::Client(value) => value,
             Self::Ledger(value) => value,
         }
+    }
+}
+
+fn monitor_outcome(payload: &EventPayload) -> Option<&MonitorOutcomePayload> {
+    match payload {
+        EventPayload::Monitor(MonitorPayload::Completed(value)) => Some(value),
+        _ => None,
     }
 }
 
@@ -2551,6 +2746,12 @@ pub struct PublicPayload {
     evidence_completeness: Option<EvidenceCompleteness>,
     #[serde(skip_serializing_if = "Option::is_none")]
     artifact_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monitor_diagnosis: Option<MonitorDiagnosis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monitor_disposition: Option<MonitorDisposition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monitor_recovery: Option<MonitorRecoveryKind>,
 }
 
 impl PublicPayload {
@@ -2629,6 +2830,18 @@ impl PublicPayload {
     pub const fn artifact_count(&self) -> Option<u64> {
         self.artifact_count
     }
+
+    pub const fn monitor_diagnosis(&self) -> Option<MonitorDiagnosis> {
+        self.monitor_diagnosis
+    }
+
+    pub const fn monitor_disposition(&self) -> Option<MonitorDisposition> {
+        self.monitor_disposition
+    }
+
+    pub const fn monitor_recovery(&self) -> Option<MonitorRecoveryKind> {
+        self.monitor_recovery
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2640,6 +2853,7 @@ impl PublicPayload {
 )]
 pub enum PublicEventPayload {
     Runtime(PublicPayload),
+    Monitor(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
     Lease(PublicPayload),

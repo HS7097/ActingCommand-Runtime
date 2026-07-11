@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::InstanceId;
-use actingcommand_device::{CaptureBackend, DeviceResult, InputBackend};
+use crate::{ExecutionKernelError, ExecutionKernelResult};
+use actingcommand_contract::{InstanceId, MonitorObservation};
+use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
 use std::fmt;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -46,4 +47,15 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>>;
+
+    fn observe_monitor(
+        &self,
+        _instance_alias: &str,
+        _expected_page: &str,
+        _frame: &Frame,
+    ) -> ExecutionKernelResult<MonitorObservation> {
+        Err(ExecutionKernelError::fatal(
+            "monitor_observation_unavailable",
+        ))
+    }
 }

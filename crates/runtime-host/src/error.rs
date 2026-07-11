@@ -81,6 +81,9 @@ impl RuntimeHostError {
             "capture_backend_open_failed" | "capture_backend_operation_failed" => {
                 RuntimeErrorCode::CaptureFailed
             }
+            "monitor_observation_unavailable" | "monitor_observation_failed" => {
+                RuntimeErrorCode::RecognitionFailed
+            }
             _ => RuntimeErrorCode::RuntimeFatal,
         };
         Self::with_projection(

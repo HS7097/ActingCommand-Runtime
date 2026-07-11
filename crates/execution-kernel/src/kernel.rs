@@ -4,7 +4,7 @@ use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult, ExecutionSession,
     ResolvedExecutionInstance,
 };
-use actingcommand_contract::{InputAction, InstanceId};
+use actingcommand_contract::{InputAction, InstanceId, MonitorObservation};
 use actingcommand_device::Frame;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -47,6 +47,24 @@ impl ExecutionKernel {
 
     pub fn capture(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
         self.session(instance_alias)?.capture()
+    }
+
+    pub fn observe_monitor(
+        &self,
+        instance_alias: &str,
+        expected_page: &str,
+        frame: &Frame,
+    ) -> ExecutionKernelResult<MonitorObservation> {
+        let observation = self
+            .provider
+            .observe_monitor(instance_alias, expected_page, frame)?;
+        observation
+            .validate()
+            .map_err(|_| ExecutionKernelError::fatal("monitor_observation_invalid"))?;
+        if observation.expected_page() != expected_page {
+            return Err(ExecutionKernelError::fatal("monitor_observation_invalid"));
+        }
+        Ok(observation)
     }
 
     pub fn close(&self) -> ExecutionKernelResult<()> {

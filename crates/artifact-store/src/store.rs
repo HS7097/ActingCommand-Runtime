@@ -5,7 +5,7 @@ use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactLinksDraft, ArtifactPayloadDraft, ArtifactReference,
     ArtifactStoreIssuer, AuditInput, DiagnosticCode, EventActor, EventDraft, EventLinksDraft,
     EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
-    ProjectedArtifactReference, StoreIssuedArtifact,
+    ProjectedArtifactReference, StoreIssuedArtifact, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -232,6 +232,43 @@ impl ArtifactStore {
         fs::read(path).map_err(|error| {
             ArtifactStoreError::fatal("artifact_read_failed", "read_artifact", error.to_string())
         })
+    }
+
+    pub fn verify_recovery_reference(
+        &self,
+        projected: &ProjectedArtifactReference,
+    ) -> ArtifactStoreResult<VerifiedArtifactReference> {
+        projected.validate().map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_reference_invalid",
+                "verify_recovery_artifact",
+                error.to_string(),
+            )
+        })?;
+        let object_key = projected.object_key().ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "artifact_object_key_missing",
+                "verify_recovery_artifact",
+                "persisted artifact reference has no object key",
+            )
+        })?;
+        let path = safe_object_path(&self.root, object_key)?;
+        let bytes = fs::read(path).map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_read_failed",
+                "verify_recovery_artifact",
+                error.to_string(),
+            )
+        })?;
+        self.artifacts
+            .verify_existing(projected.clone(), &bytes)
+            .map_err(|error| {
+                ArtifactStoreError::fatal(
+                    "artifact_verify_failed",
+                    "verify_recovery_artifact",
+                    error.to_string(),
+                )
+            })
     }
 
     pub(crate) fn rollback_stored(
@@ -653,6 +690,31 @@ mod tests {
                 .expect_err("tampered artifact")
                 .code(),
             "artifact_hash_mismatch"
+        );
+    }
+
+    #[test]
+    fn recovery_verifier_promotes_only_matching_persisted_artifacts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let mut sink = RecordingSink::default();
+        let stored = store
+            .put(request(b"durable recovery bytes"), &mut sink)
+            .expect("stored artifact");
+        let projected = stored.reference().project(true);
+
+        let verified = store
+            .verify_recovery_reference(&projected)
+            .expect("verified recovery artifact");
+        assert_eq!(verified.reference(), stored.reference());
+
+        fs::write(stored.path(), b"tampered recovery bytes").expect("tamper artifact");
+        assert_eq!(
+            store
+                .verify_recovery_reference(&projected)
+                .expect_err("tampered recovery artifact")
+                .code(),
+            "artifact_verify_failed"
         );
     }
 

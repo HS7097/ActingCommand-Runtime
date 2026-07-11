@@ -81,6 +81,7 @@ closed_code!(EventAction {
     RuntimeReadonlyObserve => "runtime.readonly_observe",
     MonitorConfigure => "monitor.configure",
     MonitorClear => "monitor.clear",
+    MonitorProbe => "monitor.probe",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",

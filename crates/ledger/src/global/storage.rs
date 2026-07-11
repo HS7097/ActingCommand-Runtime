@@ -9,8 +9,8 @@ use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
     AuditInput, EventActor, EventDraft, EventId, EventLinks, EventLinksDraft, EventOrigin,
     EventPayload, EventSeverity, EventSource, EventType, GLOBAL_EVENT_SCHEMA_VERSION,
-    IdentifierIssuer, LedgerPayload, LedgerPayloadDraft, OriginModule, RecoveryReason,
-    SanitizedEventDraft, Sensitivity,
+    IdentifierIssuer, LedgerPayload, LedgerPayloadDraft, OriginModule, ProjectedArtifactReference,
+    RecoveryReason, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -28,6 +28,9 @@ const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
 const REPAIR_JOURNAL_FILE: &str = "repair-journal.jsonl";
 const LINE_TYPE: &str = "event";
 
+type ArtifactVerifier<'a> =
+    dyn FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + 'a;
+
 pub(super) struct SegmentStore {
     root: PathBuf,
     segments_dir: PathBuf,
@@ -43,6 +46,23 @@ pub(super) struct SegmentStore {
 
 impl SegmentStore {
     pub(super) fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
+        Self::open_inner(config, None)
+    }
+
+    pub(super) fn open_with_artifact_verifier<F>(
+        config: GlobalLedgerConfig,
+        mut verifier: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        Self::open_inner(config, Some(&mut verifier))
+    }
+
+    fn open_inner(
+        config: GlobalLedgerConfig,
+        mut verifier: Option<&mut ArtifactVerifier<'_>>,
+    ) -> GlobalLedgerResult<Self> {
         fs::create_dir_all(&config.root)
             .map_err(|error| GlobalLedgerError::io("ledger_io", "create_ledger_root", &error))?;
         let segments_dir = config.root.join("segments");
@@ -50,7 +70,7 @@ impl SegmentStore {
             .map_err(|error| GlobalLedgerError::io("ledger_io", "create_segments", &error))?;
         let (mut ownership, stale_owner) =
             WriterOwnership::acquire(&config.root, &config.owner_id)?;
-        let recovery = match recover_segments(&config.root, &segments_dir) {
+        let recovery = match recover_segments(&config.root, &segments_dir, &mut verifier) {
             Ok(recovery) => recovery,
             Err(error) => {
                 let _ = ownership.close();
@@ -535,7 +555,11 @@ struct SegmentSnapshot {
     is_last: bool,
 }
 
-fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<RecoveryState> {
+fn recover_segments(
+    root: &Path,
+    segments_dir: &Path,
+    verifier: &mut Option<&mut ArtifactVerifier<'_>>,
+) -> GlobalLedgerResult<RecoveryState> {
     let segments = list_segments(segments_dir)?;
     let mut journal = RepairJournal::load(root)?;
     let snapshots = read_segment_snapshots(&segments)?;
@@ -543,7 +567,13 @@ fn recover_segments(root: &Path, segments_dir: &Path) -> GlobalLedgerResult<Reco
     let mut event_ids = BTreeSet::new();
     let mut events = Vec::new();
     for snapshot in &snapshots {
-        parse_segment_records(snapshot, &mut next_sequence, &mut event_ids, &mut events)?;
+        parse_segment_records(
+            snapshot,
+            &mut next_sequence,
+            &mut event_ids,
+            &mut events,
+            verifier,
+        )?;
     }
 
     let mut pending_repairs = Vec::new();
@@ -626,6 +656,7 @@ fn parse_segment_records(
     next_sequence: &mut u64,
     event_ids: &mut BTreeSet<EventId>,
     events: &mut Vec<PersistedEvent>,
+    verifier: &mut Option<&mut ArtifactVerifier<'_>>,
 ) -> GlobalLedgerResult<()> {
     let complete_records = if snapshot.complete_len == 0 {
         &snapshot.bytes[..0]
@@ -670,10 +701,12 @@ fn parse_segment_records(
                 "validate_line_type",
             ));
         }
-        let event = stored
-            .event
-            .into_event()
-            .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
+        let event = if let Some(verifier) = verifier.as_deref_mut() {
+            stored.event.into_event_with_artifact_verifier(verifier)
+        } else {
+            stored.event.into_event()
+        }
+        .map_err(|error| GlobalLedgerError::fatal(error.code(), "validate_persisted_event"))?;
         if event.sequence() != *next_sequence {
             return Err(GlobalLedgerError::fatal(
                 "sequence_discontinuity",

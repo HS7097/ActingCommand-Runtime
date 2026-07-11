@@ -7,8 +7,9 @@ mod storage;
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventQuery, ProjectedEvent, ProjectionProfile, SanitizationError, SanitizedEventDraft,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
+    EventQuery, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, SanitizationError,
+    SanitizedEventDraft, SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
+    VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -485,6 +486,18 @@ impl fmt::Debug for GlobalLedger {
 impl GlobalLedger {
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_with_store(config, SegmentStore::open)
+    }
+
+    pub fn open_with_artifact_verifier<F>(
+        config: GlobalLedgerConfig,
+        verifier: F,
+    ) -> GlobalLedgerResult<Self>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        Self::open_with_store(config, move |config| {
+            SegmentStore::open_with_artifact_verifier(config, verifier)
+        })
     }
 
     fn open_with_store<F>(config: GlobalLedgerConfig, open_store: F) -> GlobalLedgerResult<Self>

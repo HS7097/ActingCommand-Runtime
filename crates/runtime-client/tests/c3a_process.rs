@@ -4,7 +4,9 @@ use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, InputAction, InstanceId, OwnerEpoch,
     RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo, RuntimeMonitorPolicy,
 };
-use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
+use actingcommand_device::{
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
@@ -91,6 +93,20 @@ struct FileProvider {
     events_path: PathBuf,
 }
 
+struct FileCapture;
+
+impl CaptureBackend for FileCapture {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        Frame::from_pixels(
+            1,
+            1,
+            vec![0, 0, 0, 255],
+            PixelFormat::Rgba8,
+            CaptureBackendName::AdbScreencap,
+        )
+    }
+}
+
 impl ExecutionBackendProvider for FileProvider {
     fn instance_aliases(&self) -> Vec<String> {
         vec!["ak.cn".to_string()]
@@ -113,10 +129,11 @@ impl ExecutionBackendProvider for FileProvider {
         Ok(Box::new(backend))
     }
 
-    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        Err(DeviceError::fatal(
-            "sealed process test does not configure capture",
-        ))
+    fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        if instance_alias != "ak.cn" {
+            return Err(DeviceError::fatal("sealed process-test instance mismatch"));
+        }
+        Ok(Box::new(FileCapture))
     }
 }
 
@@ -307,6 +324,22 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     first_client
         .configure_monitor("ak.cn", monitor_policy.clone())
         .expect("configure persistent monitor");
+    let monitor_wait = Instant::now();
+    let first_monitor_run_count = loop {
+        let status = first_client.monitor_status().expect("first monitor status");
+        let run_count = status.instances()[0]
+            .state()
+            .expect("configured monitor state")
+            .run_count();
+        if run_count > 0 {
+            break run_count;
+        }
+        assert!(
+            monitor_wait.elapsed() < Duration::from_secs(2),
+            "resident monitor did not execute before hard kill"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
     let old_token = first_client.acquire_lease("ak.cn").expect("old lease");
     first_client
         .input(&old_token, InputAction::Reset)
@@ -323,13 +356,17 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let takeover_status = second_client.status().expect("takeover Runtime status");
     assert_eq!(takeover_status.owner_epoch(), second_info.owner_epoch());
     assert!(takeover_status.instances()[0].takeover_cooldown_active());
+    let takeover_monitor = second_client
+        .monitor_status()
+        .expect("takeover monitor status");
     assert_eq!(
-        second_client
-            .monitor_status()
-            .expect("takeover monitor status")
-            .instances()[0]
-            .policy(),
+        takeover_monitor.instances()[0].policy(),
         Some(&monitor_policy)
+    );
+    assert!(
+        takeover_monitor.instances()[0]
+            .state()
+            .is_some_and(|state| state.run_count() >= first_monitor_run_count)
     );
     let cooldown = second_client
         .acquire_lease("ak.cn")

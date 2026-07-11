@@ -2,8 +2,8 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    OwnerEpoch, RuntimeErrorCode, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeMonitorState,
+    MonitorDecision, OwnerEpoch, RuntimeErrorCode, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeMonitorState,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +26,13 @@ struct MonitorRecord {
 pub(crate) struct MonitorUpdate {
     pub(crate) status: RuntimeMonitorInstanceStatus,
     pub(crate) changed: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct DueMonitorProbe {
+    pub(crate) instance_alias: String,
+    pub(crate) policy: RuntimeMonitorPolicy,
+    state: RuntimeMonitorState,
 }
 
 pub(crate) struct MonitorRegistry {
@@ -147,6 +154,79 @@ impl MonitorRegistry {
             .map_err(|_| monitor_error("monitor_status_invalid", "read_monitor_status"))
     }
 
+    pub(crate) fn due(
+        &self,
+        now_unix_ms: u64,
+        maximum: usize,
+    ) -> RuntimeHostResult<Vec<DueMonitorProbe>> {
+        if now_unix_ms == 0 || maximum == 0 {
+            return Err(monitor_error(
+                "monitor_due_query_invalid",
+                "read_due_monitors",
+            ));
+        }
+        self.monitors
+            .values()
+            .filter(|status| {
+                status
+                    .state()
+                    .is_some_and(|state| state.next_due_unix_ms() <= now_unix_ms)
+            })
+            .take(maximum)
+            .map(|status| {
+                Ok(DueMonitorProbe {
+                    instance_alias: status.instance_alias().to_string(),
+                    policy: status
+                        .policy()
+                        .cloned()
+                        .ok_or_else(|| invalid_monitor_record("read_due_monitors"))?,
+                    state: status
+                        .state()
+                        .cloned()
+                        .ok_or_else(|| invalid_monitor_record("read_due_monitors"))?,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn complete_probe(
+        &mut self,
+        probe: &DueMonitorProbe,
+        started_at_unix_ms: u64,
+        completed_at_unix_ms: u64,
+        decision: MonitorDecision,
+    ) -> RuntimeHostResult<bool> {
+        let state = probe
+            .state
+            .completed(
+                probe.policy.interval_ms(),
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                decision,
+            )
+            .map_err(|_| monitor_error("monitor_state_invalid", "complete_monitor_probe"))?;
+        self.finish_probe(probe, state)
+    }
+
+    pub(crate) fn fail_probe(
+        &mut self,
+        probe: &DueMonitorProbe,
+        started_at_unix_ms: u64,
+        completed_at_unix_ms: u64,
+        error: RuntimeErrorCode,
+    ) -> RuntimeHostResult<bool> {
+        let state = probe
+            .state
+            .failed(
+                probe.policy.interval_ms(),
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                error,
+            )
+            .map_err(|_| monitor_error("monitor_state_invalid", "fail_monitor_probe"))?;
+        self.finish_probe(probe, state)
+    }
+
     fn require_allowed(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         if !self.allowed_aliases.contains(instance_alias) {
             return Err(monitor_error(
@@ -155,6 +235,30 @@ impl MonitorRegistry {
             ));
         }
         Ok(())
+    }
+
+    fn finish_probe(
+        &mut self,
+        probe: &DueMonitorProbe,
+        state: RuntimeMonitorState,
+    ) -> RuntimeHostResult<bool> {
+        let Some(current) = self.monitors.get(&probe.instance_alias) else {
+            return Ok(false);
+        };
+        if current.policy() != Some(&probe.policy) || current.state() != Some(&probe.state) {
+            return Ok(false);
+        }
+        let status = RuntimeMonitorInstanceStatus::configured(
+            &probe.instance_alias,
+            probe.policy.clone(),
+            state,
+        )
+        .map_err(|_| monitor_error("monitor_status_invalid", "finish_monitor_probe"))?;
+        let mut monitors = self.monitors.clone();
+        monitors.insert(probe.instance_alias.clone(), status);
+        self.append_snapshot(&monitors)?;
+        self.monitors = monitors;
+        Ok(true)
     }
 
     fn append_snapshot(
@@ -338,5 +442,50 @@ mod tests {
                 .code(),
             "monitor_record_invalid"
         );
+    }
+
+    #[test]
+    fn due_probe_completion_does_not_overwrite_a_newer_policy() {
+        let root = TempDir::new().expect("tempdir");
+        let mut registry =
+            MonitorRegistry::open(root.path(), ["ak.cn".to_string()]).expect("registry");
+        let first = RuntimeMonitorPolicy::new(1_000, "home", false).expect("first policy");
+        registry
+            .configure("ak.cn", first, 10)
+            .expect("configure first policy");
+        assert!(registry.due(9, 1).expect("not due").is_empty());
+        let probe = registry.due(10, 1).expect("due probe").remove(0);
+
+        let replacement =
+            RuntimeMonitorPolicy::new(2_000, "campaign", false).expect("replacement policy");
+        registry
+            .configure("ak.cn", replacement.clone(), 20)
+            .expect("configure replacement");
+        let decision = MonitorDecision::new(
+            actingcommand_contract::MonitorDiagnosis::Healthy,
+            actingcommand_contract::MonitorDisposition::Healthy,
+            None,
+        )
+        .expect("decision");
+        assert!(
+            !registry
+                .complete_probe(&probe, 10, 11, decision.clone())
+                .expect("stale completion")
+        );
+
+        let replacement_probe = registry.due(20, 1).expect("replacement due").remove(0);
+        assert!(
+            registry
+                .complete_probe(&replacement_probe, 20, 25, decision)
+                .expect("replacement completion")
+        );
+        let owner_epoch = *IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_owner_epoch()
+            .expect("epoch")
+            .transport();
+        let status = registry.status(owner_epoch).expect("status");
+        assert_eq!(status.instances()[0].policy(), Some(&replacement));
+        assert_eq!(status.instances()[0].state().expect("state").run_count(), 1);
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
-use crate::monitor::{MonitorRegistry, MonitorUpdate};
+use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::time::unix_ms_now;
 use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
@@ -16,15 +16,15 @@ use actingcommand_contract::{
     EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
     EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
     InputPayloadDraft, InstanceId, IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft,
-    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, OriginModule, RUNTIME_INFO_FILE,
-    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass,
-    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, OriginModule,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
+    RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
-use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel};
+use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
 use actingcommand_ledger::critical::{
     CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
     DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
@@ -48,8 +48,10 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const LEASE_SWEEP_INTERVAL: Duration = Duration::from_millis(50);
+const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ACCEPT_IDLE_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
+const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
@@ -139,6 +141,7 @@ pub struct RuntimeHost {
     shared: Option<Arc<HostShared>>,
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 }
 
 impl RuntimeHost {
@@ -172,13 +175,13 @@ impl RuntimeHost {
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            config.state_root.join("ledger"),
-            ledger_owner,
-        ))
-        .map_err(|_| ledger_error("open_global_ledger"))?;
         let artifacts = ArtifactStore::open(&config.state_root)
             .map_err(|_| artifact_store_error("open_artifact_store"))?;
+        let ledger = GlobalLedger::open_with_artifact_verifier(
+            GlobalLedgerConfig::new(config.state_root.join("ledger"), ledger_owner),
+            |reference| artifacts.verify_recovery_reference(reference).ok(),
+        )
+        .map_err(|_| ledger_error("open_global_ledger"))?;
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -247,7 +250,23 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, None)?;
+                failed_start_cleanup(shared, &info_path, None, None)?;
+                return Err(original);
+            }
+        };
+        let monitor_shared = Arc::clone(&shared);
+        let monitor_thread = match thread::Builder::new()
+            .name("actingcommand-runtime-monitor".to_string())
+            .spawn(move || monitor_probe_loop(monitor_shared))
+        {
+            Ok(thread) => thread,
+            Err(_) => {
+                let original = RuntimeHostError::fatal(
+                    "runtime_monitor_spawn_failed",
+                    "start_runtime_host",
+                    RuntimeErrorCode::RuntimeFatal,
+                );
+                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None)?;
                 return Err(original);
             }
         };
@@ -265,7 +284,7 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, Some(sweep_thread))?;
+                failed_start_cleanup(shared, &info_path, Some(sweep_thread), Some(monitor_thread))?;
                 return Err(original);
             }
         };
@@ -275,6 +294,7 @@ impl RuntimeHost {
             shared: Some(shared),
             accept_thread: Some(accept_thread),
             sweep_thread: Some(sweep_thread),
+            monitor_thread: Some(monitor_thread),
         })
     }
 
@@ -328,6 +348,10 @@ impl RuntimeHost {
         record_failure(
             &mut failure,
             join_runtime_thread(self.sweep_thread.take(), "join_runtime_sweeper"),
+        );
+        record_failure(
+            &mut failure,
+            join_runtime_thread(self.monitor_thread.take(), "join_runtime_monitor"),
         );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -822,6 +846,266 @@ impl HostShared {
             ),
         )?;
         Ok(RequestFailure::poison(error, Some(terminal(&event))))
+    }
+
+    fn run_monitor_probe(&self, probe: &DueMonitorProbe) -> RuntimeHostResult<()> {
+        let started_at_unix_ms = unix_ms_now()?;
+        let instance = self.monitor_instance(&probe.instance_alias)?;
+        let issued = self
+            .events
+            .issuer()
+            .issue_monitor_probe(instance.instance_id())
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "monitor_probe_id_issue_failed",
+                    "run_monitor_probe",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        let links = issued.event_links();
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            MonitorPayloadDraft::requested(AuditInput::new()),
+        )?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            MonitorPayloadDraft::started(AuditInput::new()),
+        )?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Device,
+            OriginModule::Capture,
+            EventActor::Runtime,
+            links.clone(),
+            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
+        )?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Recognition,
+            EventActor::Runtime,
+            links.clone(),
+            RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
+        )?;
+
+        let frame = match self.execution.capture(&probe.instance_alias) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let error = RuntimeHostError::execution("run_monitor_capture", &error);
+                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
+            }
+        };
+        let artifact_png = match frame.png_for_artifact() {
+            Ok(png) => png,
+            Err(_) => {
+                let error = RuntimeHostError::request(
+                    "capture_frame_invalid",
+                    "run_monitor_capture",
+                    RuntimeErrorCode::CaptureFailed,
+                );
+                return self.finish_monitor_failure(probe, &links, started_at_unix_ms, error, true);
+            }
+        };
+        let write_context =
+            ArtifactWriteContext::new(issued.artifact_links(), links.clone(), unix_ms_now()?);
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        self.artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::CaptureFrame,
+                    &artifact_png,
+                    write_context,
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CaptureStore,
+                        RetentionClass::Adaptive,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map_err(|_| artifact_store_error("persist_monitor_observation"))?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Device,
+            OriginModule::Capture,
+            EventActor::Runtime,
+            links.clone(),
+            CapturePayloadDraft::completed(
+                EventAction::CaptureObserve,
+                EffectDisposition::Performed,
+                frame.width,
+                frame.height,
+                AuditInput::new(),
+            ),
+        )?;
+
+        let observation = match self.execution.observe_monitor(
+            &probe.instance_alias,
+            probe.policy.expected_page(),
+            &frame,
+        ) {
+            Ok(observation) => observation,
+            Err(error) => {
+                let error = RuntimeHostError::execution("classify_monitor_observation", &error);
+                return self.finish_monitor_failure(
+                    probe,
+                    &links,
+                    started_at_unix_ms,
+                    error,
+                    false,
+                );
+            }
+        };
+        let decision =
+            decide_monitor(probe.policy.decision_policy(), &observation).map_err(|_| {
+                RuntimeHostError::fatal(
+                    "monitor_decision_invalid",
+                    "run_monitor_probe",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Recognition,
+            EventActor::Runtime,
+            links.clone(),
+            RecognitionPayloadDraft::completed(
+                EventAction::RecognitionObserve,
+                EffectDisposition::Performed,
+                frame.width,
+                frame.height,
+                RecognitionVerdict::FrameDecoded,
+                AuditInput::new(),
+            ),
+        )?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            MonitorPayloadDraft::completed(
+                EffectDisposition::Performed,
+                observation,
+                decision.clone(),
+                AuditInput::new(),
+            ),
+        )?;
+        let completed_at_unix_ms = unix_ms_now()?;
+        lock(&self.monitor_registry, "complete_monitor_probe")?.complete_probe(
+            probe,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            decision,
+        )?;
+        Ok(())
+    }
+
+    fn finish_monitor_failure(
+        &self,
+        probe: &DueMonitorProbe,
+        links: &EventLinksDraft,
+        started_at_unix_ms: u64,
+        error: RuntimeHostError,
+        capture_failed: bool,
+    ) -> RuntimeHostResult<()> {
+        let runtime_code = error.projection().code;
+        let diagnostic = if capture_failed {
+            DiagnosticCode::CaptureFailed
+        } else {
+            DiagnosticCode::RecognitionFailed
+        };
+        if capture_failed {
+            self.append_event_raw(
+                EventSeverity::Error,
+                EventSource::Device,
+                OriginModule::Capture,
+                EventActor::Runtime,
+                links.clone(),
+                CapturePayloadDraft::failed(
+                    EventAction::CaptureObserve,
+                    diagnostic,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                ),
+            )?;
+        }
+        self.append_event_raw(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Recognition,
+            EventActor::Runtime,
+            links.clone(),
+            RecognitionPayloadDraft::failed(
+                EventAction::RecognitionObserve,
+                diagnostic,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        self.append_event_raw(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            MonitorPayloadDraft::failed(
+                diagnostic,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        let completed_at_unix_ms = unix_ms_now()?;
+        lock(&self.monitor_registry, "fail_monitor_probe")?.fail_probe(
+            probe,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            runtime_code,
+        )?;
+        if error.code() == "monitor_observation_invalid" {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn monitor_instance(&self, instance_alias: &str) -> RuntimeHostResult<RegisteredInstance> {
+        let registered = lock(&self.registered_instances, "resolve_monitor_instance")?
+            .values()
+            .find(|instance| instance.instance_alias == instance_alias)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "monitor_instance_unknown",
+                    "resolve_monitor_instance",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        let resolved = self
+            .execution
+            .resolve(instance_alias)
+            .map_err(|error| RuntimeHostError::execution("resolve_monitor_instance", &error))?;
+        if resolved.instance_id() != registered.instance_id
+            || resolved.audit_endpoint() != registered.audit_endpoint
+        {
+            return Err(RuntimeHostError::fatal(
+                "runtime_instance_identity_mismatch",
+                "resolve_monitor_instance",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(registered)
     }
 
     fn acquire_lease(
@@ -3846,6 +4130,25 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     Ok(())
 }
 
+fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
+    while !shared.fatal.is_shutdown_requested() {
+        let now_unix_ms = unix_ms_now()?;
+        let due = lock(&shared.monitor_registry, "read_due_monitors")?
+            .due(now_unix_ms, MAX_MONITOR_PROBES_PER_TICK)?;
+        for probe in due {
+            if shared.fatal.is_shutdown_requested() {
+                return Ok(());
+            }
+            if let Err(error) = shared.run_monitor_probe(&probe) {
+                shared.fatal.mark(error.clone())?;
+                return Err(error);
+            }
+        }
+        thread::sleep(MONITOR_POLL_INTERVAL);
+    }
+    Ok(())
+}
+
 fn append_runtime_start_event(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -4087,9 +4390,14 @@ fn failed_start_cleanup(
     shared: Arc<HostShared>,
     info_path: &Path,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 ) -> RuntimeHostResult<()> {
     shared.fatal.request_shutdown();
     let mut failure = join_runtime_thread(sweep_thread, "join_runtime_sweeper").err();
+    record_failure(
+        &mut failure,
+        join_runtime_thread(monitor_thread, "join_runtime_monitor"),
+    );
     if let Err(error) = fs::remove_file(info_path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
