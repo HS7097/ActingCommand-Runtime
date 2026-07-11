@@ -135,6 +135,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-execution-kernel"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-device",
+]
+
+[[package]]
 name = "actingcommand-lab"
 version = "0.1.0"
 dependencies = [

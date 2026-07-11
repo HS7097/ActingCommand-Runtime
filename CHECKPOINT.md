@@ -1,5 +1,73 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3b Task 2 daemon-owned execution backend shell
+
+### Current status
+
+- Added workspace crate `actingcommand-execution-kernel` as the resident daemon's production
+  input/capture session owner.
+- `ExecutionBackendProvider` resolves instances and opens backends only inside execution worker
+  threads. Backend objects are never returned to clients.
+- `ExecutionKernel` owns one session per instance; input and capture open lazily, remain resident,
+  and are partitioned across instances.
+- Input/capture open or operation failure terminates and latches that session. A later request does
+  not reopen it, reconnect it, select another backend, retry it, or return fake success.
+- Input close, worker panic, channel loss, unknown instance, and same-instance identity mismatch
+  fail explicitly. Errors expose stable codes/severity without leaking provider messages or audit
+  endpoints.
+- Explicit close is idempotent; drop closes an opened input session. Failure cleanup preserves both
+  the primary and secondary stable error codes.
+- Added an architecture guard proving execution-kernel depends only on contract/device, contains no
+  IPC/ledger/scheduler/backend-constructor ownership, and cannot be consumed by production clients.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/execution-kernel/Cargo.toml`
+- `crates/execution-kernel/src/lib.rs`
+- `crates/execution-kernel/src/error.rs`
+- `crates/execution-kernel/src/provider.rs`
+- `crates/execution-kernel/src/session.rs`
+- `crates/execution-kernel/src/kernel.rs`
+- `crates/execution-kernel/src/tests.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c3b-control-plane.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-execution-kernel`
+- `cargo test -p actingcommand-execution-kernel`
+- `cargo test -p actingcommand-execution-kernel -p actingcommand-actinglab-architecture`
+- `cargo clippy -p actingcommand-execution-kernel -p actingcommand-actinglab-architecture --all-targets -- -D warnings`
+- `cargo tree -p actingcommand-execution-kernel --edges normal`
+- `cargo test --workspace`
+- `cargo fmt --all`
+- `git diff --check`
+
+### Test results
+
+- Execution-kernel suite passed: 7 unit tests and doctests.
+- Architecture suite passed: 14 unit tests and 19 workspace guards.
+- Focused all-target Clippy passed with warnings denied.
+- Full workspace tests passed, including all prior Runtime process tests, protocol goldens, C2 sealed
+  evidence, scheduler tests, architecture guards, and doctests.
+- Dependency tree contains only `actingcommand-contract`, `actingcommand-device`, and their external
+  dependencies.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push C3b Task 2 and record it in Issue #36.
+2. Integrate execution-kernel, queued acquisition/poll/cancel, destructive safe-yield transfer, and
+   durable transfer facts into Runtime host in Task 3.
+
 ## 2026-07-11 Issue 35 C3b Task 1 contract and scheduler core
 
 ### Current status

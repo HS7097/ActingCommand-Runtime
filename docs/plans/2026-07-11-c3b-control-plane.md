@@ -85,7 +85,7 @@ Status: complete.
 
 ### Task 2: Daemon-owned execution backend shell
 
-Status: active.
+Status: complete.
 
 - Add `crates/execution-kernel` and its daemon-only provider/session interfaces.
 - Move backend worker/session ownership out of Runtime client reach.
@@ -95,7 +95,7 @@ Status: active.
 
 ### Task 3: Runtime host control-plane integration
 
-Status: pending.
+Status: active.
 
 - Integrate queue/poll/cancel and safe-yield transfer into Runtime host.
 - Record every queue, preemption, transfer, cancellation, expiry, release, and denial in the global

@@ -386,6 +386,73 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
 }
 
 #[test]
+fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let kernel = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-execution-kernel")
+        .expect("execution-kernel package");
+    let dependency_names = kernel["dependencies"]
+        .as_array()
+        .expect("execution-kernel dependencies")
+        .iter()
+        .filter_map(|dependency| dependency["name"].as_str())
+        .collect::<Vec<_>>();
+    for forbidden in [
+        "actingcommand-lab",
+        "actingcommand-runtime-client",
+        "actingcommand-runtime-host",
+        "actingcommand-scheduler",
+        "actingcommand-ledger",
+        "actingcommand-artifact-store",
+    ] {
+        assert!(
+            !dependency_names.contains(&forbidden),
+            "execution-kernel must not depend on {forbidden}"
+        );
+    }
+
+    for package in packages {
+        let name = package["name"].as_str().expect("package name");
+        let reaches_kernel = package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .any(|dependency| dependency["name"] == "actingcommand-execution-kernel");
+        if reaches_kernel {
+            assert!(
+                matches!(name, "actingcommand-runtime-host" | "actingcommand-actingd"),
+                "production client {name} must not construct execution backends"
+            );
+        }
+    }
+
+    let mut sources = Vec::new();
+    collect_rust_files(&root.join("crates/execution-kernel/src"), &mut sources);
+    for path in sources {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for forbidden in [
+            "TcpStream",
+            "GlobalLedger",
+            "SeedScheduler",
+            "RuntimeClient",
+            "create_touch_backend",
+            "create_capture_backend",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden control-plane token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn persisted_event_is_opaque_and_query_matching_is_ledger_owned() {
     let root = workspace_root();
     let fact = fs::read_to_string(root.join("crates/ledger/src/fact.rs"))
