@@ -851,6 +851,44 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
 }
 
 #[test]
+fn resident_monitor_uses_completion_based_cadence_without_a_tight_loop() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: RuntimeMonitorPolicy::new(100, "home", false).expect("monitor policy"),
+    });
+    assert_eq!(
+        client.send(&configure).state(),
+        RuntimeReceiptState::Completed
+    );
+    wait_until(Duration::from_secs(2), || {
+        state.monitor_observation_count.load(Ordering::Acquire) >= 3
+    });
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
+
+    let started = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::MonitorProbeStarted),
+            ..EventQuery::default()
+        },
+    );
+    assert!(started.len() >= 3);
+    for pair in started[..3].windows(2) {
+        assert!(pair[1].timestamp_unix_ms - pair[0].timestamp_unix_ms >= 100);
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -1027,6 +1065,27 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
         )
         .is_empty()
     );
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorRecoveryAdmitted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::MonitorRecoveryDeferred),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");

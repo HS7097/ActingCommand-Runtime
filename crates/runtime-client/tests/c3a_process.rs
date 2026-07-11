@@ -327,11 +327,16 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let monitor_wait = Instant::now();
     let first_monitor_run_count = loop {
         let status = first_client.monitor_status().expect("first monitor status");
-        let run_count = status.instances()[0]
+        let state = status.instances()[0]
             .state()
-            .expect("configured monitor state")
-            .run_count();
+            .expect("configured monitor state");
+        let run_count = state.run_count();
         if run_count > 0 {
+            assert_eq!(state.last_decision(), None);
+            assert_eq!(
+                state.last_error(),
+                Some(RuntimeErrorCode::RecognitionFailed)
+            );
             break run_count;
         }
         assert!(
@@ -367,6 +372,12 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
         takeover_monitor.instances()[0]
             .state()
             .is_some_and(|state| state.run_count() >= first_monitor_run_count)
+    );
+    assert_eq!(
+        takeover_monitor.instances()[0]
+            .state()
+            .and_then(|state| state.last_error()),
+        Some(RuntimeErrorCode::RecognitionFailed)
     );
     let cooldown = second_client
         .acquire_lease("ak.cn")

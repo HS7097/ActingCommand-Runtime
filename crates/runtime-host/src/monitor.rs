@@ -488,4 +488,28 @@ mod tests {
         assert_eq!(status.instances()[0].policy(), Some(&replacement));
         assert_eq!(status.instances()[0].state().expect("state").run_count(), 1);
     }
+
+    #[test]
+    fn due_probe_batches_are_bounded_and_deterministic() {
+        let root = TempDir::new().expect("tempdir");
+        let aliases = (0..20)
+            .map(|index| format!("instance-{index:02}"))
+            .collect::<Vec<_>>();
+        let mut registry = MonitorRegistry::open(root.path(), aliases.clone()).expect("registry");
+        let policy = RuntimeMonitorPolicy::new(100, "home", false).expect("policy");
+        for alias in &aliases {
+            registry
+                .configure(alias, policy.clone(), 10)
+                .expect("configure policy");
+        }
+
+        let due = registry.due(10, 16).expect("bounded due probes");
+        assert_eq!(due.len(), 16);
+        assert_eq!(
+            due.iter()
+                .map(|probe| probe.instance_alias.as_str())
+                .collect::<Vec<_>>(),
+            aliases[..16]
+        );
+    }
 }

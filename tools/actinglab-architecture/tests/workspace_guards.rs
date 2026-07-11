@@ -853,6 +853,27 @@ fn c5_monitor_policy_and_state_are_owned_by_runtime() {
     assert!(host.contains("fn monitor_recovery_admission"));
     assert!(host.contains("MonitorPayloadDraft::recovery_admitted"));
     assert!(host.contains("MonitorPayloadDraft::recovery_deferred"));
+    let coordination_start = host
+        .find("    fn record_monitor_recovery_coordination(")
+        .expect("monitor recovery coordination start");
+    let coordination_end = host[coordination_start..]
+        .find("    fn finish_monitor_failure(")
+        .map(|offset| coordination_start + offset)
+        .expect("monitor recovery coordination end");
+    let coordination = &host[coordination_start..coordination_end];
+    for forbidden in [
+        "RuntimeOperation::",
+        "TaskPayloadDraft",
+        "InputPayloadDraft",
+        "self.execution.input",
+        "self.execution.run",
+        ".put(",
+    ] {
+        assert!(
+            !coordination.contains(forbidden),
+            "monitor recovery coordination must not execute effects through {forbidden}"
+        );
+    }
     assert!(client.contains("pub fn configure_monitor"));
     assert!(client.contains("pub fn clear_monitor"));
     assert!(!lab.contains("RuntimeMonitorRegistryStatus"));
