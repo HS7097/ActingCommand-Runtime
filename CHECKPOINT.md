@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 4b2b environment-decision ownership and pause
+
+### Current status
+
+- Continued from Task 4b2a commit `bdb6efb8f6beb10711b096451ae99057e52fc7da`.
+- Added execution-owned `EnvironmentDetectionEngine` with typed candidate observations containing
+  only environment key, candidate index, and confidence.
+- The engine rejects unknown, missing, duplicate, non-finite, and out-of-range observations; applies
+  candidate and key thresholds; selects the highest-confidence candidate; validates its value; and
+  constructs source, TTL, detector/scope provenance, resource hash, and `EnvDetectionResult`.
+- Reduced Lab environment evaluation to explicit observation adapters: template evaluation supplies
+  normalized scores and scene-size evaluation supplies 0/1 measurements. Lab no longer chooses the
+  winning candidate or constructs environment result facts.
+- Added execution tests proving best-candidate/source/TTL construction, fail-loud observation
+  completeness/uniqueness, and no success for below-threshold or invalid confidence.
+- Extended architecture guards so candidate selection cannot return to Lab.
+- Task 4b is complete. Per Alice's pause notice, no Task 4c work has started.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `crates/execution-kernel/src/environment.rs`
+- `crates/lab/src/env_detection.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-execution-kernel environment --no-fail-fast`
+- `cargo test -p actingcommand-lab env_detection --no-fail-fast`
+- `cargo clippy -p actingcommand-execution-kernel -p actingcommand-lab --all-targets -- -D warnings`
+- `cargo test -p actingcommand-actinglab-architecture --test workspace_guards -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `gh issue view 35 --repo HS7097/ActingCommand-Runtime --json state,updatedAt,author,comments`
+
+### Test results
+
+- Execution-kernel environment suite passed 12 tests; the full crate now has 61 tests.
+- All 20 established Lab environment tests passed through the observation adapter.
+- Architecture passed all 23 workspace guards with candidate-selection ownership assertions.
+- Protocol goldens passed all 30 envelopes across 3 tests.
+- Full `cargo test --workspace` passed.
+- Full all-target/all-feature Clippy passed with warnings denied; formatting and whitespace checks
+  passed.
+- Issue #35 remains open, approved, and unchanged; every instruction/comment is authored by
+  repository owner `HS7097`.
+
+### Current blocker
+
+- Work is intentionally paused at Alice's request, not technically blocked.
+- Production Lab capture construction remains the next ownership gap.
+
+### Next step
+
+1. Commit and push Task 4b2b and record its evidence in Issue #36.
+2. Wait for Alice's next instruction before starting Task 4c.
+
 ## 2026-07-11 Issue 35 C5 Task 4b2a environment-catalog ownership
 
 ### Current status

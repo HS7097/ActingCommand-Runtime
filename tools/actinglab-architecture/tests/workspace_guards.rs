@@ -558,6 +558,7 @@ fn c5_environment_state_is_pure_and_execution_owned() {
     let lab_source = fs::read_to_string(&lab_source_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", lab_source_path.display()));
     assert!(lab_source.contains("EnvironmentStateEngine"));
+    assert!(lab_source.contains("EnvironmentDetectionEngine::decide"));
     assert!(!lab_source.contains("pub struct EnvDetectionResult"));
     assert!(!lab_source.contains("struct EnvDetectionCatalog"));
     assert!(!lab_source.contains("struct EnvDetector"));
@@ -565,6 +566,9 @@ fn c5_environment_state_is_pure_and_execution_owned() {
     assert!(!lab_source.contains("fn validate_detection_key("));
     assert!(!lab_source.contains("fn validate_resolved_value("));
     assert!(!lab_source.contains("fn resolve_env_markers_in_value_inner("));
+    assert!(!lab_source.contains("fn evaluate_detection_key("));
+    assert!(!lab_source.contains("fn evaluate_candidate("));
+    assert!(!lab_source.contains("let mut best"));
 }
 
 #[test]

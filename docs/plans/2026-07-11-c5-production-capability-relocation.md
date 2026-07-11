@@ -153,9 +153,14 @@ Status: active.
   candidate checks, ROI decoding, detector selection, game/server canonicalization, scope checks,
   and device-free step plans. Lab retains only catalog file reads and maps step plans to its
   temporary touch adapter.
-- Subtask 4b2b next: move candidate-score selection and `EnvDetectionResult` construction behind
-  typed observation inputs while keeping template loading and recognition scoring as explicit
-  adapters.
+- Subtask 4b2b complete: Lab emits only typed candidate index/confidence observations from explicit
+  template or scene-size adapters. `EnvironmentDetectionEngine` validates observation completeness,
+  uniqueness, and score range; applies candidate/key thresholds; selects the best candidate; and
+  constructs value/source/TTL plus the final `EnvDetectionResult` without device or filesystem
+  access.
+- Task 4b is complete. Subtask 4c is the next work item and remains paused: replace production Lab
+  capture construction with daemon-owned observation requests while preserving sealed/offline
+  scene adapters.
 - Subtask 4c pending: replace production Lab capture construction with a daemon-owned observation
   request without weakening sealed/offline scene adapters.
 

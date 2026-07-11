@@ -7,18 +7,20 @@ use actingcommand_device::{
     combine_operation_and_close,
 };
 use actingcommand_execution_kernel::{
-    ENV_RESULT_SCHEMA_VERSION, EnvCandidateMatcher, EnvDetectionCandidate, EnvDetectionCatalog,
-    EnvDetectionKey, EnvDetectionStep, EnvDetectionStepPlan, EnvDetector, EnvironmentCatalogError,
-    EnvironmentDetectorState, EnvironmentKeyState, EnvironmentStateEngine, EnvironmentStateError,
-    EnvironmentStateScope, canonical_environment_game, collect_environment_pointer_keys,
-    default_environment_server, parse_environment_catalog_value, validate_environment_value_safety,
+    EnvCandidateMatcher, EnvDetectionCandidate, EnvDetectionCatalog, EnvDetectionKey,
+    EnvDetectionStep, EnvDetectionStepPlan, EnvDetector, EnvironmentCandidateObservation,
+    EnvironmentCatalogError, EnvironmentDecisionError, EnvironmentDetectionContext,
+    EnvironmentDetectionEngine, EnvironmentDetectorState, EnvironmentKeyState,
+    EnvironmentStateEngine, EnvironmentStateError, EnvironmentStateScope,
+    canonical_environment_game, collect_environment_pointer_keys, default_environment_server,
+    parse_environment_catalog_value,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -38,7 +40,11 @@ type EnvResult<T> = LabResult<T>;
 pub use actingcommand_execution_kernel::{EnvDetectedValue, EnvDetectionResult};
 
 #[cfg(test)]
-use actingcommand_execution_kernel::EnvRect;
+use actingcommand_execution_kernel::{
+    ENV_RESULT_SCHEMA_VERSION, EnvRect, validate_environment_value_safety,
+};
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -860,32 +866,30 @@ fn evaluate_detector(
     resource_hash: &str,
     now_ms: u64,
 ) -> EnvResult<EnvDetectionResult> {
-    let mut detections = BTreeMap::new();
+    let mut observations = Vec::new();
     for key in &detector.keys {
-        let value = evaluate_detection_key(detector, key, context, scene, now_ms)?;
-        detections.insert(key.key.clone(), value);
+        observations.extend(observe_detection_key(detector, key, context, scene)?);
     }
-    Ok(EnvDetectionResult {
-        schema_version: ENV_RESULT_SCHEMA_VERSION.to_string(),
-        instance_id: context.instance_id.clone(),
-        game_id: context.game_id.clone(),
-        server_id: context.server_id.clone(),
-        detector_id: detector.id.clone(),
-        detector_version: detector.version().to_string(),
-        resource_pack_id: detector.resource_pack_id(&context.game_id, &context.server_id),
-        resource_pack_hash: resource_hash.to_string(),
-        generated_at_unix_ms: now_ms,
-        detections,
-    })
+    EnvironmentDetectionEngine::decide(
+        detector,
+        &EnvironmentDetectionContext {
+            instance_id: context.instance_id.clone(),
+            game_id: context.game_id.clone(),
+            server_id: context.server_id.clone(),
+            resource_pack_hash: resource_hash.to_string(),
+            generated_at_unix_ms: now_ms,
+        },
+        observations,
+    )
+    .map_err(environment_decision_error)
 }
 
-fn evaluate_detection_key(
+fn observe_detection_key(
     detector: &EnvDetector,
     key: &EnvDetectionKey,
     context: &EnvCommandContext,
     scene: &Scene,
-    now_ms: u64,
-) -> EnvResult<EnvDetectedValue> {
+) -> EnvResult<Vec<EnvironmentCandidateObservation>> {
     let evaluator = if key.candidates.iter().any(|candidate| {
         matches!(
             candidate.matcher(&key.key),
@@ -896,49 +900,26 @@ fn evaluate_detection_key(
     } else {
         None
     };
-    let mut best: Option<(&EnvDetectionCandidate, bool, f32)> = None;
-    for (index, candidate) in key.candidates.iter().enumerate() {
-        let (passed, score) = evaluate_candidate(key, candidate, index, scene, evaluator.as_ref())?;
-        if best
-            .as_ref()
-            .is_none_or(|(_, _, best_score)| score > *best_score)
-        {
-            best = Some((candidate, passed, score));
-        }
-    }
-    let Some((candidate, passed, confidence)) = best else {
-        return Err(LabError::usage(format!(
-            "env key '{}' has no evaluated candidates",
-            key.key
-        )));
-    };
-    if !passed || confidence < key.min_confidence {
-        return Err(LabError::usage(format!(
-            "env detector '{}' key '{}' needs detection: best candidate '{}' scored {:.6}, below threshold {:.6}",
-            detector.id, key.key, candidate.value, confidence, key.min_confidence
-        )));
-    }
-    validate_env_value(candidate, key)?;
-    Ok(EnvDetectedValue {
-        value: candidate.value.clone(),
-        confidence,
-        source: candidate
-            .source
-            .clone()
-            .unwrap_or_else(|| format!("{}@{}", detector.id, candidate.value)),
-        detected_at_unix_ms: now_ms,
-        detector_id: detector.id.clone(),
-        expires_at_unix_ms: key.ttl_ms.map(|ttl| now_ms.saturating_add(ttl)),
-    })
+    key.candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            Ok(EnvironmentCandidateObservation {
+                key: key.key.clone(),
+                candidate_index: index,
+                confidence: observe_candidate(key, candidate, index, scene, evaluator.as_ref())?,
+            })
+        })
+        .collect()
 }
 
-fn evaluate_candidate(
+fn observe_candidate(
     key: &EnvDetectionKey,
     candidate: &EnvDetectionCandidate,
     index: usize,
     scene: &Scene,
     evaluator: Option<&RecognitionEvaluator>,
-) -> EnvResult<(bool, f32)> {
+) -> EnvResult<f32> {
     match candidate
         .matcher(&key.key)
         .map_err(environment_catalog_error)?
@@ -954,21 +935,18 @@ fn evaluate_candidate(
             let evaluation = evaluator
                 .evaluate_target(scene, &target_id)
                 .map_err(|err| LabError::usage(err.to_string()))?;
-            let score = evaluation
+            Ok(evaluation
                 .template
                 .as_ref()
                 .map(|template| template.score)
-                .unwrap_or(0.0);
-            Ok((evaluation.passed, score))
+                .unwrap_or(0.0))
         }
         EnvCandidateMatcher::SceneSize { width, height } => {
-            let confidence = if scene.width() == width && scene.height() == height {
+            Ok(if scene.width() == width && scene.height() == height {
                 1.0
             } else {
                 0.0
-            };
-            let threshold = candidate.threshold.unwrap_or(key.min_confidence);
-            Ok((confidence >= threshold, confidence))
+            })
         }
     }
 }
@@ -1160,6 +1138,7 @@ fn environment_detector_state(detector: &EnvDetector) -> EnvironmentDetectorStat
     }
 }
 
+#[cfg(test)]
 fn validate_env_value(candidate: &EnvDetectionCandidate, key: &EnvDetectionKey) -> EnvResult<()> {
     validate_env_value_safety(&candidate.value, &key.key)?;
     if key
@@ -1175,6 +1154,7 @@ fn validate_env_value(candidate: &EnvDetectionCandidate, key: &EnvDetectionKey) 
     )))
 }
 
+#[cfg(test)]
 fn validate_env_value_safety(value: &str, key: &str) -> EnvResult<()> {
     validate_environment_value_safety(value, key).map_err(environment_state_error)
 }
@@ -1184,6 +1164,10 @@ fn environment_state_error(error: EnvironmentStateError) -> LabError {
 }
 
 fn environment_catalog_error(error: EnvironmentCatalogError) -> LabError {
+    LabError::usage(error.message())
+}
+
+fn environment_decision_error(error: EnvironmentDecisionError) -> LabError {
     LabError::usage(error.message())
 }
 

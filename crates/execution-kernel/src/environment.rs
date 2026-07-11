@@ -769,6 +769,196 @@ fn joined_keys(keys: &BTreeSet<String>) -> String {
     keys.iter().cloned().collect::<Vec<_>>().join(", ")
 }
 
+pub type EnvironmentDecisionResult<T> = Result<T, EnvironmentDecisionError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentDecisionError {
+    message: String,
+}
+
+impl EnvironmentDecisionError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for EnvironmentDecisionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "environment decision error: {}", self.message)
+    }
+}
+
+impl Error for EnvironmentDecisionError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentDetectionContext {
+    pub instance_id: String,
+    pub game_id: String,
+    pub server_id: String,
+    pub resource_pack_hash: String,
+    pub generated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvironmentCandidateObservation {
+    pub key: String,
+    pub candidate_index: usize,
+    pub confidence: f32,
+}
+
+/// Selects environment candidates from complete caller-supplied recognition observations.
+pub struct EnvironmentDetectionEngine;
+
+impl EnvironmentDetectionEngine {
+    pub fn decide(
+        detector: &EnvDetector,
+        context: &EnvironmentDetectionContext,
+        observations: Vec<EnvironmentCandidateObservation>,
+    ) -> EnvironmentDecisionResult<EnvDetectionResult> {
+        detector
+            .validate_scope(&context.game_id, &context.server_id)
+            .map_err(|error| EnvironmentDecisionError::new(error.message()))?;
+        let observation_map = validate_candidate_observations(detector, observations)?;
+        let mut detections = BTreeMap::new();
+        for key in &detector.keys {
+            let value = decide_detection_key(detector, key, context, &observation_map)?;
+            detections.insert(key.key.clone(), value);
+        }
+        Ok(EnvDetectionResult {
+            schema_version: ENV_RESULT_SCHEMA_VERSION.to_string(),
+            instance_id: context.instance_id.clone(),
+            game_id: context.game_id.clone(),
+            server_id: context.server_id.clone(),
+            detector_id: detector.id.clone(),
+            detector_version: detector.version().to_string(),
+            resource_pack_id: detector.resource_pack_id(&context.game_id, &context.server_id),
+            resource_pack_hash: context.resource_pack_hash.clone(),
+            generated_at_unix_ms: context.generated_at_unix_ms,
+            detections,
+        })
+    }
+}
+
+fn validate_candidate_observations(
+    detector: &EnvDetector,
+    observations: Vec<EnvironmentCandidateObservation>,
+) -> EnvironmentDecisionResult<BTreeMap<(String, usize), f32>> {
+    let mut observation_map = BTreeMap::new();
+    for observation in observations {
+        let key = detector
+            .keys
+            .iter()
+            .find(|key| key.key == observation.key)
+            .ok_or_else(|| {
+                EnvironmentDecisionError::new(format!(
+                    "environment observation references unknown key '{}'",
+                    observation.key
+                ))
+            })?;
+        if observation.candidate_index >= key.candidates.len() {
+            return Err(EnvironmentDecisionError::new(format!(
+                "environment observation for key '{}' references missing candidate {}",
+                observation.key, observation.candidate_index
+            )));
+        }
+        if !observation.confidence.is_finite() || !(0.0..=1.0).contains(&observation.confidence) {
+            return Err(EnvironmentDecisionError::new(format!(
+                "environment observation for key '{}' candidate {} has invalid confidence {}",
+                observation.key, observation.candidate_index, observation.confidence
+            )));
+        }
+        let identity = (observation.key.clone(), observation.candidate_index);
+        if observation_map
+            .insert(identity, observation.confidence)
+            .is_some()
+        {
+            return Err(EnvironmentDecisionError::new(format!(
+                "environment observation for key '{}' candidate {} is duplicated",
+                observation.key, observation.candidate_index
+            )));
+        }
+    }
+    for key in &detector.keys {
+        for index in 0..key.candidates.len() {
+            if !observation_map.contains_key(&(key.key.clone(), index)) {
+                return Err(EnvironmentDecisionError::new(format!(
+                    "environment observation for key '{}' candidate {} is missing",
+                    key.key, index
+                )));
+            }
+        }
+    }
+    Ok(observation_map)
+}
+
+fn decide_detection_key(
+    detector: &EnvDetector,
+    key: &EnvDetectionKey,
+    context: &EnvironmentDetectionContext,
+    observations: &BTreeMap<(String, usize), f32>,
+) -> EnvironmentDecisionResult<EnvDetectedValue> {
+    let mut best: Option<(&EnvDetectionCandidate, bool, f32)> = None;
+    for (index, candidate) in key.candidates.iter().enumerate() {
+        let confidence = *observations.get(&(key.key.clone(), index)).ok_or_else(|| {
+            EnvironmentDecisionError::new(format!(
+                "environment observation for key '{}' candidate {} is missing",
+                key.key, index
+            ))
+        })?;
+        let threshold = candidate.threshold.unwrap_or(key.min_confidence);
+        let passed = confidence >= threshold;
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, best_score)| confidence > *best_score)
+        {
+            best = Some((candidate, passed, confidence));
+        }
+    }
+    let Some((candidate, passed, confidence)) = best else {
+        return Err(EnvironmentDecisionError::new(format!(
+            "env key '{}' has no evaluated candidates",
+            key.key
+        )));
+    };
+    if !passed || confidence < key.min_confidence {
+        return Err(EnvironmentDecisionError::new(format!(
+            "env detector '{}' key '{}' needs detection: best candidate '{}' scored {:.6}, below threshold {:.6}",
+            detector.id, key.key, candidate.value, confidence, key.min_confidence
+        )));
+    }
+    validate_environment_value_safety(&candidate.value, &key.key)
+        .map_err(|error| EnvironmentDecisionError::new(error.message()))?;
+    if !key
+        .allowed_values
+        .iter()
+        .any(|allowed| allowed == &candidate.value)
+    {
+        return Err(EnvironmentDecisionError::new(format!(
+            "env key '{}' candidate value '{}' is not in allowed_values",
+            key.key, candidate.value
+        )));
+    }
+    Ok(EnvDetectedValue {
+        value: candidate.value.clone(),
+        confidence,
+        source: candidate
+            .source
+            .clone()
+            .unwrap_or_else(|| format!("{}@{}", detector.id, candidate.value)),
+        detected_at_unix_ms: context.generated_at_unix_ms,
+        detector_id: detector.id.clone(),
+        expires_at_unix_ms: key
+            .ttl_ms
+            .map(|ttl| context.generated_at_unix_ms.saturating_add(ttl)),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentStateScope {
     pub instance_id: String,
@@ -1330,6 +1520,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn candidate_observations_select_best_and_construct_result() {
+        let mut detector = catalog("detect_a", "ui_theme").detections.remove(0);
+        detector.keys[0].allowed_values.push("Other".to_string());
+        detector.keys[0].ttl_ms = Some(50);
+        detector.keys[0].candidates.push(EnvDetectionCandidate {
+            value: "Other".to_string(),
+            template_path: Some("other.png".to_string()),
+            width: None,
+            height: None,
+            region: None,
+            threshold: None,
+            source: Some("fixture-other".to_string()),
+        });
+
+        let result = EnvironmentDetectionEngine::decide(
+            &detector,
+            &decision_context(),
+            vec![observation(0, 0.8), observation(1, 0.9)],
+        )
+        .expect("decision");
+        let value = &result.detections["ui_theme"];
+        assert_eq!(value.value, "Other");
+        assert_eq!(value.source, "fixture-other");
+        assert_eq!(value.expires_at_unix_ms, Some(150));
+        assert_eq!(result.resource_pack_hash, "hash");
+    }
+
+    #[test]
+    fn candidate_decision_requires_complete_unique_observations() {
+        let detector = catalog("detect_a", "ui_theme").detections.remove(0);
+        let missing =
+            EnvironmentDetectionEngine::decide(&detector, &decision_context(), Vec::new())
+                .expect_err("missing observation must fail");
+        assert!(missing.message().contains("candidate 0 is missing"));
+
+        let duplicate = EnvironmentDetectionEngine::decide(
+            &detector,
+            &decision_context(),
+            vec![observation(0, 0.8), observation(0, 0.9)],
+        )
+        .expect_err("duplicate observation must fail");
+        assert!(duplicate.message().contains("candidate 0 is duplicated"));
+    }
+
+    #[test]
+    fn below_threshold_or_invalid_confidence_never_becomes_success() {
+        let detector = catalog("detect_a", "ui_theme").detections.remove(0);
+        let below = EnvironmentDetectionEngine::decide(
+            &detector,
+            &decision_context(),
+            vec![observation(0, 0.6)],
+        )
+        .expect_err("below threshold must fail");
+        assert!(below.message().contains("below threshold 0.700000"));
+
+        let invalid = EnvironmentDetectionEngine::decide(
+            &detector,
+            &decision_context(),
+            vec![observation(0, f32::NAN)],
+        )
+        .expect_err("invalid confidence must fail");
+        assert!(invalid.message().contains("invalid confidence"));
+    }
+
     fn engine() -> EnvironmentStateEngine {
         EnvironmentStateEngine::new(
             EnvironmentStateScope {
@@ -1378,6 +1633,24 @@ mod tests {
                     }],
                 }],
             }],
+        }
+    }
+
+    fn decision_context() -> EnvironmentDetectionContext {
+        EnvironmentDetectionContext {
+            instance_id: "envinst_a".to_string(),
+            game_id: "arknights".to_string(),
+            server_id: "cn".to_string(),
+            resource_pack_hash: "hash".to_string(),
+            generated_at_unix_ms: 100,
+        }
+    }
+
+    fn observation(candidate_index: usize, confidence: f32) -> EnvironmentCandidateObservation {
+        EnvironmentCandidateObservation {
+            key: "ui_theme".to_string(),
+            candidate_index,
+            confidence,
         }
     }
 
