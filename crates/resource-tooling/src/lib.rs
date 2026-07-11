@@ -8,6 +8,7 @@
 #![allow(clippy::result_large_err)]
 
 mod api;
+mod authoring;
 mod environment;
 mod maa_task_graph;
 mod package_build;
@@ -15,6 +16,7 @@ mod package_validate;
 mod resource_convert;
 
 pub use api::*;
+pub use authoring::*;
 pub use environment::AuthoringEnvironmentSnapshot;
 pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
 pub use package_build::{
