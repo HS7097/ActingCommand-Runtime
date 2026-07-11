@@ -188,7 +188,7 @@ Implemented result:
 
 ## Task 7: Closeout
 
-Status: in progress.
+Status: complete.
 
 - Run focused contract/scheduler/host/client/process tests.
 - Run full workspace tests, non-Lab workspace tests, all-features dependency guards, Clippy,
@@ -206,3 +206,14 @@ Fresh review corrections:
 - Runtime-client now separates host fatality from fallback eligibility. Only busy, cooldown, and
   explicitly transient backend failures remain fallback-eligible; fencing, identity, config, and
   protocol failures become fatal at the `InputBackend` boundary and retain their Runtime code.
+
+Closeout result:
+
+- Focused contract, scheduler, host, client, daemon, process, and architecture suites passed.
+- Full workspace and non-Lab workspace tests passed; full-workspace Clippy passed with warnings
+  denied; formatting, dependency, forbidden-source, and diff checks passed.
+- The repeated whole-C3a review found no remaining Critical or Important issue after the replay
+  and severity corrections.
+- C3a is complete on `issue-35-runtime-ledger-v3` and is anchored by
+  `checkpoint/20260711-c3a-runtime-seed`. The branch remains unmerged.
+- The next seed critical-path phase is C4. C2 remains independently ready.

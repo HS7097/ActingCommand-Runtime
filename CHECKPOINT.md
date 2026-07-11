@@ -1,5 +1,68 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a resident Runtime seed closeout
+
+### Current status
+
+- C3a Tasks 1-7 are complete on `issue-35-runtime-ledger-v3`.
+- The typed Runtime contract, scheduler, resident host, client, thin `actingd`, ActingLab Runtime
+  input migration, and adversarial/process acceptance are implemented and verified.
+- Fresh review corrections preserve renew/release idempotency beyond the bounded connection cache
+  and restrict transient fallback eligibility to busy, cooldown, and explicitly transient backend
+  failures. Repeated review found no remaining Critical or Important issue in C3a scope.
+- Stable rollback anchor: `checkpoint/20260711-c3a-runtime-seed`.
+- The branch remains unmerged. C4 is the next seed critical-path phase; C2 remains independently
+  ready.
+- Completed and reviewed directly without subagents.
+
+### Milestone commits
+
+- `4be0eb3` - typed Runtime contract.
+- `f284adb` - scheduler and fencing state machine.
+- `3411e5c` - resident Runtime host and DeviceProxy.
+- `53c2a09` - Runtime client and thin `actingd`.
+- `a7493a7` - ActingLab production input migration to Runtime proxy.
+- `3bd6d03` - adversarial and real-process acceptance.
+- `afb858b` - replay idempotency and error-severity review corrections.
+
+### Files changed
+
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test --workspace`
+- `cargo test --workspace --exclude actingcommand-lab --exclude actingcommand-actinglab`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `cargo tree --workspace --all-features -i actingcommand-lab`
+- Production-source scans for writable client backend constructors, Lab dependencies, reconnect
+  behavior, daemon capture backends, and fallback eligibility.
+- `git diff --check`
+
+### Test results
+
+- Full workspace tests passed.
+- Full workspace tests excluding `actingcommand-lab` and `actingcommand-actinglab` passed.
+- Full-workspace Clippy passed with warnings denied; formatting and diff checks passed.
+- The all-features reverse dependency tree contains only
+  `actingcommand-actinglab -> actingcommand-lab`.
+- Production sources contain no client writable-backend constructor, non-Lab Runtime dependency
+  on Lab, reconnect behavior, or daemon-owned capture backend. Fallback references are limited to
+  explicit eligibility classification and rejection coverage.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Push the closeout commit and stable checkpoint tag, then record final evidence in Issue #36.
+2. Continue with C4 only when directed; do not merge this branch into `main` or the umbrella
+   repository by default.
+
 ## 2026-07-11 Issue 35 C3a Task 7 fresh-review corrections
 
 ### Current status
