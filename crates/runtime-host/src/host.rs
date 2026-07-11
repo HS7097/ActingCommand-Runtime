@@ -2,6 +2,7 @@
 
 use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
+use crate::monitor::{MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::time::unix_ms_now;
 use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
@@ -18,9 +19,9 @@ use actingcommand_contract::{
     LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, OriginModule, RUNTIME_INFO_FILE,
     ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft, TerminalEvent,
-    ValidatedRuntimeRequest,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel};
@@ -162,6 +163,12 @@ impl RuntimeHost {
             takeover_instances,
             takeover,
         } = OwnerGuard::acquire(&config.state_root, events.issuer(), started_at_unix_ms)?;
+        let monitor_registry = MonitorRegistry::open(
+            &config.state_root,
+            registered_instances
+                .values()
+                .map(|instance| instance.instance_alias.clone()),
+        )?;
         let scheduler = SeedScheduler::new(owner_epoch, config.scheduler, takeover_instances, 0)
             .map_err(|error| RuntimeHostError::scheduler("start_runtime_host", &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
@@ -220,6 +227,7 @@ impl RuntimeHost {
             events,
             execution: ExecutionKernel::new(provider),
             registered_instances: Mutex::new(registered_instances),
+            monitor_registry: Mutex::new(monitor_registry),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
             admission_guards: Mutex::new(BTreeMap::new()),
@@ -475,6 +483,7 @@ struct HostShared {
     events: RuntimeEvents,
     execution: ExecutionKernel,
     registered_instances: Mutex<BTreeMap<InstanceId, RegisteredInstance>>,
+    monitor_registry: Mutex<MonitorRegistry>,
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
@@ -565,6 +574,14 @@ impl HostShared {
                 },
             }),
             RuntimeOperation::Status => self.control_plane_status(),
+            RuntimeOperation::MonitorStatus => self.monitor_status(),
+            RuntimeOperation::ConfigureMonitor {
+                instance_alias,
+                policy,
+            } => self.configure_monitor(request, validated, instance_alias, policy.clone()),
+            RuntimeOperation::ClearMonitor { instance_alias } => {
+                self.clear_monitor(request, validated, instance_alias)
+            }
             RuntimeOperation::AcquireLease {
                 instance_alias,
                 holder_id,
@@ -683,6 +700,128 @@ impl HostShared {
             terminal: None,
             result: RuntimeResult::Status { status },
         })
+    }
+
+    fn monitor_status(&self) -> Result<OperationSuccess, RequestFailure> {
+        let status = lock(&self.monitor_registry, "read_monitor_registry")?
+            .status(self.owner_epoch)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::MonitorStatus { status },
+        })
+    }
+
+    fn configure_monitor(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        policy: RuntimeMonitorPolicy,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let resolved = self.resolve_instance(instance_alias)?;
+        let links = self.append_client_command_intent(
+            original,
+            request,
+            resolved.instance_id(),
+            EventAction::MonitorConfigure,
+        )?;
+        let update = match lock(&self.monitor_registry, "configure_monitor_registry")?.configure(
+            instance_alias,
+            policy,
+            unix_ms_now().map_err(RequestFailure::from)?,
+        ) {
+            Ok(update) => update,
+            Err(error) => {
+                return Err(self.monitor_mutation_failure(
+                    links,
+                    EventAction::MonitorConfigure,
+                    error,
+                )?);
+            }
+        };
+        self.monitor_mutation_success(links, EventAction::MonitorConfigure, update, |status| {
+            RuntimeResult::MonitorConfigured { status }
+        })
+    }
+
+    fn clear_monitor(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let resolved = self.resolve_instance(instance_alias)?;
+        let links = self.append_client_command_intent(
+            original,
+            request,
+            resolved.instance_id(),
+            EventAction::MonitorClear,
+        )?;
+        let update =
+            match lock(&self.monitor_registry, "clear_monitor_registry")?.clear(instance_alias) {
+                Ok(update) => update,
+                Err(error) => {
+                    return Err(self.monitor_mutation_failure(
+                        links,
+                        EventAction::MonitorClear,
+                        error,
+                    )?);
+                }
+            };
+        self.monitor_mutation_success(links, EventAction::MonitorClear, update, |status| {
+            RuntimeResult::MonitorCleared { status }
+        })
+    }
+
+    fn monitor_mutation_success(
+        &self,
+        links: EventLinksDraft,
+        action: EventAction,
+        update: MonitorUpdate,
+        result: impl FnOnce(actingcommand_contract::RuntimeMonitorInstanceStatus) -> RuntimeResult,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let effect = if update.changed {
+            EffectDisposition::Performed
+        } else {
+            EffectDisposition::NotPerformed
+        };
+        let event = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(action, effect, AuditInput::new()),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&event)),
+            result: result(update.status),
+        })
+    }
+
+    fn monitor_mutation_failure(
+        &self,
+        links: EventLinksDraft,
+        action: EventAction,
+        error: RuntimeHostError,
+    ) -> Result<RequestFailure, RequestFailure> {
+        let event = self.append_event(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::rejected(
+                action,
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(RequestFailure::poison(error, Some(terminal(&event))))
     }
 
     fn acquire_lease(
@@ -2165,6 +2304,29 @@ impl HostShared {
         instance_id: InstanceId,
         action: EventAction,
     ) -> Result<(), RequestFailure> {
+        let links = self.append_client_command_intent(original, request, instance_id, action)?;
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(
+                action,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn append_client_command_intent(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: InstanceId,
+        action: EventAction,
+    ) -> Result<EventLinksDraft, RequestFailure> {
         self.validate_c4_client_source(original)?;
         let (source, module, payload) = match original.source() {
             EventSource::Cli => (
@@ -2217,19 +2379,7 @@ impl HostShared {
             links.clone(),
             CommandPayloadDraft::received(action, AuditInput::new()),
         )?;
-        self.append_event(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            links,
-            CommandPayloadDraft::validated(
-                action,
-                EffectDisposition::NotPerformed,
-                AuditInput::new(),
-            ),
-        )?;
-        Ok(())
+        Ok(links)
     }
 
     fn validate_c4_client_source(&self, request: &RuntimeRequest) -> Result<(), RequestFailure> {

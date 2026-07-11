@@ -6,7 +6,8 @@ use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
     IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
     ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeControlPlaneStatus,
-    RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
 };
 use serde::Serialize;
 use std::fmt;
@@ -209,6 +210,45 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    pub fn monitor_status(&self) -> RuntimeClientResult<RuntimeMonitorRegistryStatus> {
+        match self.execute("runtime_monitor_status", RuntimeOperation::MonitorStatus)? {
+            RuntimeResult::MonitorStatus { status } => Ok(status),
+            _ => Err(self.unexpected_result("runtime_monitor_status")),
+        }
+    }
+
+    pub fn configure_monitor(
+        &self,
+        instance_alias: &str,
+        policy: RuntimeMonitorPolicy,
+    ) -> RuntimeClientResult<RuntimeMonitorInstanceStatus> {
+        match self.execute(
+            "runtime_monitor_configure",
+            RuntimeOperation::ConfigureMonitor {
+                instance_alias: instance_alias.to_string(),
+                policy,
+            },
+        )? {
+            RuntimeResult::MonitorConfigured { status } => Ok(status),
+            _ => Err(self.unexpected_result("runtime_monitor_configure")),
+        }
+    }
+
+    pub fn clear_monitor(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<RuntimeMonitorInstanceStatus> {
+        match self.execute(
+            "runtime_monitor_clear",
+            RuntimeOperation::ClearMonitor {
+                instance_alias: instance_alias.to_string(),
+            },
+        )? {
+            RuntimeResult::MonitorCleared { status } => Ok(status),
+            _ => Err(self.unexpected_result("runtime_monitor_clear")),
         }
     }
 

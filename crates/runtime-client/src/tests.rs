@@ -4,8 +4,8 @@ use super::*;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
     LeasePriority, LeaseQueuePolicy, ProjectionProfile, RuntimeCaptureBackend, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult,
+    RuntimeErrorProjection, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -223,6 +223,34 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     assert_eq!(status.instances().len(), 1);
     assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
     assert!(!status.instances()[0].lease_active());
+    assert!(
+        client.monitor_status().expect("monitor status").instances()[0]
+            .policy()
+            .is_none()
+    );
+    let monitor_policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy");
+    assert_eq!(
+        client
+            .configure_monitor("ak.cn", monitor_policy.clone())
+            .expect("configure monitor")
+            .policy(),
+        Some(&monitor_policy)
+    );
+    assert_eq!(
+        client
+            .monitor_status()
+            .expect("configured monitor status")
+            .instances()[0]
+            .policy(),
+        Some(&monitor_policy)
+    );
+    assert!(
+        client
+            .clear_monitor("ak.cn")
+            .expect("clear monitor")
+            .policy()
+            .is_none()
+    );
     let token = client.acquire_lease("ak.cn").expect("lease");
     assert!(client.status().expect("leased status").instances()[0].lease_active());
     client

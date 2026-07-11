@@ -2,7 +2,7 @@
 
 use actingcommand_contract::{
     EventActor, EventSource, IdentifierIssuer, InputAction, InstanceId, OwnerEpoch,
-    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo,
+    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo, RuntimeMonitorPolicy,
 };
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
@@ -303,6 +303,10 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     assert_eq!(first_status.instances().len(), 1);
     assert_eq!(first_status.instances()[0].instance_alias(), "ak.cn");
     assert!(!first_status.instances()[0].takeover_cooldown_active());
+    let monitor_policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy");
+    first_client
+        .configure_monitor("ak.cn", monitor_policy.clone())
+        .expect("configure persistent monitor");
     let old_token = first_client.acquire_lease("ak.cn").expect("old lease");
     first_client
         .input(&old_token, InputAction::Reset)
@@ -319,6 +323,14 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let takeover_status = second_client.status().expect("takeover Runtime status");
     assert_eq!(takeover_status.owner_epoch(), second_info.owner_epoch());
     assert!(takeover_status.instances()[0].takeover_cooldown_active());
+    assert_eq!(
+        second_client
+            .monitor_status()
+            .expect("takeover monitor status")
+            .instances()[0]
+            .policy(),
+        Some(&monitor_policy)
+    );
     let cooldown = second_client
         .acquire_lease("ak.cn")
         .expect_err("takeover cooldown must reject acquisition");

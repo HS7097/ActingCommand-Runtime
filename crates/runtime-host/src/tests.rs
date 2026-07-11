@@ -2,13 +2,15 @@
 
 use super::*;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
+use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
     IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend, RuntimeErrorCode,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -567,6 +569,129 @@ fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
         Err(error) => error,
     };
     assert_eq!(error.code(), "duplicate_runtime_instance_id");
+    assert!(error.is_fatal());
+}
+
+#[test]
+fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state() {
+    let root = TempDir::new().expect("tempdir");
+    let configured_id = instance_id();
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "ak.cn",
+            configured_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("policy");
+    let configure = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: policy.clone(),
+    });
+    let configured = client.send(&configure);
+    let RuntimeResult::MonitorConfigured { status } =
+        configured.result().expect("configured result")
+    else {
+        panic!("expected configured monitor");
+    };
+    assert_eq!(status.policy(), Some(&policy));
+    assert_eq!(
+        event_types_for_request(
+            &host,
+            &client.ids,
+            ConnectionId::new(99).expect("query connection"),
+            configure.request_id()
+        ),
+        vec![
+            EventType::CliCommand,
+            EventType::CommandReceived,
+            EventType::CommandValidated,
+        ]
+    );
+    let journal = root.path().join(MONITOR_FILE_NAME);
+    let first_length = fs::metadata(&journal).expect("monitor metadata").len();
+
+    let repeated = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: policy.clone(),
+    });
+    assert!(matches!(
+        client.send(&repeated).result(),
+        Some(RuntimeResult::MonitorConfigured { .. })
+    ));
+    assert_eq!(
+        fs::metadata(&journal).expect("monitor metadata").len(),
+        first_length
+    );
+    let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
+    let RuntimeResult::MonitorStatus { status } = status.result().expect("monitor status") else {
+        panic!("expected monitor status");
+    };
+    assert_eq!(status.instances().len(), 1);
+    assert_eq!(status.instances()[0].policy(), Some(&policy));
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one("ak.cn", configured_id, state)),
+    )
+    .expect("reopened runtime");
+    let mut client = TestClient::connect(&reopened);
+    let status = client.send(&client.request(RuntimeOperation::MonitorStatus));
+    let RuntimeResult::MonitorStatus { status } = status.result().expect("reopened status") else {
+        panic!("expected reopened monitor status");
+    };
+    assert_eq!(status.instances()[0].policy(), Some(&policy));
+
+    let clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert!(matches!(
+        client.send(&clear).result(),
+        Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
+    ));
+    let cleared_length = fs::metadata(&journal).expect("monitor metadata").len();
+    let repeated_clear = client.request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    });
+    assert!(matches!(
+        client.send(&repeated_clear).result(),
+        Some(RuntimeResult::MonitorCleared { status }) if status.policy().is_none()
+    ));
+    assert_eq!(
+        fs::metadata(&journal).expect("monitor metadata").len(),
+        cleared_length
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn corrupt_monitor_registry_fails_runtime_startup() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(root.path().join(MONITOR_FILE_NAME), b"not-json\n")
+        .expect("write monitor corruption");
+    let result = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "ak.cn",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    );
+    let error = match result {
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("corrupt monitor registry must fail startup");
+        }
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "monitor_record_invalid");
     assert!(error.is_fatal());
 }
 

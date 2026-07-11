@@ -18,7 +18,8 @@ use crate::{
     HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId,
     IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId,
     LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    RecognitionId, RecognitionVerdict, RequestId,
+    RecognitionId, RecognitionVerdict, RequestId, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -597,6 +598,14 @@ impl ReadonlyObservationOutcome {
 pub enum RuntimeOperation {
     Health,
     Status,
+    MonitorStatus,
+    ConfigureMonitor {
+        instance_alias: String,
+        policy: RuntimeMonitorPolicy,
+    },
+    ClearMonitor {
+        instance_alias: String,
+    },
     AcquireLease {
         instance_alias: String,
         holder_id: HolderId,
@@ -666,12 +675,23 @@ impl RuntimeOperation {
         match self {
             Self::Health
             | Self::Status
+            | Self::MonitorStatus
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
-            | Self::SafeReset { instance_alias, .. } => validate_instance_alias(instance_alias),
+            | Self::SafeReset { instance_alias, .. }
+            | Self::ClearMonitor { instance_alias } => validate_instance_alias(instance_alias),
+            Self::ConfigureMonitor {
+                instance_alias,
+                policy,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                policy
+                    .validate()
+                    .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_policy"))
+            }
             Self::QueueLease {
                 instance_alias,
                 policy,
@@ -693,7 +713,9 @@ impl RuntimeOperation {
             Self::AcquireLease { instance_alias, .. }
             | Self::QueueLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
-            | Self::SafeReset { instance_alias, .. } => Some(instance_alias),
+            | Self::SafeReset { instance_alias, .. }
+            | Self::ConfigureMonitor { instance_alias, .. }
+            | Self::ClearMonitor { instance_alias } => Some(instance_alias),
             _ => None,
         }
     }
@@ -713,6 +735,9 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::Status => "RuntimeOperation::Status",
+            Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
+            Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
+            Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
             Self::QueueLease { .. } => "RuntimeOperation::QueueLease(<redacted>)",
             Self::PollQueuedLease { .. } => "RuntimeOperation::PollQueuedLease(<opaque-request>)",
@@ -1009,6 +1034,15 @@ pub enum RuntimeResult {
     Status {
         status: RuntimeControlPlaneStatus,
     },
+    MonitorStatus {
+        status: RuntimeMonitorRegistryStatus,
+    },
+    MonitorConfigured {
+        status: RuntimeMonitorInstanceStatus,
+    },
+    MonitorCleared {
+        status: RuntimeMonitorInstanceStatus,
+    },
     LeaseGranted {
         token: LeaseToken,
     },
@@ -1124,6 +1158,15 @@ impl RuntimeReceipt {
         }
         match &self.result {
             Some(RuntimeResult::Status { status }) => status.validate()?,
+            Some(RuntimeResult::MonitorStatus { status }) => status
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
+            Some(
+                RuntimeResult::MonitorConfigured { status }
+                | RuntimeResult::MonitorCleared { status },
+            ) => status
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
             Some(
                 RuntimeResult::LeaseQueued { status } | RuntimeResult::LeasePending { status },
             ) => status.validate()?,

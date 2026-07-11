@@ -5,8 +5,8 @@ use crate::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
     ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, EventDraft, EventLinksDraft,
     EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer, LeasePayloadDraft,
-    OriginModule, RetentionClass, RuntimePayloadDraft, SanitizationError, SecretField,
-    SecretFingerprinter, Sha256Fingerprint,
+    OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft, SanitizationError,
+    SecretField, SecretFingerprinter, Sha256Fingerprint,
 };
 
 struct RejectSecrets;
@@ -356,6 +356,58 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
         .code(),
         "invalid_runtime_instance_status"
     );
+}
+
+#[test]
+fn runtime_monitor_operations_and_receipts_are_strict() {
+    let ids = issuer();
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let policy = RuntimeMonitorPolicy::new(1_000, "home", true).expect("policy");
+    let configure = request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "ak.cn".to_string(),
+        policy: policy.clone(),
+    });
+    configure.validate().expect("configure request");
+    request(RuntimeOperation::ClearMonitor {
+        instance_alias: "ak.cn".to_string(),
+    })
+    .validate()
+    .expect("clear request");
+
+    let configured = RuntimeMonitorInstanceStatus::configured(
+        "ak.cn",
+        policy,
+        RuntimeMonitorState::scheduled(10).expect("state"),
+    )
+    .expect("configured status");
+    RuntimeReceipt::success(
+        &configure,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::MonitorConfigured {
+            status: configured.clone(),
+        },
+    )
+    .expect("configured receipt")
+    .validate()
+    .expect("configured receipt validation");
+
+    let status_request = request(RuntimeOperation::MonitorStatus);
+    let registry =
+        RuntimeMonitorRegistryStatus::new(owner_epoch, vec![configured]).expect("monitor registry");
+    RuntimeReceipt::success(
+        &status_request,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::MonitorStatus { status: registry },
+    )
+    .expect("monitor status receipt")
+    .validate()
+    .expect("monitor status receipt validation");
+
+    let mut encoded = serde_json::to_value(configure.operation()).expect("operation JSON");
+    encoded["policy"]["unknown"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<RuntimeOperation>(encoded).is_err());
 }
 
 #[test]

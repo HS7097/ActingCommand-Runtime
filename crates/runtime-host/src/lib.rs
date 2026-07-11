@@ -11,6 +11,7 @@ mod error;
 mod events;
 mod host;
 mod ipc;
+mod monitor;
 mod owner;
 mod provider;
 mod time;

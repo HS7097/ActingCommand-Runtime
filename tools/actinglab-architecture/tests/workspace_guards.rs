@@ -813,6 +813,29 @@ fn c5_monitor_decisions_are_pure_and_execution_owned() {
 }
 
 #[test]
+fn c5_monitor_policy_and_state_are_owned_by_runtime() {
+    let root = workspace_root();
+    let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+        .expect("read Runtime contract");
+    let registry = fs::read_to_string(root.join("crates/runtime-host/src/monitor.rs"))
+        .expect("read Runtime monitor registry");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let client = fs::read_to_string(root.join("crates/runtime-client/src/client.rs"))
+        .expect("read Runtime client");
+    let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
+
+    assert!(contract.contains("ConfigureMonitor"));
+    assert!(contract.contains("MonitorStatus"));
+    assert!(registry.contains("struct MonitorRegistry"));
+    assert!(registry.contains("MONITOR_FILE_NAME"));
+    assert!(host.contains("monitor_registry: Mutex<MonitorRegistry>"));
+    assert!(client.contains("pub fn configure_monitor"));
+    assert!(client.contains("pub fn clear_monitor"));
+    assert!(!lab.contains("RuntimeMonitorRegistryStatus"));
+}
+
+#[test]
 fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
     let root = workspace_root();
     let metadata: serde_json::Value =
