@@ -4,12 +4,8 @@ use crate::readonly::{
     detect_current_page, load_evaluator, load_page_detector, needs_detection, recognition_scene,
     rect_response, target_evaluation_response,
 };
-use crate::{
-    Clock, InputBackendFactory, InputBackendObservation, InputBackendRequest, Lab, LabPorts,
-    SemanticLedgerContext,
-};
+use crate::{Clock, Lab, LabPorts, SemanticInputExecutor, SemanticLedgerContext};
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
-use actingcommand_device::{TouchBackendConfig, combine_operation_and_close};
 use actingcommand_execution_kernel::{
     DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
     DriveNavigationGraph as NavigationGraph, DrivePoint, DriveSemanticInput as SemanticInput,
@@ -126,7 +122,6 @@ impl<P: LabPorts> Lab<P> {
                 env_resolved,
             }
         } else {
-            let touch_config = required_touch_config(request.touch_config.as_ref())?;
             let input = SemanticInput::Tap {
                 rect: click,
                 point: DrivePoint {
@@ -134,7 +129,7 @@ impl<P: LabPorts> Lab<P> {
                     y: point.y,
                 },
             };
-            let device = send_semantic_input(self, &touch_config, &input)?;
+            let device = send_semantic_input(self, &input)?;
             ledger.record_drive(json!({
                 "stage": "action",
                 "command": "tap-target",
@@ -279,7 +274,6 @@ impl<P: LabPorts> Lab<P> {
             });
         }
 
-        let touch_config = required_touch_config(request.touch_config.as_ref())?;
         let step_timeout = required_duration(request.step_timeout.as_ref(), "step timeout")?;
         let poll = required_duration(request.poll.as_ref(), "poll interval")?;
         let mut execution = NavigationExecutionContext {
@@ -288,7 +282,6 @@ impl<P: LabPorts> Lab<P> {
             evaluator: &evaluator,
             detector: &detector,
             graph: &graph,
-            touch_config: &touch_config,
             step_timeout,
             poll,
         };
@@ -398,14 +391,6 @@ fn drive_decision_error(error: DriveDecisionError) -> LabError {
     }
 }
 
-fn required_touch_config(
-    config: Option<&LabResult<TouchBackendConfig>>,
-) -> LabResult<TouchBackendConfig> {
-    config
-        .ok_or_else(|| LabError::device("touch backend configuration is missing"))?
-        .clone()
-}
-
 fn required_duration(duration: Option<&LabResult<Duration>>, label: &str) -> LabResult<Duration> {
     duration
         .ok_or_else(|| LabError::device(format!("{label} is missing")))?
@@ -413,34 +398,15 @@ fn required_duration(duration: Option<&LabResult<Duration>>, label: &str) -> Lab
 }
 
 fn send_semantic_input<P: LabPorts>(
-    lab: &mut Lab<P>,
-    config: &TouchBackendConfig,
+    lab: &Lab<P>,
     input: &SemanticInput,
 ) -> LabResult<crate::SemanticDeviceResponse> {
-    let observation = InputBackendObservation::default();
-    let mut backend = lab.ports().input_factory().open(InputBackendRequest {
-        config: config.clone(),
-        observation: Some(observation.clone()),
-    })?;
-    let operation = match input {
-        SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
-        SemanticInput::TargetCenter { .. } => {
-            return Err(LabError::usage(
-                "target_center semantic input must be resolved before device execution",
-            ));
-        }
-        SemanticInput::Drag {
-            from,
-            to,
-            duration_ms,
-            ..
-        } => backend.swipe(from.x, from.y, to.x, to.y, *duration_ms),
-    };
-    let close = backend.close();
-    combine_operation_and_close(operation, close)
-        .map_err(|error| LabError::device(error.to_string()))?;
+    let action = input
+        .resolved_input_action()
+        .map_err(drive_decision_error)?;
+    let report = lab.ports().semantic_input().execute(action)?;
     Ok(crate::SemanticDeviceResponse {
-        report: observation.snapshot()?,
+        report,
         control_mode: "semantic".to_string(),
         action: semantic_input_response(input),
     })
@@ -452,7 +418,6 @@ struct NavigationExecutionContext<'a, P: LabPorts> {
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
     graph: &'a NavigationGraph,
-    touch_config: &'a TouchBackendConfig,
     step_timeout: Duration,
     poll: Duration,
 }
@@ -482,7 +447,7 @@ fn execute_navigation_route<P: LabPorts>(
             .graph
             .validate_resolved_input(&edge, &input)
             .map_err(drive_decision_error)?;
-        let device = send_semantic_input(context.lab, context.touch_config, &input)?;
+        let device = send_semantic_input(context.lab, &input)?;
         let arrived = poll_for_page(context, edge.to_page())?;
         if !arrived.matched {
             return Err(LabError::safety_blocked(

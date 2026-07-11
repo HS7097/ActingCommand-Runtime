@@ -5,6 +5,7 @@ use super::{
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
     read_user_config, runtime_state_root, semantic_ledger_context,
 };
+use actingcommand_contract::InputAction;
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendConfig, DeviceError, DeviceTarget, InputBackend,
     MaaTouchConfig, TouchBackendConfig,
@@ -15,10 +16,10 @@ use actingcommand_lab::{
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
     InputBackendRequest, Lab, LabError, LabPorts, LabState, LedgerEventEntry, LedgerLastResort,
     LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink, RunLedgerSessionRequest,
-    UserConfig,
+    SemanticInputExecutor, UserConfig,
 };
 use actingcommand_ledger::{LabLedger, LastResortError, LedgerRecord, write_last_resort_error};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -139,6 +140,29 @@ pub(super) fn build_control_lab(
     )
 }
 
+pub(super) fn build_drive_lab(
+    config: UserConfig,
+    instance_alias: Option<&str>,
+    enable_input: bool,
+) -> CliOutcome<Lab<AppLabPorts>> {
+    let runtime_metadata = instance_alias
+        .map(|alias| InputFactoryMetadata::new(alias.to_string()))
+        .transpose()?;
+    let capture_authority =
+        runtime_metadata
+            .clone()
+            .map_or(AppCaptureAuthority::Disabled, |metadata| {
+                AppCaptureAuthority::Runtime(
+                    super::runtime_capture_backend::RuntimeCaptureEndpoint::new(
+                        metadata.instance_alias,
+                        metadata.runtime_state_root,
+                    ),
+                )
+            });
+    let input_metadata = enable_input.then_some(runtime_metadata).flatten();
+    build_app_lab(config, input_metadata, capture_authority)
+}
+
 fn build_app_lab(
     config: UserConfig,
     input_metadata: Option<InputFactoryMetadata>,
@@ -146,6 +170,9 @@ fn build_app_lab(
 ) -> CliOutcome<Lab<AppLabPorts>> {
     Lab::new(
         AppLabPorts {
+            semantic_input: AppSemanticInputExecutor {
+                input_metadata: input_metadata.clone(),
+            },
             input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory {
                 authority: capture_authority,
@@ -272,6 +299,9 @@ fn build_lab(
     let state = LabState::open(&scope.state_root)?;
     Lab::new(
         AppLabPorts {
+            semantic_input: AppSemanticInputExecutor {
+                input_metadata: input_metadata.clone(),
+            },
             input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory {
                 authority: capture_metadata.map_or(AppCaptureAuthority::Disabled, |metadata| {
@@ -333,6 +363,7 @@ fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
 
 pub(super) struct AppLabPorts {
     input: AppInputFactory,
+    semantic_input: AppSemanticInputExecutor,
     capture: AppCaptureFactory,
     ledger: AppLedgerSink,
     clock: SystemClock,
@@ -341,6 +372,7 @@ pub(super) struct AppLabPorts {
 
 impl LabPorts for AppLabPorts {
     type InputFactory = AppInputFactory;
+    type SemanticInput = AppSemanticInputExecutor;
     type CaptureFactory = AppCaptureFactory;
     type Ledger = AppLedgerSink;
     type Time = SystemClock;
@@ -348,6 +380,10 @@ impl LabPorts for AppLabPorts {
 
     fn input_factory(&self) -> &Self::InputFactory {
         &self.input
+    }
+
+    fn semantic_input(&self) -> &Self::SemanticInput {
+        &self.semantic_input
     }
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
@@ -383,6 +419,36 @@ impl InputFactoryMetadata {
 
     fn from_device(device: &super::DeviceRuntimeConfig) -> CliOutcome<Self> {
         Self::new(device.instance_alias.clone())
+    }
+}
+
+pub(super) struct AppSemanticInputExecutor {
+    input_metadata: Option<InputFactoryMetadata>,
+}
+
+impl SemanticInputExecutor for AppSemanticInputExecutor {
+    fn execute(&self, action: InputAction) -> Result<InputBackendReport, LabError> {
+        let metadata = self
+            .input_metadata
+            .as_ref()
+            .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            &metadata.runtime_state_root,
+            actingcommand_contract::EventActor::Lab,
+            actingcommand_contract::EventSource::Lab,
+        ))
+        .map_err(|error| LabError::device(error.to_string()))?;
+        let mut proxy = RuntimeInputProxy::connect(client, &metadata.instance_alias)
+            .map_err(|error| LabError::device(error.to_string()))?;
+        let operation = proxy.input(action);
+        let close = proxy.close();
+        match (operation, close) {
+            (Ok(()), Ok(())) => Ok(input_report()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(LabError::device(error.to_string())),
+            (Err(operation), Err(close)) => Err(LabError::device(format!(
+                "{operation}; Runtime input proxy close also failed: {close}"
+            ))),
+        }
     }
 }
 

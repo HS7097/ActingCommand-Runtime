@@ -3,13 +3,11 @@
 use super::*;
 use crate::ports::DisabledLedger;
 use crate::{
-    CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendReport,
-    SemanticRequestContext,
+    CaptureBackendFactory, ConfigSource, InputBackendAttemptReport, InputBackendFactory,
+    InputBackendReport, InputBackendRequest, SemanticInputExecutor, SemanticRequestContext,
 };
-use actingcommand_device::{
-    AdbConfig, DeviceError, DeviceResult, DeviceTarget, InputBackend, MaaTouchConfig,
-    TouchBackendConfig,
-};
+use actingcommand_contract::InputAction;
+use actingcommand_device::InputBackend;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -182,7 +180,8 @@ impl Fixture {
     fn lab(&self) -> Lab<TestPorts> {
         Lab::new(
             TestPorts {
-                input: RecordingInputFactory {
+                input: DisabledInputFactory,
+                semantic_input: RecordingSemanticInput {
                     actions: self.actions.clone(),
                 },
                 capture: DisabledCaptureFactory,
@@ -202,7 +201,6 @@ impl Fixture {
             allow_destructive: false,
             dry_run,
             capture_requested: !dry_run,
-            touch_config: (!dry_run).then(|| Ok(touch_config())),
         }
     }
 
@@ -214,7 +212,6 @@ impl Fixture {
             allow_destructive: false,
             dry_run: true,
             capture_requested: false,
-            touch_config: None,
             step_timeout: None,
             poll: None,
         }
@@ -241,73 +238,54 @@ impl Fixture {
     }
 }
 
-struct RecordingInputFactory {
-    actions: Arc<Mutex<Vec<String>>>,
-}
+struct DisabledInputFactory;
 
-impl InputBackendFactory for RecordingInputFactory {
-    fn open(&self, request: InputBackendRequest) -> LabResult<Box<dyn InputBackend>> {
-        if let Some(observation) = request.observation {
-            observation.record(InputBackendReport {
-                backend: "test_input".to_string(),
-                requested_backend: request.config.requested.as_str().to_string(),
-                adb_source: "test".to_string(),
-                adb_warning: None,
-                attempts: Vec::<InputBackendAttemptReport>::new(),
-                warnings: Vec::new(),
-                serial: request.config.target.resolved_serial(),
-                device_state: "device".to_string(),
-                screen_size: "Physical size: 1280x720".to_string(),
-                handshake: None,
-            })?;
-        }
-        Ok(Box::new(RecordingInput {
-            actions: self.actions.clone(),
-        }))
+impl InputBackendFactory for DisabledInputFactory {
+    fn open(&self, _request: InputBackendRequest) -> LabResult<Box<dyn InputBackend>> {
+        Err(LabError::device(
+            "drive must use the semantic Runtime command port",
+        ))
     }
 }
 
-struct RecordingInput {
+struct RecordingSemanticInput {
     actions: Arc<Mutex<Vec<String>>>,
 }
 
-impl RecordingInput {
-    fn record(&self, action: String) -> DeviceResult<()> {
+impl SemanticInputExecutor for RecordingSemanticInput {
+    fn execute(&self, action: InputAction) -> LabResult<InputBackendReport> {
+        let action = match action {
+            InputAction::Tap { x, y } => format!("tap:{x}:{y}"),
+            InputAction::LongTap { x, y, duration_ms } => {
+                format!("long_tap:{x}:{y}:{duration_ms}")
+            }
+            InputAction::Swipe {
+                x1,
+                y1,
+                x2,
+                y2,
+                duration_ms,
+            } => format!("swipe:{x1}:{y1}:{x2}:{y2}:{duration_ms}"),
+            InputAction::Key { key } => format!("key:{key}"),
+            InputAction::Text { text } => format!("text:{text}"),
+            InputAction::Reset => "reset".to_string(),
+        };
         self.actions
             .lock()
-            .map_err(|_| DeviceError::fatal("recording input lock poisoned"))?
+            .map_err(|_| LabError::device("recording semantic input lock poisoned"))?
             .push(action);
-        Ok(())
-    }
-}
-
-impl InputBackend for RecordingInput {
-    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        self.record(format!("tap:{x}:{y}"))
-    }
-
-    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.record(format!("long_tap:{x}:{y}:{duration_ms}"))
-    }
-
-    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
-        self.record(format!("swipe:{x1}:{y1}:{x2}:{y2}:{duration_ms}"))
-    }
-
-    fn key(&mut self, key: &str) -> DeviceResult<()> {
-        self.record(format!("key:{key}"))
-    }
-
-    fn text(&mut self, text: &str) -> DeviceResult<()> {
-        self.record(format!("text:{text}"))
-    }
-
-    fn reset(&mut self) -> DeviceResult<()> {
-        self.record("reset".to_string())
-    }
-
-    fn close(&mut self) -> DeviceResult<()> {
-        Ok(())
+        Ok(InputBackendReport {
+            backend: "test_input".to_string(),
+            requested_backend: "runtime_owned".to_string(),
+            adb_source: "runtime_owned".to_string(),
+            adb_warning: None,
+            attempts: Vec::<InputBackendAttemptReport>::new(),
+            warnings: Vec::new(),
+            serial: "<runtime-owned>".to_string(),
+            device_state: "runtime_owned".to_string(),
+            screen_size: "<runtime-owned>".to_string(),
+            handshake: None,
+        })
     }
 }
 
@@ -345,7 +323,8 @@ impl ConfigSource for DisabledConfig {
 }
 
 struct TestPorts {
-    input: RecordingInputFactory,
+    input: DisabledInputFactory,
+    semantic_input: RecordingSemanticInput,
     capture: DisabledCaptureFactory,
     ledger: DisabledLedger,
     clock: FixedClock,
@@ -353,7 +332,8 @@ struct TestPorts {
 }
 
 impl LabPorts for TestPorts {
-    type InputFactory = RecordingInputFactory;
+    type InputFactory = DisabledInputFactory;
+    type SemanticInput = RecordingSemanticInput;
     type CaptureFactory = DisabledCaptureFactory;
     type Ledger = DisabledLedger;
     type Time = FixedClock;
@@ -361,6 +341,10 @@ impl LabPorts for TestPorts {
 
     fn input_factory(&self) -> &Self::InputFactory {
         &self.input
+    }
+
+    fn semantic_input(&self) -> &Self::SemanticInput {
+        &self.semantic_input
     }
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
@@ -387,14 +371,6 @@ fn ledger(command: &str) -> SemanticLedgerContext {
         arguments: Vec::new(),
         dry_run: true,
     })
-}
-
-fn touch_config() -> TouchBackendConfig {
-    TouchBackendConfig::new(
-        AdbConfig::default(),
-        DeviceTarget::default(),
-        MaaTouchConfig::default(),
-    )
 }
 
 fn red_scene() -> Scene {

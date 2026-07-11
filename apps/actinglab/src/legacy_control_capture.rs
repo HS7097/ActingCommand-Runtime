@@ -3,7 +3,7 @@
 use actingcommand_device::{CaptureBackend, create_capture_backend};
 use actingcommand_lab::{CaptureBackendRequest, LabError};
 
-/// Temporary direct-capture bridge for drive/run until C5 Task 5 moves those flows to Runtime.
+/// Temporary direct-capture bridge for run compatibility until C5 finishes Runtime migration.
 pub(super) fn open_legacy_control_capture(
     request: CaptureBackendRequest,
 ) -> Result<Box<dyn CaptureBackend>, LabError> {

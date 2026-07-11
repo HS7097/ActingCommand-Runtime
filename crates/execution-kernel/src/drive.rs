@@ -2,6 +2,7 @@
 
 //! Pure semantic-drive planning owned by the execution kernel.
 
+use actingcommand_contract::InputAction;
 use actingcommand_recognition_pack::PackRect;
 use serde::Serialize;
 use serde_json::Value;
@@ -103,6 +104,42 @@ pub enum DriveSemanticInput {
         to: DrivePoint,
         duration_ms: u64,
     },
+}
+
+impl DriveSemanticInput {
+    /// Converts a resolved semantic action into the typed Runtime input contract.
+    pub fn resolved_input_action(&self) -> Result<InputAction, DriveDecisionError> {
+        let action = match self {
+            Self::Tap { point, .. } => InputAction::Tap {
+                x: point.x,
+                y: point.y,
+            },
+            Self::TargetCenter { .. } => {
+                return Err(DriveDecisionError::invalid(
+                    "target_center semantic input must be resolved before execution",
+                ));
+            }
+            Self::Drag {
+                from,
+                to,
+                duration_ms,
+                ..
+            } => InputAction::Swipe {
+                x1: from.x,
+                y1: from.y,
+                x2: to.x,
+                y2: to.y,
+                duration_ms: *duration_ms,
+            },
+        };
+        action.validate().map_err(|error| {
+            DriveDecisionError::invalid(format!(
+                "resolved semantic input is invalid: {}",
+                error.code()
+            ))
+        })?;
+        Ok(action)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,6 +709,34 @@ mod tests {
             .expect_err("overflow")
             .kind(),
             DriveDecisionErrorKind::PackageInvalid
+        );
+    }
+
+    #[test]
+    fn resolved_semantic_input_maps_to_typed_runtime_action() {
+        let tap = DriveSemanticInput::Tap {
+            rect: PackRect {
+                x: 10,
+                y: 20,
+                width: 8,
+                height: 6,
+            },
+            point: DrivePoint { x: 14, y: 23 },
+        };
+        assert_eq!(
+            tap.resolved_input_action().expect("tap action"),
+            InputAction::Tap { x: 14, y: 23 }
+        );
+
+        let unresolved = DriveSemanticInput::TargetCenter {
+            target_id: "entry".to_string(),
+        };
+        assert_eq!(
+            unresolved
+                .resolved_input_action()
+                .expect_err("unresolved target")
+                .kind(),
+            DriveDecisionErrorKind::InvalidInput
         );
     }
 }

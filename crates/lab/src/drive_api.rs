@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{EnvResolved, LabResult};
-use actingcommand_device::TouchBackendConfig;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,7 +11,6 @@ pub struct TapTargetRequest {
     pub allow_destructive: bool,
     pub dry_run: bool,
     pub capture_requested: bool,
-    pub touch_config: Option<LabResult<TouchBackendConfig>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,7 +38,6 @@ pub struct NavigateRequest {
     pub allow_destructive: bool,
     pub dry_run: bool,
     pub capture_requested: bool,
-    pub touch_config: Option<LabResult<TouchBackendConfig>>,
     pub step_timeout: Option<LabResult<Duration>>,
     pub poll: Option<LabResult<Duration>>,
 }

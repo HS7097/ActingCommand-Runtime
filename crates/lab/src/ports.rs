@@ -4,7 +4,7 @@ use crate::UserConfig;
 use crate::{
     LedgerEventEntry, LedgerLastResort, LedgerReadback, LedgerRecordEntry, RunLedgerSessionRequest,
 };
-use actingcommand_contract::LabResult;
+use actingcommand_contract::{InputAction, LabResult};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendConfig,
     CaptureBackendName, InputBackend, TouchBackendConfig,
@@ -88,6 +88,23 @@ pub struct InputHandshakeReport {
 
 pub trait InputBackendFactory {
     fn open(&self, request: InputBackendRequest) -> LabResult<Box<dyn InputBackend>>;
+}
+
+/// Temporary Lab client port. Production implementations submit to Runtime; sealed tests may fake it.
+pub trait SemanticInputExecutor {
+    fn execute(&self, action: InputAction) -> LabResult<InputBackendReport>;
+}
+
+#[cfg(test)]
+pub(crate) struct DisabledSemanticInput;
+
+#[cfg(test)]
+impl SemanticInputExecutor for DisabledSemanticInput {
+    fn execute(&self, _action: InputAction) -> LabResult<InputBackendReport> {
+        Err(actingcommand_contract::LabError::device(
+            "semantic input must not execute in this test",
+        ))
+    }
 }
 
 pub struct CaptureBackendRequest {
@@ -231,12 +248,14 @@ pub trait ConfigSource {
 
 pub trait LabPorts {
     type InputFactory: InputBackendFactory;
+    type SemanticInput: SemanticInputExecutor;
     type CaptureFactory: CaptureBackendFactory;
     type Ledger: LedgerSink;
     type Time: Clock;
     type Config: ConfigSource;
 
     fn input_factory(&self) -> &Self::InputFactory;
+    fn semantic_input(&self) -> &Self::SemanticInput;
     fn capture_factory(&self) -> &Self::CaptureFactory;
     fn ledger(&mut self) -> &mut Self::Ledger;
     fn clock(&self) -> &Self::Time;

@@ -396,6 +396,7 @@ impl crate::ConfigSource for TestConfigSource {
 
 struct TestPorts {
     input: TestInputFactory,
+    semantic_input: crate::ports::DisabledSemanticInput,
     capture: TestCaptureFactory,
     ledger: TestLedgerSink,
     clock: TestClock,
@@ -404,6 +405,7 @@ struct TestPorts {
 
 impl crate::LabPorts for TestPorts {
     type InputFactory = TestInputFactory;
+    type SemanticInput = crate::ports::DisabledSemanticInput;
     type CaptureFactory = TestCaptureFactory;
     type Ledger = TestLedgerSink;
     type Time = TestClock;
@@ -411,6 +413,10 @@ impl crate::LabPorts for TestPorts {
 
     fn input_factory(&self) -> &Self::InputFactory {
         &self.input
+    }
+
+    fn semantic_input(&self) -> &Self::SemanticInput {
+        &self.semantic_input
     }
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
@@ -436,6 +442,7 @@ fn test_lab(root: &Path) -> Lab<TestPorts> {
             input: TestInputFactory {
                 opens: Arc::new(AtomicUsize::new(0)),
             },
+            semantic_input: crate::ports::DisabledSemanticInput,
             capture: TestCaptureFactory {
                 opens: Arc::new(AtomicUsize::new(0)),
                 lease_root: root.join("locks"),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::ports::DisabledLedger;
+use crate::ports::{DisabledLedger, DisabledSemanticInput};
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
 use actingcommand_recognition::ScenePixelFormat;
 use std::path::PathBuf;
@@ -62,6 +62,7 @@ impl ConfigSource for DisabledConfig {
 
 struct TestPorts {
     input: DisabledInputFactory,
+    semantic_input: DisabledSemanticInput,
     capture: DisabledCaptureFactory,
     ledger: DisabledLedger,
     clock: FixedClock,
@@ -70,6 +71,7 @@ struct TestPorts {
 
 impl LabPorts for TestPorts {
     type InputFactory = DisabledInputFactory;
+    type SemanticInput = DisabledSemanticInput;
     type CaptureFactory = DisabledCaptureFactory;
     type Ledger = DisabledLedger;
     type Time = FixedClock;
@@ -77,6 +79,10 @@ impl LabPorts for TestPorts {
 
     fn input_factory(&self) -> &Self::InputFactory {
         &self.input
+    }
+
+    fn semantic_input(&self) -> &Self::SemanticInput {
+        &self.semantic_input
     }
 
     fn capture_factory(&self) -> &Self::CaptureFactory {
@@ -215,6 +221,7 @@ impl Fixture {
         Lab::new(
             TestPorts {
                 input: DisabledInputFactory,
+                semantic_input: DisabledSemanticInput,
                 capture: DisabledCaptureFactory,
                 ledger: DisabledLedger,
                 clock: FixedClock,

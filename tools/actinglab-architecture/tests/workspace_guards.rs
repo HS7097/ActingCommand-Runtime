@@ -269,6 +269,56 @@ fn c5_drive_decisions_are_owned_by_execution_kernel() {
 }
 
 #[test]
+fn c5_drive_effects_cross_only_runtime_ports() {
+    let root = workspace_root();
+    let kernel = fs::read_to_string(root.join("crates/execution-kernel/src/drive.rs"))
+        .expect("read execution-kernel drive source");
+    let lab = fs::read_to_string(root.join("crates/lab/src/drive.rs"))
+        .expect("read Lab drive adapter source");
+    let cli = fs::read_to_string(root.join("apps/actinglab/src/drive_cli.rs"))
+        .expect("read ActingLab drive CLI source");
+    let ports = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))
+        .expect("read ActingLab Runtime port source");
+
+    assert!(
+        kernel.contains("pub fn resolved_input_action"),
+        "execution-kernel must own semantic-to-runtime input planning"
+    );
+    for forbidden in [
+        "input_factory()",
+        "InputBackendRequest",
+        "TouchBackendConfig",
+        "combine_operation_and_close",
+    ] {
+        assert!(
+            !lab.contains(forbidden),
+            "Lab drive still opens or configures a production input backend via {forbidden}"
+        );
+    }
+    for forbidden in [
+        "device_config",
+        "build_control_lab",
+        "legacy_control_capture",
+    ] {
+        assert!(
+            !cli.contains(forbidden),
+            "ActingLab drive CLI still reaches legacy device authority via {forbidden}"
+        );
+    }
+    for required in [
+        "build_drive_lab",
+        "AppSemanticInputExecutor",
+        "RuntimeInputProxy::connect",
+        "AppCaptureAuthority::Runtime",
+    ] {
+        assert!(
+            ports.contains(required),
+            "ActingLab drive Runtime port lost {required}"
+        );
+    }
+}
+
+#[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");
