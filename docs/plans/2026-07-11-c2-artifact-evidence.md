@@ -1,6 +1,6 @@
 # C2 Artifact Store And Evidence Exporter Implementation Plan
 
-Status: active.
+Status: complete at `checkpoint/20260711-c2-artifact-evidence`.
 
 ## Authority and baseline
 
@@ -169,7 +169,7 @@ Status: complete.
 
 ### Task 6: Closeout
 
-Status: active.
+Status: complete.
 
 - Run focused contract, artifact-store, ledger integration, Lab compatibility, and architecture
   suites.
@@ -178,6 +178,16 @@ Status: active.
 - Update `PLANS.md` and `CHECKPOINT.md`, push each completed unit, create a stable C2 checkpoint
   tag, and record evidence in Issue #36.
 - Do not merge this branch into `main` or the umbrella repository.
+
+Closeout evidence:
+
+- `cargo test --workspace` passed.
+- `cargo test --workspace --exclude actingcommand-actinglab --exclude actingcommand-lab` passed.
+- `cargo check --workspace --all-features` passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed.
+- `cargo fmt --all -- --check`, architecture/dependency guards, and `git diff --check` passed.
+- The extra all-target Clippy cleanup changed only equivalent test expressions and did not alter
+  Runtime, device, scheduler, or artifact behavior.
 
 ## Explicit non-goals
 

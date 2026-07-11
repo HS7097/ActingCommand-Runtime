@@ -1697,6 +1697,6 @@ mod tests {
 
     #[test]
     fn min_soft_limit_constant_is_lower_than_hard_limit() {
-        assert!(MIN_PROJECTION_SOFT_LIMIT_BYTES < MIN_PROJECTION_HARD_LIMIT_BYTES);
+        const { assert!(MIN_PROJECTION_SOFT_LIMIT_BYTES < MIN_PROJECTION_HARD_LIMIT_BYTES) };
     }
 }

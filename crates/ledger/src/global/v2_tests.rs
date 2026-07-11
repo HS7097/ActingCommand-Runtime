@@ -268,7 +268,9 @@ fn artifact_bearing_recovery_fails_closed_without_disclosure() {
 
 #[test]
 fn recovery_rejects_unknown_and_inconsistent_v2_layers_without_disclosure() {
-    let mutations: [(&str, fn(&mut Value)); 8] = [
+    type JsonMutation = (&'static str, fn(&mut Value));
+
+    let mutations: [JsonMutation; 8] = [
         ("event", |line| {
             line["event"]["smuggled"] = Value::String("token-secret-event".to_string());
         }),

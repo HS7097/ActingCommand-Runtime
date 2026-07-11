@@ -53722,7 +53722,7 @@ mod tests {
         let read = LabLedger::read(path).expect("read package event ledger");
         assert!(read.events.iter().any(|event| {
             event.event_type == "package.validate.ok"
-                && event.ids.get("req_id").is_some()
+                && event.ids.contains_key("req_id")
                 && event.payload.get("module").and_then(Value::as_str) == Some("module")
         }));
     }
@@ -56336,7 +56336,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let queued = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        let queued = run_cli(base.to_vec(), true);
         assert_eq!(queued.exit_code(), 3);
         assert_eq!(
             queued
@@ -56364,7 +56364,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let queue_full = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        let queue_full = run_cli(base.to_vec(), true);
         assert_eq!(queue_full.exit_code(), 3);
         assert_eq!(
             queue_full
@@ -56426,7 +56426,7 @@ mod tests {
             .unwrap()
             .to_string();
         std::thread::sleep(Duration::from_millis(2));
-        let replacement = run_cli(base.iter().copied().collect::<Vec<_>>(), true);
+        let replacement = run_cli(base.to_vec(), true);
         assert_eq!(replacement.exit_code(), 3);
         assert_ne!(
             replacement

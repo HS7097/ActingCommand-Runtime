@@ -1024,7 +1024,7 @@ fn write_fake_adb(root: &Path, scene: &Path, case: &str) -> PathBuf {
 fn encode_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
     let mut scanlines = Vec::with_capacity((width * height * 3 + height) as usize);
     for _ in 0..height {
-        scanlines.push(0);
+        scanlines.extend_from_slice(&[0]);
         for _ in 0..width {
             scanlines.extend_from_slice(&color);
         }

@@ -106,7 +106,7 @@ mod tests {
             dry_run: true,
         });
         context
-            .record_drive(&serde_json::json!({"stage": "recognition"}))
+            .record_drive(serde_json::json!({"stage": "recognition"}))
             .expect("drive");
         let records = context.take_records();
         assert_eq!(records.len(), 2);

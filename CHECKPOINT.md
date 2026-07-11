@@ -1,5 +1,63 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 artifact and evidence closeout
+
+### Current status
+
+- C2 Tasks 1-6 are complete and will be anchored by
+  `checkpoint/20260711-c2-artifact-evidence` on this closeout commit.
+- Milestone commits are `d66f8a6` (plan freeze), `d132f72` (contract/authority), `1c4605e`
+  (durable store), `e31935f` (frame pipeline), `fb24b0e` (evidence exporter), and `2b69e45`
+  (sealed GlobalLedger acceptance).
+- The current tree passes full workspace, non-Lab, all-features, formatting, architecture,
+  dependency, and all-target Clippy gates.
+- Eight Clippy findings exposed only by the stricter all-target gate were reduced to equivalent
+  test expressions. No Runtime, scheduler, device, artifact, or protocol behavior changed.
+- No resource repository, emulator, live device, upstream source, cooperation workspace, or
+  subagent was used.
+
+### Files changed
+
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/golden_protocol.rs`
+- `crates/lab/src/context.rs`
+- `crates/ledger/src/global/v2_tests.rs`
+- `crates/ledger/src/lib.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-ledger -p actingcommand-lab`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo test --workspace --exclude actingcommand-actinglab --exclude actingcommand-lab`
+- `cargo check --workspace --all-features`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+
+### Test results
+
+- Focused ledger and Lab suites passed.
+- Full workspace tests passed, including 48 artifact-store unit tests, 3 sealed GlobalLedger
+  integration tests, architecture/dependency guards, protocol goldens, process tests, and
+  doctests.
+- The non-Lab workspace test passed, including 14 architecture units and 18 workspace guards.
+- All-features compilation and all-target Clippy passed with warnings denied.
+- Formatting and whitespace checks passed.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this closeout, create and push the stable C2 checkpoint tag, and record the
+   final evidence in Issue #36.
+2. Start C3b from the approved Issue #35 task chain without merging this branch into `main`.
+
 ## 2026-07-11 Issue 35 C2 Task 5 sealed GlobalLedger acceptance
 
 ### Current status
