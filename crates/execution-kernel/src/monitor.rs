@@ -2,219 +2,17 @@
 
 //! Pure monitor decisions over already-classified observations.
 
-use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fmt;
-
-const MAX_MONITOR_PAGE_BYTES: usize = 256;
-
-pub type MonitorDecisionResult<T> = Result<T, MonitorDecisionError>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MonitorDecisionError {
-    code: &'static str,
-}
-
-impl MonitorDecisionError {
-    const fn new(code: &'static str) -> Self {
-        Self { code }
-    }
-
-    pub const fn code(&self) -> &'static str {
-        self.code
-    }
-}
-
-impl fmt::Display for MonitorDecisionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "monitor decision error: {}", self.code)
-    }
-}
-
-impl Error for MonitorDecisionError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MonitorDiagnosis {
-    Healthy,
-    Standby,
-    UnexpectedPage,
-    CaptureStaleSuspected,
-    CaptureUnavailable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MonitorObservation {
-    diagnosis: MonitorDiagnosis,
-    expected_page: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_page: Option<String>,
-}
-
-impl MonitorObservation {
-    pub fn new(
-        diagnosis: MonitorDiagnosis,
-        expected_page: impl Into<String>,
-        current_page: Option<String>,
-    ) -> MonitorDecisionResult<Self> {
-        let observation = Self {
-            diagnosis,
-            expected_page: expected_page.into(),
-            current_page,
-        };
-        observation.validate()?;
-        Ok(observation)
-    }
-
-    pub fn validate(&self) -> MonitorDecisionResult<()> {
-        validate_page(&self.expected_page)?;
-        if let Some(current_page) = &self.current_page {
-            validate_page(current_page)?;
-        }
-        let valid = match self.diagnosis {
-            MonitorDiagnosis::Healthy => self.current_page.as_deref() == Some(&self.expected_page),
-            MonitorDiagnosis::UnexpectedPage => self
-                .current_page
-                .as_deref()
-                .is_some_and(|current| current != self.expected_page),
-            MonitorDiagnosis::Standby
-            | MonitorDiagnosis::CaptureStaleSuspected
-            | MonitorDiagnosis::CaptureUnavailable => self.current_page.is_none(),
-        };
-        if !valid {
-            return Err(MonitorDecisionError::new("invalid_monitor_observation"));
-        }
-        Ok(())
-    }
-
-    pub const fn diagnosis(&self) -> MonitorDiagnosis {
-        self.diagnosis
-    }
-
-    pub fn expected_page(&self) -> &str {
-        &self.expected_page
-    }
-
-    pub fn current_page(&self) -> Option<&str> {
-        self.current_page.as_deref()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MonitorPolicy {
-    recovery_enabled: bool,
-}
-
-impl MonitorPolicy {
-    pub const fn new(recovery_enabled: bool) -> Self {
-        Self { recovery_enabled }
-    }
-
-    pub const fn recovery_enabled(self) -> bool {
-        self.recovery_enabled
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MonitorDisposition {
-    Healthy,
-    ObserveOnly,
-    RecoveryRequested,
-    Blocked,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MonitorRecoveryKind {
-    WakeStandby,
-    ReturnToExpectedPage,
-    RefreshCapture,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MonitorDecision {
-    diagnosis: MonitorDiagnosis,
-    disposition: MonitorDisposition,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recovery: Option<MonitorRecoveryKind>,
-}
-
-impl MonitorDecision {
-    fn new(
-        diagnosis: MonitorDiagnosis,
-        disposition: MonitorDisposition,
-        recovery: Option<MonitorRecoveryKind>,
-    ) -> MonitorDecisionResult<Self> {
-        let decision = Self {
-            diagnosis,
-            disposition,
-            recovery,
-        };
-        decision.validate()?;
-        Ok(decision)
-    }
-
-    pub fn validate(&self) -> MonitorDecisionResult<()> {
-        let valid = matches!(
-            (self.diagnosis, self.disposition, self.recovery),
-            (MonitorDiagnosis::Healthy, MonitorDisposition::Healthy, None)
-                | (
-                    MonitorDiagnosis::Standby
-                        | MonitorDiagnosis::UnexpectedPage
-                        | MonitorDiagnosis::CaptureStaleSuspected,
-                    MonitorDisposition::ObserveOnly,
-                    None
-                )
-                | (
-                    MonitorDiagnosis::Standby,
-                    MonitorDisposition::RecoveryRequested,
-                    Some(MonitorRecoveryKind::WakeStandby)
-                )
-                | (
-                    MonitorDiagnosis::UnexpectedPage,
-                    MonitorDisposition::RecoveryRequested,
-                    Some(MonitorRecoveryKind::ReturnToExpectedPage)
-                )
-                | (
-                    MonitorDiagnosis::CaptureStaleSuspected,
-                    MonitorDisposition::RecoveryRequested,
-                    Some(MonitorRecoveryKind::RefreshCapture)
-                )
-                | (
-                    MonitorDiagnosis::CaptureUnavailable,
-                    MonitorDisposition::Blocked,
-                    None
-                )
-        );
-        if !valid {
-            return Err(MonitorDecisionError::new("invalid_monitor_decision"));
-        }
-        Ok(())
-    }
-
-    pub const fn diagnosis(&self) -> MonitorDiagnosis {
-        self.diagnosis
-    }
-
-    pub const fn disposition(&self) -> MonitorDisposition {
-        self.disposition
-    }
-
-    pub const fn recovery(&self) -> Option<MonitorRecoveryKind> {
-        self.recovery
-    }
-}
+pub use actingcommand_contract::{
+    MonitorDecision, MonitorDecisionError, MonitorDecisionResult, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorPolicy, MonitorRecoveryKind,
+};
 
 pub fn decide_monitor(
     policy: MonitorPolicy,
     observation: &MonitorObservation,
 ) -> MonitorDecisionResult<MonitorDecision> {
     observation.validate()?;
-    let (disposition, recovery) = match observation.diagnosis {
+    let (disposition, recovery) = match observation.diagnosis() {
         MonitorDiagnosis::Healthy => (MonitorDisposition::Healthy, None),
         MonitorDiagnosis::CaptureUnavailable => (MonitorDisposition::Blocked, None),
         _ if !policy.recovery_enabled() => (MonitorDisposition::ObserveOnly, None),
@@ -231,17 +29,7 @@ pub fn decide_monitor(
             Some(MonitorRecoveryKind::RefreshCapture),
         ),
     };
-    MonitorDecision::new(observation.diagnosis, disposition, recovery)
-}
-
-fn validate_page(value: &str) -> MonitorDecisionResult<()> {
-    if value.is_empty()
-        || value.len() > MAX_MONITOR_PAGE_BYTES
-        || value.chars().any(char::is_control)
-    {
-        return Err(MonitorDecisionError::new("invalid_monitor_page"));
-    }
-    Ok(())
+    MonitorDecision::new(observation.diagnosis(), disposition, recovery)
 }
 
 #[cfg(test)]
