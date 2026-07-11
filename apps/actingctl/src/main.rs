@@ -4,8 +4,9 @@
 
 #![forbid(unsafe_code)]
 
-use actingcommand_contract::{EventActor, EventSource};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeFlowOutput};
+use actingcommand_contract::{CaptureSequenceSpec, EventActor, EventSource, RuntimeMonitorPolicy};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use serde_json::Value;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
@@ -29,25 +30,55 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(arguments: Vec<OsString>) -> Result<RuntimeFlowOutput, ActingctlError> {
-    let invocation = Invocation::parse(arguments)?;
+fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
+    let Invocation {
+        state_root,
+        instance,
+        command,
+    } = Invocation::parse(arguments)?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &invocation.state_root,
+        &state_root,
         EventActor::Cli,
         EventSource::Cli,
     ))
     .map_err(ActingctlError::runtime)?;
-    match invocation.command {
-        Command::Reset => client
-            .safe_reset(&invocation.instance)
-            .map_err(ActingctlError::runtime),
-        Command::Observe => client
-            .observe_readonly(&invocation.instance)
-            .map_err(ActingctlError::runtime),
+    let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
+    let output = match command {
+        Command::Reset => serde_json::to_value(
+            client
+                .safe_reset(instance()?)
+                .map_err(ActingctlError::runtime)?,
+        ),
+        Command::Observe => serde_json::to_value(
+            client
+                .observe_readonly(instance()?)
+                .map_err(ActingctlError::runtime)?,
+        ),
+        Command::Status => serde_json::to_value(client.status().map_err(ActingctlError::runtime)?),
+        Command::MonitorStatus => {
+            serde_json::to_value(client.monitor_status().map_err(ActingctlError::runtime)?)
+        }
+        Command::MonitorSet { policy } => serde_json::to_value(
+            client
+                .configure_monitor(instance()?, policy)
+                .map_err(ActingctlError::runtime)?,
+        ),
+        Command::MonitorClear => serde_json::to_value(
+            client
+                .clear_monitor(instance()?)
+                .map_err(ActingctlError::runtime)?,
+        ),
+        Command::Stream { spec } => serde_json::to_value(
+            client
+                .capture_sequence(instance()?, spec)
+                .map_err(ActingctlError::runtime)?,
+        ),
     }
+    .map_err(|_| ActingctlError::Output)?;
+    Ok(output)
 }
 
-fn write_output(output: &RuntimeFlowOutput) -> Result<(), ActingctlError> {
+fn write_output(output: &Value) -> Result<(), ActingctlError> {
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     serde_json::to_writer(&mut writer, output).map_err(|_| ActingctlError::Output)?;
@@ -56,13 +87,18 @@ fn write_output(output: &RuntimeFlowOutput) -> Result<(), ActingctlError> {
 
 struct Invocation {
     state_root: PathBuf,
-    instance: String,
+    instance: Option<String>,
     command: Command,
 }
 
 enum Command {
     Observe,
     Reset,
+    Status,
+    MonitorStatus,
+    MonitorSet { policy: RuntimeMonitorPolicy },
+    MonitorClear,
+    Stream { spec: CaptureSequenceSpec },
 }
 
 impl Invocation {
@@ -72,6 +108,10 @@ impl Invocation {
         };
         let mut state_root = None;
         let mut instance = None;
+        let mut interval_ms = None;
+        let mut expected_page = None;
+        let mut frame_count = None;
+        let mut recovery_enabled = false;
         let mut index = 1;
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
@@ -82,24 +122,59 @@ impl Invocation {
                 "--instance" => {
                     instance = Some(require_text(&arguments, &mut index)?);
                 }
+                "--interval-ms" => {
+                    interval_ms = Some(require_u64(&arguments, &mut index)?);
+                }
+                "--expect" => {
+                    expected_page = Some(require_text(&arguments, &mut index)?);
+                }
+                "--max-frames" => {
+                    frame_count = Some(require_u16(&arguments, &mut index)?);
+                }
+                "--recover" => recovery_enabled = true,
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
         }
         let state_root = state_root.ok_or(ActingctlError::Usage)?;
-        let instance = instance
-            .filter(|value: &String| !value.trim().is_empty())
-            .ok_or(ActingctlError::Usage)?;
+        let instance = instance.filter(|value: &String| !value.trim().is_empty());
         let command = match command {
             "reset" => Command::Reset,
             "observe" => Command::Observe,
+            "status" => Command::Status,
+            "monitor-status" => Command::MonitorStatus,
+            "monitor-set" => Command::MonitorSet {
+                policy: RuntimeMonitorPolicy::new(
+                    interval_ms.unwrap_or(30_000),
+                    expected_page.unwrap_or_else(|| "home".to_string()),
+                    recovery_enabled,
+                )
+                .map_err(|_| ActingctlError::Usage)?,
+            },
+            "monitor-clear" => Command::MonitorClear,
+            "stream" => Command::Stream {
+                spec: CaptureSequenceSpec::new(
+                    frame_count.unwrap_or(1),
+                    interval_ms.unwrap_or(250),
+                )
+                .map_err(|_| ActingctlError::Usage)?,
+            },
             _ => return Err(ActingctlError::Usage),
         };
+        if command.requires_instance() != instance.is_some() {
+            return Err(ActingctlError::Usage);
+        }
         Ok(Self {
             state_root,
             instance,
             command,
         })
+    }
+}
+
+impl Command {
+    const fn requires_instance(&self) -> bool {
+        !matches!(self, Self::Status | Self::MonitorStatus)
     }
 }
 
@@ -111,6 +186,18 @@ fn require_value(arguments: &[OsString], index: &mut usize) -> Result<OsString, 
 fn require_text(arguments: &[OsString], index: &mut usize) -> Result<String, ActingctlError> {
     require_value(arguments, index)?
         .into_string()
+        .map_err(|_| ActingctlError::Usage)
+}
+
+fn require_u64(arguments: &[OsString], index: &mut usize) -> Result<u64, ActingctlError> {
+    require_text(arguments, index)?
+        .parse()
+        .map_err(|_| ActingctlError::Usage)
+}
+
+fn require_u16(arguments: &[OsString], index: &mut usize) -> Result<u16, ActingctlError> {
+    require_text(arguments, index)?
+        .parse()
         .map_err(|_| ActingctlError::Usage)
 }
 
@@ -131,7 +218,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset> --state-root <path> --instance <id>"),
+                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream> --state-root <path> [--instance <id>]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Output => formatter.write_str("failed to write JSON output"),
         }
@@ -166,5 +253,50 @@ mod tests {
         .map(OsString::from)
         .collect();
         assert!(Invocation::parse(args).is_err());
+    }
+
+    #[test]
+    fn status_does_not_require_an_instance() {
+        let args = ["status", "--state-root", "state"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        assert!(Invocation::parse(args).is_ok());
+    }
+
+    #[test]
+    fn monitor_and_stream_commands_build_closed_runtime_contracts() {
+        let monitor = [
+            "monitor-set",
+            "--state-root",
+            "state",
+            "--instance",
+            "ak.cn",
+            "--interval-ms",
+            "1000",
+            "--expect",
+            "home",
+            "--recover",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(Invocation::parse(monitor).is_ok());
+
+        let stream = [
+            "stream",
+            "--state-root",
+            "state",
+            "--instance",
+            "ak.cn",
+            "--max-frames",
+            "60",
+            "--interval-ms",
+            "1000",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(Invocation::parse(stream).is_ok());
     }
 }
