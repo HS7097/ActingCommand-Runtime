@@ -70,6 +70,69 @@ pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, Strin
     Ok(violations)
 }
 
+/// Keeps the C3a read-only admission capability from becoming a writable authority escape.
+pub fn inspect_readonly_capture_capability(
+    path: &str,
+    source: &str,
+) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut found_struct = false;
+    let mut found_impl = false;
+    let mut violations = Vec::new();
+    for item in &file.items {
+        match item {
+            Item::Struct(item_struct) if item_struct.ident == "ReadOnlyCaptureCapability" => {
+                found_struct = true;
+                if item_struct.fields.iter().any(|field| is_public(&field.vis)) {
+                    violations.push(format!(
+                        "{path}: ReadOnlyCaptureCapability exposes a public field"
+                    ));
+                }
+            }
+            Item::Impl(item_impl)
+                if impl_self_ident(item_impl)
+                    .is_some_and(|ident| ident == "ReadOnlyCaptureCapability") =>
+            {
+                found_impl = true;
+                if let Some((_, trait_path, _)) = &item_impl.trait_ {
+                    let trait_name = trait_path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    violations.push(format!(
+                        "{path}: ReadOnlyCaptureCapability explicitly implements {trait_name}"
+                    ));
+                    continue;
+                }
+                for item in &item_impl.items {
+                    let syn::ImplItem::Fn(method) = item else {
+                        continue;
+                    };
+                    if is_public(&method.vis)
+                        && !matches!(method.sig.ident.to_string().as_str(), "new" | "instance_id")
+                    {
+                        violations.push(format!(
+                            "{path}: ReadOnlyCaptureCapability exposes unexpected public method {}",
+                            method.sig.ident
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !found_struct {
+        violations.push(format!("{path}: ReadOnlyCaptureCapability is missing"));
+    }
+    if !found_impl {
+        violations.push(format!(
+            "{path}: ReadOnlyCaptureCapability inherent implementation is missing"
+        ));
+    }
+    Ok(violations)
+}
+
 /// Enforces the sole public global-ledger append ingress.
 pub fn inspect_global_append_ingress(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;

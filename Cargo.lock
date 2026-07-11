@@ -44,6 +44,8 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-runtime-client",
+ "actingcommand-runtime-host",
  "serde",
  "serde_json",
  "sha2",

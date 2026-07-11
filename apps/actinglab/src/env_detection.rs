@@ -3,21 +3,19 @@
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, current_unix_ms, device_config,
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
-    read_user_config, semantic_ledger_context,
+    read_user_config, runtime_state_root, semantic_ledger_context,
 };
-use actingcommand_device::{
-    CaptureBackend, DeviceError, InputBackend, SelectedTouchBackend, create_capture_backend,
-    create_touch_backend,
-};
+use actingcommand_device::{CaptureBackend, DeviceError, InputBackend, create_capture_backend};
 use actingcommand_lab::{
     CaptureBackendFactory, CaptureBackendRequest, Clock, ConfigSource, EnvDetectRequest,
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
-    InputBackendRequest, InputHandshakeReport, Lab, LabError, LabPorts, LabState, LedgerEventEntry,
-    LedgerLastResort, LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink,
-    RunLedgerSessionRequest, UserConfig,
+    InputBackendRequest, Lab, LabError, LabPorts, LabState, LedgerEventEntry, LedgerLastResort,
+    LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink, RunLedgerSessionRequest,
+    UserConfig,
 };
 use actingcommand_ledger::{LabLedger, LastResortError, LedgerRecord, write_last_resort_error};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -111,7 +109,10 @@ pub(super) fn build_control_lab(
     config: UserConfig,
     device: Option<&super::DeviceRuntimeConfig>,
 ) -> CliOutcome<Lab<AppLabPorts>> {
-    build_app_lab(config, device.map(InputFactoryMetadata::from_device))
+    build_app_lab(
+        config,
+        device.map(InputFactoryMetadata::from_device).transpose()?,
+    )
 }
 
 fn build_app_lab(
@@ -143,7 +144,10 @@ fn detect_request(
     let device = capture
         .then(|| device_config(global, &config))
         .transpose()?;
-    let input_metadata = device.as_ref().map(InputFactoryMetadata::from_device);
+    let input_metadata = device
+        .as_ref()
+        .map(|_| InputFactoryMetadata::new(scope.instance.clone()))
+        .transpose()?;
     Ok((
         EnvDetectRequest {
             scope,
@@ -322,16 +326,20 @@ impl LabPorts for AppLabPorts {
 
 #[derive(Clone)]
 struct InputFactoryMetadata {
-    adb_source: String,
-    adb_warning: Option<String>,
+    instance_alias: String,
+    runtime_state_root: PathBuf,
 }
 
 impl InputFactoryMetadata {
-    fn from_device(device: &super::DeviceRuntimeConfig) -> Self {
-        Self {
-            adb_source: device.adb_source.as_str().to_string(),
-            adb_warning: device.adb_warning.clone(),
-        }
+    fn new(instance_alias: String) -> CliOutcome<Self> {
+        Ok(Self {
+            instance_alias,
+            runtime_state_root: runtime_state_root()?,
+        })
+    }
+
+    fn from_device(device: &super::DeviceRuntimeConfig) -> CliOutcome<Self> {
+        Self::new(device.instance_alias.clone())
     }
 }
 
@@ -341,21 +349,23 @@ pub(super) struct AppInputFactory {
 
 impl InputBackendFactory for AppInputFactory {
     fn open(&self, request: InputBackendRequest) -> Result<Box<dyn InputBackend>, LabError> {
-        if request.observation.is_none() {
-            return create_touch_backend(request.config)
-                .map(|selected| Box::new(selected) as Box<dyn InputBackend>)
-                .map_err(|error| LabError::device(error.to_string()));
-        }
+        // Runtime owns the real touch configuration; this field remains only for the Lab port contract.
+        let _legacy_touch_config = request.config;
         let metadata = self
             .input_metadata
             .clone()
-            .ok_or_else(|| LabError::device("env detection input metadata was not configured"))?;
-        let selected = create_touch_backend(request.config)
+            .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            &metadata.runtime_state_root,
+            actingcommand_contract::EventActor::Lab,
+            actingcommand_contract::EventSource::Lab,
+        ))
+        .map_err(|error| LabError::device(error.to_string()))?;
+        let proxy = RuntimeInputProxy::connect(client, &metadata.instance_alias)
             .map_err(|error| LabError::device(error.to_string()))?;
         let backend = ObservedInputBackend {
-            selected,
+            proxy,
             observation: request.observation,
-            metadata,
         };
         backend.publish_report()?;
         Ok(Box::new(backend))
@@ -363,15 +373,14 @@ impl InputBackendFactory for AppInputFactory {
 }
 
 struct ObservedInputBackend {
-    selected: SelectedTouchBackend,
+    proxy: RuntimeInputProxy,
     observation: Option<InputBackendObservation>,
-    metadata: InputFactoryMetadata,
 }
 
 impl ObservedInputBackend {
     fn publish_report(&self) -> Result<(), LabError> {
         if let Some(observation) = &self.observation {
-            observation.record(input_report(&self.selected, &self.metadata))?;
+            observation.record(input_report())?;
         }
         Ok(())
     }
@@ -380,15 +389,16 @@ impl ObservedInputBackend {
         &mut self,
         operation: actingcommand_device::DeviceResult<()>,
     ) -> actingcommand_device::DeviceResult<()> {
-        self.publish_report()
-            .map_err(|error| DeviceError::fatal(error.to_string()))?;
-        operation
+        let report = self
+            .publish_report()
+            .map_err(|error| DeviceError::fatal(error.to_string()));
+        combine_device_results(operation, report)
     }
 }
 
 impl InputBackend for ObservedInputBackend {
     fn tap(&mut self, x: i32, y: i32) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.tap(x, y);
+        let operation = self.proxy.tap(x, y);
         self.finish_operation(operation)
     }
 
@@ -398,7 +408,7 @@ impl InputBackend for ObservedInputBackend {
         y: i32,
         duration_ms: u64,
     ) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.long_tap(x, y, duration_ms);
+        let operation = self.proxy.long_tap(x, y, duration_ms);
         self.finish_operation(operation)
     }
 
@@ -410,72 +420,68 @@ impl InputBackend for ObservedInputBackend {
         y2: i32,
         duration_ms: u64,
     ) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.swipe(x1, y1, x2, y2, duration_ms);
+        let operation = self.proxy.swipe(x1, y1, x2, y2, duration_ms);
         self.finish_operation(operation)
     }
 
     fn key(&mut self, key: &str) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.key(key);
+        let operation = self.proxy.key(key);
         self.finish_operation(operation)
     }
 
     fn text(&mut self, text: &str) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.text(text);
+        let operation = self.proxy.text(text);
         self.finish_operation(operation)
     }
 
     fn reset(&mut self) -> actingcommand_device::DeviceResult<()> {
-        let operation = self.selected.reset();
+        let operation = self.proxy.reset();
         self.finish_operation(operation)
     }
 
     fn close(&mut self) -> actingcommand_device::DeviceResult<()> {
-        let close = self.selected.close();
-        self.publish_report()
-            .map_err(|error| DeviceError::fatal(error.to_string()))?;
-        close
+        let close = self.proxy.close();
+        let report = self
+            .publish_report()
+            .map_err(|error| DeviceError::fatal(error.to_string()));
+        combine_device_results(close, report)
     }
 }
 
-fn input_report(
-    selected: &SelectedTouchBackend,
-    metadata: &InputFactoryMetadata,
-) -> InputBackendReport {
-    let diagnostics = selected.diagnostics();
+fn input_report() -> InputBackendReport {
     InputBackendReport {
-        backend: selected.backend_name().as_str().to_string(),
-        requested_backend: diagnostics.requested.as_str().to_string(),
-        adb_source: metadata.adb_source.clone(),
-        adb_warning: metadata.adb_warning.clone(),
-        attempts: diagnostics
-            .attempts
-            .iter()
-            .map(|attempt| InputBackendAttemptReport {
-                attempt_id: attempt.attempt_id,
-                backend: attempt.backend.as_str().to_string(),
-                ok: attempt.ok,
-                elapsed_ms: attempt.elapsed_ms,
-                action: attempt.action.clone(),
-                fallback_backend: attempt
-                    .fallback_backend
-                    .map(|backend| backend.as_str().to_string()),
-                error_reason: attempt.error_reason.clone(),
-                selected: attempt.selected,
-            })
-            .collect(),
-        warnings: diagnostics.warnings.clone(),
-        serial: selected.serial().to_string(),
-        device_state: selected.device_info().state.clone(),
-        screen_size: selected.device_info().screen_size.clone(),
-        handshake: selected
-            .handshake_info()
-            .map(|handshake| InputHandshakeReport {
-                max_contacts: handshake.max_contacts,
-                max_x: handshake.max_x,
-                max_y: handshake.max_y,
-                max_pressure: handshake.max_pressure,
-                pid: handshake.pid.clone(),
-            }),
+        backend: "runtime_proxy".to_string(),
+        requested_backend: "runtime_owned".to_string(),
+        adb_source: "runtime_owned".to_string(),
+        adb_warning: None,
+        attempts: vec![InputBackendAttemptReport {
+            attempt_id: 1,
+            backend: "runtime_proxy".to_string(),
+            ok: true,
+            elapsed_ms: 0,
+            action: Some("lease_acquire".to_string()),
+            fallback_backend: None,
+            error_reason: None,
+            selected: true,
+        }],
+        warnings: Vec::new(),
+        serial: "<runtime-owned>".to_string(),
+        device_state: "runtime_owned".to_string(),
+        screen_size: "<runtime-owned>".to_string(),
+        handshake: None,
+    }
+}
+
+fn combine_device_results(
+    operation: actingcommand_device::DeviceResult<()>,
+    report: actingcommand_device::DeviceResult<()>,
+) -> actingcommand_device::DeviceResult<()> {
+    match (operation, report) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(operation), Err(report)) => Err(DeviceError::fatal(format!(
+            "{operation}; input report also failed: {report}"
+        ))),
     }
 }
 

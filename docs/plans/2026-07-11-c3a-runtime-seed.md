@@ -131,7 +131,7 @@ Implemented result:
 
 ## Task 5: Remove client-side production input construction
 
-Status: next.
+Status: complete.
 
 - Replace ActingLab's production `AppInputFactory` and direct write helpers with
   `RuntimeInputProxy`.
@@ -140,7 +140,22 @@ Status: next.
 - Add architecture guards rejecting direct touch-backend construction in production client
   sources and rejecting any writable method/downcast/getter on the read-only capability.
 
+Implemented result:
+
+- ActingLab production input paths now acquire `RuntimeInputProxy` from the resident Runtime
+  and no longer construct MaaTouch, minitouch, or ADB-shell input backends in client code.
+- Direct tap, long-tap, swipe, key, text, stream relay, semantic input, and the Lab input
+  factory use the same lease-gated Runtime boundary. Dry-run and sealed fake-input paths remain
+  local and unchanged.
+- Capture remains a client-side read-only capability for C3a. Its public capability surface is
+  guarded against writable methods, downcasts, public fields, and unrelated trait exposure.
+- A real-process ActingLab test proves a tap reaches a fake daemon-owned backend without any
+  client ADB configuration. Source and dependency guards reject production backend constructors
+  in ActingLab and runtime-client sources.
+
 ## Task 6: C3a adversarial and process acceptance
+
+Status: next.
 
 - Prove zero-stagger same-instance requests produce one grant and one busy denial.
 - Prove different instances acquire and execute independently.

@@ -22,10 +22,12 @@ actingcommand-page-detector = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
+actingcommand-runtime-client = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+actingcommand-runtime-host = { workspace = true }
 tempfile = "3"

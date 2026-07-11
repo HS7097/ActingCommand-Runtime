@@ -3,14 +3,13 @@
 #![allow(clippy::result_large_err)]
 
 use actingcommand_contract::{
-    CLI_SCHEMA_VERSION, Envelope, EnvelopeError, LabError as CliError, LabErrorClass as ErrorKind,
-    LedgerProjection,
+    CLI_SCHEMA_VERSION, Envelope, EnvelopeError, EventActor, EventSource, LabError as CliError,
+    LabErrorClass as ErrorKind, LedgerProjection,
 };
 use actingcommand_device::{
     Adb, AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
-    DeviceTarget, Frame, HandshakeInfo, InputBackend, MaaTouchConfig, PixelFormat,
-    TouchBackendChoice, TouchBackendConfig, TouchBackendDiagnostics, combine_operation_and_close,
-    create_capture_backend, create_touch_backend, resolve_adb_path, touch_probe_report,
+    DeviceTarget, Frame, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
+    TouchBackendConfig, combine_operation_and_close, create_capture_backend, resolve_adb_path,
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
@@ -26,6 +25,7 @@ use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, Sce
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -60,6 +60,7 @@ mod resource_convert;
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
+const RUNTIME_STATE_ROOT_ENV: &str = "ACTINGCOMMAND_RUNTIME_STATE_ROOT";
 const SESSION_STATE_ENV: &str = "ACTINGLAB_SESSION_STATE_DIR";
 const REQUIRE_SESSION_DAEMON_ENV: &str = "ACTINGLAB_REQUIRE_SESSION_DAEMON";
 const TRUSTED_REMOTE_TOKEN_ENV: &str = "ACTINGLAB_TRUSTED_REMOTE_TOKEN";
@@ -4916,25 +4917,27 @@ fn ledger_diagnosis_warnings(
 fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     flags.expect_positionals("touch-probe", 0)?;
-    let requested = parse_touch_backend_override(&flags)?;
+    if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {
+        return Err(CliError::usage(
+            "touch-probe backend selection is owned by actingd; remove --touch-backend",
+        ));
+    }
     let config = read_user_config()?;
-    let device_config = device_config(global, &config)?;
-    let requested = requested.unwrap_or(device_config.touch_backend);
-    let report = touch_probe_report(
-        device_config
-            .touch_backend_config()
-            .with_requested(requested),
-    );
+    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
+    backend
+        .close()
+        .map_err(|error| CliError::device(error.to_string()))?;
     Ok(json!({
-        "status": if report.selected.is_some() { "available" } else { "unavailable" },
+        "status": "available",
         "mode": "touch_probe",
-        "requested_backend": requested.as_str(),
-        "selected_backend": report.selected.map(actingcommand_device::TouchBackendName::as_str),
-        "adb_source": device_config.adb_source.as_str(),
-        "adb_warning": device_config.adb_warning,
+        "requested_backend": "runtime_owned",
+        "selected_backend": "runtime_proxy",
+        "instance": instance_alias,
+        "adb_source": "runtime_owned",
+        "adb_warning": Value::Null,
         "action_executed": false,
-        "touch_backend_attempts": touch_attempts_json(&report),
-        "touch_backend_warnings": report.warnings
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": []
     }))
 }
 
@@ -5832,33 +5835,20 @@ impl DirectTouchCommand {
     }
 }
 
-fn handshake_json(handshake: HandshakeInfo) -> Value {
-    json!({
-        "max_contacts": handshake.max_contacts,
-        "max_x": handshake.max_x,
-        "max_y": handshake.max_y,
-        "max_pressure": handshake.max_pressure,
-        "pid": handshake.pid
-    })
-}
-
-fn touch_attempts_json(diagnostics: &TouchBackendDiagnostics) -> Value {
-    json!(
-        diagnostics
-            .attempts
-            .iter()
-            .map(|attempt| json!({
-                "attempt_id": attempt.attempt_id,
-                "backend": attempt.backend.as_str(),
-                "ok": attempt.ok,
-                "elapsed_ms": attempt.elapsed_ms,
-                "action": attempt.action.as_deref(),
-                "fallback_backend": attempt.fallback_backend.map(actingcommand_device::TouchBackendName::as_str),
-                "error_reason": attempt.error_reason.as_deref(),
-                "selected": attempt.selected
-            }))
-            .collect::<Vec<_>>()
-    )
+fn open_cli_runtime_input_proxy(
+    global: &GlobalOptions,
+    config: &UserConfig,
+) -> CliOutcome<(RuntimeInputProxy, String)> {
+    let instance_alias = resolve_instance_id(global, config)?;
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .map_err(|error| CliError::device(error.to_string()))?;
+    let proxy = RuntimeInputProxy::connect(client, &instance_alias)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    Ok((proxy, instance_alias))
 }
 
 fn run_direct_touch(global: &GlobalOptions, command: &str, args: &[String]) -> CliOutcome<Value> {
@@ -5884,30 +5874,26 @@ fn send_direct_touch_command(
     control_mode: &str,
     safety_gate: &str,
 ) -> CliOutcome<Value> {
-    let device_config = device_config(global, config)?;
-    let mut backend = create_touch_backend(device_config.touch_backend_config())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let serial = backend.serial().to_string();
-    let device = backend.device_info().clone();
-    let handshake = backend.handshake_info().cloned();
+    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
     combine_operation_and_close(operation, close)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": backend.backend_name().as_str(),
-        "touch_backend_requested": device_config.touch_backend.as_str(),
-        "adb_source": device_config.adb_source.as_str(),
-        "adb_warning": device_config.adb_warning,
-        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
-        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
+        "backend": "runtime_proxy",
+        "touch_backend_requested": "runtime_owned",
+        "adb_source": "runtime_owned",
+        "adb_warning": Value::Null,
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": [],
         "control_mode": control_mode,
         "safety_gate": safety_gate,
-        "serial": serial,
-        "device_state": device.state,
-        "screen_size": device.screen_size,
-        "handshake": handshake.map(handshake_json),
+        "instance": instance_alias,
+        "serial": Value::Null,
+        "device_state": "runtime_owned",
+        "screen_size": Value::Null,
+        "handshake": Value::Null,
         "action": command.to_json()
     }))
 }
@@ -5919,30 +5905,26 @@ fn run_direct_input(global: &GlobalOptions, command: &str, args: &[String]) -> C
     }
     let command = DirectInputCommand::parse(command, &flags)?;
     let config = read_user_config()?;
-    let device_config = device_config(global, &config)?;
-    let mut backend = create_touch_backend(device_config.touch_backend_config())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let serial = backend.serial().to_string();
-    let device = backend.device_info().clone();
-    let handshake = backend.handshake_info().cloned();
+    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, &config)?;
     let operation = command.run(&mut backend);
     let close = backend.close();
     combine_operation_and_close(operation, close)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": backend.backend_name().as_str(),
-        "touch_backend_requested": device_config.touch_backend.as_str(),
-        "adb_source": device_config.adb_source.as_str(),
-        "adb_warning": device_config.adb_warning,
-        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
-        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
+        "backend": "runtime_proxy",
+        "touch_backend_requested": "runtime_owned",
+        "adb_source": "runtime_owned",
+        "adb_warning": Value::Null,
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": [],
         "control_mode": "direct_trusted_manual",
         "safety_gate": "not_required_for_manual_control",
-        "serial": serial,
-        "device_state": device.state,
-        "screen_size": device.screen_size,
-        "handshake": handshake.map(handshake_json),
+        "instance": instance_alias,
+        "serial": Value::Null,
+        "device_state": "runtime_owned",
+        "screen_size": Value::Null,
+        "handshake": Value::Null,
         "action": command.to_json()
     }))
 }
@@ -6134,12 +6116,7 @@ fn run_stream_input_relay(
             "actions": action_values
         }));
     }
-    let device_config = device_config(global, config)?;
-    let mut backend = create_touch_backend(device_config.touch_backend_config())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let serial = backend.serial().to_string();
-    let device = backend.device_info().clone();
-    let handshake = backend.handshake_info().cloned();
+    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
     let operation = actions
         .iter()
         .try_for_each(|action| action.run(&mut backend));
@@ -6148,17 +6125,18 @@ fn run_stream_input_relay(
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
         "status": "sent",
-        "backend": backend.backend_name().as_str(),
-        "touch_backend_requested": device_config.touch_backend.as_str(),
-        "adb_source": device_config.adb_source.as_str(),
-        "adb_warning": device_config.adb_warning,
-        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
-        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
+        "backend": "runtime_proxy",
+        "touch_backend_requested": "runtime_owned",
+        "adb_source": "runtime_owned",
+        "adb_warning": Value::Null,
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": [],
         "control_mode": "stream_input_relay",
-        "serial": serial,
-        "device_state": device.state,
-        "screen_size": device.screen_size,
-        "handshake": handshake.map(handshake_json),
+        "instance": instance_alias,
+        "serial": Value::Null,
+        "device_state": "runtime_owned",
+        "screen_size": Value::Null,
+        "handshake": Value::Null,
         "action_count": actions.len(),
         "action": action_values.first().cloned(),
         "actions": action_values
@@ -7798,12 +7776,7 @@ fn send_semantic_input(
         return Ok(fake);
     }
 
-    let device_config = device_config(global, config)?;
-    let mut backend = create_touch_backend(device_config.touch_backend_config())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let serial = backend.serial().to_string();
-    let device = backend.device_info().clone();
-    let handshake = backend.handshake_info().cloned();
+    let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
     let operation = match input {
         SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
         SemanticInput::TargetCenter { .. } => {
@@ -7822,15 +7795,16 @@ fn send_semantic_input(
     combine_operation_and_close(operation, close)
         .map_err(|err| CliError::device(err.to_string()))?;
     Ok(json!({
-        "backend": backend.backend_name().as_str(),
-        "touch_backend_requested": device_config.touch_backend.as_str(),
-        "touch_backend_attempts": touch_attempts_json(backend.diagnostics()),
-        "touch_backend_warnings": backend.diagnostics().warnings.clone(),
+        "backend": "runtime_proxy",
+        "touch_backend_requested": "runtime_owned",
+        "touch_backend_attempts": [],
+        "touch_backend_warnings": [],
         "control_mode": "semantic",
-        "serial": serial,
-        "device_state": device.state,
-        "screen_size": device.screen_size,
-        "handshake": handshake.map(handshake_json),
+        "instance": instance_alias,
+        "serial": Value::Null,
+        "device_state": "runtime_owned",
+        "screen_size": Value::Null,
+        "handshake": Value::Null,
         "action": semantic_input_json(input)
     }))
 }
@@ -23765,6 +23739,7 @@ fn device_config_for_instance(
         ..Default::default()
     };
     Ok(DeviceRuntimeConfig {
+        instance_alias: instance_id,
         adb,
         target,
         adb_source: resolved_adb.source,
@@ -23776,6 +23751,7 @@ fn device_config_for_instance(
 
 #[derive(Debug)]
 struct DeviceRuntimeConfig {
+    instance_alias: String,
     adb: AdbConfig,
     target: DeviceTarget,
     adb_source: AdbPathSource,
@@ -25017,6 +24993,21 @@ fn app_state_root() -> CliOutcome<PathBuf> {
         .or_else(|_| env::var("APPDATA"))
         .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for ActingLab state"))?;
     Ok(PathBuf::from(root).join("ActingCommand").join("actinglab"))
+}
+
+fn runtime_state_root() -> CliOutcome<PathBuf> {
+    if let Ok(path) = env::var(RUNTIME_STATE_ROOT_ENV) {
+        if path.trim().is_empty() {
+            return Err(CliError::usage(format!(
+                "{RUNTIME_STATE_ROOT_ENV} must not be empty"
+            )));
+        }
+        return Ok(PathBuf::from(path));
+    }
+    let root = env::var("LOCALAPPDATA")
+        .or_else(|_| env::var("APPDATA"))
+        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for Runtime state"))?;
+    Ok(PathBuf::from(root).join("ActingCommand").join("runtime"))
 }
 
 fn session_state_dir_from_flags(flags: &FlagArgs) -> CliOutcome<PathBuf> {

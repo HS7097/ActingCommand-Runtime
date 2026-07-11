@@ -1,5 +1,72 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 5 Runtime-owned production input
+
+### Current status
+
+- Routed every ActingLab production input path through `RuntimeInputProxy`: direct tap,
+  long-tap, swipe, key, text, stream relay, semantic input, and the Lab input factory.
+- ActingLab no longer constructs a MaaTouch, minitouch, or ADB-shell input backend. Runtime
+  state discovery uses `ACTINGCOMMAND_RUNTIME_STATE_ROOT` when set and otherwise resolves the
+  local application state directory.
+- Preserved dry-run and sealed fake-input behavior. Capture remains client-side and read-only
+  during C3a.
+- Added a process integration test that starts a fake resident Runtime host, runs the real
+  ActingLab tap command without client ADB configuration, and proves exactly one daemon-owned
+  backend tap and close.
+- Added architecture guards for forbidden client backend constructors and for a deliberately
+  narrow read-only capture capability with no writable recovery surface.
+- Implemented and reviewed directly without subagents.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/env_detection.rs`
+- `apps/actinglab/src/main.rs`
+- `apps/actinglab/tests/runtime_input_proxy.rs`
+- `ratchet/main_rs_lines.txt`
+- `tools/actinglab-architecture/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab --bin actinglab -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test runtime_input_proxy -- --nocapture`
+- `cargo test -p actingcommand-actinglab --test golden_protocol -- --nocapture`
+- `cargo test -p actingcommand-actinglab-architecture -- --nocapture`
+- `cargo test --workspace`
+- `cargo clippy --workspace -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "create_touch_backend|touch_probe_report|MaaTouchBackend|MinitouchBackend|AdbShellInputBackend" apps/actinglab/src crates/runtime-client/src -g '*.rs'`
+
+### Test results
+
+- ActingLab binary tests passed: 516; Runtime proxy process test passed: 1; protocol goldens
+  passed: 3.
+- Architecture library and workspace guards passed: 14 + 17.
+- Full workspace tests and full workspace Clippy with warnings denied passed.
+- Formatting, diff checks, the lowered `59176` line ratchet, and forbidden-constructor scan
+  passed.
+- An additional all-targets ActingLab-only Clippy run exposed existing test-only warnings in
+  `golden_protocol.rs` and historical `main.rs` tests. They are outside this surgical migration;
+  production and standard workspace Clippy remain clean.
+
+### Current blocker
+
+- None for C3a Task 5.
+
+### Next step
+
+1. Commit and push Task 5 with this planning/checkpoint evidence and record it in Issue #36.
+2. Implement Task 6 adversarial and process acceptance, including hard-kill/restart fencing and
+   correlated ledger proof.
+
 ## 2026-07-11 Issue 35 C3a Task 4 Runtime client and actingd process
 
 ### Current status

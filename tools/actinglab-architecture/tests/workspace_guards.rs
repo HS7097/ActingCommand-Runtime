@@ -7,8 +7,9 @@ use std::process::Command;
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
     inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
-    inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, validate_line_ratchet, workspace_dependency_violations,
+    inspect_producer_event_capabilities, inspect_public_api, inspect_readonly_capture_capability,
+    lab_removability_violations, ledger_owns_query_matching, validate_line_ratchet,
+    workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
 
@@ -121,6 +122,60 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+}
+
+#[test]
+fn c3a_client_input_authority_stays_behind_runtime_proxy() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut files);
+    collect_rust_files(&root.join("crates/runtime-client/src"), &mut files);
+    let forbidden = [
+        "create_touch_backend",
+        "touch_probe_report",
+        "MaaTouchBackend",
+        "MinitouchBackend",
+        "AdbShellInputBackend",
+    ];
+    let mut violations = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for token in forbidden {
+            if source.contains(token) {
+                violations.push(format!(
+                    "{display}: client constructs touch authority via {token}"
+                ));
+            }
+        }
+    }
+    let manifest = fs::read_to_string(root.join("apps/actinglab/Cargo.toml"))
+        .expect("read ActingLab manifest");
+    assert!(
+        manifest.contains("actingcommand-runtime-client"),
+        "ActingLab must depend on the typed Runtime client"
+    );
+
+    let runtime_contract =
+        fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+            .expect("read Runtime contract");
+    violations.extend(
+        inspect_readonly_capture_capability(
+            "crates/actingcommand-contract/src/runtime.rs",
+            &runtime_contract,
+        )
+        .expect("inspect read-only capability"),
+    );
+    assert!(
+        violations.is_empty(),
+        "C3a client authority violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
