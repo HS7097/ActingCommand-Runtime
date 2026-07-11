@@ -1,5 +1,81 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 Task 3 frame pipeline extraction
+
+### Current status
+
+- Moved the accepted frame-store implementation and its algorithm tests from `crates/lab` into
+  production-owned `actingcommand-artifact-store`.
+- Kept Lab behavior behind a narrow compatibility facade. The Lab and ActingLab suites, including
+  all protocol goldens, pass without a second frame-store authority.
+- Added explicit semantic/pinned reasons. Pinned frames bypass same-page deduplication, remain
+  admissible during Tier3 pause, and persist immediately through the durable artifact store.
+- Tier2-spilled frames are routed through the durable artifact store, and finalization persists all
+  retained frames.
+- Added typed policy, dedup-window, and pressure events. Ordinary Tier3 skipped intervals are
+  counted separately from deduplication and lower evidence completeness to `partial`.
+- Pinned persistence failure emits an explicit `artifact.store_failed` fact with
+  `artifact.pinned_frame_missing`, returns a fatal error, and lowers evidence completeness to
+  `failed`.
+- Tightened the artifact-store architecture guard to reject actual capture trait/factory/backend
+  authority while allowing the non-authoritative `CaptureBackendName` frame metadata enum.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/actinglab/Cargo.toml`
+- `apps/actinglab/src/frame_store.rs`
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/artifact-store/Cargo.toml`
+- `crates/artifact-store/src/error.rs`
+- `crates/artifact-store/src/frame_store.rs`
+- `crates/artifact-store/src/lib.rs`
+- `crates/artifact-store/src/pipeline.rs`
+- `crates/artifact-store/src/store.rs`
+- `crates/lab/Cargo.toml`
+- `crates/lab/src/frame_store.rs`
+- `crates/lab/src/lab_run/context.rs`
+- `crates/lab/src/lab_run/tests/context_and_output.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo check -p actingcommand-artifact-store -p actingcommand-lab -p actingcommand-actinglab`
+- `cargo test -p actingcommand-artifact-store`
+- `cargo test -p actingcommand-contract`
+- `cargo test -p actingcommand-lab`
+- `cargo test -p actingcommand-actinglab`
+- `cargo test -p actingcommand-actinglab-architecture`
+- `cargo clippy -p actingcommand-artifact-store -p actingcommand-lab -p actingcommand-actinglab -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- Artifact-store tests passed: 40 unit tests plus doctests.
+- Contract tests passed: 34 unit tests and 11 compile-fail doctests.
+- Lab tests passed: 184 unit tests plus 3 API/doctest targets.
+- ActingLab tests passed: 518 unit tests, all protocol goldens, and all integration suites.
+- Architecture tests passed: 14 unit tests and 18 workspace guards.
+- Focused Clippy passed with warnings denied.
+- Migrated tests preserve Tier thresholds, hysteresis, spill, pause/resume, recovery, and Lab
+  materialization behavior. New tests cover pinned dedup bypass, pinned persistence during Tier3,
+  ledger-visible pressure skips, independent drop/dedup counts, and fail-loud pinned loss.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this completed frame-pipeline unit.
+2. Implement C2 Task 4: the shared evidence exporter, verifiable manifest, four-way screenshot
+   counts, pinned accounting, archive re-open/hash verification, and fail-loud publication.
+
 ## 2026-07-11 Issue 35 C2 Task 2 durable artifact store
 
 ### Current status

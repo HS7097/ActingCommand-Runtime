@@ -38,6 +38,14 @@ impl ArtifactWriteContext {
             created_at_unix_ms,
         }
     }
+
+    pub fn event_links(&self) -> &EventLinksDraft {
+        &self.event_links
+    }
+
+    pub const fn created_at_unix_ms(&self) -> u64 {
+        self.created_at_unix_ms
+    }
 }
 
 pub struct ArtifactWriteRequest<'a> {

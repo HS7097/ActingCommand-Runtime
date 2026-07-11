@@ -876,7 +876,7 @@ impl CapturePressureDraft {
         self,
         fingerprinter: &dyn SecretFingerprinter,
     ) -> Result<CapturePressurePayload, SanitizationError> {
-        if self.memory_budget_bytes == 0 || self.resident_bytes > self.memory_budget_bytes {
+        if self.memory_budget_bytes == 0 {
             return Err(SanitizationError::new(
                 "invalid_capture_pressure",
                 "memory_budget_bytes",
@@ -2104,8 +2104,7 @@ impl EventPayload {
                 ));
             }
             Self::Capture(CapturePayload::PressureChanged(value))
-                if value.memory_budget_bytes == 0
-                    || value.resident_bytes > value.memory_budget_bytes =>
+                if value.memory_budget_bytes == 0 =>
             {
                 return Err(SanitizationError::new(
                     "invalid_capture_pressure",

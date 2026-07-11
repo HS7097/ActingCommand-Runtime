@@ -90,6 +90,7 @@
                 recognition_state: RecognitionState::from_matched_page(Some(
                     "arknights/home".to_string(),
                 )),
+                pinned_reason: None,
                 frame,
             })
             .expect("frame store");
@@ -177,6 +178,7 @@
                 recognition_state: RecognitionState::from_matched_page(Some(
                     "arknights/home".to_string(),
                 )),
+                pinned_reason: None,
                 frame,
             })
             .expect("frame store");

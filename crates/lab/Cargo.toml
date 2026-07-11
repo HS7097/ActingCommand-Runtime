@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }

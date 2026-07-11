@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 actingcommand-arbitrator = { workspace = true }
 actingcommand-contract = { workspace = true }
+actingcommand-artifact-store = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-lab = { workspace = true }
 actingcommand-ledger = { workspace = true }

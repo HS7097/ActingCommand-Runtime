@@ -436,6 +436,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             file_name,
             label: label.to_string(),
             recognition_state: RecognitionState::from_matched_page(matched_page.clone()),
+            pinned_reason: None,
             frame,
         })?;
         if let Some(checkpoint) = store_outcome.checkpoint.as_mut() {

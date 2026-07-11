@@ -49,6 +49,7 @@ name = "actingcommand-actinglab"
 version = "0.1.0"
 dependencies = [
  "actingcommand-arbitrator",
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-lab",
@@ -92,6 +93,7 @@ name = "actingcommand-artifact-store"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-device",
  "serde",
  "serde_json",
  "sha2",
@@ -135,6 +137,7 @@ dependencies = [
 name = "actingcommand-lab"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-ledger",

@@ -344,10 +344,13 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         for forbidden in [
             "create_touch_backend",
+            "create_capture_backend",
             "MaaTouchBackend",
             "MinitouchBackend",
             "AdbInputBackend",
-            "CaptureBackend",
+            "CaptureBackendFactory",
+            "dyn CaptureBackend",
+            "impl CaptureBackend",
         ] {
             assert!(
                 !source.contains(forbidden),

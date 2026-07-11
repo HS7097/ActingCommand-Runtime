@@ -37,6 +37,18 @@ impl ArtifactStoreError {
         true
     }
 
+    pub fn usage(detail: impl Into<String>) -> Self {
+        Self::fatal("frame_store_usage", "frame_store", detail)
+    }
+
+    pub fn package_invalid(detail: impl Into<String>) -> Self {
+        Self::fatal("frame_store_invalid", "frame_store", detail)
+    }
+
+    pub fn device(detail: impl Into<String>) -> Self {
+        Self::fatal("frame_store_device", "frame_store", detail)
+    }
+
     pub(crate) fn with_secondary(mut self, secondary: &Self) -> Self {
         use std::fmt::Write as _;
         let _ = write!(

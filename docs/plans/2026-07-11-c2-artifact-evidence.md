@@ -133,7 +133,7 @@ Status: complete.
 
 ### Task 3: Frame pipeline extraction
 
-Status: active.
+Status: complete.
 
 - Move the accepted frame-store algorithm and tests into artifact-store.
 - Make semantic/pinned reasons explicit and bypass both deduplication and pressure dropping.
@@ -142,6 +142,8 @@ Status: active.
 - Preserve existing Lab behavior through a narrow compatibility facade and unchanged goldens.
 
 ### Task 4: Evidence exporter
+
+Status: active.
 
 - Add typed export request, manifest, screenshot counters, pinned accounting, and export receipt.
 - Implement success/failure/cancelled task-outcome exports.

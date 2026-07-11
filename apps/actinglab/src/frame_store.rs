@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome};
+use actingcommand_artifact_store::{
+    ArtifactStoreError as CliError, ArtifactStoreResult as CliOutcome,
+};
 use actingcommand_lab::MemorySample;
 
 #[cfg(windows)]
