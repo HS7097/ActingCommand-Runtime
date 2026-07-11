@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C2 Task 2 durable artifact store
+
+### Current status
+
+- Added production-owned `actingcommand-artifact-store` with no Lab, Runtime host, scheduler,
+  runtime-client, input, or capture-backend dependency.
+- Added same-directory temporary writes, file sync, serialized no-overwrite publication, readback
+  byte-count/SHA-256 verification, safe relative object paths, and fatal cleanup diagnostics.
+- Artifact persistence requires typed event submission. `artifact.created` and
+  `artifact.verified` must both append before `put` returns success; event submission failure never
+  returns a stored-artifact result.
+- Added typed `artifact.store_failed` and `artifact.verification_failed` facts for failed store and
+  verification paths.
+- Added UTC `yyyyMMddHHmmssfff.png` screenshot naming with first-free `-NN` suffixes and no
+  overwrite of existing files.
+- Retired the unreferenced `runtime-core::capture_store` implementation after moving durable file,
+  hash, path, and collision responsibilities into artifact-store. The remaining runtime-core
+  prototype has no artifact/device dependency.
+- Added workspace guards for the artifact issuer boundary, forbidden production dependencies, and
+  device-backend authority tokens.
+- No resource repository, emulator, live device, upstream source, or subagent was used.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/artifact-store/Cargo.toml`
+- `crates/artifact-store/src/lib.rs`
+- `crates/artifact-store/src/error.rs`
+- `crates/artifact-store/src/naming.rs`
+- `crates/artifact-store/src/store.rs`
+- `crates/actingcommand-contract/src/event.rs`
+- `crates/actingcommand-contract/src/event/payload.rs`
+- `crates/actingcommand-contract/src/event/v2_tests.rs`
+- `crates/runtime-core/Cargo.toml`
+- `crates/runtime-core/src/lib.rs`
+- removed `crates/runtime-core/src/capture_store.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c2-artifact-evidence.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo fmt --all`
+- `cargo test -p actingcommand-artifact-store`
+- `cargo test -p actingcommand-runtime-core -p actingcommand-artifact-store -p actingcommand-contract -p actingcommand-actinglab-architecture`
+- `cargo check --workspace`
+- `cargo clippy -p actingcommand-runtime-core -p actingcommand-artifact-store -p actingcommand-contract -p actingcommand-actinglab-architecture -- -D warnings`
+- `git diff --check`
+
+### Test results
+
+- Artifact-store tests passed: 12 unit tests plus doctests.
+- Contract tests passed: 34 unit tests and 11 compile-fail doctests.
+- Architecture tests passed: 14 unit tests and 18 workspace guards.
+- Remaining runtime-core prototype tests passed: 9 unit tests.
+- Workspace compile and focused Clippy passed.
+- Adversarial coverage includes empty bytes, unsafe paths, pre-existing publication collision,
+  hash mismatch, write failure, sync failure with partial cleanup, rename failure, and required
+  created/verified event failures.
+
+### Current blocker
+
+- None.
+
+### Next step
+
+1. Commit and push this completed durable artifact-store unit.
+2. Move the accepted Lab frame-store mechanics and tests into artifact-store, preserve the Lab
+   compatibility API, add explicit semantic/pinned reasons, and route spill/pinned persistence
+   through the durable store.
+
 ## 2026-07-11 Issue 35 C2 Task 1 contract and artifact authority
 
 ### Current status

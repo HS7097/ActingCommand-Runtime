@@ -88,6 +88,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-artifact-store"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "zip",
+]
+
+[[package]]
 name = "actingcommand-contract"
 version = "0.1.0"
 dependencies = [
@@ -242,13 +255,6 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-core"
 version = "0.1.0"
-dependencies = [
- "actingcommand-contract",
- "actingcommand-device",
- "sha2",
- "tempfile",
- "time",
-]
 
 [[package]]
 name = "actingcommand-runtime-host"

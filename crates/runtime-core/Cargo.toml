@@ -7,12 +7,3 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-
-[dependencies]
-actingcommand-contract = { workspace = true }
-actingcommand-device = { workspace = true }
-sha2 = "0.10"
-time = { version = "0.3", features = ["formatting", "macros"] }
-
-[dev-dependencies]
-tempfile = "3"

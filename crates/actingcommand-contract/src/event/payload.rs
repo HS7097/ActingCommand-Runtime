@@ -1418,6 +1418,8 @@ impl RecognitionPayloadDraft {
 enum ArtifactDraftKind {
     Created(OutcomeDraft),
     Verified(OutcomeDraft),
+    StoreFailed(DiagnosticOutcomeDraft),
+    VerificationFailed(DiagnosticOutcomeDraft),
     ExportCompleted(ArtifactExportDraft),
     ExportFailed(ArtifactExportFailureDraft),
 }
@@ -1439,6 +1441,26 @@ impl ArtifactPayloadDraft {
             EffectDisposition::Performed,
             audit,
         )))
+    }
+
+    pub fn store_failed(diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
+        Self(ArtifactDraftKind::StoreFailed(DiagnosticOutcomeDraft::new(
+            EventAction::ArtifactStore,
+            diagnostic_code,
+            EffectDisposition::Indeterminate,
+            audit,
+        )))
+    }
+
+    pub fn verification_failed(diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
+        Self(ArtifactDraftKind::VerificationFailed(
+            DiagnosticOutcomeDraft::new(
+                EventAction::ArtifactVerify,
+                diagnostic_code,
+                EffectDisposition::Indeterminate,
+                audit,
+            ),
+        ))
     }
 
     pub fn export_completed(
@@ -1693,6 +1715,8 @@ pub enum RecognitionPayload {
 pub enum ArtifactPayload {
     Created(OutcomePayload),
     Verified(OutcomePayload),
+    StoreFailed(DiagnosticOutcomePayload),
+    VerificationFailed(DiagnosticOutcomePayload),
     ExportCompleted(ArtifactExportPayload),
     ExportFailed(ArtifactExportFailurePayload),
 }
@@ -1802,6 +1826,8 @@ family_payload!(RecognitionPayload, {
 family_payload!(ArtifactPayload, {
     Created => EventType::ArtifactCreated,
     Verified => EventType::ArtifactVerified,
+    StoreFailed => EventType::ArtifactStoreFailed,
+    VerificationFailed => EventType::ArtifactVerificationFailed,
     ExportCompleted => EventType::ArtifactExportCompleted,
     ExportFailed => EventType::ArtifactExportFailed,
 });
@@ -1980,6 +2006,12 @@ impl EventPayloadDraft {
                 }
                 ArtifactDraftKind::Verified(detail) => {
                     ArtifactPayload::Verified(detail.sanitize(fingerprinter)?)
+                }
+                ArtifactDraftKind::StoreFailed(detail) => {
+                    ArtifactPayload::StoreFailed(detail.sanitize(fingerprinter)?)
+                }
+                ArtifactDraftKind::VerificationFailed(detail) => {
+                    ArtifactPayload::VerificationFailed(detail.sanitize(fingerprinter)?)
                 }
                 ArtifactDraftKind::ExportCompleted(detail) => {
                     ArtifactPayload::ExportCompleted(detail.sanitize(fingerprinter)?)

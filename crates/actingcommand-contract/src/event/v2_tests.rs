@@ -173,6 +173,9 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         .into(),
         ArtifactPayloadDraft::created(input()).into(),
         ArtifactPayloadDraft::verified(input()).into(),
+        ArtifactPayloadDraft::store_failed(DiagnosticCode::ArtifactWriteFailed, input()).into(),
+        ArtifactPayloadDraft::verification_failed(DiagnosticCode::ArtifactVerifyFailed, input())
+            .into(),
         ArtifactPayloadDraft::export_completed(
             TaskOutcome::Success,
             EvidenceCompleteness::Complete,
@@ -519,7 +522,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 44);
+    assert_eq!(payloads.len(), 46);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

@@ -244,6 +244,10 @@ pub enum EventType {
     ArtifactCreated,
     #[serde(rename = "artifact.verified")]
     ArtifactVerified,
+    #[serde(rename = "artifact.store_failed")]
+    ArtifactStoreFailed,
+    #[serde(rename = "artifact.verification_failed")]
+    ArtifactVerificationFailed,
     #[serde(rename = "artifact.export_completed")]
     ArtifactExportCompleted,
     #[serde(rename = "artifact.export_failed")]
@@ -300,6 +304,8 @@ impl EventType {
             }
             Self::ArtifactCreated
             | Self::ArtifactVerified
+            | Self::ArtifactStoreFailed
+            | Self::ArtifactVerificationFailed
             | Self::ArtifactExportCompleted
             | Self::ArtifactExportFailed => EventFamily::Artifact,
             Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,

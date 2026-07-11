@@ -123,7 +123,7 @@ Status: complete.
 
 ### Task 2: Durable artifact store
 
-Status: active.
+Status: complete.
 
 - Add `crates/artifact-store`, typed configuration/error models, atomic writes, hashing,
   verification, safe object paths, screenshot naming, and retention metadata.
@@ -132,6 +132,8 @@ Status: active.
 - Retire `runtime-core::capture_store` after compatibility and reverse-dependency proof.
 
 ### Task 3: Frame pipeline extraction
+
+Status: active.
 
 - Move the accepted frame-store algorithm and tests into artifact-store.
 - Make semantic/pinned reasons explicit and bypass both deduplication and pressure dropping.

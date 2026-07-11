@@ -9,6 +9,7 @@ members = [
     "apps/vision-provider-check",
     "benchmarks/rust",
     "crates/actingcommand-contract",
+    "crates/artifact-store",
     "crates/arbitrator",
     "crates/device",
     "crates/ledger",
@@ -37,6 +38,7 @@ repository = "https://github.com/HS7097/ActingCommand-Runtime"
 
 [workspace.dependencies]
 actingcommand-contract = { path = "crates/actingcommand-contract" }
+actingcommand-artifact-store = { path = "crates/artifact-store" }
 actingcommand-arbitrator = { path = "crates/arbitrator" }
 actingcommand-device = { path = "crates/device" }
 actingcommand-ledger = { path = "crates/ledger" }
@@ -55,4 +57,5 @@ actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
+time = { version = "0.3", features = ["formatting", "macros"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }

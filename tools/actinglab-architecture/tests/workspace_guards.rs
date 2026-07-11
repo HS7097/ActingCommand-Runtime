@@ -306,6 +306,83 @@ fn c1_hardening_forbidden_source_surfaces_are_absent() {
 }
 
 #[test]
+fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let artifact_package = metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|package| package["name"] == "actingcommand-artifact-store")
+        .expect("artifact-store package");
+    let dependency_names = artifact_package["dependencies"]
+        .as_array()
+        .expect("artifact-store dependencies")
+        .iter()
+        .filter_map(|dependency| dependency["name"].as_str())
+        .collect::<Vec<_>>();
+    for forbidden in [
+        "actingcommand-lab",
+        "actingcommand-runtime-host",
+        "actingcommand-scheduler",
+        "actingcommand-runtime-client",
+    ] {
+        assert!(
+            !dependency_names.contains(&forbidden),
+            "artifact-store must not depend on {forbidden}"
+        );
+    }
+
+    let mut artifact_sources = Vec::new();
+    collect_rust_files(
+        &root.join("crates/artifact-store/src"),
+        &mut artifact_sources,
+    );
+    for path in artifact_sources {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for forbidden in [
+            "create_touch_backend",
+            "MaaTouchBackend",
+            "MinitouchBackend",
+            "AdbInputBackend",
+            "CaptureBackend",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden device authority token {forbidden}",
+                path.display()
+            );
+        }
+    }
+
+    let mut workspace_sources = Vec::new();
+    for directory in ["apps", "crates", "providers", "benchmarks"] {
+        collect_rust_files(&root.join(directory), &mut workspace_sources);
+    }
+    let mut violations = Vec::new();
+    for path in workspace_sources {
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        if normalized.contains("/crates/actingcommand-contract/")
+            || normalized.contains("/crates/artifact-store/")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        if source.contains("ArtifactStoreIssuer") {
+            violations.push(normalized);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "artifact issuer escaped contract/store boundary:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn persisted_event_is_opaque_and_query_matching_is_ledger_owned() {
     let root = workspace_root();
     let fact = fs::read_to_string(root.join("crates/ledger/src/fact.rs"))
