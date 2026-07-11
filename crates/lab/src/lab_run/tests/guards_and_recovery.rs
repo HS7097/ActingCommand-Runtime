@@ -397,29 +397,6 @@
     }
 
     #[test]
-    fn operation_selection_prefers_specific_page_before_any_fallback() {
-        let generic = Operation {
-            id: "open_quickswitch".to_string(),
-            from: "any".to_string(),
-            to: Some("quickswitch_dropdown".to_string()),
-            ..test_operation(Some("quickswitch_dropdown"), None)
-        };
-        let specific = Operation {
-            id: "quickswitch_to_home".to_string(),
-            from: "quickswitch_dropdown".to_string(),
-            to: Some("home".to_string()),
-            ..test_operation(Some("home"), None)
-        };
-        let operations = vec![generic, specific];
-
-        let selected =
-            select_operation_for_page("arknights", "arknights/quickswitch_dropdown", &operations)
-                .unwrap();
-
-        assert_eq!(selected.id, "quickswitch_to_home");
-    }
-
-    #[test]
     fn operation_verification_marks_to_null_without_template_unverified() {
         let operation = test_operation(None, None);
         let scene = captured_scene(Some("arknights/home"), false);

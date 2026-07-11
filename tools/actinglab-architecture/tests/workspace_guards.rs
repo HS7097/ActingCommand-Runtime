@@ -428,6 +428,12 @@ fn c5_run_state_machine_returns_data_only_successors() {
     let root = workspace_root();
     let run = fs::read_to_string(root.join("crates/execution-kernel/src/run.rs"))
         .expect("read execution run source");
+    let lab_api = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
+        .expect("read Lab run adapter source");
+    let lab_execute = fs::read_to_string(root.join("crates/lab/src/lab_run/execute.rs"))
+        .expect("read Lab operation adapter source");
+    let lab_bundle = fs::read_to_string(root.join("crates/lab/src/lab_run/bundle.rs"))
+        .expect("read Lab run bundle source");
 
     for required in [
         "pub struct RunStateMachine",
@@ -456,6 +462,44 @@ fn c5_run_state_machine_returns_data_only_successors() {
             "execution run decisions gained side-effect authority via {forbidden}"
         );
     }
+    for required in [
+        "RunStateMachine::new",
+        ".next_directive(&run_operations)",
+        ".operation_succeeded(",
+        ".operation_needs_recovery(",
+        "successor_suggested",
+    ] {
+        assert!(
+            lab_api.contains(required),
+            "Lab run adapter no longer consumes execution-owned transition {required}"
+        );
+    }
+    for forbidden in [
+        "run_recovery_bundle(",
+        ".load_operation_bundle(",
+        "recovery_started",
+        "recovery_result",
+    ] {
+        assert!(
+            !lab_api.contains(forbidden),
+            "Lab run adapter regained direct recovery chaining via {forbidden}"
+        );
+    }
+    for forbidden in [
+        "enum OperationFailureDecision",
+        "fn operation_failure_decision",
+        "fn pre_execution_guard_failure_decision",
+        "fn select_operation_for_page",
+    ] {
+        assert!(
+            !lab_execute.contains(forbidden),
+            "Lab operation adapter regained run decision ownership via {forbidden}"
+        );
+    }
+    assert!(
+        !lab_bundle.contains("fn load_operation_bundle"),
+        "Lab bundle adapter can still load and directly chain successor tasks"
+    );
 }
 
 #[test]

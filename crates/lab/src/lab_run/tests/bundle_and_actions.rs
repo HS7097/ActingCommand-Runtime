@@ -367,6 +367,31 @@
     }
 
     #[test]
+    fn configured_recovery_task_must_exist_inside_admitted_bundle() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let expected = ExternalExpectedSha256::parse_hex(
+            &Sha256Hash::digest(&fs::read(&zip).expect("read bundle")).to_string(),
+        )
+        .expect("external hash");
+        let contained =
+            load_lab_package_for_run(&zip, "fixture", expected).expect("admitted bundle");
+        let mut operation_bundle = test_operation_bundle(test_operation(Some("terminal"), None));
+        operation_bundle.recovery = Some(TaskRecovery::Kind("return_home".to_string()));
+
+        let error = validate_recovery_task_entries(
+            &contained.bundle,
+            &test_control(),
+            &operation_bundle,
+        )
+            .expect_err("missing recovery task");
+
+        assert_eq!(error.code, "package_invalid");
+        assert!(error.message.contains("return_home"));
+    }
+
+    #[test]
     fn lab_validate_reports_unsupported_recognition_target_count() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
@@ -1244,109 +1269,28 @@
     }
 
     #[test]
-    fn operation_failure_decision_retries_only_bounded_transient_navigation_failures() {
-        let flow = OperationFlowPolicy {
-            retryable: true,
-            max_attempts: 3,
-            retry_interval_ms: 100,
-            pre_delay_ms: 0,
-            post_delay_ms: 0,
-            pre_wait_freezes_ms: 0,
-            post_wait_freezes_ms: 0,
-        };
-
-        assert_eq!(
-            operation_failure_decision(flow, 1, false, true),
-            OperationFailureDecision::Retry
-        );
-        assert_eq!(
-            operation_failure_decision(flow, 1, true, true),
-            OperationFailureDecision::Recover
-        );
-        assert_eq!(
-            operation_failure_decision(flow, 3, false, true),
-            OperationFailureDecision::Recover
-        );
-        assert_eq!(
-            operation_failure_decision(flow, 3, false, false),
-            OperationFailureDecision::Fail
-        );
-    }
-
-    #[test]
-    fn operation_failure_decision_does_not_retry_non_retryable_side_effects() {
-        let flow = OperationFlowPolicy {
-            retryable: false,
-            max_attempts: 1,
-            retry_interval_ms: 100,
-            pre_delay_ms: 0,
-            post_delay_ms: 0,
-            pre_wait_freezes_ms: 0,
-            post_wait_freezes_ms: 0,
-        };
-
-        assert_eq!(
-            operation_failure_decision(flow, 1, false, true),
-            OperationFailureDecision::Fail
-        );
-        assert_eq!(
-            operation_failure_decision(flow, 1, true, true),
-            OperationFailureDecision::Fail
-        );
-    }
-
-    #[test]
     fn recovery_configuration_uses_implicit_return_home_when_available() {
         let operation = test_operation(Some("terminal"), None);
         let mut bundle = test_operation_bundle(operation.clone());
 
-        assert!(!operation_recovery_configured(&bundle, &operation, false));
-        assert!(operation_recovery_configured(&bundle, &operation, true));
+        assert_eq!(operation_recovery_task_id(&bundle, &operation, false), None);
+        assert_eq!(
+            operation_recovery_task_id(&bundle, &operation, true).as_deref(),
+            Some(DEFAULT_RECOVERY_TASK_ID)
+        );
 
         bundle.recovery = Some(TaskRecovery::Kind(DEFAULT_RECOVERY_TASK_ID.to_string()));
-        assert!(operation_recovery_configured(&bundle, &operation, false));
+        assert_eq!(
+            operation_recovery_task_id(&bundle, &operation, false).as_deref(),
+            Some(DEFAULT_RECOVERY_TASK_ID)
+        );
 
         bundle.recovery = None;
         let mut operation_with_error_handler = operation.clone();
         operation_with_error_handler.on_error = Some(DEFAULT_RECOVERY_TASK_ID.to_string());
-        assert!(operation_recovery_configured(
-            &bundle,
-            &operation_with_error_handler,
-            false
-        ));
-    }
-
-    #[test]
-    fn pre_execution_guard_failure_recovers_only_after_a_real_attempt() {
-        let retryable = OperationFlowPolicy {
-            retryable: true,
-            max_attempts: 3,
-            retry_interval_ms: 1,
-            pre_delay_ms: 0,
-            post_delay_ms: 0,
-            pre_wait_freezes_ms: 0,
-            post_wait_freezes_ms: 0,
-        };
-        let non_retryable = OperationFlowPolicy {
-            retryable: false,
-            ..retryable
-        };
-
         assert_eq!(
-            pre_execution_guard_failure_decision(retryable, 1, true),
-            OperationFailureDecision::Fail
-        );
-        assert_eq!(
-            pre_execution_guard_failure_decision(retryable, 2, true),
-            OperationFailureDecision::Recover
-        );
-        assert_eq!(
-            pre_execution_guard_failure_decision(retryable, 2, false),
-            OperationFailureDecision::Fail
-        );
-        assert_eq!(
-            pre_execution_guard_failure_decision(non_retryable, 2, true),
-            OperationFailureDecision::Fail
+            operation_recovery_task_id(&bundle, &operation_with_error_handler, false).as_deref(),
+            Some(DEFAULT_RECOVERY_TASK_ID)
         );
     }
 

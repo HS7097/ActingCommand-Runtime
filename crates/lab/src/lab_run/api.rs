@@ -271,6 +271,28 @@ fn execute_lab_run<P: LabPorts>(
         current_page: None,
         failed_step_id: None,
     };
+    let run_operations = state
+        .resources
+        .operation_bundle
+        .operations
+        .iter()
+        .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(run_decision_error)?;
+    let run_config = RunStateConfig::new(
+        &state.control.game,
+        state.resources.operation_bundle.target_page.clone(),
+        state.control.stop_on_confirmation.unwrap_or(true),
+        state
+            .resources
+            .operation_bundle
+            .max_task_retries
+            .unwrap_or(1),
+        u32::try_from(max_steps)
+            .map_err(|_| CliError::package_invalid("control max_steps exceeds u32"))?,
+    )
+    .map_err(run_decision_error)?;
+    let mut run_machine = RunStateMachine::new(run_config, 0).map_err(run_decision_error)?;
     let actionable_page_candidates = if state.control.execution_mode == "recognize_only" {
         None
     } else {
@@ -292,6 +314,9 @@ fn execute_lab_run<P: LabPorts>(
         initial_page_candidates.as_deref(),
     )?;
     state.current_page = first.matched_anchor(&state.control.game);
+    run_machine
+        .observe_page(state.current_page.clone())
+        .map_err(run_decision_error)?;
 
     if state.control.execution_mode == "recognize_only" {
         ctx.event(
@@ -303,16 +328,17 @@ fn execute_lab_run<P: LabPorts>(
         return Ok(state);
     }
 
-    let mut task_retry_count = 0u32;
-    for step_index in 0..max_steps {
+    let terminal_error = loop {
         if started.elapsed() > Duration::from_millis(timeout_ms) {
             return Err(CliError::device(format!(
                 "Lab-1y run timeout after {timeout_ms}ms"
             )));
         }
-        let current_page = match state.current_page.clone() {
-            Some(current_page) => current_page,
-            None => {
+        match run_machine
+            .next_directive(&run_operations)
+            .map_err(run_decision_error)?
+        {
+            RunDirective::AwaitPage => {
                 let scene = capture_until_matched_page(
                     ctx,
                     capture.as_mut(),
@@ -326,178 +352,134 @@ fn execute_lab_run<P: LabPorts>(
                     CliError::device("no page matched before operation selection")
                 })?;
                 state.current_page = Some(current_page.clone());
-                current_page
+                run_machine
+                    .observe_page(Some(current_page))
+                    .map_err(run_decision_error)?;
             }
-        };
-        if state
-            .resources
-            .operation_bundle
-            .target_page
-            .as_ref()
-            .is_some_and(|target| page_anchor_matches(&state.control.game, &current_page, target))
-            && state.control.stop_on_confirmation.unwrap_or(true)
-        {
-            break;
-        }
-
-        let operation = select_operation_for_page(
-            &state.control.game,
-            &current_page,
-            &state.resources.operation_bundle.operations,
-        )
-        .ok_or_else(|| {
-            CliError::device(format!(
-                "no operation can continue from page '{current_page}'"
-            ))
-        })?
-        .clone();
-
-        match execute_operation_with_retries(
-            ctx,
-            capture.as_mut(),
-            &mut input,
-            OperationExecutionRequest {
-                device: DeviceInputRequest {
-                    factory: ports.input_factory(),
-                    config: device.touch_config(),
-                },
-                resources: &state.resources,
-                bundle: &state.resources.operation_bundle,
-                control: &state.control,
-                operation: &operation,
-                current_page: &current_page,
+            RunDirective::ExecuteOperation {
+                operation_id,
+                current_page,
                 step_index,
-                step_timeout_ms,
-                candidate_pages: actionable_page_candidates.as_deref(),
-            },
-        )? {
-            OperationRunOutcome::Success { current_page } => {
-                state.current_page = current_page;
-            }
-            OperationRunOutcome::NeedsRecovery(trigger) => {
-                let max_task_retries = state
+            } => {
+                let operation = state
                     .resources
                     .operation_bundle
-                    .max_task_retries
-                    .unwrap_or(1);
-                if task_retry_count >= max_task_retries {
-                    ctx.event(
-                        "paused_needs_human",
-                        json!({
-                            "step_id": trigger.operation_id,
-                            "reason": trigger.reason,
-                            "after_page": trigger.after_page,
-                            "attempts": trigger.attempts,
-                            "retry_count": task_retry_count,
-                            "max_task_retries": max_task_retries
-                        }),
-                    )?;
-                    state.failed_step_id = Some(trigger.operation_id.clone());
-                    return Err(CliError::device(format!(
-                        "operation '{}' exhausted recovery after {} task retry/retries; paused_needs_human",
-                        trigger.operation_id, task_retry_count
-                    )));
-                }
-                let recovery_task_id = state
-                    .resources
-                    .operation_bundle
-                    .recovery
-                    .as_ref()
-                    .map(TaskRecovery::task_id)
-                    .or_else(|| {
-                        operation
-                            .on_error
-                            .as_deref()
-                            .map(|_| DEFAULT_RECOVERY_TASK_ID)
-                    })
-                    .unwrap_or(DEFAULT_RECOVERY_TASK_ID);
-                ctx.event(
-                    "recovery_started",
-                    json!({
-                        "step_id": trigger.operation_id,
-                        "reason": trigger.reason,
-                        "after_page": trigger.after_page,
-                        "recovery": "return_home",
-                        "task_id": recovery_task_id,
-                        "retry_count": task_retry_count + 1,
-                        "max_task_retries": max_task_retries
-                    }),
-                )?;
-                let recovery_bundle = match state
-                    .resources
-                    .load_operation_bundle(&state.control, recovery_task_id)
-                {
-                    Ok(bundle) => bundle,
-                    Err(err) => {
-                        ctx.event(
-                            "recovery_result",
-                            json!({"status": "failed", "reason": "recovery_task_unavailable", "error": err.message}),
-                        )?;
-                        ctx.event(
-                            "paused_needs_human",
-                            json!({"step_id": trigger.operation_id, "reason": "recovery_task_unavailable"}),
-                        )?;
-                        state.failed_step_id = Some(trigger.operation_id.clone());
-                        return Err(CliError::device(
-                            "return_home recovery task is unavailable; paused_needs_human",
-                        ));
-                    }
-                };
-                match run_recovery_bundle(
+                    .operations
+                    .iter()
+                    .find(|operation| operation.id == operation_id)
+                    .ok_or_else(|| {
+                        CliError::device(format!(
+                            "execution-kernel selected unknown operation '{operation_id}'"
+                        ))
+                    })?
+                    .clone();
+                match execute_operation_with_retries(
                     ctx,
                     capture.as_mut(),
                     &mut input,
-                    RecoveryRunRequest {
+                    OperationExecutionRequest {
                         device: DeviceInputRequest {
                             factory: ports.input_factory(),
                             config: device.touch_config(),
                         },
                         resources: &state.resources,
+                        bundle: &state.resources.operation_bundle,
                         control: &state.control,
-                        recovery_bundle: &recovery_bundle,
-                        current_page: trigger.after_page.clone(),
+                        operation: &operation,
+                        current_page: &current_page,
+                        step_index: usize::try_from(step_index).map_err(|_| {
+                            CliError::device("execution-kernel step index exceeds usize")
+                        })?,
                         step_timeout_ms,
+                        candidate_pages: actionable_page_candidates.as_deref(),
                     },
-                ) {
-                    Ok(page) => {
-                        task_retry_count += 1;
-                        ctx.event(
-                            "recovery_result",
-                            json!({"status": "ok", "page": page, "retry_count": task_retry_count}),
-                        )?;
-                        state.current_page = None;
-                        continue;
+                )? {
+                    OperationRunOutcome::Success { current_page } => {
+                        state.current_page = current_page.clone();
+                        run_machine
+                            .operation_succeeded(&operation_id, current_page)
+                            .map_err(run_decision_error)?;
                     }
-                    Err(err) => {
-                        ctx.event(
-                            "recovery_result",
-                            json!({"status": "failed", "reason": "return_home_failed", "error": err.message}),
-                        )?;
-                        ctx.event(
-                            "paused_needs_human",
-                            json!({"step_id": trigger.operation_id, "reason": "return_home_failed"}),
-                        )?;
-                        state.failed_step_id = Some(trigger.operation_id.clone());
-                        return Err(CliError::device(format!(
-                            "return_home recovery failed for operation '{}'; paused_needs_human",
-                            trigger.operation_id
-                        )));
+                    OperationRunOutcome::NeedsRecovery(trigger) => {
+                        let terminal = run_machine
+                            .operation_needs_recovery(trigger)
+                            .map_err(run_decision_error)?;
+                        let RunDirective::Terminal(terminal) = terminal else {
+                            return Err(CliError::device(
+                                "execution-kernel recovery transition did not reach terminal state",
+                            ));
+                        };
+                        break project_run_terminal(ctx, &mut state, &terminal)?;
                     }
                 }
             }
+            RunDirective::Continue { .. } => {
+                return Err(CliError::device(
+                    "execution-kernel returned internal continue directive from next_directive",
+                ));
+            }
+            RunDirective::Terminal(terminal) => {
+                break project_run_terminal(ctx, &mut state, &terminal)?;
+            }
         }
-        if state.current_page.is_none() {
-            break;
-        }
-    }
+    };
 
     if let Some(mut backend) = input {
         combine_operation_and_close(Ok(()), backend.close())
             .map_err(|err| CliError::device(err.to_string()))?;
     }
+    if let Some(error) = terminal_error {
+        return Err(error);
+    }
     ctx.event("lab_lease_released", json!({"mode": "trusted_execution"}))?;
     ctx.lease_released = true;
     Ok(state)
+}
+
+fn project_run_terminal<L: LedgerSink>(
+    ctx: &mut LabRunContext<'_, L>,
+    state: &mut RunState,
+    terminal: &RunTerminal,
+) -> CliOutcome<Option<CliError>> {
+    let details = serde_json::to_value(terminal).map_err(|error| {
+        CliError::device(format!(
+            "failed to serialize execution-kernel run terminal: {error}"
+        ))
+    })?;
+    ctx.event("run_terminal_decided", details.clone())?;
+    match terminal {
+        RunTerminal::Completed { current_page } => {
+            state.current_page = current_page.clone();
+            Ok(None)
+        }
+        RunTerminal::SuccessorSuggested { suggestion } => {
+            state.failed_step_id = Some(suggestion.source_operation_id.clone());
+            ctx.event("successor_suggested", json!({"suggestion": suggestion}))?;
+            Ok(Some(
+                CliError::safety_blocked(
+                    "successor_suggested",
+                    format!(
+                        "operation '{}' requested successor task '{}'; scheduler decision is required",
+                        suggestion.source_operation_id, suggestion.task_id
+                    ),
+                    &["scheduler_decision"],
+                )
+                .with_details(details),
+            ))
+        }
+        RunTerminal::PausedNeedsHuman { pause } => {
+            state.failed_step_id = pause.operation_id.clone();
+            ctx.event("paused_needs_human", json!({"pause": pause}))?;
+            Ok(Some(
+                CliError::safety_blocked(
+                    "paused_needs_human",
+                    "run state requires human attention before execution can continue",
+                    &["human_attention"],
+                )
+                .with_details(details),
+            ))
+        }
+    }
 }
 
 fn select_device_id(

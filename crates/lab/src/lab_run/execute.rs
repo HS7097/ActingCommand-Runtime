@@ -29,35 +29,6 @@ fn capture_until_matched_page<L: LedgerSink>(
     }
 }
 
-fn canonical_page_anchor(game: &str, page_id: &str) -> String {
-    let prefix = format!("{game}/");
-    page_id.strip_prefix(&prefix).unwrap_or(page_id).to_string()
-}
-
-fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &str) -> bool {
-    expected_anchor == "any"
-        || observed_or_anchor == expected_anchor
-        || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
-        || observed_or_anchor == format!("{game}/{expected_anchor}")
-}
-
-fn select_operation_for_page<'a>(
-    game: &str,
-    current_page: &str,
-    operations: &'a [Operation],
-) -> Option<&'a Operation> {
-    operations
-        .iter()
-        .find(|operation| {
-            operation.from != "any" && page_anchor_matches(game, current_page, &operation.from)
-        })
-        .or_else(|| {
-            operations
-                .iter()
-                .find(|operation| page_anchor_matches(game, current_page, &operation.from))
-        })
-}
-
 fn matched_page_matches_anchor(
     game: &str,
     matched_page: Option<&str>,
@@ -822,66 +793,59 @@ struct OperationExecutionRequest<'a> {
     candidate_pages: Option<&'a [String]>,
 }
 
-struct RecoveryRunRequest<'a> {
-    device: DeviceInputRequest<'a>,
-    resources: &'a LabResources,
-    control: &'a LabControl,
-    recovery_bundle: &'a OperationBundle,
-    current_page: Option<String>,
-    step_timeout_ms: u64,
-}
-
-struct OperationRecoveryTrigger {
-    operation_id: String,
-    reason: &'static str,
-    after_page: Option<String>,
-    attempts: u32,
-}
-
 enum OperationRunOutcome {
     Success { current_page: Option<String> },
-    NeedsRecovery(OperationRecoveryTrigger),
+    NeedsRecovery(RunRecoveryTrigger),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OperationFailureDecision {
-    Retry,
-    Recover,
-    Fail,
-}
-
-fn operation_failure_decision(
-    flow: OperationFlowPolicy,
-    attempt: u32,
-    hit_error_page: bool,
-    recovery_configured: bool,
-) -> OperationFailureDecision {
-    if flow.retryable && attempt < flow.max_attempts && !hit_error_page {
-        return OperationFailureDecision::Retry;
-    }
-    if flow.retryable && recovery_configured {
-        return OperationFailureDecision::Recover;
-    }
-    OperationFailureDecision::Fail
-}
-
-fn operation_recovery_configured(
+fn operation_recovery_task_id(
     bundle: &OperationBundle,
     operation: &Operation,
     implicit_return_home_available: bool,
-) -> bool {
-    bundle.recovery.is_some() || operation.on_error.is_some() || implicit_return_home_available
+) -> Option<String> {
+    bundle
+        .recovery
+        .as_ref()
+        .map(|recovery| recovery.task_id().to_string())
+        .or_else(|| {
+            operation
+                .on_error
+                .as_ref()
+                .map(|_| DEFAULT_RECOVERY_TASK_ID.to_string())
+        })
+        .or_else(|| implicit_return_home_available.then(|| DEFAULT_RECOVERY_TASK_ID.to_string()))
 }
 
-fn pre_execution_guard_failure_decision(
+fn run_operation_policy(
     flow: OperationFlowPolicy,
+    recovery_task_id: Option<String>,
+) -> CliOutcome<RunOperationPolicy> {
+    RunOperationPolicy::new(
+        flow.retryable,
+        flow.max_attempts,
+        flow.retry_interval_ms,
+        recovery_task_id,
+    )
+    .map_err(run_decision_error)
+}
+
+fn run_failure_observation(
+    operation_id: &str,
     attempt: u32,
-    recovery_configured: bool,
-) -> OperationFailureDecision {
-    if attempt > 1 && flow.retryable && recovery_configured {
-        return OperationFailureDecision::Recover;
+    reason: &str,
+    after_page: Option<String>,
+    stage: RunFailureStage,
+) -> CliOutcome<RunFailureObservation> {
+    RunFailureObservation::new(operation_id, attempt, reason, after_page, stage)
+        .map_err(run_decision_error)
+}
+
+fn run_decision_error(error: RunDecisionError) -> CliError {
+    if error.code() == "run_decision_invalid" {
+        CliError::package_invalid(error.to_string())
+    } else {
+        CliError::device(error.to_string())
     }
-    OperationFailureDecision::Fail
 }
 
 fn execute_operation_with_retries<L: LedgerSink>(
@@ -902,11 +866,12 @@ fn execute_operation_with_retries<L: LedgerSink>(
         candidate_pages,
     } = request;
     let flow = operation.flow_policy(bundle.defaults);
-    let recovery_configured = operation_recovery_configured(
+    let recovery_task_id = operation_recovery_task_id(
         bundle,
         operation,
         resources.has_operation_bundle(DEFAULT_RECOVERY_TASK_ID)?,
     );
+    let run_policy = run_operation_policy(flow, recovery_task_id)?;
     ctx.set_step_context(step_index, operation);
     ctx.event(
         "step_started",
@@ -1030,32 +995,42 @@ fn execute_operation_with_retries<L: LedgerSink>(
                     "pre_execution_guard_failed",
                     json!({"step_id": operation.id, "attempt": attempt, "reason": reason, "current_page": current_page, "diagnostics": diagnostics}),
                 )?;
-                if pre_execution_guard_failure_decision(flow, attempt, recovery_configured)
-                    == OperationFailureDecision::Recover
-                {
-                    ctx.event(
-                        "operation_recovery_required",
-                        json!({"step_id": operation.id, "attempts": attempt - 1, "reason": reason, "after_page": current_page}),
-                    )?;
-                    ctx.clear_step_context();
-                    return Ok(OperationRunOutcome::NeedsRecovery(
-                        OperationRecoveryTrigger {
-                            operation_id: operation.id.clone(),
-                            reason,
-                            after_page: current_page,
-                            attempts: attempt - 1,
-                        },
-                    ));
-                }
-                ctx.event(
-                    "step_failed",
-                    json!({"step_id": operation.id, "reason": "pre_execution_guard_failed", "attempt": attempt}),
+                let observation = run_failure_observation(
+                    &operation.id,
+                    attempt,
+                    reason,
+                    current_page.clone(),
+                    RunFailureStage::PreExecutionGuard,
                 )?;
-                return Err(CliError::device(format!(
-                    "pre-execution guard failed for operation '{}': {reason}; current_page={}",
-                    operation.id,
-                    current_page.unwrap_or_else(|| "unknown".to_string())
-                )));
+                match decide_run_operation_failure(&run_policy, observation)
+                    .map_err(run_decision_error)?
+                {
+                    RunOperationFailureDecision::RequestRecovery(trigger) => {
+                        ctx.event(
+                            "operation_recovery_required",
+                            json!({"step_id": operation.id, "attempts": trigger.attempts, "reason": trigger.reason.as_str(), "after_page": trigger.after_page.as_deref()}),
+                        )?;
+                        ctx.clear_step_context();
+                        return Ok(OperationRunOutcome::NeedsRecovery(trigger));
+                    }
+                    RunOperationFailureDecision::Fail(_) => {
+                        ctx.event(
+                            "step_failed",
+                            json!({"step_id": operation.id, "reason": "pre_execution_guard_failed", "attempt": attempt}),
+                        )?;
+                        return Err(CliError::device(format!(
+                            "pre-execution guard failed for operation '{}': {reason}; current_page={}",
+                            operation.id,
+                            current_page.unwrap_or_else(|| "unknown".to_string())
+                        )));
+                    }
+                    RunOperationFailureDecision::Retry { .. } => {
+                        return Err(CliError::device(format!(
+                            "execution-kernel returned retry for pre-execution guard failure in operation '{}'",
+                            operation.id
+                        )));
+                    }
+                }
             }
         };
 
@@ -1203,35 +1178,41 @@ fn execute_operation_with_retries<L: LedgerSink>(
                 "page_guard_failed",
                 json!({"step_id": operation.id, "attempt": attempt, "expected": operation.expected_after_page(), "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
             )?;
-            match operation_failure_decision(flow, attempt, hit_error_page, recovery_configured) {
-                OperationFailureDecision::Retry => {
+            let decision_reason = if hit_error_page {
+                "error_page"
+            } else {
+                failure_reason
+            };
+            let observation = run_failure_observation(
+                &operation.id,
+                attempt,
+                decision_reason,
+                after_page.clone(),
+                RunFailureStage::PostExecution { hit_error_page },
+            )?;
+            match decide_run_operation_failure(&run_policy, observation)
+                .map_err(run_decision_error)?
+            {
+                RunOperationFailureDecision::Retry {
+                    next_attempt,
+                    delay_ms,
+                } => {
                     ctx.event(
                         "operation_retry_scheduled",
-                        json!({"step_id": operation.id, "attempt": attempt, "next_attempt": attempt + 1, "reason": failure_reason, "retry_interval_ms": flow.retry_interval_ms, "after_page": after_page}),
+                        json!({"step_id": operation.id, "attempt": attempt, "next_attempt": next_attempt, "reason": failure_reason, "retry_interval_ms": delay_ms, "after_page": after_page}),
                     )?;
-                    ctx.sleep_ms(flow.retry_interval_ms);
+                    ctx.sleep_ms(delay_ms);
                     continue;
                 }
-                OperationFailureDecision::Recover => {
+                RunOperationFailureDecision::RequestRecovery(trigger) => {
                     ctx.event(
                         "operation_recovery_required",
-                        json!({"step_id": operation.id, "attempts": attempt, "reason": if hit_error_page { "error_page" } else { failure_reason }, "after_page": after_page}),
+                        json!({"step_id": operation.id, "attempts": trigger.attempts, "reason": trigger.reason.as_str(), "after_page": trigger.after_page.as_deref()}),
                     )?;
                     ctx.clear_step_context();
-                    return Ok(OperationRunOutcome::NeedsRecovery(
-                        OperationRecoveryTrigger {
-                            operation_id: operation.id.clone(),
-                            reason: if hit_error_page {
-                                "error_page"
-                            } else {
-                                failure_reason
-                            },
-                            after_page,
-                            attempts: attempt,
-                        },
-                    ));
+                    return Ok(OperationRunOutcome::NeedsRecovery(trigger));
                 }
-                OperationFailureDecision::Fail => {
+                RunOperationFailureDecision::Fail(_) => {
                     ctx.event(
                         "step_failed",
                         json!({"step_id": operation.id, "reason": "page_confirmation_failed", "attempts": attempt}),
@@ -1298,90 +1279,6 @@ fn execute_operation_with_retries<L: LedgerSink>(
     }
 
     unreachable!("operation attempt loop has at least one iteration")
-}
-
-fn run_recovery_bundle<L: LedgerSink>(
-    ctx: &mut LabRunContext<'_, L>,
-    capture: &mut dyn CaptureBackend,
-    input: &mut Option<Box<dyn InputBackend>>,
-    request: RecoveryRunRequest<'_>,
-) -> CliOutcome<Option<String>> {
-    let RecoveryRunRequest {
-        device,
-        resources,
-        control,
-        recovery_bundle,
-        current_page,
-        step_timeout_ms,
-    } = request;
-    let candidate_pages = actionable_page_ids_for_bundle(resources, control, recovery_bundle)?;
-    let mut page = match current_page {
-        Some(page) => page,
-        None => {
-            let scene = capture_until_matched_page(
-                ctx,
-                capture,
-                resources,
-                "recovery_page_wait",
-                step_timeout_ms,
-                control,
-                Some(&candidate_pages),
-            )?;
-            scene.matched_anchor(&control.game).ok_or_else(|| {
-                CliError::device("return_home recovery could not identify the current page")
-            })?
-        }
-    };
-
-    for recovery_index in 0..DEFAULT_MAX_STEPS {
-        if recovery_bundle
-            .target_page
-            .as_ref()
-            .is_some_and(|target| page_anchor_matches(&control.game, &page, target))
-        {
-            return Ok(Some(page));
-        }
-        let operation =
-            select_operation_for_page(&control.game, &page, &recovery_bundle.operations)
-                .ok_or_else(|| {
-                    CliError::device(format!(
-                        "return_home recovery cannot continue from page '{page}'"
-                    ))
-                })?;
-        match execute_operation_with_retries(
-            ctx,
-            capture,
-            input,
-            OperationExecutionRequest {
-                device,
-                resources,
-                bundle: recovery_bundle,
-                control,
-                operation,
-                current_page: &page,
-                step_index: recovery_index,
-                step_timeout_ms,
-                candidate_pages: Some(&candidate_pages),
-            },
-        )? {
-            OperationRunOutcome::Success { current_page } => {
-                let Some(next_page) = current_page else {
-                    return Ok(None);
-                };
-                page = next_page;
-            }
-            OperationRunOutcome::NeedsRecovery(trigger) => {
-                return Err(CliError::device(format!(
-                    "return_home recovery operation '{}' failed after {} attempt(s): {}",
-                    trigger.operation_id, trigger.attempts, trigger.reason
-                )));
-            }
-        }
-    }
-
-    Err(CliError::device(format!(
-        "return_home recovery exceeded {DEFAULT_MAX_STEPS} steps"
-    )))
 }
 
 fn capture_backend_attempt_json(attempt: &CaptureBackendAttempt) -> Value {

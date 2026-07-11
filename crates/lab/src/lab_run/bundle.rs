@@ -37,6 +37,7 @@ fn load_lab_resources_from_bundle(
                 other => Err(containment_error(other)),
             })
     })?;
+    validate_recovery_task_entries(&bundle, control, &operation_bundle)?;
     let pack_path = bundle
         .recognition_pack_path()
         .map(PathBuf::from)
@@ -94,6 +95,56 @@ fn validate_manifest_entry_task_id(
     }
     Ok(())
 }
+
+fn validate_recovery_task_entries(
+    bundle: &LoadedBundle,
+    control: &LabControl,
+    operation_bundle: &OperationBundle,
+) -> CliOutcome<()> {
+    let mut task_ids = BTreeSet::new();
+    if let Some(recovery) = &operation_bundle.recovery {
+        task_ids.insert(recovery.task_id());
+    }
+    if operation_bundle
+        .operations
+        .iter()
+        .any(|operation| operation.on_error.is_some())
+    {
+        task_ids.insert(DEFAULT_RECOVERY_TASK_ID);
+    }
+    for task_id in task_ids {
+        let path = format!("operations/{task_id}/task.json");
+        let bytes = match bundle.resource_entry(&path) {
+            Ok(bytes) => bytes,
+            Err(ContainmentError::MissingEntry { .. }) => {
+                return Err(CliError::package_invalid(format!(
+                    "configured recovery task '{task_id}' is missing {path}"
+                )));
+            }
+            Err(error) => return Err(containment_error(error)),
+        };
+        let recovery_bundle: OperationBundle = serde_json::from_slice(bytes).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to parse configured recovery task {path}: {error}"
+            ))
+        })?;
+        recovery_bundle.validate(control, |relative| {
+            bundle
+                .resource_entry(&format!("operations/{task_id}/{relative}"))
+                .or_else(|error| match error {
+                    ContainmentError::MissingEntry { .. } => bundle.resource_entry(relative),
+                    other => Err(other),
+                })
+                .map(|_| true)
+                .or_else(|error| match error {
+                    ContainmentError::MissingEntry { .. } => Ok(false),
+                    other => Err(containment_error(other)),
+                })
+        })?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct LabControl {
     schema_version: String,
@@ -229,33 +280,6 @@ impl LabResources {
             .map_err(containment_error)
     }
 
-    fn load_operation_bundle(
-        &self,
-        control: &LabControl,
-        task_id: &str,
-    ) -> CliOutcome<OperationBundle> {
-        let path = format!("operations/{task_id}/task.json");
-        let bytes = self
-            .bundle
-            .resource_entry(&path)
-            .map_err(containment_error)?;
-        let operation_bundle: OperationBundle = serde_json::from_slice(bytes)
-            .map_err(|err| CliError::package_invalid(format!("failed to parse {path}: {err}")))?;
-        operation_bundle.validate(control, |relative| {
-            self.bundle
-                .resource_entry(&format!("operations/{task_id}/{relative}"))
-                .or_else(|err| match err {
-                    ContainmentError::MissingEntry { .. } => self.bundle.resource_entry(relative),
-                    other => Err(other),
-                })
-                .map(|_| true)
-                .or_else(|err| match err {
-                    ContainmentError::MissingEntry { .. } => Ok(false),
-                    other => Err(containment_error(other)),
-                })
-        })?;
-        Ok(operation_bundle)
-    }
 }
 
 #[derive(Debug)]
