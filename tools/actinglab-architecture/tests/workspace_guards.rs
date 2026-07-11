@@ -463,8 +463,14 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
             .any(|dependency| dependency["name"] == "actingcommand-execution-kernel");
         if reaches_kernel {
             assert!(
-                matches!(name, "actingcommand-runtime-host" | "actingcommand-actingd"),
-                "production client {name} must not construct execution backends"
+                matches!(
+                    name,
+                    "actingcommand-runtime-host"
+                        | "actingcommand-actingd"
+                        | "actingcommand-device-test"
+                        | "actingcommand-task-loop"
+                ),
+                "package {name} must not access execution-kernel"
             );
         }
     }
@@ -485,6 +491,94 @@ fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
             assert!(
                 !source.contains(forbidden),
                 "{} contains forbidden control-plane token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn c5_task_planning_moves_to_execution_kernel_behind_a_compatibility_shell() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let dependencies = |package_name: &str| {
+        packages
+            .iter()
+            .find(|package| package["name"] == package_name)
+            .unwrap_or_else(|| panic!("missing package {package_name}"))["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter_map(|dependency| dependency["name"].as_str())
+            .collect::<Vec<_>>()
+    };
+
+    let kernel_dependencies = dependencies("actingcommand-execution-kernel");
+    for required in [
+        "actingcommand-page-detector",
+        "actingcommand-recognition",
+        "actingcommand-recognition-pack",
+    ] {
+        assert!(
+            kernel_dependencies.contains(&required),
+            "execution-kernel must own task planning dependency {required}"
+        );
+    }
+
+    let device_test_dependencies = dependencies("actingcommand-device-test");
+    assert!(
+        device_test_dependencies.contains(&"actingcommand-execution-kernel"),
+        "device-test must consume planning from execution-kernel"
+    );
+    assert!(
+        !device_test_dependencies.contains(&"actingcommand-task-loop"),
+        "device-test must not retain the legacy task-loop dependency"
+    );
+
+    let legacy_dependencies = dependencies("actingcommand-task-loop");
+    assert_eq!(
+        legacy_dependencies,
+        vec!["actingcommand-execution-kernel"],
+        "the temporary task-loop crate must remain a pure compatibility shell"
+    );
+    let legacy_source = fs::read_to_string(root.join("crates/task-loop/src/lib.rs"))
+        .expect("read task-loop compatibility source");
+    assert!(legacy_source.contains("load_task_plan_from_json_str"));
+    for forbidden in [
+        "actingcommand_execution_kernel::*",
+        "ExecutionKernel",
+        "ExecutionBackendProvider",
+        "struct TaskPlan",
+        "struct ProbePlan",
+        "impl DryRunTaskLoop",
+    ] {
+        assert!(
+            !legacy_source.contains(forbidden),
+            "task-loop compatibility shell retained implementation token {forbidden}"
+        );
+    }
+
+    let mut planning_sources = Vec::new();
+    collect_rust_files(
+        &root.join("crates/execution-kernel/src/planning"),
+        &mut planning_sources,
+    );
+    for path in planning_sources {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for forbidden in [
+            "actingcommand_device",
+            "ExecutionKernel",
+            "ExecutionBackendProvider",
+            "InputBackend",
+            "CaptureBackend",
+            "std::process::Command",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{} contains forbidden planning side-effect token {forbidden}",
                 path.display()
             );
         }

@@ -126,10 +126,10 @@ name = "actingcommand-device-test"
 version = "0.1.0"
 dependencies = [
  "actingcommand-device",
+ "actingcommand-execution-kernel",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
- "actingcommand-task-loop",
  "serde",
  "serde_json",
 ]
@@ -140,6 +140,11 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-page-detector",
+ "actingcommand-recognition",
+ "actingcommand-recognition-pack",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -307,11 +312,7 @@ dependencies = [
 name = "actingcommand-task-loop"
 version = "0.1.0"
 dependencies = [
- "actingcommand-page-detector",
- "actingcommand-recognition",
- "actingcommand-recognition-pack",
- "serde",
- "serde_json",
+ "actingcommand-execution-kernel",
 ]
 
 [[package]]

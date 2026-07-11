@@ -1,5 +1,77 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C5 Task 3a execution-planning migration
+
+### Current status
+
+- Mechanically moved the existing pure `TaskPlan`/`ProbePlan` validation, decision behavior, and 37
+  established tests from `actingcommand-task-loop` into `actingcommand-execution-kernel::planning`.
+- Kept planning APIs side-effect free. A new architecture guard rejects device backend, execution
+  session, provider, and child-process tokens from the planning module.
+- Migrated device-test task-dry-run and probe-run imports directly to execution-kernel; device-test
+  no longer depends on task-loop.
+- Reduced task-loop to a temporary explicit re-export list containing planning APIs only. It cannot
+  re-export execution backend/session authority, and Cargo reverse-dependency output shows no
+  workspace consumer.
+- Preserved type names, fatal error text, JSON parsing, dry-run decisions, probe safety policy, and
+  device-test behavior. Full-workspace tests pass with the compatibility shell still present.
+- No resource repository, emulator, live device, cooperation-workspace write, or subagent was used.
+
+### Files changed
+
+- `Cargo.lock`
+- `apps/device-test/Cargo.toml`
+- `apps/device-test/src/main.rs`
+- `apps/device-test/src/probe_run.rs`
+- `crates/execution-kernel/Cargo.toml`
+- `crates/execution-kernel/src/lib.rs`
+- `crates/execution-kernel/src/planning/mod.rs`
+- `crates/execution-kernel/src/planning/probe.rs`
+- `crates/task-loop/Cargo.toml`
+- `crates/task-loop/src/lib.rs`
+- `tools/actinglab-architecture/tests/workspace_guards.rs`
+- `docs/plans/2026-07-11-c5-production-capability-relocation.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo check -p actingcommand-execution-kernel -p actingcommand-task-loop -p actingcommand-device-test -p actingcommand-actinglab-architecture --all-targets`
+- `cargo test -p actingcommand-execution-kernel -p actingcommand-task-loop -p actingcommand-device-test -p actingcommand-actinglab-architecture`
+- `cargo test -p actingcommand-actinglab-architecture c5_task_planning_moves_to_execution_kernel_behind_a_compatibility_shell -- --exact`
+- `cargo tree -i actingcommand-task-loop --workspace`
+- `cargo tree -i actingcommand-execution-kernel --workspace --depth 2`
+- `cargo test --workspace`
+- `cargo clippy -p actingcommand-execution-kernel -p actingcommand-task-loop -p actingcommand-device-test -p actingcommand-actinglab-architecture --all-targets --all-features -- -D warnings`
+- `cargo fmt --all`
+- `git diff --check`
+
+### Test results
+
+- Execution-kernel passed 44 tests: 37 mechanically moved planning tests plus 7 existing backend
+  lifecycle tests.
+- Device-test passed 55 tests after switching directly to execution-kernel planning APIs.
+- Architecture passed 15 unit tests and 21 workspace guards, including the new ownership,
+  compatibility-shell, and side-effect-token checks.
+- Full `cargo test --workspace` passed with task-loop retained only as the compatibility shell.
+- Focused Clippy passed with warnings denied; formatting and whitespace checks passed.
+- The first focused architecture run correctly exposed that the C3b consumer allowlist had not yet
+  admitted the temporary compatibility shell. The allowlist and the narrower shell-specific guard
+  were added, then focused and full suites passed.
+
+### Current blocker
+
+- No blocker for Task 3a.
+- Task 3 is not complete until the unreferenced compatibility crate is removed and retirement gates
+  pass without it.
+
+### Next step
+
+1. Commit and push Task 3a and record evidence in Issue #36.
+2. Remove `actingcommand-task-loop` from the workspace and dependency catalog, update the guard to
+   require its absence, then repeat focused, protocol, architecture, reverse-dependency, Clippy,
+   formatting, and full-workspace gates.
+
 ## 2026-07-11 Issue 35 C5 Task 2b package-build boundary
 
 ### Current status

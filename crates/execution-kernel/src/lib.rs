@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Daemon-owned execution session shell for production input and capture backends.
+//! Daemon-owned execution sessions plus pure task and probe decision planning.
 //!
 //! Clients never receive backend objects. The resident Runtime owns this kernel and invokes it
 //! only after scheduler admission and fencing.
@@ -9,11 +9,13 @@
 
 mod error;
 mod kernel;
+mod planning;
 mod provider;
 mod session;
 
 pub use error::*;
 pub use kernel::*;
+pub use planning::*;
 pub use provider::*;
 pub use session::*;
 

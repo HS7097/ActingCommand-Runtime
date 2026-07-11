@@ -6,13 +6,13 @@ use actingcommand_device::{
     PixelFormat, ScreencapBackend, SelectedTouchBackend, TouchBackendConfig,
     TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close, create_touch_backend,
 };
-use actingcommand_page_detector::PageDetector;
-use actingcommand_recognition::{Rect as RecognitionRect, Scene, ScenePixelFormat};
-use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator};
-use actingcommand_task_loop::{
+use actingcommand_execution_kernel::{
     ProbeClickEffect, ProbeDecisionLoop, ProbeReferenceOverrides, ProbeStepDecision,
     ResourcePolicy, ResourcePolicyKind, load_probe_plan_from_json_str,
 };
+use actingcommand_page_detector::PageDetector;
+use actingcommand_recognition::{Rect as RecognitionRect, Scene, ScenePixelFormat};
+use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;

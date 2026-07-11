@@ -9,8 +9,4 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-actingcommand-page-detector = { workspace = true }
-actingcommand-recognition = { workspace = true }
-actingcommand-recognition-pack = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+actingcommand-execution-kernel = { workspace = true }

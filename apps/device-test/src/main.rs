@@ -6,6 +6,9 @@ use actingcommand_device::{
     TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
     create_capture_backend, create_touch_backend, resolve_adb_path,
 };
+use actingcommand_execution_kernel::{
+    DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
+};
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
 };
@@ -13,9 +16,6 @@ use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, RecognitionPack, RecognitionTarget, TargetEvaluation,
     TargetKind, load_pack_from_json_str,
-};
-use actingcommand_task_loop::{
-    DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
 };
 use serde::Deserialize;
 use std::env;
@@ -1145,7 +1145,7 @@ fn page_error(err: actingcommand_page_detector::PageDetectorError) -> DeviceErro
     DeviceError::fatal(err.to_string())
 }
 
-fn task_error(err: actingcommand_task_loop::TaskLoopError) -> DeviceError {
+fn task_error(err: actingcommand_execution_kernel::TaskLoopError) -> DeviceError {
     DeviceError::fatal(err.to_string())
 }
 
