@@ -301,6 +301,72 @@
     }
 
     #[test]
+    fn lab_run_rejects_external_hash_mismatch_before_device_resolution() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let out = temp.path().join("out.zip");
+        let mut request = test_run_request(zip, out.clone(), temp.path());
+        request.instance = Some("fixture".to_string());
+        request.expected_input_sha256 = ExternalExpectedSha256::parse_hex(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("external hash");
+        let resolver = Arc::new(DeviceResolverCounters::default());
+        request.device_resolver = test_device_resolver(
+            "fixture",
+            "fixture",
+            resolver.clone(),
+            temp.path().join("locks"),
+        );
+        let mut lab = test_lab(temp.path());
+
+        let error = lab.lab_run(request).expect_err("hash mismatch");
+
+        assert_eq!(error.code, "package_invalid");
+        assert!(error.message.contains("hash mismatch"));
+        assert!(
+            resolver
+                .resolved_ids
+                .lock()
+                .expect("resolved ids")
+                .is_empty()
+        );
+        assert_eq!(lab.ports().capture.opens.load(Ordering::SeqCst), 0);
+        assert!(out.is_file());
+    }
+
+    #[test]
+    fn production_bundle_ignores_loose_neighbor_resources() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let loose = temp.path().join("resources/operations/task");
+        fs::create_dir_all(&loose).expect("loose resource directory");
+        fs::write(
+            loose.join("task.json"),
+            br#"{"task_id":"malicious-loose-resource"}"#,
+        )
+        .expect("loose resource");
+        let expected = ExternalExpectedSha256::parse_hex(
+            &Sha256Hash::digest(&fs::read(&zip).expect("read bundle")).to_string(),
+        )
+        .expect("external hash");
+
+        let contained =
+            load_lab_package_for_run(&zip, "fixture", expected).expect("admitted bundle");
+
+        assert_eq!(
+            contained
+                .bundle
+                .operation()
+                .get("task_id")
+                .and_then(Value::as_str),
+            Some("task")
+        );
+    }
+
+    #[test]
     fn lab_validate_reports_unsupported_recognition_target_count() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");

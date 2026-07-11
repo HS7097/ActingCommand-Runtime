@@ -319,6 +319,59 @@ fn c5_drive_effects_cross_only_runtime_ports() {
 }
 
 #[test]
+fn c5_production_run_ingress_requires_external_loaded_bundle() {
+    let root = workspace_root();
+    let bundle = fs::read_to_string(root.join("crates/execution-kernel/src/bundle.rs"))
+        .expect("read execution bundle source");
+    let run = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
+        .expect("read Lab run ingress source");
+    let run_api = fs::read_to_string(root.join("crates/lab/src/lab_run_api.rs"))
+        .expect("read Lab run API source");
+    let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
+        .expect("read ActingLab run CLI source");
+    let production_loader = run
+        .split_once("fn load_lab_package_for_run")
+        .and_then(|(_, tail)| tail.split_once("fn containment_error"))
+        .map(|(loader, _)| loader)
+        .expect("locate production run loader");
+
+    for required in [
+        "pub struct ExternalExpectedSha256",
+        "pub struct ExternallyVerifiedBundle",
+        "Containment::new()",
+    ] {
+        assert!(
+            bundle.contains(required),
+            "execution bundle ingress lost {required}"
+        );
+    }
+    for forbidden in ["std::fs", "Sha256Hash::digest"] {
+        assert!(
+            !bundle.contains(forbidden),
+            "execution bundle ingress can discover or self-trust resources via {forbidden}"
+        );
+    }
+    assert!(
+        production_loader.contains("ExternallyVerifiedBundle::load"),
+        "production run loader bypasses the execution bundle capability"
+    );
+    for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
+        assert!(
+            !production_loader.contains(forbidden),
+            "production run loader self-trusts its package via {forbidden}"
+        );
+    }
+    assert!(
+        run_api.contains("pub expected_input_sha256: ExternalExpectedSha256"),
+        "LabRunRequest does not require an externally supplied hash type"
+    );
+    assert!(
+        cli.contains("parse_required_external_sha256"),
+        "ActingLab production run CLI does not require an external expected hash"
+    );
+}
+
+#[test]
 fn ledger_ingress_accepts_only_sanitized_event_v2() {
     let root = workspace_root();
     let global_path = root.join("crates/ledger/src/global.rs");

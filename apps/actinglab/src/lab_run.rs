@@ -6,8 +6,8 @@ use super::{
 };
 use actingcommand_device::CaptureBackendChoice;
 use actingcommand_lab::{
-    FrameStoreControl, LabRunDeviceResolver, LabRunProcessContext, LabRunRequest,
-    LabRunSelectedDevice, LabValidateRequest, MemorySampleSource,
+    ExternalExpectedSha256, FrameStoreControl, LabRunDeviceResolver, LabRunProcessContext,
+    LabRunRequest, LabRunSelectedDevice, LabValidateRequest, MemorySampleSource,
 };
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
 use serde::Serialize;
@@ -57,7 +57,7 @@ fn lab_run_request(
                 .capture_backend
                 .or(parse_optional_capture_backend(flags, "--capture-backend")?),
             frame_store_override: parse_frame_store_control_from_flags(flags)?,
-            expected_input_sha256: parse_optional_sha256(flags, "--expected-sha256")?,
+            expected_input_sha256: parse_required_external_sha256(flags, "--expected-sha256")?,
             process: process_context()?,
         },
         config,
@@ -163,6 +163,21 @@ fn parse_optional_sha256(flags: &FlagArgs, name: &str) -> CliOutcome<Option<Sha2
         .transpose()
 }
 
+fn parse_required_external_sha256(
+    flags: &FlagArgs,
+    name: &str,
+) -> CliOutcome<ExternalExpectedSha256> {
+    let value = flags
+        .optional(name)
+        .filter(|value| value != "true")
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "lab run requires {name} <sha256> from an external trust source"
+            ))
+        })?;
+    ExternalExpectedSha256::parse_hex(&value).map_err(containment_error)
+}
+
 fn parse_frame_store_control_from_flags(flags: &FlagArgs) -> CliOutcome<FrameStoreControl> {
     let control = FrameStoreControl {
         similarity_threshold: parse_optional_f32(flags, "--similarity-threshold")?,
@@ -237,6 +252,23 @@ fn git_commit() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_run_requires_external_expected_hash() {
+        let flags = FlagArgs::parse(&[
+            "--zip".to_string(),
+            "input.zip".to_string(),
+            "--out".to_string(),
+            "output.zip".to_string(),
+        ])
+        .expect("flags");
+
+        let error = parse_required_external_sha256(&flags, "--expected-sha256")
+            .expect_err("missing external hash");
+
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("external trust source"));
+    }
 
     #[test]
     fn frame_store_flags_build_typed_override() {

@@ -102,7 +102,7 @@ fn validate_lab_package_zip_with_expected(
     expected_input_sha256: Option<Sha256Hash>,
 ) -> CliOutcome<LabValidateResponse> {
     let contained =
-        load_lab_package_through_containment(zip_path, "lab-validate", expected_input_sha256)?;
+        load_lab_package_for_validation(zip_path, "lab-validate", expected_input_sha256)?;
     let entry_count = contained.bundle.entry_count();
     let control = lab_control_from_bundle(&contained.bundle)?;
     control.validate()?;
@@ -158,7 +158,7 @@ fn execute_lab_run<P: LabPorts>(
     request: &mut LabRunRequest,
 ) -> CliOutcome<RunState> {
     ctx.set_phase("input_unpacked");
-    let contained = load_lab_package_through_containment(
+    let contained = load_lab_package_for_run(
         &request.zip_path,
         "lab-run",
         request.expected_input_sha256,
@@ -528,7 +528,7 @@ struct ContainedLabInput {
     bundle: LoadedBundle,
 }
 
-fn load_lab_package_through_containment(
+fn load_lab_package_for_validation(
     zip_path: &Path,
     instance_label: &str,
     expected_input_sha256: Option<Sha256Hash>,
@@ -551,6 +551,26 @@ fn load_lab_package_through_containment(
     Ok(ContainedLabInput {
         sha256: expected.to_string(),
         bundle,
+    })
+}
+
+fn load_lab_package_for_run(
+    zip_path: &Path,
+    instance_label: &str,
+    expected_input_sha256: ExternalExpectedSha256,
+) -> CliOutcome<ContainedLabInput> {
+    let bytes = fs::read(zip_path).map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to read Lab package {}: {err}",
+            zip_path.display()
+        ))
+    })?;
+    let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected_input_sha256)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
+    Ok(ContainedLabInput {
+        sha256,
+        bundle: admitted.into_loaded_bundle(),
     })
 }
 

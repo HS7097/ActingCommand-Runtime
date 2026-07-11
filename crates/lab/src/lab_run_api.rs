@@ -2,6 +2,7 @@
 
 use crate::{FrameStoreControl, LabError, MemorySampleSource};
 use actingcommand_device::{CaptureBackendChoice, CaptureBackendConfig, TouchBackendConfig};
+pub use actingcommand_execution_kernel::ExternalExpectedSha256;
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -67,7 +68,7 @@ pub struct LabRunRequest {
     pub capture_interval_override: Option<u64>,
     pub capture_backend_override: Option<CaptureBackendChoice>,
     pub frame_store_override: FrameStoreControl,
-    pub expected_input_sha256: Option<Sha256Hash>,
+    pub expected_input_sha256: ExternalExpectedSha256,
     pub process: LabRunProcessContext,
 }
 

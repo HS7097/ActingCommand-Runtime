@@ -5,11 +5,11 @@ use actingcommand_device::{
     MaaTouchConfig, TouchBackendConfig,
 };
 use actingcommand_lab::{
-    CaptureBackendObservation, CaptureBackendReport, FrameStoreControl, LabRunDeviceResolver,
-    LabRunProcessContext, LabRunRequest, LabRunResponse, LabRunSelectedDevice, LabValidateRequest,
-    LabValidateResponse, LedgerEventEntry, LedgerLastResort, LedgerReadback, LedgerRecordEntry,
-    LedgerSessionHeader, LedgerSink, MemorySample, MemorySampleSource, RunLedgerSessionRequest,
-    RuntimeCommitSource,
+    CaptureBackendObservation, CaptureBackendReport, ExternalExpectedSha256, FrameStoreControl,
+    LabRunDeviceResolver, LabRunProcessContext, LabRunRequest, LabRunResponse,
+    LabRunSelectedDevice, LabValidateRequest, LabValidateResponse, LedgerEventEntry,
+    LedgerLastResort, LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink,
+    MemorySample, MemorySampleSource, RunLedgerSessionRequest, RuntimeCommitSource,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -94,7 +94,10 @@ fn lab_run_family_exposes_typed_requests_and_responses() {
         capture_interval_override: None,
         capture_backend_override: Some(CaptureBackendChoice::Adb),
         frame_store_override: FrameStoreControl::default(),
-        expected_input_sha256: None,
+        expected_input_sha256: ExternalExpectedSha256::parse_hex(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("external expected hash"),
         process,
     };
     let _validate = LabValidateRequest {

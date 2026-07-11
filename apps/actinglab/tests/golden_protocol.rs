@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
@@ -669,6 +670,7 @@ impl Fixture {
                 args.push(self.safe_package.clone().into_os_string());
             }
             "lab_run_success" => {
+                let expected = sha256_file(&self.lab_package);
                 args.extend([
                     os("--instance"),
                     os("fixture:5555"),
@@ -678,6 +680,8 @@ impl Fixture {
                     os("run"),
                     os("--zip"),
                     self.lab_package.clone().into_os_string(),
+                    os("--expected-sha256"),
+                    os(&expected),
                     os("--out"),
                     self.root().join("lab-result.zip").into_os_string(),
                 ]);
@@ -766,6 +770,11 @@ impl Fixture {
             self.red_scene.clone().into_os_string(),
         ]
     }
+}
+
+fn sha256_file(path: &Path) -> String {
+    let bytes = fs::read(path).expect("read package for external expected hash");
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn os(value: &str) -> OsString {

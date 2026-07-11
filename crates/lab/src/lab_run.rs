@@ -15,6 +15,7 @@ use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
     InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
 };
+use actingcommand_execution_kernel::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_ledger::{
     CommitProof, EvidenceStore, IdIssuer, IdKind, LastResortError, LedgerRecord, LedgerRecordKind,
     LightEvent, SessionHeader, commit_then_record, project_light_events,

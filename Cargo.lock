@@ -140,6 +140,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-pack-containment",
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",

@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bundle;
 mod drive;
 mod environment;
 mod error;
@@ -16,6 +17,7 @@ mod provider;
 mod readonly;
 mod session;
 
+pub use bundle::*;
 pub use drive::*;
 pub use environment::*;
 pub use error::*;

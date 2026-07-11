@@ -457,6 +457,10 @@ fn test_lab(root: &Path) -> Lab<TestPorts> {
 }
 
 fn test_run_request(zip: PathBuf, out: PathBuf, root: &Path) -> LabRunRequest {
+    let expected_input_sha256 = ExternalExpectedSha256::parse_hex(
+        &Sha256Hash::digest(&std::fs::read(&zip).expect("read test bundle")).to_string(),
+    )
+    .expect("external test hash");
     LabRunRequest {
         zip_path: zip,
         out_path: out,
@@ -473,7 +477,7 @@ fn test_run_request(zip: PathBuf, out: PathBuf, root: &Path) -> LabRunRequest {
         capture_interval_override: None,
         capture_backend_override: None,
         frame_store_override: FrameStoreControl::default(),
-        expected_input_sha256: None,
+        expected_input_sha256,
         process: crate::LabRunProcessContext {
             current_dir: Some(root.to_path_buf()),
             lease_root: root.join("locks"),
