@@ -329,6 +329,7 @@ fn takeover_cooldown_blocks_only_affected_instances() {
     let unaffected = instance(&issuer);
     let mut scheduler =
         SeedScheduler::new(epoch(&issuer), config(), [affected], 1_000).expect("scheduler");
+    assert_eq!(scheduler.protected_instance_ids(1_100), vec![affected]);
     let error = scheduler
         .acquire(
             request(&issuer),
@@ -357,6 +358,17 @@ fn takeover_cooldown_blocks_only_affected_instances() {
             1_150,
         )
         .expect("grant after cooldown");
+    assert!(!scheduler.clear_elapsed_cooldowns(1_150));
+}
+
+#[test]
+fn elapsed_takeover_cooldowns_leave_the_crash_protection_set() {
+    let issuer = ids();
+    let affected = instance(&issuer);
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), config(), [affected], 1_000).expect("scheduler");
+    assert!(scheduler.clear_elapsed_cooldowns(1_150));
+    assert!(scheduler.protected_instance_ids(1_150).is_empty());
 }
 
 #[test]
@@ -405,16 +417,44 @@ fn expiry_and_disconnect_release_owned_leases() {
             1,
         )
         .expect("second");
-    let disconnected =
-        scheduler.release_connection(first_connection, LeaseReleaseReason::Disconnect);
-    assert_eq!(disconnected.len(), 1);
-    assert_eq!(disconnected[0].token, first);
-    assert_eq!(disconnected[0].reason, LeaseReleaseReason::Disconnect);
-    let expired = scheduler.expire_due(second.expires_at_monotonic_ms());
-    assert_eq!(expired.len(), 1);
-    assert_eq!(expired[0].token, second);
-    assert_eq!(expired[0].reason, LeaseReleaseReason::Expired);
+    assert_eq!(
+        scheduler.tokens_for_connection(first_connection),
+        vec![first.clone()]
+    );
+    let disconnected = scheduler
+        .release_owned(&first, first_connection, LeaseReleaseReason::Disconnect)
+        .expect("disconnect release");
+    assert_eq!(disconnected.token, first);
+    assert_eq!(disconnected.reason, LeaseReleaseReason::Disconnect);
+    assert_eq!(
+        scheduler.due_tokens(second.expires_at_monotonic_ms()),
+        vec![second.clone()]
+    );
+    let expired = scheduler
+        .expire_token(&second, second.expires_at_monotonic_ms())
+        .expect("expiry release");
+    assert_eq!(expired.token, second);
+    assert_eq!(expired.reason, LeaseReleaseReason::Expired);
     assert!(scheduler.active_tokens().is_empty());
+}
+
+#[test]
+fn prepared_lease_does_not_mutate_state_before_commit() {
+    let issuer = ids();
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let prepared = scheduler
+        .prepare_acquire(
+            request(&issuer),
+            instance(&issuer),
+            holder(&issuer).1,
+            connection(1),
+            1,
+        )
+        .expect("prepare");
+    assert!(!prepared.is_existing());
+    assert!(scheduler.active_tokens().is_empty());
+    let token = scheduler.commit_acquire(prepared, 2).expect("commit");
+    assert_eq!(scheduler.active_tokens(), vec![token]);
 }
 
 #[test]

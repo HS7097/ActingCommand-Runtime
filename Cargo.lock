@@ -208,6 +208,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-runtime-host"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-ledger",
+ "actingcommand-scheduler",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-scheduler"
 version = "0.1.0"
 dependencies = [

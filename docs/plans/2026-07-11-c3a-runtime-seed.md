@@ -70,7 +70,7 @@ Status: complete.
 
 ## Task 3: Runtime host, owner guard, IPC, and DeviceProxy
 
-Status: next.
+Status: complete.
 
 - Create `crates/runtime-host`.
 - Acquire one OS-held owner file and append durable owner metadata. Persist active instance
@@ -85,7 +85,25 @@ Status: next.
   backend guards, revoke leases, update owner metadata, and append events. Cleanup is
   idempotent; cleanup failure makes host health fatal.
 
+Implemented result:
+
+- `actingcommand-runtime-host` owns one OS-locked owner journal, fresh owner epochs,
+  crash-takeover instance cooldowns, one GlobalLedger writer, loopback TCP framing, and
+  `runtime-info.json` discovery.
+- Input backends are opened and retained only by backend worker threads inside the host.
+  Every input variant is re-fenced immediately before use and follows durable intent,
+  action, durable outcome ordering.
+- Connection drop, explicit release, expiry, shutdown, and backend failure close the
+  backend guard and revoke the matching lease. Cleanup and request replay are idempotent.
+- Repeated acquire after the bounded connection cache is unavailable recovers its original
+  durable `LeaseGranted` terminal instead of appending duplicate request facts.
+- Nine host tests and fourteen scheduler tests cover lifecycle, fencing, idempotency,
+  takeover metadata recovery, malformed owner metadata, expiry, disconnect, redaction,
+  and correlated ledger events.
+
 ## Task 4: Runtime client and actingd process
+
+Status: next.
 
 - Create `crates/runtime-client` and `apps/actingd`.
 - Runtime client discovers the daemon from `runtime-info.json`, keeps one local IPC

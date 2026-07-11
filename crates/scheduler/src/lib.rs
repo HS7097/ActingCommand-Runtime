@@ -74,6 +74,51 @@ pub struct ReleasedLease {
     pub reason: LeaseReleaseReason,
 }
 
+pub enum LeasePreparation {
+    Existing(LeaseToken),
+    New(PreparedLease),
+}
+
+impl LeasePreparation {
+    pub fn token(&self) -> &LeaseToken {
+        match self {
+            Self::Existing(token) => token,
+            Self::New(prepared) => prepared.token(),
+        }
+    }
+
+    pub const fn is_existing(&self) -> bool {
+        matches!(self, Self::Existing(_))
+    }
+}
+
+impl fmt::Debug for LeasePreparation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Existing(_) => "LeasePreparation::Existing(<opaque-token>)",
+            Self::New(_) => "LeasePreparation::New(<opaque-token>)",
+        })
+    }
+}
+
+pub struct PreparedLease {
+    token: LeaseToken,
+    connection_id: ConnectionId,
+    acquire_request_id: RequestId,
+}
+
+impl PreparedLease {
+    pub const fn token(&self) -> &LeaseToken {
+        &self.token
+    }
+}
+
+impl fmt::Debug for PreparedLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedLease(<opaque-token>)")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerError {
     InvalidConfig,
@@ -94,6 +139,7 @@ pub enum SchedulerError {
     HolderMismatch,
     ConnectionMismatch,
     LeaseExpired,
+    LeaseNotExpired,
     LeaseMissing,
 }
 
@@ -112,6 +158,7 @@ impl SchedulerError {
             Self::HolderMismatch => "holder_mismatch",
             Self::ConnectionMismatch => "connection_mismatch",
             Self::LeaseExpired => "lease_expired",
+            Self::LeaseNotExpired => "lease_not_expired",
             Self::LeaseMissing => "lease_missing",
         }
     }
@@ -161,6 +208,9 @@ impl SchedulerError {
             }
             Self::LeaseExpired => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::LeaseExpired, false)
+            }
+            Self::LeaseNotExpired => {
+                RuntimeErrorProjection::new(RuntimeErrorCode::LeaseMismatch, false)
             }
             Self::LeaseMissing => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::LeaseMissing, false)
@@ -271,6 +321,24 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeaseToken> {
+        let preparation = self.prepare_acquire(
+            request_id,
+            instance_id,
+            holder_id,
+            connection_id,
+            now_monotonic_ms,
+        )?;
+        self.commit_acquire(preparation, now_monotonic_ms)
+    }
+
+    pub fn prepare_acquire(
+        &mut self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        holder_id: HolderId,
+        connection_id: ConnectionId,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
         {
             let state = self.instances.entry(instance_id).or_default();
             if state.cooldown_until_monotonic_ms > now_monotonic_ms {
@@ -287,7 +355,7 @@ impl SeedScheduler {
                     && lease.connection_id == connection_id
                     && lease.token.holder_id() == holder_id
                 {
-                    return Ok(lease.token.clone());
+                    return Ok(LeasePreparation::Existing(lease.token.clone()));
                 }
                 return Err(SchedulerError::Busy {
                     holder_id: lease.token.holder_id(),
@@ -310,14 +378,51 @@ impl SeedScheduler {
             expires_at_monotonic_ms,
         )
         .map_err(|_| SchedulerError::InvalidConfig)?;
+        Ok(LeasePreparation::New(PreparedLease {
+            token,
+            connection_id,
+            acquire_request_id: request_id,
+        }))
+    }
+
+    pub fn commit_acquire(
+        &mut self,
+        preparation: LeasePreparation,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeaseToken> {
+        let LeasePreparation::New(prepared) = preparation else {
+            let LeasePreparation::Existing(token) = preparation else {
+                unreachable!();
+            };
+            return Ok(token);
+        };
+        self.validate_epoch(&prepared.token)?;
+        if prepared.token.expires_at_monotonic_ms() <= now_monotonic_ms {
+            return Err(SchedulerError::LeaseExpired);
+        }
+        let instance_id = prepared.token.instance_id();
         let state = self
             .instances
             .get_mut(&instance_id)
             .ok_or(SchedulerError::LeaseMissing)?;
+        if state.cooldown_until_monotonic_ms > now_monotonic_ms {
+            return Err(SchedulerError::Cooldown {
+                retry_after_ms: state.cooldown_until_monotonic_ms - now_monotonic_ms,
+            });
+        }
+        if let Some(lease) = &state.lease {
+            return Err(SchedulerError::Busy {
+                holder_id: lease.token.holder_id(),
+                lease_id: lease.token.lease_id(),
+                expires_at_monotonic_ms: lease.token.expires_at_monotonic_ms(),
+            });
+        }
+        let lease_id = prepared.token.lease_id();
+        let token = prepared.token;
         state.lease = Some(LeaseEntry {
             token: token.clone(),
-            connection_id,
-            acquire_request_id: request_id,
+            connection_id: prepared.connection_id,
+            acquire_request_id: prepared.acquire_request_id,
             last_renew: None,
         });
         state.last_release = None;
@@ -436,61 +541,91 @@ impl SeedScheduler {
         validate_active_lease(lease, token, connection_id, now_monotonic_ms)
     }
 
-    pub fn expire_due(&mut self, now_monotonic_ms: u64) -> Vec<ReleasedLease> {
-        let due = self
-            .instances
-            .iter()
-            .filter_map(|(instance_id, state)| {
+    pub fn due_tokens(&self, now_monotonic_ms: u64) -> Vec<LeaseToken> {
+        self.instances
+            .values()
+            .filter_map(|state| {
                 state
                     .lease
                     .as_ref()
                     .filter(|lease| lease.token.expires_at_monotonic_ms() <= now_monotonic_ms)
-                    .map(|_| *instance_id)
-            })
-            .collect::<Vec<_>>();
-        due.into_iter()
-            .filter_map(|instance_id| {
-                let state = self.instances.get_mut(&instance_id)?;
-                let lease = state.lease.take()?;
-                self.lease_locations.remove(&lease.token.lease_id());
-                state.last_release = None;
-                Some(ReleasedLease {
-                    token: lease.token,
-                    reason: LeaseReleaseReason::Expired,
-                })
+                    .map(|lease| lease.token.clone())
             })
             .collect()
     }
 
-    pub fn release_connection(
-        &mut self,
-        connection_id: ConnectionId,
-        reason: LeaseReleaseReason,
-    ) -> Vec<ReleasedLease> {
-        let owned = self
-            .instances
-            .iter()
-            .filter_map(|(instance_id, state)| {
+    pub fn tokens_for_connection(&self, connection_id: ConnectionId) -> Vec<LeaseToken> {
+        self.instances
+            .values()
+            .filter_map(|state| {
                 state
                     .lease
                     .as_ref()
                     .filter(|lease| lease.connection_id == connection_id)
-                    .map(|_| *instance_id)
-            })
-            .collect::<Vec<_>>();
-        owned
-            .into_iter()
-            .filter_map(|instance_id| {
-                let state = self.instances.get_mut(&instance_id)?;
-                let lease = state.lease.take()?;
-                self.lease_locations.remove(&lease.token.lease_id());
-                state.last_release = None;
-                Some(ReleasedLease {
-                    token: lease.token,
-                    reason,
-                })
+                    .map(|lease| lease.token.clone())
             })
             .collect()
+    }
+
+    pub fn expire_token(
+        &mut self,
+        submitted_token: &LeaseToken,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<ReleasedLease> {
+        self.validate_epoch(submitted_token)?;
+        let instance_id = self.locate_token_instance(submitted_token)?;
+        let state = self
+            .instances
+            .get_mut(&instance_id)
+            .ok_or(SchedulerError::LeaseMissing)?;
+        let lease = state.lease.as_ref().ok_or(SchedulerError::LeaseMissing)?;
+        if lease.token != *submitted_token {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        if lease.token.expires_at_monotonic_ms() > now_monotonic_ms {
+            return Err(SchedulerError::LeaseNotExpired);
+        }
+        let lease = state.lease.take().ok_or(SchedulerError::LeaseMissing)?;
+        self.lease_locations.remove(&lease.token.lease_id());
+        state.last_release = None;
+        Ok(ReleasedLease {
+            token: lease.token,
+            reason: LeaseReleaseReason::Expired,
+        })
+    }
+
+    pub fn release_owned(
+        &mut self,
+        submitted_token: &LeaseToken,
+        connection_id: ConnectionId,
+        reason: LeaseReleaseReason,
+    ) -> SchedulerResult<ReleasedLease> {
+        if matches!(
+            reason,
+            LeaseReleaseReason::Explicit | LeaseReleaseReason::Expired
+        ) {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        self.validate_epoch(submitted_token)?;
+        let instance_id = self.locate_token_instance(submitted_token)?;
+        let state = self
+            .instances
+            .get_mut(&instance_id)
+            .ok_or(SchedulerError::LeaseMissing)?;
+        let lease = state.lease.as_ref().ok_or(SchedulerError::LeaseMissing)?;
+        if lease.token != *submitted_token {
+            return Err(SchedulerError::LeaseMismatch);
+        }
+        if lease.connection_id != connection_id {
+            return Err(SchedulerError::ConnectionMismatch);
+        }
+        let lease = state.lease.take().ok_or(SchedulerError::LeaseMissing)?;
+        self.lease_locations.remove(&lease.token.lease_id());
+        state.last_release = None;
+        Ok(ReleasedLease {
+            token: lease.token,
+            reason,
+        })
     }
 
     pub fn rollback_lease(&mut self, token: &LeaseToken) -> SchedulerResult<()> {
@@ -522,6 +657,29 @@ impl SeedScheduler {
             .iter()
             .filter_map(|(instance_id, state)| state.lease.as_ref().map(|_| *instance_id))
             .collect()
+    }
+
+    pub fn protected_instance_ids(&self, now_monotonic_ms: u64) -> Vec<InstanceId> {
+        self.instances
+            .iter()
+            .filter_map(|(instance_id, state)| {
+                (state.lease.is_some() || state.cooldown_until_monotonic_ms > now_monotonic_ms)
+                    .then_some(*instance_id)
+            })
+            .collect()
+    }
+
+    pub fn clear_elapsed_cooldowns(&mut self, now_monotonic_ms: u64) -> bool {
+        let mut changed = false;
+        for state in self.instances.values_mut() {
+            if state.cooldown_until_monotonic_ms != 0
+                && state.cooldown_until_monotonic_ms <= now_monotonic_ms
+            {
+                state.cooldown_until_monotonic_ms = 0;
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn expiry_from(&self, now_monotonic_ms: u64) -> SchedulerResult<u64> {

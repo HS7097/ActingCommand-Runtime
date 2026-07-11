@@ -1,5 +1,82 @@
 # CHECKPOINT.md
 
+## 2026-07-11 Issue 35 C3a Task 3 resident Runtime host
+
+### Current status
+
+- Added `actingcommand-runtime-host` as the resident production owner of the Runtime process,
+  scheduler state, GlobalLedger writer, local typed IPC, lease guards, and input backends.
+- Added an OS-held `owner.lock` append journal with a fresh owner epoch per successful start,
+  durable affected-instance metadata, explicit clean close, active-owner rejection, safe
+  incomplete-tail recovery, and fatal complete-record corruption.
+- Added loopback-only length-prefixed JSON IPC with a `1 MiB` maximum frame, bounded I/O,
+  `runtime-info.json` publication, per-connection request replay cache, and explicit protocol
+  failure cleanup.
+- Added daemon-owned backend workers and DeviceProxy routing for tap, long tap, swipe, key,
+  text, and reset. Every operation revalidates all fencing fields immediately before backend
+  use and follows durable intent, action, durable outcome ordering.
+- Added connection drop, release, expiry, shutdown, and backend-failure cleanup. Cleanup closes
+  the backend, revokes the lease, updates protected owner metadata, and records the terminal
+  ledger fact; cleanup failure makes Runtime health fatal.
+- Repeated acquire remains idempotent after connection-cache loss by recovering exactly one
+  persisted `LeaseGranted` terminal instead of appending duplicate request facts.
+- Added nine host tests and expanded the scheduler to fourteen tests. Work was implemented and
+  reviewed directly without subagents.
+
+### Files changed
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/scheduler/src/lib.rs`
+- `crates/scheduler/src/tests.rs`
+- `crates/runtime-host/Cargo.toml`
+- `crates/runtime-host/src/lib.rs`
+- `crates/runtime-host/src/error.rs`
+- `crates/runtime-host/src/provider.rs`
+- `crates/runtime-host/src/owner.rs`
+- `crates/runtime-host/src/backend.rs`
+- `crates/runtime-host/src/events.rs`
+- `crates/runtime-host/src/ipc.rs`
+- `crates/runtime-host/src/time.rs`
+- `crates/runtime-host/src/host.rs`
+- `crates/runtime-host/src/tests.rs`
+- `docs/plans/2026-07-11-c3a-runtime-seed.md`
+- `PLANS.md`
+- `CHECKPOINT.md`
+
+### Commands run
+
+- `cargo test -p actingcommand-runtime-host -- --nocapture`
+- `cargo test -p actingcommand-scheduler -- --nocapture`
+- `cargo clippy -p actingcommand-runtime-host -p actingcommand-scheduler -- -D warnings`
+- `cargo test --workspace`
+- `cargo test -p actingcommand-device vendor_stdio::tests::captures_win32_stdout_and_stderr_noise -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `rg -n "unwrap_or|unwrap_or_default|\\.ok\\(\\)|let _ =|if let Ok\\(" crates/runtime-host/src -g '*.rs'`
+
+### Test results
+
+- Runtime-host tests passed: 9.
+- Scheduler tests passed: 14.
+- Runtime-host/scheduler Clippy passed with warnings denied.
+- The first full-workspace run hit the existing Windows vendor-stdio capture timing test once;
+  its isolated rerun passed immediately, and the complete workspace rerun then passed.
+- Formatting and diff checks passed.
+- Production runtime-host sources contain no discarded backend notification result, lock-poison
+  fallback, retry loop, reconnect path, client-owned backend, queue, priority, preemption,
+  capture, UI, game, OCR, or SQLite behavior.
+
+### Current blocker
+
+- None for C3a Task 3.
+
+### Next step
+
+1. Commit and push Task 3 with this planning/checkpoint evidence and record the commit in
+   Issue #36.
+2. Implement Task 4 `actingcommand-runtime-client` and the thin `actingd` process adapter.
+
 ## 2026-07-11 Issue 35 C3a Task 2 per-instance scheduler seed
 
 ### Current status

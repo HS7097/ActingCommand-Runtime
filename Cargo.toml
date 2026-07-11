@@ -17,6 +17,7 @@ members = [
     "crates/recognition",
     "crates/recognition-pack",
     "crates/runtime-core",
+    "crates/runtime-host",
     "crates/scheduler",
     "crates/task-loop",
     "crates/vision-ffi",
@@ -43,6 +44,7 @@ actingcommand-pack-containment = { path = "crates/pack-containment" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-runtime-core = { path = "crates/runtime-core" }
+actingcommand-runtime-host = { path = "crates/runtime-host" }
 actingcommand-scheduler = { path = "crates/scheduler" }
 actingcommand-task-loop = { path = "crates/task-loop" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
