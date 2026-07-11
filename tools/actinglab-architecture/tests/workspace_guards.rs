@@ -788,6 +788,31 @@ fn c5_runtime_status_registry_is_owned_by_the_resident_control_plane() {
 }
 
 #[test]
+fn c5_monitor_decisions_are_pure_and_execution_owned() {
+    let root = workspace_root();
+    let monitor = fs::read_to_string(root.join("crates/execution-kernel/src/monitor.rs"))
+        .expect("read execution monitor decisions");
+    let lab = fs::read_to_string(root.join("crates/lab/src/lib.rs")).expect("read Lab facade");
+
+    assert!(monitor.contains("pub fn decide_monitor"));
+    assert!(monitor.contains("MonitorRecoveryKind"));
+    for forbidden in [
+        "actingcommand_device",
+        "std::fs",
+        "std::thread",
+        "thread::sleep",
+        "RuntimeHost",
+        "RuntimeClient",
+    ] {
+        assert!(
+            !monitor.contains(forbidden),
+            "pure monitor decisions must not contain {forbidden}"
+        );
+    }
+    assert!(!lab.contains("pub fn decide_monitor"));
+}
+
+#[test]
 fn c3b_execution_kernel_is_a_daemon_only_backend_shell() {
     let root = workspace_root();
     let metadata: serde_json::Value =
