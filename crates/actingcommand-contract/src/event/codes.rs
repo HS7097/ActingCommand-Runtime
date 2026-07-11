@@ -79,6 +79,7 @@ closed_code!(EventAction {
     RuntimeQuery => "runtime.query",
     RuntimeReadonlyAdmit => "runtime.readonly_admit",
     RuntimeReadonlyObserve => "runtime.readonly_observe",
+    RuntimeCaptureSequence => "runtime.capture_sequence",
     MonitorConfigure => "monitor.configure",
     MonitorClear => "monitor.clear",
     MonitorProbe => "monitor.probe",

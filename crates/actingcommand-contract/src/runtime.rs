@@ -37,6 +37,9 @@ pub const MAX_INPUT_KEY_BYTES: usize = 64;
 pub const MAX_INPUT_DURATION_MS: u64 = 60_000;
 pub const MAX_LEASE_QUEUE_TIMEOUT_MS: u64 = 3_600_000;
 pub const MAX_READONLY_OBSERVATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
+pub const MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000;
+pub const MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -432,6 +435,109 @@ impl fmt::Debug for ReadonlyObservation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSequenceSpec {
+    frame_count: u16,
+    interval_ms: u64,
+}
+
+impl CaptureSequenceSpec {
+    pub fn new(frame_count: u16, interval_ms: u64) -> RuntimeContractResult<Self> {
+        let spec = Self {
+            frame_count,
+            interval_ms,
+        };
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.frame_count == 0
+            || self.frame_count > MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES
+            || self.interval_ms > MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS
+            || self.planned_wait_ms()? > MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS
+        {
+            return Err(RuntimeContractError::new("invalid_capture_sequence_spec"));
+        }
+        Ok(())
+    }
+
+    pub const fn frame_count(&self) -> u16 {
+        self.frame_count
+    }
+
+    pub const fn interval_ms(&self) -> u64 {
+        self.interval_ms
+    }
+
+    pub fn planned_wait_ms(&self) -> RuntimeContractResult<u64> {
+        u64::from(self.frame_count.saturating_sub(1))
+            .checked_mul(self.interval_ms)
+            .ok_or_else(|| RuntimeContractError::new("capture_sequence_wait_overflow"))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSequence {
+    spec: CaptureSequenceSpec,
+    observations: Vec<ReadonlyObservation>,
+}
+
+impl CaptureSequence {
+    pub fn new(
+        spec: CaptureSequenceSpec,
+        observations: Vec<ReadonlyObservation>,
+    ) -> RuntimeContractResult<Self> {
+        let sequence = Self { spec, observations };
+        sequence.validate()?;
+        Ok(sequence)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        self.spec.validate()?;
+        if self.observations.len() != usize::from(self.spec.frame_count()) {
+            return Err(RuntimeContractError::new(
+                "invalid_capture_sequence_observation_count",
+            ));
+        }
+        let mut artifact_ids = BTreeSet::new();
+        let mut frame_ids = BTreeSet::new();
+        for observation in &self.observations {
+            observation.validate()?;
+            let artifact = observation.artifact();
+            let frame_id = artifact.frame_id().ok_or_else(|| {
+                RuntimeContractError::new("invalid_capture_sequence_artifact_identity")
+            })?;
+            if !artifact_ids.insert(artifact.artifact_id) || !frame_ids.insert(*frame_id) {
+                return Err(RuntimeContractError::new(
+                    "duplicate_capture_sequence_artifact_identity",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub const fn spec(&self) -> CaptureSequenceSpec {
+        self.spec
+    }
+
+    pub fn observations(&self) -> &[ReadonlyObservation] {
+        &self.observations
+    }
+}
+
+impl fmt::Debug for CaptureSequence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CaptureSequence")
+            .field("spec", &self.spec)
+            .field("observation_count", &self.observations.len())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceStatus {
@@ -630,6 +736,10 @@ pub enum RuntimeOperation {
     ObserveReadonly {
         instance_alias: String,
     },
+    CaptureSequence {
+        instance_alias: String,
+        spec: CaptureSequenceSpec,
+    },
     SafeReset {
         instance_alias: String,
         holder_id: HolderId,
@@ -701,6 +811,13 @@ impl RuntimeOperation {
                 policy.validate()
             }
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
+            Self::CaptureSequence {
+                instance_alias,
+                spec,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                spec.validate()
+            }
             Self::Input { token, action } => {
                 token.validate()?;
                 action.validate()
@@ -713,6 +830,7 @@ impl RuntimeOperation {
             Self::AcquireLease { instance_alias, .. }
             | Self::QueueLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
+            | Self::CaptureSequence { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
@@ -747,6 +865,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
             Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
+            Self::CaptureSequence { .. } => "RuntimeOperation::CaptureSequence(<redacted>)",
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
@@ -1066,6 +1185,9 @@ pub enum RuntimeResult {
     ReadonlyObservationCompleted {
         observation: ReadonlyObservation,
     },
+    CaptureSequenceCompleted {
+        sequence: CaptureSequence,
+    },
     SafeResetCompleted {
         action_id: ActionId,
     },
@@ -1173,6 +1295,7 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
                 observation.validate()?
             }
+            Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
             _ => {}
         }
         Ok(())

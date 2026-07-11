@@ -3,8 +3,8 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
+    CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer,
+    InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
     ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeControlPlaneStatus,
     RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
@@ -366,6 +366,38 @@ impl RuntimeClient {
         self.flow_output(receipt, correlation_id)
     }
 
+    pub fn capture_sequence(
+        &self,
+        instance_alias: &str,
+        spec: CaptureSequenceSpec,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        spec.validate().map_err(|_| {
+            RuntimeClientError::fatal("runtime_capture_sequence_invalid", "capture_sequence")
+        })?;
+        let response_timeout = {
+            let connection = self.connection("capture_sequence")?;
+            capture_sequence_response_timeout(connection.backend_open_timeout, spec)?
+        };
+        let correlation = self.issue_correlation("capture_sequence")?;
+        let correlation_id = *correlation.transport();
+        let receipt = self.execute_receipt_with_correlation(
+            "capture_sequence",
+            RuntimeOperation::CaptureSequence {
+                instance_alias: instance_alias.to_string(),
+                spec,
+            },
+            correlation,
+            Some(response_timeout),
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::CaptureSequenceCompleted { .. })
+        ) {
+            return Err(self.unexpected_result("capture_sequence"));
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
     pub fn safe_reset(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
         let connection = self.connection("safe_reset")?;
         let correlation = connection.ids.mint_correlation_id().map_err(|_| {
@@ -700,4 +732,21 @@ fn input_response_timeout(
     io_timeout
         .checked_add(Duration::from_millis(duration_ms))
         .ok_or_else(|| RuntimeClientError::fatal("runtime_input_timeout_overflow", "runtime_input"))
+}
+
+fn capture_sequence_response_timeout(
+    backend_open_timeout: Duration,
+    spec: CaptureSequenceSpec,
+) -> RuntimeClientResult<Duration> {
+    let planned_wait_ms = spec.planned_wait_ms().map_err(|_| {
+        RuntimeClientError::fatal("runtime_capture_sequence_invalid", "capture_sequence")
+    })?;
+    backend_open_timeout
+        .checked_add(Duration::from_millis(planned_wait_ms))
+        .ok_or_else(|| {
+            RuntimeClientError::fatal(
+                "runtime_capture_sequence_timeout_overflow",
+                "capture_sequence",
+            )
+        })
 }

@@ -12,17 +12,17 @@ use actingcommand_artifact_store::{
 };
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput,
-    CapturePayloadDraft, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPayload,
-    InputPayloadDraft, InstanceId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, RequestId, RetentionClass, RuntimeCaptureBackend,
-    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, SchedulerPayloadDraft,
-    TerminalEvent, ValidatedRuntimeRequest,
+    CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft,
+    CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
+    EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType, InputAction,
+    InputPayload, InputPayloadDraft, InstanceId, IssuedMonitorProbe,
+    IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
+    RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
@@ -417,6 +417,11 @@ struct MonitorRecoveryAdmission {
     lease_id: Option<LeaseId>,
 }
 
+struct CompletedReadonlyObservation {
+    observation: ReadonlyObservation,
+    terminal: PersistedEvent,
+}
+
 impl MonitorRecoveryAdmission {
     fn admitted(&self) -> bool {
         self.reason == MonitorRecoveryCoordinationReason::SchedulerAvailable
@@ -655,6 +660,10 @@ impl HostShared {
             RuntimeOperation::ObserveReadonly { instance_alias } => {
                 self.observe_readonly(request, validated, instance_alias)
             }
+            RuntimeOperation::CaptureSequence {
+                instance_alias,
+                spec,
+            } => self.capture_sequence(request, validated, instance_alias, *spec),
             RuntimeOperation::SafeReset {
                 instance_alias,
                 holder_id,
@@ -2351,7 +2360,82 @@ impl HostShared {
             EventAction::RuntimeReadonlyObserve,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
-        let capability = self.issue_readonly_capability(resolved.instance_id())?;
+        let completed =
+            self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&completed.terminal)),
+            result: RuntimeResult::ReadonlyObservationCompleted {
+                observation: completed.observation,
+            },
+        })
+    }
+
+    fn capture_sequence(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        spec: CaptureSequenceSpec,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        spec.validate().map_err(|_| {
+            RequestFailure::request(
+                RuntimeHostError::request(
+                    "capture_sequence_spec_invalid",
+                    "capture_sequence",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            )
+        })?;
+        let resolved = self.resolve_instance(instance_alias)?;
+        self.append_request_lifecycle(
+            original,
+            request,
+            resolved.instance_id(),
+            EventAction::RuntimeCaptureSequence,
+        )?;
+        self.append_scheduler_admitted(request, &resolved, None)?;
+        let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
+        let mut last_terminal = None;
+        for index in 0..spec.frame_count() {
+            let completed =
+                self.capture_readonly_observation(request, instance_alias, resolved.instance_id())?;
+            observations.push(completed.observation);
+            last_terminal = Some(completed.terminal);
+            if index + 1 < spec.frame_count() && spec.interval_ms() > 0 {
+                thread::sleep(Duration::from_millis(spec.interval_ms()));
+            }
+        }
+        let sequence = CaptureSequence::new(spec, observations).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "capture_sequence_result_invalid",
+                "capture_sequence",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let terminal_event = last_terminal.ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "capture_sequence_terminal_missing",
+                "capture_sequence",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&terminal_event)),
+            result: RuntimeResult::CaptureSequenceCompleted { sequence },
+        })
+    }
+
+    fn capture_readonly_observation(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        instance_id: InstanceId,
+    ) -> Result<CompletedReadonlyObservation, RequestFailure> {
+        let capability = self.issue_readonly_capability(instance_id)?;
         let links = capability.event_links(request);
         self.append_event(
             EventSeverity::Info,
@@ -2508,10 +2592,9 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal(&event)),
-            result: RuntimeResult::ReadonlyObservationCompleted { observation },
+        Ok(CompletedReadonlyObservation {
+            observation,
+            terminal: event,
         })
     }
 
