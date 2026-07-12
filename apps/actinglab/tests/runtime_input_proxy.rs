@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureSequenceSpec, EventAction, EventActor, EventQuery,
-    EventSource, EventType, IdentifierIssuer, InstanceId, PackageDebugRequest, ProjectionPayload,
-    ProjectionProfile, RetentionClass, RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
+    ApplicationLifecycleAction, CaptureSequenceSpec, EventAction, EventActor, EventPayload,
+    EventQuery, EventSource, EventType, IdentifierIssuer, InstanceId, PackageDebugRequest,
+    ProjectionPayload, ProjectionProfile, RetentionClass, RuntimeEvidenceExportRequest,
+    RuntimeResult, TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -17,9 +18,11 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -32,6 +35,8 @@ struct FakeState {
     application_calls: AtomicUsize,
     application_action: AtomicUsize,
     transition_after_tap: AtomicBool,
+    tap_started: AtomicBool,
+    tap_delay_ms: AtomicUsize,
 }
 
 struct FakeBackend {
@@ -41,6 +46,11 @@ struct FakeBackend {
 
 impl InputBackend for FakeBackend {
     fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+        self.state.tap_started.store(true, Ordering::Release);
+        let delay_ms = self.state.tap_delay_ms.load(Ordering::Acquire);
+        if delay_ms > 0 {
+            thread::sleep(Duration::from_millis(delay_ms as u64));
+        }
         self.state.taps.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -1676,6 +1686,196 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let config_path = root.path().join("actinglab.json");
+    let package_path = root.path().join("runtime-owned-lab.zip");
+    let result_path = root.path().join("client-result.zip");
+    let adb_marker = root.path().join("forbidden-adb-invoked");
+    fs::write(&config_path, "{}").expect("write config");
+    write_runtime_owned_lab_package(&package_path);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&package_path).expect("read package"))
+    );
+    let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    state.tap_delay_ms.store(500, Ordering::Release);
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-killed-client-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+
+    let mut client_process = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .args([
+            "--json",
+            "--instance",
+            "ak.cn",
+            "--game",
+            "ark",
+            "--server",
+            "cn",
+            "lab",
+            "run",
+            "--zip",
+            package_path.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+            "--out",
+            result_path.to_str().expect("result path"),
+        ])
+        .env("ACTINGLAB_CONFIG_PATH", &config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
+        .env("LOCALAPPDATA", &local_app_data)
+        .env("ACTINGCOMMAND_ADB_PATH", &forbidden_adb)
+        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
+        .env_remove("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn ActingLab client");
+    wait_until(Duration::from_secs(5), || {
+        state.tap_started.load(Ordering::Acquire)
+    });
+    client_process.kill().expect("kill ActingLab client");
+    let status = client_process.wait().expect("wait killed ActingLab client");
+    assert!(!status.success(), "killed ActingLab client succeeded");
+
+    wait_until(Duration::from_secs(5), || {
+        state.taps.load(Ordering::Acquire) == 1 && state.captures.load(Ordering::Acquire) >= 2
+    });
+    assert!(
+        !result_path.exists(),
+        "killed client unexpectedly published its local result projection"
+    );
+    assert!(
+        !adb_marker.exists(),
+        "ActingLab invoked a local ADB backend"
+    );
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("fresh Runtime client");
+    let events = wait_for_runtime_task_terminal(&client);
+    let facts = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
+                Some(payload.fact())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for required in [
+        "package_admitted",
+        "run_started",
+        "evidence_indexed",
+        "recognition_started",
+        "recognition_completed",
+        "step_started",
+        "effect_intent",
+        "effect_completed",
+        "step_finished",
+        "finalizing",
+        "terminal_committed",
+    ] {
+        assert!(
+            facts.iter().any(|fact| task_fact_kind(fact) == required),
+            "missing Runtime semantic fact {required}: {facts:#?}"
+        );
+    }
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Success,
+            final_page: Some(page),
+            executed_steps: 1,
+            failure_code: None,
+        } if page == "arknights/terminal"
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskCompleted)
+            .count(),
+        1
+    );
+
+    drop(client);
+    host.close().expect("close host");
+    assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
+    let started = Instant::now();
+    while !predicate() {
+        assert!(
+            started.elapsed() < timeout,
+            "timed out waiting for condition"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_runtime_task_terminal(
+    client: &RuntimeClient,
+) -> Vec<actingcommand_contract::ProjectedEvent> {
+    let started = Instant::now();
+    loop {
+        let events = client
+            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("query Runtime ledger after ActingLab client kill");
+        if events.iter().any(|event| {
+            matches!(
+                event.event_type,
+                EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+            )
+        }) {
+            return events;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "Runtime task terminal did not become durable after ActingLab client kill"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn task_fact_kind(fact: &TaskSemanticFact) -> &'static str {
+    match fact {
+        TaskSemanticFact::PackageAdmitted { .. } => "package_admitted",
+        TaskSemanticFact::RunStarted => "run_started",
+        TaskSemanticFact::EvidenceIndexed { .. } => "evidence_indexed",
+        TaskSemanticFact::RecognitionStarted { .. } => "recognition_started",
+        TaskSemanticFact::RecognitionCompleted { .. } => "recognition_completed",
+        TaskSemanticFact::StepStarted { .. } => "step_started",
+        TaskSemanticFact::EffectIntent { .. } => "effect_intent",
+        TaskSemanticFact::EffectCompleted { .. } => "effect_completed",
+        TaskSemanticFact::StepFinished { .. } => "step_finished",
+        TaskSemanticFact::Finalizing { .. } => "finalizing",
+        TaskSemanticFact::TerminalCommitted { .. } => "terminal_committed",
+        TaskSemanticFact::TerminalRejected { .. } => "terminal_rejected",
+    }
 }
 
 fn assert_event_order(actual: &[EventType], expected: &[EventType]) {

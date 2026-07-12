@@ -2009,6 +2009,14 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
             "neutral contained-task process fixture lost {required}"
         );
     }
+    let actinglab_process =
+        fs::read_to_string(root.join("apps/actinglab/tests/runtime_input_proxy.rs"))
+            .expect("read ActingLab Runtime process tests");
+    assert!(
+        actinglab_process
+            .contains("runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed"),
+        "ActingLab client-kill Runtime recovery evidence is missing"
+    );
 }
 
 fn cargo_metadata_args() -> [&'static str; 4] {
