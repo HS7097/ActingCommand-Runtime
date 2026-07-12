@@ -92,6 +92,7 @@ impl InputBackend for FakeBackend {
 }
 
 struct FakeProvider {
+    instance_alias: &'static str,
     instance_id: InstanceId,
     state: Arc<FakeState>,
     frame_size: u32,
@@ -127,16 +128,16 @@ impl CaptureBackend for FakeCapture {
 
 impl ExecutionBackendProvider for FakeProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak.cn".to_string()]
+        vec![self.instance_alias.to_string()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak.cn")
+        (instance_alias == self.instance_alias)
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>"))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, self.instance_alias);
         Ok(Box::new(FakeBackend {
             state: Arc::clone(&self.state),
             closed: false,
@@ -144,7 +145,7 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, self.instance_alias);
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
             frame_size: self.frame_size,
@@ -156,7 +157,7 @@ impl ExecutionBackendProvider for FakeProvider {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, self.instance_alias);
         self.state.application_calls.fetch_add(1, Ordering::AcqRel);
         self.state.application_action.store(
             match action {
@@ -186,6 +187,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-application-test"),
         Arc::new(FakeProvider {
+            instance_alias: "neutral.instance",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -199,7 +201,9 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         EventSource::Cli,
     ))
     .expect("lease client");
-    let token = lease_client.acquire_lease("ak.cn").expect("active lease");
+    let token = lease_client
+        .acquire_lease("neutral.instance")
+        .expect("active lease");
     let (busy_exit, busy) = run_actinglab_failure_json(
         &config_path,
         &runtime_root,
@@ -207,7 +211,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "neutral.instance",
             "session",
             "app",
             "force-stop",
@@ -232,7 +236,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "neutral.instance",
             "session",
             "app",
             "force-stop",
@@ -253,7 +257,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "neutral.instance",
             "session",
             "app",
             "launch",
@@ -285,6 +289,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-session-adapter-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state,
             frame_size: 1,
@@ -383,6 +388,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-stream-adapter-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -625,6 +631,7 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-package-debug-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -736,6 +743,7 @@ fn runtime_owned_evidence_export_has_a_sealed_offline_replay_path() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-evidence-export-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -913,6 +921,7 @@ fn runtime_debug_session_exports_verified_debug_full_capture_evidence() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-captured-evidence-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -996,6 +1005,7 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-drive-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1066,6 +1076,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1189,6 +1200,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-guard-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1271,6 +1283,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-route-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1505,6 +1518,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-proxy-test"),
         Arc::new(FakeProvider {
+            instance_alias: "ak.cn",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1563,6 +1577,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-run-test"),
         Arc::new(FakeProvider {
+            instance_alias: "neutral.instance",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -1574,11 +1589,11 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
         .args([
             "--json",
             "--instance",
-            "ak.cn",
+            "neutral.instance",
             "--game",
-            "ark",
+            "neutral",
             "--server",
-            "cn",
+            "test",
             "lab",
             "run",
             "--zip",
@@ -1610,7 +1625,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
         envelope
             .pointer("/data/runtime_flow/receipt/result/final_page")
             .and_then(Value::as_str),
-        Some("arknights/terminal")
+        Some("neutral/terminal")
     );
     assert!(result_path.is_file());
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
@@ -1715,6 +1730,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-killed-client-test"),
         Arc::new(FakeProvider {
+            instance_alias: "neutral.instance",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -1726,11 +1742,11 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
         .args([
             "--json",
             "--instance",
-            "ak.cn",
+            "neutral.instance",
             "--game",
-            "ark",
+            "neutral",
             "--server",
-            "cn",
+            "test",
             "lab",
             "run",
             "--zip",
@@ -1811,7 +1827,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
             final_page: Some(page),
             executed_steps: 1,
             failure_code: None,
-        } if page == "arknights/terminal"
+        } if page == "neutral/terminal"
     )));
     assert_eq!(
         events
@@ -1897,10 +1913,10 @@ fn write_runtime_owned_lab_package(path: &Path) {
                 "control.json",
                 br#"{
                     "schema_version":"Lab-1y.control.v1",
-                    "package_id":"runtime-owned.recovery",
+                    "package_id":"neutral.runtime-owned.recovery",
                     "execution_mode":"navigable_route",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"neutral",
+                    "server":"test",
                     "resolution":{"width":2,"height":2},
                     "entry_task_id":"task",
                     "capture_interval_ms":1,
@@ -1917,8 +1933,8 @@ fn write_runtime_owned_lab_package(path: &Path) {
                 br#"{
                     "schema_version":"0.6",
                     "task_id":"task",
-                    "game":"arknights",
-                    "server_scope":["cn"],
+                    "game":"neutral",
+                    "server_scope":["test"],
                     "coordinate_space":{"width":2,"height":2},
                     "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
                     "entry_page":"home",
@@ -1943,8 +1959,8 @@ fn write_runtime_owned_lab_package(path: &Path) {
                 br#"{
                     "schema_version":"0.6",
                     "task_id":"return_home",
-                    "game":"arknights",
-                    "server_scope":["cn"],
+                    "game":"neutral",
+                    "server_scope":["test"],
                     "coordinate_space":{"width":2,"height":2},
                     "target_page":"home",
                     "operations":[{
@@ -1959,11 +1975,11 @@ fn write_runtime_owned_lab_package(path: &Path) {
                 }"#,
             ),
             (
-                "resources/recognition/arknights.cn.pack.json",
+                "resources/recognition/neutral.test.pack.json",
                 br#"{
                     "schema_version":"0.3",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"neutral",
+                    "server":"test",
                     "coordinate_space":{"width":2,"height":2},
                     "defaults":{"color_max_distance":0.0},
                     "targets":[
@@ -1973,12 +1989,12 @@ fn write_runtime_owned_lab_package(path: &Path) {
                 }"#,
             ),
             (
-                "resources/recognition/arknights.cn.pages.json",
+                "resources/recognition/neutral.test.pages.json",
                 br#"{
                     "schema_version":"0.3",
                     "pages":[
-                        {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
-                        {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                        {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+                        {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                     ]
                 }"#,
             ),

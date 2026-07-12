@@ -2012,11 +2012,45 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
     let actinglab_process =
         fs::read_to_string(root.join("apps/actinglab/tests/runtime_input_proxy.rs"))
             .expect("read ActingLab Runtime process tests");
-    assert!(
-        actinglab_process
-            .contains("runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed"),
-        "ActingLab client-kill Runtime recovery evidence is missing"
+    let assert_neutral_fixture = |fixture: &str, label: &str| {
+        assert!(
+            fixture.contains("neutral.instance"),
+            "{label} lost neutral instance identity"
+        );
+        for forbidden in ["ak.cn", "arknights", "\"ark\"", "\"cn\""] {
+            assert!(
+                !fixture.contains(forbidden),
+                "{label} regained application-specific identity {forbidden}"
+            );
+        }
+    };
+    let application_fixture = actinglab_process
+        .split_once(
+            "fn session_app_routes_application_lifecycle_through_runtime_without_client_package_identity()",
+        )
+        .and_then(|(_, tail)| {
+            tail.split_once(
+                "fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_state()",
+            )
+        })
+        .map(|(body, _)| body)
+        .expect("locate ActingLab application lifecycle Runtime evidence");
+    assert_neutral_fixture(
+        application_fixture,
+        "ActingLab application lifecycle fixture",
     );
+    let client_kill_fixture = actinglab_process
+        .split_once("fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed()")
+        .and_then(|(_, tail)| tail.split_once("fn wait_until("))
+        .map(|(body, _)| body)
+        .expect("locate ActingLab client-kill Runtime recovery evidence");
+    assert_neutral_fixture(client_kill_fixture, "ActingLab client-kill fixture");
+    for required in ["neutral/terminal", "\"neutral\"", "\"test\""] {
+        assert!(
+            client_kill_fixture.contains(required),
+            "ActingLab client-kill fixture lost neutral task identity {required}"
+        );
+    }
 }
 
 fn cargo_metadata_args() -> [&'static str; 4] {
