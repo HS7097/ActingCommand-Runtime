@@ -7,9 +7,9 @@ use actingcommand_contract::{
     IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
     LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
     RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
-    RuntimeEventBatch, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, TerminalEvent,
+    RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt,
+    RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -798,6 +798,32 @@ impl RuntimeDebugSession {
             Some(RuntimeResult::PackageDebugCompleted { .. })
         ) {
             return Err(self.client.unexpected_result("debug_package"));
+        }
+        Ok(receipt)
+    }
+
+    pub fn export_evidence(
+        &self,
+        request: RuntimeEvidenceExportRequest,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        request.validate().map_err(|_| {
+            RuntimeClientError::fatal("runtime_evidence_export_invalid", "export_evidence")
+        })?;
+        let timeout = self
+            .client
+            .connection("export_evidence")?
+            .backend_open_timeout;
+        let receipt = self.client.execute_receipt_with_correlation(
+            "export_evidence",
+            RuntimeOperation::ExportEvidence { request },
+            self.correlation,
+            Some(timeout),
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::EvidenceExportCompleted { .. })
+        ) {
+            return Err(self.client.unexpected_result("export_evidence"));
         }
         Ok(receipt)
     }

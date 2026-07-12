@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, EventType, IdentifierIssuer, InstanceId, ProjectionProfile,
+    CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
+    InstanceId, PackageDebugRequest, ProjectionProfile, RetentionClass,
+    RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -583,6 +585,263 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     );
     assert_eq!(failure["ok"], false);
     assert_eq!(host.runtime_info().pid(), std::process::id());
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_owned_evidence_export_has_a_sealed_offline_replay_path() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let config_path = root.path().join("actinglab.json");
+    let package = root.path().join("debug-package.zip");
+    let evidence = root.path().join("runtime-evidence.zip");
+    fs::write(&config_path, "{}").expect("write config");
+    write_runtime_owned_lab_package(&package);
+    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-evidence-export-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+
+    let export_output = run_actinglab_output(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "export-evidence",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+            "--out",
+            evidence.to_str().expect("evidence path"),
+            "--outcome",
+            "success",
+        ],
+    );
+    if !export_output.status.success() {
+        let fatal = host.fatal_error().expect("Runtime fatal state");
+        panic!(
+            "evidence export failed: stdout={} stderr={} fatal={fatal:#?}",
+            String::from_utf8_lossy(&export_output.stdout),
+            String::from_utf8_lossy(&export_output.stderr),
+        );
+    }
+    let export = serde_json::from_slice::<Value>(&export_output.stdout).expect("export JSON");
+    assert_eq!(export["data"]["authority"], "runtime");
+    assert_eq!(export["data"]["summary"]["task_outcome"], "success");
+    assert_eq!(
+        export["data"]["summary"]["evidence_completeness"],
+        "complete"
+    );
+    assert_eq!(
+        export["data"]["summary"]["screenshot_counts"]["persisted"],
+        0
+    );
+    assert_eq!(
+        export["data"]["terminal_receipt"]["correlation_id"],
+        export["data"]["correlation_id"]
+    );
+    assert!(evidence.is_file());
+    assert_eq!(state.captures.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    let exported_bytes = fs::read(&evidence).expect("evidence bytes");
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::TaskCompleted)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::ArtifactExportCompleted)
+    );
+    drop(client);
+
+    let (_, collision) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "export-evidence",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+            "--out",
+            evidence.to_str().expect("evidence path"),
+            "--outcome",
+            "success",
+        ],
+    );
+    assert_eq!(collision["ok"], false);
+    assert_eq!(
+        fs::read(&evidence).expect("evidence after collision"),
+        exported_bytes
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert!(host.fatal_error().expect("Runtime fatal state").is_none());
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client after collision");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events after collision");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::ArtifactExportFailed)
+    );
+    drop(client);
+
+    let zip_sha256 = export["data"]["summary"]["zip_sha256"]
+        .as_str()
+        .expect("ZIP digest")
+        .to_string();
+    host.close().expect("close host");
+    let replay = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "replay-evidence",
+            "--zip",
+            evidence.to_str().expect("evidence path"),
+            "--expected-sha256",
+            &zip_sha256,
+        ],
+    );
+    assert_eq!(replay["data"]["authority"], "sealed_offline_verifier");
+    assert_eq!(replay["data"]["zip_sha256"], zip_sha256);
+    assert_eq!(replay["data"]["manifest"]["task_outcome"], "success");
+    assert_eq!(
+        replay["data"]["manifest_sha256"],
+        export["data"]["summary"]["manifest_sha256"]
+    );
+
+    let (_, mismatch) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "replay-evidence",
+            "--zip",
+            evidence.to_str().expect("evidence path"),
+            "--expected-sha256",
+            &"0".repeat(64),
+        ],
+    );
+    assert_eq!(mismatch["ok"], false);
+}
+
+#[test]
+fn runtime_debug_session_exports_verified_debug_full_capture_evidence() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let package = root.path().join("debug-package.zip");
+    let evidence = root.path().join("captured-evidence.zip");
+    write_runtime_owned_lab_package(&package);
+    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-captured-evidence-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let session = client.begin_debug_session().expect("debug session");
+    session
+        .debug_package(
+            PackageDebugRequest::new(package.to_string_lossy().into_owned(), expected_sha256)
+                .expect("debug package request"),
+        )
+        .expect("debug package");
+    session
+        .capture_sequence(
+            "ak.cn",
+            CaptureSequenceSpec::new(1, 0).expect("capture spec"),
+        )
+        .expect("Runtime capture sequence");
+    let receipt = session
+        .export_evidence(
+            RuntimeEvidenceExportRequest::new(
+                evidence.to_string_lossy().into_owned(),
+                TaskOutcome::Success,
+            )
+            .expect("evidence request"),
+        )
+        .expect("evidence export");
+    let summary = match receipt.result() {
+        Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary,
+        other => panic!("unexpected evidence result: {other:?}"),
+    };
+    assert_eq!(summary.screenshot_counts().captured, 1);
+    assert_eq!(summary.screenshot_counts().persisted, 1);
+    assert_eq!(summary.archive().retention_class, RetentionClass::DebugFull);
+    let events = session
+        .query_events(ProjectionProfile::Forensic)
+        .expect("debug events");
+    let captures = events
+        .iter()
+        .flat_map(|event| &event.artifacts)
+        .filter(|artifact| artifact.kind() == actingcommand_contract::ArtifactKind::CaptureFrame)
+        .collect::<Vec<_>>();
+    assert!(!captures.is_empty());
+    assert!(captures.iter().all(|artifact| {
+        artifact.run_id == Some(summary.run_id())
+            && artifact.retention_class == RetentionClass::DebugFull
+    }));
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    drop(client);
     host.close().expect("close host");
 }
 

@@ -5836,7 +5836,6 @@ fn stream_events_json(stream_id: &str, frames: &[Value], input_relay: &Value) ->
     }));
     events
 }
-
 fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "run" => {
@@ -5846,6 +5845,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
         }
         "validate" => lab_run::run_lab_validate(args),
         "debug-package" | "watch" => runtime_debug::run_runtime_debug(sub, args),
+        "export-evidence" | "replay-evidence" => runtime_debug::run_runtime_debug(sub, args),
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;

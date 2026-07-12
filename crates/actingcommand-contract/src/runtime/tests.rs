@@ -239,6 +239,51 @@ fn package_debug_summary_round_trips_as_a_closed_result() {
 }
 
 #[test]
+fn evidence_export_request_is_lab_only_bounded_redacted_and_closed() {
+    let private_path = r"C:\private\runtime-evidence.zip";
+    let export = RuntimeEvidenceExportRequest::new(private_path, TaskOutcome::Success)
+        .expect("evidence request");
+    let debug = format!("{export:?}");
+    assert!(!debug.contains(private_path));
+
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        1,
+        RuntimeOperation::ExportEvidence {
+            request: export.clone(),
+        },
+    )
+    .expect("Lab evidence export request");
+    let encoded = serde_json::to_string(&request).expect("serialize request");
+    let decoded = serde_json::from_str::<RuntimeRequest>(&encoded).expect("deserialize request");
+    assert_eq!(decoded, request);
+
+    let ids = issuer();
+    let wrong_origin = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::ExportEvidence { request: export },
+    )
+    .expect_err("non-Lab evidence export must fail");
+    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+    assert_eq!(
+        RuntimeEvidenceExportRequest::new("", TaskOutcome::Success)
+            .expect_err("empty path")
+            .code(),
+        "invalid_evidence_output_path"
+    );
+}
+
+#[test]
 fn every_input_variant_validates_bounds_and_maps_to_a_schema_action() {
     let actions = [
         InputAction::Tap { x: 1, y: 2 },

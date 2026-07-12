@@ -13,14 +13,15 @@
 //! ```
 
 use crate::{
-    ActionId, ArtifactKind, ArtifactMediaType, ArtifactRedactionState, CausationId, CorrelationId,
-    EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery, EventSource, FrameId,
-    HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId,
-    IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId,
+    ActionId, ArtifactKind, ArtifactLinksDraft, ArtifactMediaType, ArtifactRedactionState,
+    CausationId, CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft,
+    EventQuery, EventSource, EventType, EvidenceCompleteness, FrameId, HolderId,
+    IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId,
+    IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId,
     LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase,
+    RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
     RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    SubscriptionCursor,
+    SubscriptionCursor, TaskOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -42,6 +43,7 @@ pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000;
 pub const MAX_DEBUG_PACKAGE_PATH_BYTES: usize = 32 * 1024;
+pub const MAX_EVIDENCE_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
 pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
 
@@ -823,6 +825,224 @@ impl fmt::Debug for PackageDebugRequest {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEvidenceExportRequest {
+    output_path: String,
+    task_outcome: TaskOutcome,
+}
+
+impl RuntimeEvidenceExportRequest {
+    pub fn new(
+        output_path: impl Into<String>,
+        task_outcome: TaskOutcome,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self {
+            output_path: output_path.into(),
+            task_outcome,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.output_path.trim().is_empty()
+            || self.output_path.len() > MAX_EVIDENCE_OUTPUT_PATH_BYTES
+            || self.output_path.contains('\0')
+        {
+            return Err(RuntimeContractError::new("invalid_evidence_output_path"));
+        }
+        Ok(())
+    }
+
+    pub fn output_path(&self) -> &str {
+        &self.output_path
+    }
+
+    pub const fn task_outcome(&self) -> TaskOutcome {
+        self.task_outcome
+    }
+}
+
+impl fmt::Debug for RuntimeEvidenceExportRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeEvidenceExportRequest")
+            .field("output_path", &"<redacted-path>")
+            .field("task_outcome", &self.task_outcome)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEvidenceScreenshotCounts {
+    pub captured: u64,
+    pub deduplicated: u64,
+    pub dropped: u64,
+    pub persisted: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEvidenceExportSummary {
+    correlation_id: CorrelationId,
+    run_id: RunId,
+    task_outcome: TaskOutcome,
+    evidence_completeness: EvidenceCompleteness,
+    normalized_output_path: String,
+    zip_byte_count: u64,
+    zip_sha256: String,
+    manifest_sha256: String,
+    archive: ProjectedArtifactReference,
+    screenshot_counts: RuntimeEvidenceScreenshotCounts,
+    terminal_receipt: ProjectedEvent,
+}
+
+impl RuntimeEvidenceExportSummary {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        correlation_id: CorrelationId,
+        run_id: RunId,
+        task_outcome: TaskOutcome,
+        evidence_completeness: EvidenceCompleteness,
+        normalized_output_path: impl Into<String>,
+        zip_byte_count: u64,
+        zip_sha256: impl Into<String>,
+        manifest_sha256: impl Into<String>,
+        archive: ProjectedArtifactReference,
+        screenshot_counts: RuntimeEvidenceScreenshotCounts,
+        terminal_receipt: ProjectedEvent,
+    ) -> RuntimeContractResult<Self> {
+        let summary = Self {
+            correlation_id,
+            run_id,
+            task_outcome,
+            evidence_completeness,
+            normalized_output_path: normalized_output_path.into(),
+            zip_byte_count,
+            zip_sha256: zip_sha256.into(),
+            manifest_sha256: manifest_sha256.into(),
+            archive,
+            screenshot_counts,
+            terminal_receipt,
+        };
+        summary.validate()?;
+        Ok(summary)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.normalized_output_path.trim().is_empty()
+            || self.normalized_output_path.len() > MAX_EVIDENCE_OUTPUT_PATH_BYTES
+            || self.normalized_output_path.contains('\0')
+        {
+            return Err(RuntimeContractError::new("invalid_evidence_output_path"));
+        }
+        if self.zip_byte_count == 0 {
+            return Err(RuntimeContractError::new("invalid_evidence_zip_count"));
+        }
+        let accounted = self
+            .screenshot_counts
+            .deduplicated
+            .checked_add(self.screenshot_counts.dropped)
+            .and_then(|count| count.checked_add(self.screenshot_counts.persisted));
+        if accounted.is_none_or(|count| count > self.screenshot_counts.captured) {
+            return Err(RuntimeContractError::new(
+                "invalid_evidence_screenshot_counts",
+            ));
+        }
+        if self.archive.kind() != ArtifactKind::EvidenceArchive
+            || self.archive.byte_count() != self.zip_byte_count
+            || self.archive.sha256() != self.zip_sha256
+            || self.archive.run_id != Some(self.run_id)
+            || self.archive.correlation_id != Some(self.correlation_id)
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_evidence_archive_reference",
+            ));
+        }
+        if self.terminal_receipt.sequence == 0
+            || self.terminal_receipt.links.run_id() != Some(&self.run_id)
+            || self.terminal_receipt.links.correlation_id() != Some(&self.correlation_id)
+            || self.terminal_receipt.event_type != terminal_event_type(self.task_outcome)
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_evidence_terminal_receipt",
+            ));
+        }
+        validate_canonical_sha256(&self.zip_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_evidence_zip_hash"))?;
+        validate_canonical_sha256(&self.manifest_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_evidence_manifest_hash"))?;
+        self.archive
+            .validate()
+            .map_err(|_| RuntimeContractError::new("invalid_evidence_archive_reference"))
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        self.correlation_id
+    }
+
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    pub const fn task_outcome(&self) -> TaskOutcome {
+        self.task_outcome
+    }
+
+    pub const fn evidence_completeness(&self) -> EvidenceCompleteness {
+        self.evidence_completeness
+    }
+
+    pub fn normalized_output_path(&self) -> &str {
+        &self.normalized_output_path
+    }
+
+    pub const fn zip_byte_count(&self) -> u64 {
+        self.zip_byte_count
+    }
+
+    pub fn zip_sha256(&self) -> &str {
+        &self.zip_sha256
+    }
+
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+
+    pub const fn archive(&self) -> &ProjectedArtifactReference {
+        &self.archive
+    }
+
+    pub const fn screenshot_counts(&self) -> RuntimeEvidenceScreenshotCounts {
+        self.screenshot_counts
+    }
+
+    pub const fn terminal_receipt(&self) -> &ProjectedEvent {
+        &self.terminal_receipt
+    }
+}
+
+impl fmt::Debug for RuntimeEvidenceExportSummary {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeEvidenceExportSummary")
+            .field("correlation_id", &self.correlation_id)
+            .field("run_id", &self.run_id)
+            .field("task_outcome", &self.task_outcome)
+            .field("evidence_completeness", &self.evidence_completeness)
+            .field("normalized_output_path", &"<redacted-path>")
+            .field("zip_byte_count", &self.zip_byte_count)
+            .field("zip_sha256", &"<redacted-hash>")
+            .field("manifest_sha256", &"<redacted-hash>")
+            .field("archive", &self.archive)
+            .field("screenshot_counts", &self.screenshot_counts)
+            .field("terminal_receipt", &self.terminal_receipt)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageDebugLayout {
@@ -1095,6 +1315,9 @@ pub enum RuntimeOperation {
     DebugPackage {
         request: PackageDebugRequest,
     },
+    ExportEvidence {
+        request: RuntimeEvidenceExportRequest,
+    },
     RecordAuthoringEvent {
         event: ResourceAuthoringEvent,
     },
@@ -1137,6 +1360,7 @@ impl RuntimeOperation {
             | Self::QueryEvents { .. } => Ok(()),
             Self::SubscribeEvents { request } => request.validate(),
             Self::DebugPackage { request } => request.validate(),
+            Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
@@ -1220,6 +1444,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::DebugPackage { .. } => "RuntimeOperation::DebugPackage(<redacted>)",
+            Self::ExportEvidence { .. } => "RuntimeOperation::ExportEvidence(<redacted>)",
             Self::RecordAuthoringEvent { .. } => {
                 "RuntimeOperation::RecordAuthoringEvent(<redacted>)"
             }
@@ -1284,8 +1509,10 @@ impl RuntimeRequest {
                 "invalid_resource_authoring_origin",
             ));
         }
-        if matches!(self.operation, RuntimeOperation::DebugPackage { .. })
-            && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        if matches!(
+            self.operation,
+            RuntimeOperation::DebugPackage { .. } | RuntimeOperation::ExportEvidence { .. }
+        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
         }
@@ -1354,6 +1581,32 @@ impl ValidatedRuntimeRequest<'_> {
             action_id,
         )
     }
+
+    pub fn task_event_links(&self, task_id: IssuedTaskId, run_id: IssuedRunId) -> EventLinksDraft {
+        self.event_links(None, None, None)
+            .with_task_id(task_id)
+            .with_run_id(run_id)
+    }
+
+    pub fn task_artifact_links(&self, run_id: IssuedRunId) -> ArtifactLinksDraft {
+        ArtifactLinksDraft::default()
+            .with_run_id(run_id)
+            .with_correlation_id(IssuedCorrelationId::from_verified_transport(
+                self.request.correlation_id,
+            ))
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        self.request.correlation_id
+    }
+
+    pub const fn actor(&self) -> EventActor {
+        self.request.actor
+    }
+
+    pub const fn source(&self) -> EventSource {
+        self.request.source
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1403,6 +1656,7 @@ pub enum RuntimeErrorCode {
     BackendOpenFailed,
     BackendOperationFailed,
     PackageInvalid,
+    EvidenceExportFailed,
     LedgerFailure,
 }
 
@@ -1572,6 +1826,9 @@ pub enum RuntimeResult {
     PackageDebugCompleted {
         summary: PackageDebugSummary,
     },
+    EvidenceExportCompleted {
+        summary: Box<RuntimeEvidenceExportSummary>,
+    },
     AuthoringEventRecorded {
         phase: ResourceAuthoringPhase,
     },
@@ -1676,6 +1933,7 @@ impl RuntimeReceipt {
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
             Some(RuntimeResult::EventBatch { batch }) => batch.validate()?,
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
+            Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,
             _ => {}
         }
         Ok(())
@@ -1804,6 +2062,21 @@ fn validate_sha256_hex(value: &str) -> RuntimeContractResult<()> {
         return Err(RuntimeContractError::new("invalid_sha256"));
     }
     Ok(())
+}
+
+fn validate_canonical_sha256(value: &str) -> RuntimeContractResult<()> {
+    value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| RuntimeContractError::new("invalid_sha256"))
+        .and_then(validate_sha256_hex)
+}
+
+const fn terminal_event_type(outcome: TaskOutcome) -> EventType {
+    match outcome {
+        TaskOutcome::Success => EventType::TaskCompleted,
+        TaskOutcome::Failure => EventType::TaskFailed,
+        TaskOutcome::Cancelled => EventType::TaskCancelled,
+    }
 }
 
 fn validate_instance_alias(value: &str) -> RuntimeContractResult<()> {

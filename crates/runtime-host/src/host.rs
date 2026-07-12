@@ -8,23 +8,27 @@ use crate::time::unix_ms_now;
 use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
-    ArtifactWriteContext, ArtifactWriteRequest,
+    ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
+    EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
+    EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
 };
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput,
     CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft,
-    CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
-    EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType, InputAction,
-    InputPayload, InputPayloadDraft, InstanceId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule,
-    PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, RUNTIME_INFO_FILE,
-    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
-    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeEventBatch, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    CommandPayloadDraft, CorrelationId, DiagnosticCode, EffectDisposition, EventAction, EventActor,
+    EventDraft, EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
+    EvidenceCompleteness, InputAction, InputPayload, InputPayloadDraft, InstanceId,
+    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRunId, IssuedTaskId, LeaseId,
+    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
+    PackageDebugSummary, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, TaskOutcome, TaskPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
@@ -243,6 +247,7 @@ impl RuntimeHost {
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
             admission_guards: Mutex::new(BTreeMap::new()),
+            debug_runs: Mutex::new(BTreeMap::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Instant::now(),
             fatal,
@@ -536,9 +541,28 @@ struct HostShared {
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
+    debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     next_connection_id: AtomicU64,
     clock: Instant,
     fatal: FatalState,
+}
+
+#[derive(Clone)]
+struct CompletedEvidenceExport {
+    request_output_path: String,
+    task_outcome: TaskOutcome,
+    response_terminal: TerminalEvent,
+    summary: RuntimeEvidenceExportSummary,
+}
+
+#[derive(Clone)]
+struct DebugRunContext {
+    package: EvidencePackage,
+    package_summary: PackageDebugSummary,
+    run_id: IssuedRunId,
+    task_id: IssuedTaskId,
+    terminal_outcome: Option<TaskOutcome>,
+    completed_export: Option<CompletedEvidenceExport>,
 }
 
 struct OperationSuccess {
@@ -696,6 +720,9 @@ impl HostShared {
                 .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
             RuntimeOperation::SubscribeEvents { request } => self.subscribe_events(request),
             RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
+            RuntimeOperation::ExportEvidence { request } => {
+                self.export_evidence(validated, request)
+            }
             RuntimeOperation::RecordAuthoringEvent { event } => {
                 self.record_authoring_event(validated, event)
             }
@@ -806,6 +833,108 @@ impl HostShared {
                 ));
             }
         };
+        let package_name = Path::new(request.package_path())
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    debug_package_error("debug_package_name_invalid"),
+                    RuntimeReceiptState::Failed,
+                    None,
+                )
+            })?;
+        let package = EvidencePackage::new(
+            package_name,
+            summary.verified_sha256(),
+            PackageVerification::Passed,
+        )
+        .map_err(|error| {
+            RequestFailure::request(
+                debug_package_error(error.code()),
+                RuntimeReceiptState::Failed,
+                None,
+            )
+        })?;
+        let mut debug_runs = lock(&self.debug_runs, "lock_runtime_debug_runs")?;
+        let existing = debug_runs.get(&validated.correlation_id()).cloned();
+        let context = match existing {
+            Some(existing)
+                if existing.package == package && existing.package_summary == summary =>
+            {
+                existing
+            }
+            Some(_) => {
+                let event = self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links,
+                    CommandPayloadDraft::rejected(
+                        EventAction::RuntimeDebugPackage,
+                        DiagnosticCode::CommandRejected,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "runtime_debug_context_conflict",
+                        "debug_package",
+                        RuntimeErrorCode::PackageInvalid,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    Some(terminal(&event)),
+                ));
+            }
+            None => {
+                let run_id = self.events.issuer().mint_run_id().map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "run_id_issue_failed",
+                        "debug_package",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                let task_id = self.events.issuer().mint_task_id().map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "task_id_issue_failed",
+                        "debug_package",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                let task_links = validated.task_event_links(task_id, run_id);
+                self.append_event(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    task_links.clone(),
+                    TaskPayloadDraft::requested(
+                        EventAction::RuntimeDebugPackage,
+                        AuditInput::new(),
+                    ),
+                )?;
+                self.append_event(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    task_links,
+                    TaskPayloadDraft::started(EventAction::RuntimeDebugPackage, AuditInput::new()),
+                )?;
+                let context = DebugRunContext {
+                    package,
+                    package_summary: summary.clone(),
+                    run_id,
+                    task_id,
+                    terminal_outcome: None,
+                    completed_export: None,
+                };
+                debug_runs.insert(validated.correlation_id(), context.clone());
+                context
+            }
+        };
+        drop(debug_runs);
         let event = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -821,8 +950,310 @@ impl HostShared {
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
-            result: RuntimeResult::PackageDebugCompleted { summary },
+            result: RuntimeResult::PackageDebugCompleted {
+                summary: context.package_summary,
+            },
         })
+    }
+
+    fn export_evidence(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        request: &RuntimeEvidenceExportRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let mut debug_runs = lock(&self.debug_runs, "lock_runtime_debug_runs")?;
+        let context = debug_runs
+            .get_mut(&validated.correlation_id())
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        "runtime_debug_context_missing",
+                        "export_evidence",
+                        RuntimeErrorCode::EvidenceExportFailed,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })?;
+        if let Some(completed) = &context.completed_export {
+            if completed.request_output_path == request.output_path()
+                && completed.task_outcome == request.task_outcome()
+            {
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: Some(completed.response_terminal),
+                    result: RuntimeResult::EvidenceExportCompleted {
+                        summary: Box::new(completed.summary.clone()),
+                    },
+                });
+            }
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "runtime_evidence_export_conflict",
+                    "export_evidence",
+                    RuntimeErrorCode::EvidenceExportFailed,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        if context
+            .terminal_outcome
+            .is_some_and(|outcome| outcome != request.task_outcome())
+        {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "runtime_task_outcome_conflict",
+                    "export_evidence",
+                    RuntimeErrorCode::EvidenceExportFailed,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+
+        let task_links = validated.task_event_links(context.task_id, context.run_id);
+        if context.terminal_outcome.is_none() {
+            self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                task_links.clone(),
+                TaskPayloadDraft::terminal_intent(EventAction::ArtifactExport, AuditInput::new()),
+            )?;
+            self.append_event(
+                task_outcome_severity(request.task_outcome()),
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                task_links.clone(),
+                task_outcome_payload(request.task_outcome()),
+            )?;
+            context.terminal_outcome = Some(request.task_outcome());
+        }
+
+        let events = self
+            .ledger
+            .project(
+                EventQuery {
+                    correlation_id: Some(validated.correlation_id()),
+                    ..EventQuery::default()
+                },
+                actingcommand_contract::ProjectionProfile::Forensic,
+            )
+            .map_err(|_| RequestFailure::poison(ledger_error("project_evidence_events"), None))?;
+        let terminal_receipt = events
+            .iter()
+            .rev()
+            .find(|event| {
+                event.links.run_id() == Some(context.run_id.transport())
+                    && event.event_type == task_outcome_event_type(request.task_outcome())
+            })
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "runtime_task_terminal_missing",
+                    "export_evidence",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        let pipeline = self.capture_pipeline_summary(
+            &events,
+            validated.correlation_id(),
+            *context.run_id.transport(),
+        )?;
+        let documents = runtime_evidence_documents(
+            context.run_id,
+            context.task_id,
+            request.task_outcome(),
+            &terminal_receipt,
+            &events,
+        )?;
+        let archive_context = ArtifactWriteContext::new(
+            validated.task_artifact_links(context.run_id),
+            task_links,
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        let export_request = EvidenceExportRequest {
+            output_path: PathBuf::from(request.output_path()),
+            identity: EvidenceExportIdentity {
+                run_id: *context.run_id.transport(),
+                correlation_id: validated.correlation_id(),
+                package: context.package.clone(),
+                task_outcome: request.task_outcome(),
+                terminal_receipt: terminal_receipt.clone(),
+                projection_profile: actingcommand_contract::ProjectionProfile::Forensic,
+                retention_class: RetentionClass::DebugFull,
+                archive_redaction_state: ArtifactRedactionState::NotRequired,
+            },
+            events,
+            pipeline,
+            documents,
+            archive_context,
+        };
+        let mut exporter = EvidenceExporter::open(self.artifacts.root()).map_err(|error| {
+            RequestFailure::request(
+                evidence_request_error(error.code()),
+                RuntimeReceiptState::Failed,
+                Some(terminal_from_projected(&terminal_receipt)),
+            )
+        })?;
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        let receipt = match exporter.export(export_request, &mut sink) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let failure_terminal = self.latest_evidence_export_terminal(
+                    validated.correlation_id(),
+                    EventType::ArtifactExportFailed,
+                )?;
+                return Err(RequestFailure::request(
+                    evidence_request_error(error.code()),
+                    RuntimeReceiptState::Failed,
+                    failure_terminal.or_else(|| Some(terminal_from_projected(&terminal_receipt))),
+                ));
+            }
+        };
+        let response_terminal = self
+            .latest_evidence_export_terminal(
+                validated.correlation_id(),
+                EventType::ArtifactExportCompleted,
+            )?
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "evidence_export_terminal_missing",
+                    "export_evidence",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        let output_path = receipt.output_path().to_str().ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "evidence_output_path_invalid",
+                "export_evidence",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let manifest = receipt.manifest();
+        let summary = RuntimeEvidenceExportSummary::new(
+            validated.correlation_id(),
+            *context.run_id.transport(),
+            request.task_outcome(),
+            manifest.evidence_completeness,
+            output_path,
+            receipt.zip_byte_count(),
+            receipt.zip_sha256(),
+            receipt.manifest_sha256(),
+            receipt.archive().project(true),
+            RuntimeEvidenceScreenshotCounts {
+                captured: manifest.screenshot_counts.captured,
+                deduplicated: manifest.screenshot_counts.deduplicated,
+                dropped: manifest.screenshot_counts.dropped,
+                persisted: manifest.screenshot_counts.persisted,
+            },
+            terminal_receipt,
+        )
+        .map_err(|error| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                error.code(),
+                "export_evidence",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        context.completed_export = Some(CompletedEvidenceExport {
+            request_output_path: request.output_path().to_string(),
+            task_outcome: request.task_outcome(),
+            response_terminal,
+            summary: summary.clone(),
+        });
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(response_terminal),
+            result: RuntimeResult::EvidenceExportCompleted {
+                summary: Box::new(summary),
+            },
+        })
+    }
+
+    fn capture_pipeline_summary(
+        &self,
+        events: &[actingcommand_contract::ProjectedEvent],
+        correlation_id: CorrelationId,
+        run_id: actingcommand_contract::RunId,
+    ) -> Result<CapturePipelineSummary, RequestFailure> {
+        let mut seen = BTreeSet::new();
+        let mut frames = Vec::new();
+        for projected in events
+            .iter()
+            .flat_map(|event| &event.artifacts)
+            .filter(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+        {
+            if !seen.insert(projected.artifact_id) {
+                continue;
+            }
+            if projected.correlation_id != Some(correlation_id)
+                || projected.run_id.is_some_and(|actual| actual != run_id)
+            {
+                return Err(RequestFailure::request(
+                    evidence_request_error("evidence_capture_identity_mismatch"),
+                    RuntimeReceiptState::Failed,
+                    None,
+                ));
+            }
+            let verified = self
+                .artifacts
+                .verify_recovery_reference(projected)
+                .map_err(|error| {
+                    RequestFailure::request(
+                        evidence_request_error(error.code()),
+                        RuntimeReceiptState::Failed,
+                        None,
+                    )
+                })?;
+            frames.push(PersistedFrameEvidence {
+                frame_index: frames.len(),
+                pinned_reason: None,
+                artifact: verified.into_reference(),
+            });
+        }
+        let persisted = u64::try_from(frames.len()).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "evidence_frame_count_overflow",
+                "export_evidence",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        Ok(CapturePipelineSummary {
+            counts: CapturePipelineCounts {
+                captured: persisted,
+                deduplicated: 0,
+                dropped: 0,
+                persisted,
+            },
+            evidence_completeness: EvidenceCompleteness::Complete,
+            pinned: Vec::new(),
+            frames,
+        })
+    }
+
+    fn latest_evidence_export_terminal(
+        &self,
+        correlation_id: CorrelationId,
+        event_type: EventType,
+    ) -> Result<Option<TerminalEvent>, RequestFailure> {
+        self.ledger
+            .project(
+                EventQuery {
+                    correlation_id: Some(correlation_id),
+                    event_type: Some(event_type),
+                    ..EventQuery::default()
+                },
+                actingcommand_contract::ProjectionProfile::Forensic,
+            )
+            .map(|events| events.last().map(terminal_from_projected))
+            .map_err(|_| RequestFailure::poison(ledger_error("query_evidence_terminal"), None))
     }
 
     fn record_authoring_event(
@@ -2607,7 +3038,18 @@ impl HostShared {
         instance_id: InstanceId,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
         let capability = self.issue_readonly_capability(instance_id)?;
-        let links = capability.event_links(request);
+        let debug_run =
+            if request.actor() == EventActor::Lab && request.source() == EventSource::Lab {
+                lock(&self.debug_runs, "read_runtime_debug_run")?
+                    .get(&request.correlation_id())
+                    .map(|context| (context.task_id, context.run_id))
+            } else {
+                None
+            };
+        let mut links = capability.event_links(request);
+        if let Some((task_id, run_id)) = debug_run {
+            links = links.with_task_id(task_id).with_run_id(run_id);
+        }
         self.append_event(
             EventSeverity::Info,
             EventSource::Device,
@@ -2621,7 +3063,7 @@ impl HostShared {
             EventSource::Runtime,
             OriginModule::Recognition,
             EventActor::Runtime,
-            links,
+            links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
         let frame = match self.execution.capture(instance_alias) {
@@ -2632,7 +3074,7 @@ impl HostShared {
                     EventSource::Device,
                     OriginModule::Capture,
                     EventActor::Runtime,
-                    capability.event_links(request),
+                    links.clone(),
                     CapturePayloadDraft::failed(
                         EventAction::CaptureObserve,
                         DiagnosticCode::CaptureFailed,
@@ -2645,7 +3087,7 @@ impl HostShared {
                     EventSource::Runtime,
                     OriginModule::Recognition,
                     EventActor::Runtime,
-                    capability.event_links(request),
+                    links.clone(),
                     RecognitionPayloadDraft::failed(
                         EventAction::RecognitionObserve,
                         DiagnosticCode::CaptureFailed,
@@ -2668,7 +3110,7 @@ impl HostShared {
                     EventSource::Device,
                     OriginModule::Capture,
                     EventActor::Runtime,
-                    capability.event_links(request),
+                    links.clone(),
                     CapturePayloadDraft::failed(
                         EventAction::CaptureObserve,
                         DiagnosticCode::CaptureFailed,
@@ -2681,7 +3123,7 @@ impl HostShared {
                     EventSource::Runtime,
                     OriginModule::Recognition,
                     EventActor::Runtime,
-                    capability.event_links(request),
+                    links.clone(),
                     RecognitionPayloadDraft::failed(
                         EventAction::RecognitionObserve,
                         DiagnosticCode::CaptureFailed,
@@ -2700,9 +3142,13 @@ impl HostShared {
                 ));
             }
         };
+        let mut artifact_links = capability.artifact_links(request);
+        if let Some((_, run_id)) = debug_run {
+            artifact_links = artifact_links.with_run_id(run_id);
+        }
         let write_context = ArtifactWriteContext::new(
-            capability.artifact_links(request),
-            capability.event_links(request),
+            artifact_links,
+            links.clone(),
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
         );
         let mut sink = RuntimeArtifactEventSink {
@@ -2718,7 +3164,13 @@ impl HostShared {
                     write_context,
                     ArtifactIssuePolicy::new(
                         ArtifactProducer::CaptureStore,
-                        RetentionClass::Adaptive,
+                        if request.actor() == EventActor::Lab
+                            && request.source() == EventSource::Lab
+                        {
+                            RetentionClass::DebugFull
+                        } else {
+                            RetentionClass::Adaptive
+                        },
                         ArtifactRedactionState::NotRequired,
                     ),
                 ),
@@ -2743,17 +3195,13 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        self.append_capture_completed(
-            capability.event_links(request),
-            observation.width(),
-            observation.height(),
-        )?;
+        self.append_capture_completed(links.clone(), observation.width(), observation.height())?;
         let event = self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Recognition,
             EventActor::Runtime,
-            capability.event_links(request),
+            links,
             RecognitionPayloadDraft::completed(
                 EventAction::RecognitionObserve,
                 EffectDisposition::Performed,
@@ -4660,6 +5108,114 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
         bundle.navigation_path().is_some(),
     )
     .map_err(|_| debug_package_error("debug_package_summary_invalid"))
+}
+
+fn runtime_evidence_documents(
+    run_id: IssuedRunId,
+    task_id: IssuedTaskId,
+    task_outcome: TaskOutcome,
+    terminal_receipt: &actingcommand_contract::ProjectedEvent,
+    events: &[actingcommand_contract::ProjectedEvent],
+) -> Result<EvidenceExportDocuments, RequestFailure> {
+    let warning_count = events
+        .iter()
+        .filter(|event| event.severity == EventSeverity::Warning)
+        .count();
+    let error_count = events
+        .iter()
+        .filter(|event| matches!(event.severity, EventSeverity::Error | EventSeverity::Fatal))
+        .count();
+    let result = EvidenceJsonDocument::from_serializable(&serde_json::json!({
+        "schema_version": "actingcommand.runtime.evidence-result.v1",
+        "run_id": run_id.transport(),
+        "task_id": task_id.transport(),
+        "task_outcome": task_outcome,
+        "terminal_receipt": terminal_receipt,
+    }))
+    .map_err(|error| {
+        RequestFailure::request(
+            evidence_request_error(error.code()),
+            RuntimeReceiptState::Failed,
+            Some(terminal_from_projected(terminal_receipt)),
+        )
+    })?;
+    let diagnostics = EvidenceJsonDocument::from_serializable(&serde_json::json!({
+        "schema_version": "actingcommand.runtime.evidence-diagnostics.v1",
+        "event_count": events.len(),
+        "warning_count": warning_count,
+        "error_count": error_count,
+    }))
+    .map_err(|error| {
+        RequestFailure::request(
+            evidence_request_error(error.code()),
+            RuntimeReceiptState::Failed,
+            Some(terminal_from_projected(terminal_receipt)),
+        )
+    })?;
+    EvidenceExportDocuments::new(
+        result,
+        diagnostics,
+        "Runtime-owned Lab debug evidence export",
+    )
+    .map_err(|error| {
+        RequestFailure::request(
+            evidence_request_error(error.code()),
+            RuntimeReceiptState::Failed,
+            Some(terminal_from_projected(terminal_receipt)),
+        )
+    })
+}
+
+fn task_outcome_payload(outcome: TaskOutcome) -> TaskPayloadDraft {
+    match outcome {
+        TaskOutcome::Success => TaskPayloadDraft::completed(
+            EventAction::ArtifactExport,
+            EffectDisposition::Performed,
+            AuditInput::new(),
+        ),
+        TaskOutcome::Failure => TaskPayloadDraft::failed(
+            EventAction::ArtifactExport,
+            DiagnosticCode::RuntimeDiagnostic,
+            EffectDisposition::Performed,
+            AuditInput::new(),
+        ),
+        TaskOutcome::Cancelled => TaskPayloadDraft::cancelled(
+            EventAction::ArtifactExport,
+            EffectDisposition::NotPerformed,
+            AuditInput::new(),
+        ),
+    }
+}
+
+const fn task_outcome_severity(outcome: TaskOutcome) -> EventSeverity {
+    match outcome {
+        TaskOutcome::Success => EventSeverity::Info,
+        TaskOutcome::Failure => EventSeverity::Error,
+        TaskOutcome::Cancelled => EventSeverity::Warning,
+    }
+}
+
+const fn task_outcome_event_type(outcome: TaskOutcome) -> EventType {
+    match outcome {
+        TaskOutcome::Success => EventType::TaskCompleted,
+        TaskOutcome::Failure => EventType::TaskFailed,
+        TaskOutcome::Cancelled => EventType::TaskCancelled,
+    }
+}
+
+const fn terminal_from_projected(event: &actingcommand_contract::ProjectedEvent) -> TerminalEvent {
+    TerminalEvent {
+        sequence: event.sequence,
+        event_id: event.event_id,
+    }
+}
+
+fn evidence_request_error(code: &'static str) -> RuntimeHostError {
+    RuntimeHostError::request(
+        code,
+        "export_runtime_evidence",
+        RuntimeErrorCode::EvidenceExportFailed,
+    )
 }
 
 fn debug_package_error(code: &'static str) -> RuntimeHostError {

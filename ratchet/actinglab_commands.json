@@ -51,7 +51,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 123,
+  "command_count": 125,
   "commands": [
     "help",
     "version",
@@ -93,6 +93,8 @@
     "lab validate",
     "lab debug-package",
     "lab watch",
+    "lab export-evidence",
+    "lab replay-evidence",
     "lab start",
     "lab status",
     "lab lease",
